@@ -9,13 +9,13 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 **Goal:** End-to-end flow working in 1 weekend.
 
 **Scope:**
-- [ ] FastAPI app with ONE endpoint: `POST /mvp_digest`
-- [ ] Receives list of articles from n8n
-- [ ] Calls llama.cpp via LiteLLM
-- [ ] Returns 5+5 markdown
-- [ ] n8n workflow: `Schedule -> RSS -> /mvp_digest -> Telegram`
-- [ ] `docker-compose.yml` with n8n + api
-- [ ] `.env.example` documented
+- [x] FastAPI app with ONE endpoint: `POST /mvp_digest`
+- [x] Receives list of articles from n8n
+- [x] Calls llama.cpp via LiteLLM
+- [x] Returns 5+5 markdown
+- [x] n8n workflow: `Schedule -> RSS -> /mvp_digest -> Telegram`
+- [x] `docker-compose.yml` with n8n + api
+- [x] `.env.example` documented
 
 **Success criteria:** Receive a Telegram message every morning at **08:00** with 5 summaries + 5 headlines.
 
