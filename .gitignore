@@ -1,0 +1,43 @@
+# Environments and Virtual Envs
+.env
+.env.local
+.env.*.local
+.venv/
+venv/
+ENV/
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and credentials
+*.pem
+*.key
+credentials.json
+
+# Runtime data
+data/*
+!data/.gitkeep
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data/tts_cache/
+
+# System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.mimocode/
+
+# Binaries and Models
+models/
+*.gguf
+*.bin
+n8n_data/
