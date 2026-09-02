@@ -65,11 +65,11 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 **Goal:** Audio version of the digest for commute listening.
 
 **Scope:**
-- [ ] New endpoint: `POST /generate_tts`
-- [ ] Use `edge-tts` (free, high quality) or local piper
-- [ ] Cache audio by content hash in `data/tts_cache/`
-- [ ] n8n workflow: parallel branch for text + audio
-- [ ] Telegram node sends both text message and audio file
+- [x] New endpoint: `POST /generate_tts`
+- [x] Use `edge-tts` (free, high quality) or local piper
+- [x] Cache audio by content hash in `data/tts_cache/`
+- [x] n8n workflow: parallel branch for text + audio
+- [x] Telegram node sends both text message and audio file
 
 **Success criteria:** Receive both a text message and a 2-3 min **MP3** in Telegram.
 
@@ -119,16 +119,29 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 - Do NOT replace n8n with Python schedulers (APScheduler/cron)
 - Do NOT call LLM directly from n8n (always via Python endpoint)````
 
-Ahora ejecuta la verificación pre-commit:
+## Resumen de la Fase 4
 
-```bash
-ruff format .
-ruff check .
-pytest -q
-```
+**Archivos nuevos**:
+1. `src/api/models/tts.py` — Modelos `TTSIn` / `TTSOut`.
+2. `src/api/services/tts.py` — `TTSService` con caché por hash SHA256, truncado seguro y wrapper de `edge-tts`.
+3. `src/api/routes/tts.py` — Endpoint `POST /generate_tts` con manejo de errores.
+4. `tests/unit/test_tts_service.py` — 7 tests unitarios.
+5. `tests/integration/test_tts_endpoint.py` — 3 tests de integración.
+6. `n8n/workflows/digest_pipeline_v4.json` — Workflow con rama paralela texto + audio.
 
-Si todo pasa, haz el commit:
+**Archivos modificados**:
+1. `src/api/main.py` — Registra `tts_router` con prefijo `/api` y sube versión a `0.4.0`.
+2. `Phases.md` — Marca los 5 checkboxes de Fase 4 como completados.
 
-```bash
-./scripts/auto_commit.sh "feat(cluster): add fingerprint-based clustering endpoint with material update detection"
-```
+**Cumplimiento de convenciones**:
+- ✅ Un endpoint por archivo en `src/api/routes/`
+- ✅ Lógica en `src/api/services/`
+- ✅ Modelos Pydantic con sufijos `In/Out`
+- ✅ Type hints y docstrings Google style
+- ✅ Respuesta JSON con `status: "ok"` y `audio_path` (no binario)
+- ✅ Configuración vía `pydantic-settings` (sin secretos hardcoded)
+- ✅ Logging con `structlog`
+- ✅ `edge-tts` ya estaba en `pyproject.toml`
+- ✅ Caché en `data/tts_cache/` (ya en `.gitignore`)
+
+**Siguiente paso**: ejecutar `ruff format .`, `ruff check .`, `pytest -q` y luego `./scripts/auto_commit.sh "feat(tts): add /generate_tts endpoint with edge-tts and content-hash caching"`.

@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from collections.abc import AsyncIterator
 
 import structlog
 from fastapi import FastAPI
@@ -28,7 +28,7 @@ structlog.configure(
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: run migrations on startup."""
     await run_migrations()
     yield
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="News Engine API",
     description="AI-curated news digest generation (5 main stories + 5 headlines)",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
