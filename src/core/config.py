@@ -1,5 +1,6 @@
 """Configuration settings for news-engine using pydantic-settings."""
 
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,11 @@ class Settings(BaseSettings):
     api_port: int = 8000
     log_level: str = "INFO"
     database_path: str = "data/news.db"
+
+    @property
+    def data_dir(self) -> Path:
+        """Return the data directory (parent of database file)."""
+        return Path(self.database_path).parent
 
     model_config = SettingsConfigDict(
         env_file=".env",

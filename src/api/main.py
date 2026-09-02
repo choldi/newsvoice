@@ -13,6 +13,7 @@ from src.api.routes import (
     ingest_router,
     mvp_router,
     summarize_router,
+    tts_router,
 )
 from src.core.config import settings
 
@@ -53,6 +54,7 @@ app.include_router(ingest_router, prefix="/api")
 app.include_router(cluster_router, prefix="/api")
 app.include_router(summarize_router, prefix="/api")
 app.include_router(mvp_router, prefix="/api")
+app.include_router(tts_router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])
