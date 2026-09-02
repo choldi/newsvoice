@@ -1,48 +1,61 @@
-"""FastAPI main application entry point."""
+"""FastAPI application entry point."""
 
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.db.database import run_migrations
-from src.api.routes.cluster import router as cluster_router
-from src.api.routes.ingest import router as ingest_router
-from src.api.routes.mvp import router as mvp_router
-from src.api.routes.summarize import router as summarize_router
+from src.api.routes import (
+    cluster_router,
+    ingest_router,
+    mvp_router,
+    summarize_router,
+)
+from src.core.config import settings
 
-logger = structlog.get_logger()
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(settings.log_level),
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Lifespan context manager to handle application startup and shutdown tasks."""
-    logger.info("application_startup_running_migrations")
+    """Application lifespan: run migrations on startup."""
     await run_migrations()
     yield
-    logger.info("application_shutdown")
 
 
 app = FastAPI(
-    title="AI News Digest Engine API",
-    description="Microservices API for AI-curated news summarization and orchestration",
+    title="News Engine API",
+    description="AI-curated news digest generation (5 main stories + 5 headlines)",
     version="0.3.0",
     lifespan=lifespan,
 )
 
-# Include route routers
-app.include_router(ingest_router)
-app.include_router(cluster_router)
-app.include_router(summarize_router)
-app.include_router(mvp_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routes
+app.include_router(ingest_router, prefix="/api")
+app.include_router(cluster_router, prefix="/api")
+app.include_router(summarize_router, prefix="/api")
+app.include_router(mvp_router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])
 async def health_check() -> dict[str, str]:
-    """Health check endpoint to verify API operation.
-
-    Returns:
-        JSON response with health status.
-    """
-    return {"status": "ok", "service": "news-engine-api"}
+    """Health check endpoint."""
+    return {"status": "ok"}

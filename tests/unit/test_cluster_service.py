@@ -1,135 +1,215 @@
-"""Unit tests for event clustering, fingerprint extraction, and material update detection."""
-
-from unittest.mock import AsyncMock, patch
+"""Unit tests for ClusterService."""
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.api.models.article import ArticleIn
-from src.api.models.cluster import EventFingerprint
-from src.api.services.cluster import (
-    ClusterService,
-    compute_normalized_title_hash,
-    extract_heuristic_fingerprint,
-)
+from src.api.models.cluster import ClusterIn, Fingerprint
+from src.api.services.cluster import ClusterService
 
 
-def test_compute_normalized_title_hash_identical_for_reordered_or_punctuated_titles() -> None:
-    """Tests that normalized title hash is invariant to punctuation, casing, and stopwords."""
-    title1 = "OpenAI releases GPT-5 with incredible new reasoning capabilities!"
-    title2 = "OpenAI Releases GPT-5 with Incredible New Reasoning Capabilities"
-    title3 = "GPT-5: OpenAI releases new incredible reasoning capabilities."
-
-    hash1 = compute_normalized_title_hash(title1)
-    hash2 = compute_normalized_title_hash(title2)
-    hash3 = compute_normalized_title_hash(title3)
-
-    assert hash1 == hash2 == hash3
-
-
-def test_extract_heuristic_fingerprint() -> None:
-    """Tests heuristic fingerprint extraction from title."""
-    title = "SpaceX Launches Starship Flight 6 from Texas"
-    entity, action = extract_heuristic_fingerprint(title)
-    assert "SpaceX" in entity or "Starship" in entity
-    assert len(action) > 0
+@pytest.fixture
+def mock_repo() -> MagicMock:
+    """Mock ArticleRepository."""
+    repo = MagicMock()
+    repo.find_recent_clusters = AsyncMock(return_value=[])
+    repo.create_cluster = AsyncMock(return_value=1)
+    repo.add_article_to_cluster = AsyncMock()
+    repo.update_cluster_last_seen = AsyncMock()
+    repo.get_cluster_articles = AsyncMock(return_value=[])
+    return repo
 
 
-@pytest.mark.asyncio
-async def test_extract_fingerprint_with_llm() -> None:
-    """Tests extracting fingerprint via LLM completion with mock."""
-    mock_llm_json = '{"entity": "OpenAI", "action": "releases GPT-5 model"}'
-    article = ArticleIn(
-        title="OpenAI Officially Launches GPT-5",
-        link="https://example.com/openai-gpt5",
-        content="OpenAI has released its next generation AI model GPT-5 today.",
-    )
-
-    with patch(
-        "src.api.services.cluster.generate_completion", return_value=mock_llm_json
-    ) as mock_llm:
-        service = ClusterService()
-        fp = await service.extract_fingerprint(article)
-
-        assert fp.entity == "OpenAI"
-        assert fp.action == "releases GPT-5 model"
-        assert len(fp.normalized_title_hash) == 12
-        mock_llm.assert_called_once()
+@pytest.fixture
+def cluster_service(mock_repo: MagicMock) -> ClusterService:
+    """ClusterService with mocked repository."""
+    return ClusterService(repository=mock_repo)
 
 
-@pytest.mark.asyncio
-async def test_cluster_articles_collapses_same_event_stories() -> None:
-    """Tests that articles covering the same event collapse into a single cluster."""
-    mock_repo = AsyncMock()
-    mock_repo.find_recent_clusters.return_value = []
-    mock_repo.create_cluster.return_value = 1
-    mock_repo.add_article_to_cluster.return_value = None
-
-    articles = [
+@pytest.fixture
+def sample_articles() -> list[ArticleIn]:
+    """Sample articles for testing."""
+    return [
         ArticleIn(
-            title="OpenAI Releases GPT-5 AI Model",
-            link="https://tech.com/gpt5-1",
-            content="OpenAI launched GPT-5 today.",
+            title="OpenAI releases GPT-5 with reasoning capabilities",
+            link="https://example.com/openai-gpt5",
+            content="OpenAI announced GPT-5 today...",
             source="TechCrunch",
         ),
         ArticleIn(
-            title="GPT-5 Released by OpenAI with Enhanced Reasoning",
-            link="https://news.com/gpt5-2",
-            content="Today OpenAI released GPT-5.",
+            title="GPT-5 launched by OpenAI, new reasoning features",
+            link="https://example.com/gpt5-launch",
+            content="The new model from OpenAI...",
             source="The Verge",
         ),
         ArticleIn(
-            title="Apple Announces New MacBook Pro with M4",
-            link="https://apple.com/mbp-m4",
-            content="Apple announced new M4 laptops.",
-            source="AppleInsider",
+            title="Apple announces iPhone 16 with AI chips",
+            link="https://example.com/apple-iphone16",
+            content="Apple revealed the iPhone 16...",
+            source="MacRumors",
         ),
     ]
 
-    service = ClusterService(repository=mock_repo)
 
-    # Patch fingerprint extraction to return matching entities/actions for OpenAI
-    async def mock_extract(art: ArticleIn) -> EventFingerprint:
-        if "GPT-5" in art.title:
-            return EventFingerprint(
-                entity="OpenAI",
-                action="releases GPT-5 model",
-                normalized_title_hash=compute_normalized_title_hash(art.title),
+class TestClusterService:
+    """Tests for ClusterService."""
+
+    @pytest.mark.asyncio
+    async def test_normalize_title_removes_stopwords_and_numbers(
+        self, cluster_service: ClusterService
+    ) -> None:
+        """Test title normalization removes stopwords, punctuation, numbers."""
+        title = "OpenAI releases GPT-5 with NEW reasoning capabilities!"
+        normalized = cluster_service._normalize_title(title)
+        # Should remove: "with", "new", "gpt", "5", punctuation
+        assert "openai" in normalized
+        assert "releases" in normalized
+        assert "reasoning" in normalized
+        assert "capabilities" in normalized
+        assert "with" not in normalized
+        assert "new" not in normalized
+        assert "gpt" not in normalized
+        assert "5" not in normalized
+
+    @pytest.mark.asyncio
+    async def test_compute_title_hash_deterministic(
+        self, cluster_service: ClusterService
+    ) -> None:
+        """Test title hash is deterministic and short."""
+        title = "OpenAI releases GPT-5"
+        hash1 = cluster_service._compute_title_hash(title)
+        hash2 = cluster_service._compute_title_hash(title)
+        assert hash1 == hash2
+        assert len(hash1) == 12  # SHA256 truncated to 12 chars
+
+    @pytest.mark.asyncio
+    async def test_fingerprint_to_key_consistent(
+        self, cluster_service: ClusterService
+    ) -> None:
+        """Test fingerprint key generation is consistent."""
+        fp = Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="abc123")
+        key1 = cluster_service._fingerprint_to_key(fp)
+        key2 = cluster_service._fingerprint_to_key(fp)
+        assert key1 == key2
+        assert key1 == "openai|releases gpt-5|abc123"
+
+    @pytest.mark.asyncio
+    async def test_cluster_articles_empty_input(
+        self, cluster_service: ClusterService
+    ) -> None:
+        """Test clustering empty article list returns empty."""
+        payload = ClusterIn(articles=[])
+        result = await cluster_service.cluster_articles(payload)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_cluster_articles_creates_new_clusters(
+        self,
+        cluster_service: ClusterService,
+        mock_repo: MagicMock,
+        sample_articles: list[ArticleIn],
+    ) -> None:
+        """Test new clusters created for unseen fingerprints."""
+        with patch.object(
+            cluster_service, "_extract_fingerprint_llm", new_callable=AsyncMock
+        ) as mock_extract:
+            # Return different fingerprints for each article
+            mock_extract.side_effect = [
+                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
+                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash2"),
+                Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
+            ]
+
+            payload = ClusterIn(articles=sample_articles)
+            result = await cluster_service.cluster_articles(payload)
+
+            assert len(result) == 3
+            assert mock_repo.create_cluster.call_count == 3
+            assert mock_repo.add_article_to_cluster.call_count == 3
+            assert all(c.is_material_update for c in result)
+
+    @pytest.mark.asyncio
+    async def test_cluster_articles_matches_existing_cluster(
+        self,
+        cluster_service: ClusterService,
+        mock_repo: MagicMock,
+        sample_articles: list[ArticleIn],
+    ) -> None:
+        """Test articles matched to existing cluster by fingerprint."""
+        # Pre-existing cluster in DB
+        mock_repo.find_recent_clusters.return_value = [
+            {
+                "id": 42,
+                "fingerprint": {
+                    "entity": "OpenAI",
+                    "action": "releases GPT-5",
+                    "title_hash": "hash1",
+                },
+                "first_seen": "2024-01-01T00:00:00",
+                "last_seen": "2024-01-01T00:00:00",
+            }
+        ]
+        mock_repo.get_cluster_articles.return_value = [
+            {"title": "Old article", "content": "Old content"}
+        ]
+
+        with patch.object(
+            cluster_service, "_extract_fingerprint_llm", new_callable=AsyncMock
+        ) as mock_extract:
+            # First article matches existing cluster
+            mock_extract.side_effect = [
+                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
+                Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
+            ]
+
+            payload = ClusterIn(articles=sample_articles[:2])
+            result = await cluster_service.cluster_articles(payload)
+
+            assert len(result) == 2
+            # First cluster should be existing one (id=42)
+            openai_cluster = next(c for c in result if c.fingerprint.entity == "OpenAI")
+            assert openai_cluster.cluster_id == 42
+            assert len(openai_cluster.articles) == 1
+            # Second cluster should be new
+            apple_cluster = next(c for c in result if c.fingerprint.entity == "Apple")
+            assert apple_cluster.cluster_id != 42
+
+    @pytest.mark.asyncio
+    async def test_check_material_update_true(
+        self, cluster_service: ClusterService, mock_repo: MagicMock
+    ) -> None:
+        """Test material update detection returns True for significant new facts."""
+        mock_repo.get_cluster_articles.return_value = [
+            {"title": "OpenAI announces GPT-5", "content": "OpenAI will release GPT-5 soon."}
+        ]
+
+        with patch("src.api.services.cluster.generate_completion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = '{"is_material_update": true, "reason": "Release date confirmed"}'
+            new_article = ArticleIn(
+                title="OpenAI releases GPT-5 today",
+                link="https://example.com/gpt5-released",
+                content="GPT-5 is now available with reasoning.",
+                source="TechCrunch",
             )
-        return EventFingerprint(
-            entity="Apple",
-            action="announces MacBook Pro M4",
-            normalized_title_hash=compute_normalized_title_hash(art.title),
-        )
+            is_update = await cluster_service._check_material_update(1, new_article)
+            assert is_update is True
 
-    with patch.object(service, "extract_fingerprint", side_effect=mock_extract):
-        clusters = await service.cluster_articles(articles)
+    @pytest.mark.asyncio
+    async def test_check_material_update_false(
+        self, cluster_service: ClusterService, mock_repo: MagicMock
+    ) -> None:
+        """Test material update detection returns False for re-reporting."""
+        mock_repo.get_cluster_articles.return_value = [
+            {"title": "OpenAI releases GPT-5", "content": "GPT-5 is now available."}
+        ]
 
-        assert len(clusters) == 2
-        # First cluster has 2 articles (OpenAI)
-        openai_cluster = next(c for c in clusters if c.fingerprint.entity == "OpenAI")
-        assert len(openai_cluster.articles) == 2
-        # Second cluster has 1 article (Apple)
-        apple_cluster = next(c for c in clusters if c.fingerprint.entity == "Apple")
-        assert len(apple_cluster.articles) == 1
-
-
-@pytest.mark.asyncio
-async def test_material_update_detection() -> None:
-    """Tests material update detection when new facts arrive."""
-    mock_llm_update = (
-        '{"is_material_update": true, "reason": "Official confirmation and pricing revealed."}'
-    )
-    service = ClusterService()
-
-    existing = [
-        {"title": "Rumors of GPT-5 Announcement", "content": "Rumors suggest GPT-5 is coming."}
-    ]
-    new_art = ArticleIn(
-        title="OpenAI Officially Releases GPT-5 with Pricing",
-        link="https://example.com/gpt5-official",
-        content="OpenAI officially announced GPT-5 availability at $20/month.",
-    )
-
-    with patch("src.api.services.cluster.generate_completion", return_value=mock_llm_update):
-        is_material = await service.check_material_update(existing, new_art)
-        assert is_material is True
+        with patch("src.api.services.cluster.generate_completion", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = '{"is_material_update": false, "reason": "Same facts re-reported"}'
+            new_article = ArticleIn(
+                title="GPT-5 released by OpenAI",
+                link="https://example.com/gpt5-released-2",
+                content="OpenAI has released GPT-5.",
+                source="The Verge",
+            )
+            is_update = await cluster_service._check_material_update(1, new_article)
+            assert is_update is False

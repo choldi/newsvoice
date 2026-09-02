@@ -1,15 +1,15 @@
-"""Event clustering and fingerprinting service."""
+"""Event clustering service using deterministic fingerprinting."""
 
 import hashlib
 import json
 import re
-import string
+from typing import Any
 
 import structlog
 
 from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn
-from src.api.models.cluster import ClusterItem, EventFingerprint
+from src.api.models.cluster import ClusterItem, ClusterIn, Fingerprint
 from src.core.llm import generate_completion
 from src.core.prompts import (
     EXTRACT_FINGERPRINT_SYSTEM_PROMPT,
@@ -20,393 +20,164 @@ from src.core.prompts import (
 
 logger = structlog.get_logger()
 
-# Common English stopwords for title tokenization
+# Stopwords for title normalization (English + Spanish common words)
 STOPWORDS: set[str] = {
-    "a",
-    "about",
-    "after",
-    "all",
-    "also",
-    "an",
-    "and",
-    "any",
-    "are",
-    "as",
-    "at",
-    "be",
-    "because",
-    "been",
-    "before",
-    "being",
-    "between",
-    "both",
-    "but",
-    "by",
-    "can",
-    "could",
-    "did",
-    "do",
-    "does",
-    "doing",
-    "during",
-    "each",
-    "for",
-    "from",
-    "had",
-    "has",
-    "have",
-    "having",
-    "he",
-    "her",
-    "here",
-    "him",
-    "his",
-    "how",
-    "if",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "just",
-    "more",
-    "most",
-    "new",
-    "no",
-    "not",
-    "now",
-    "of",
-    "off",
-    "on",
-    "once",
-    "only",
-    "or",
-    "other",
-    "our",
-    "out",
-    "over",
-    "says",
-    "should",
-    "so",
-    "some",
-    "such",
-    "than",
-    "that",
-    "the",
-    "their",
-    "them",
-    "then",
-    "there",
-    "these",
-    "they",
-    "this",
-    "to",
-    "too",
-    "under",
-    "until",
-    "up",
-    "very",
-    "was",
-    "we",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "while",
-    "who",
-    "whom",
-    "why",
-    "will",
-    "with",
-    "would",
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+    "by", "from", "as", "is", "was", "are", "were", "be", "been", "being", "have",
+    "has", "had", "do", "does", "did", "will", "would", "could", "should", "may",
+    "might", "must", "can", "this", "that", "these", "those", "it", "its", "they",
+    "them", "their", "we", "us", "our", "you", "your", "he", "him", "his", "she",
+    "her", "hers", "i", "me", "my", "mine", "el", "la", "los", "las", "un", "una",
+    "unos", "unas", "y", "o", "pero", "en", "de", "del", "al", "por", "para", "con",
+    "sin", "sobre", "entre", "hasta", "desde", "durante", "mediante", "según", "como",
+    "es", "son", "era", "eran", "está", "están", "estaba", "estaban", "ha", "han",
+    "he", "has", "había", "habían", "ser", "estar", "tener", "hacer", "ir", "venir"
 }
 
 
-def compute_normalized_title_hash(title: str) -> str:
-    """Computes a deterministic hash of normalized headline tokens.
-
-    Args:
-        title: The article title string.
-
-    Returns:
-        A 12-character hex hash representing normalized title keywords.
-    """
-    if not title:
-        return "0" * 12
-
-    # Remove punctuation and lowercase
-    cleaned = title.lower().translate(str.maketrans("", "", string.punctuation))
-    tokens = [w for w in cleaned.split() if w and w not in STOPWORDS]
-    tokens.sort()
-
-    if not tokens:
-        tokens = [title.strip().lower()]
-
-    normalized_str = " ".join(tokens)
-    return hashlib.sha256(normalized_str.encode("utf-8")).hexdigest()[:12]
-
-
-def extract_heuristic_fingerprint(title: str, content: str | None = None) -> tuple[str, str]:
-    """Heuristic fallback to extract entity and action from title.
-
-    Args:
-        title: Article title.
-        content: Optional article content.
-
-    Returns:
-        Tuple of (entity, action).
-    """
-    cleaned = re.sub(r"[^\w\s]", " ", title).strip()
-    words = cleaned.split()
-
-    if not words:
-        return ("General", "Reported news")
-
-    # Capitalized sequence as entity heuristic
-    capitalized = [w for w in title.split() if w and w[0].isupper() and w.lower() not in STOPWORDS]
-    entity = " ".join(capitalized[:2]) if capitalized else words[0]
-
-    # Action from remaining words
-    action_words = [w for w in words if w.lower() not in STOPWORDS and w != entity]
-    action = " ".join(action_words[:3]) if action_words else "updates"
-
-    return (entity[:50], action[:50])
-
-
 class ClusterService:
-    """Service to group articles into event clusters and detect material updates."""
+    """Service to cluster articles by event fingerprint and detect material updates."""
 
     def __init__(self, repository: ArticleRepository | None = None) -> None:
-        """Initializes the ClusterService with an ArticleRepository instance.
-
-        Args:
-            repository: Optional ArticleRepository instance. Defaults to new instance.
-        """
+        """Initialize with ArticleRepository."""
         self.repo = repository or ArticleRepository()
 
-    async def extract_fingerprint(self, article: ArticleIn) -> EventFingerprint:
-        """Extracts event fingerprint (entity, action, title hash) for an article.
+    def _normalize_title(self, title: str) -> str:
+        """Normalize title for hashing: lowercase, remove stopwords, punctuation, numbers."""
+        if not title:
+            return ""
+        # Lowercase and remove punctuation except spaces
+        normalized = re.sub(r"[^\w\s]", " ", title.lower())
+        # Remove numbers (version numbers, dates, etc.)
+        normalized = re.sub(r"\d+", "", normalized)
+        # Split and filter stopwords
+        words = [w for w in normalized.split() if w not in STOPWORDS and len(w) > 2]
+        return " ".join(words)
 
-        Args:
-            article: The ArticleIn instance.
+    def _compute_title_hash(self, title: str) -> str:
+        """Compute short hash of normalized title."""
+        normalized = self._normalize_title(title)
+        return hashlib.sha256(normalized.encode()).hexdigest()[:12]
 
-        Returns:
-            EventFingerprint model.
-        """
-        title_hash = compute_normalized_title_hash(article.title)
-
+    async def _extract_fingerprint_llm(self, title: str, content: str | None) -> Fingerprint:
+        """Extract entity and action using LLM."""
         user_prompt = EXTRACT_FINGERPRINT_USER_PROMPT_TEMPLATE.format(
-            title=article.title, content=article.content or ""
+            title=title, content=content or ""
         )
         messages = [
             {"role": "system", "content": EXTRACT_FINGERPRINT_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
-
         try:
-            # Temperature 0.7 for clustering judgment as per conventions
-            raw_response = await generate_completion(messages=messages, temperature=0.7)
-            # Clean possible markdown wrapping
-            cleaned = (
-                raw_response.strip()
-                .removeprefix("```json")
-                .removeprefix("```")
-                .removesuffix("```")
-                .strip()
-            )
-            data = json.loads(cleaned)
-            entity = str(data.get("entity", "")).strip() or "General"
-            action = str(data.get("action", "")).strip() or "Reported event"
+            response = await generate_completion(messages=messages, temperature=0.7)
+            data = json.loads(response.strip())
+            entity = data.get("entity", "Unknown").strip()
+            action = data.get("action", "Unknown").strip()
+            title_hash = self._compute_title_hash(title)
+            return Fingerprint(entity=entity, action=action, title_hash=title_hash)
         except Exception as exc:
-            logger.warning("llm_fingerprint_extraction_failed_using_heuristics", error=str(exc))
-            entity, action = extract_heuristic_fingerprint(article.title, article.content)
+            logger.warning("fingerprint_llm_failed", error=str(exc), title=title[:50])
+            # Fallback: simple heuristic
+            title_hash = self._compute_title_hash(title)
+            return Fingerprint(entity="Unknown", action="Unknown", title_hash=title_hash)
 
-        return EventFingerprint(
-            entity=entity,
-            action=action,
-            normalized_title_hash=title_hash,
-        )
+    def _fingerprint_to_key(self, fp: Fingerprint) -> str:
+        """Create a deterministic key for fingerprint matching."""
+        return f"{fp.entity.lower()}|{fp.action.lower()}|{fp.title_hash}"
 
-    def _are_fingerprints_similar(self, fp1: EventFingerprint, fp2: EventFingerprint) -> bool:
-        """Evaluates whether two fingerprints belong to the same event cluster.
-
-        Args:
-            fp1: First EventFingerprint.
-            fp2: Second EventFingerprint.
-
-        Returns:
-            True if fingerprints match on hash or entity/action similarity.
-        """
-        if fp1.normalized_title_hash == fp2.normalized_title_hash:
-            return True
-
-        e1, e2 = fp1.entity.lower().strip(), fp2.entity.lower().strip()
-        a1, a2 = fp1.action.lower().strip(), fp2.action.lower().strip()
-
-        if e1 == e2 and (a1 in a2 or a2 in a1):
-            return True
-
-        # Check entity containment and shared action words
-        if (e1 in e2 or e2 in e1) and len(e1) > 2 and len(e2) > 2:
-            a1_words = set(a1.split())
-            a2_words = set(a2.split())
-            if a1_words & a2_words:
-                return True
-
-        return False
-
-    async def check_material_update(
-        self,
-        existing_articles: list[dict[str, str | None]],
-        new_article: ArticleIn,
+    async def _check_material_update(
+        self, cluster_id: int, new_article: ArticleIn
     ) -> bool:
-        """Evaluates if a new incoming article contains material new facts for a cluster.
-
-        Args:
-            existing_articles: Previously saved articles in the cluster.
-            new_article: The new ArticleIn being evaluated.
-
-        Returns:
-            True if the new article represents a material update.
-        """
-        if not existing_articles:
-            return True
-
-        existing_text = "\n".join(
-            f"- {a.get('title')}: {a.get('content', '')[:150]}" for a in existing_articles
-        )
-        user_prompt = MATERIAL_UPDATE_USER_PROMPT_TEMPLATE.format(
-            existing_text=existing_text,
-            new_title=new_article.title,
-            new_content=new_article.content or "",
-        )
-
-        messages = [
-            {"role": "system", "content": MATERIAL_UPDATE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-
+        """Check if new article brings material updates to existing cluster."""
         try:
-            raw_response = await generate_completion(messages=messages, temperature=0.7)
-            cleaned = (
-                raw_response.strip()
-                .removeprefix("```json")
-                .removeprefix("```")
-                .removesuffix("```")
-                .strip()
+            existing_articles = await self.repo.get_cluster_articles(cluster_id)
+            if not existing_articles:
+                return True  # First article in cluster is always material
+
+            existing_text = "\n\n".join(
+                f"Title: {a['title']}\nContent: {a['content'] or ''}"
+                for a in existing_articles
             )
-            data = json.loads(cleaned)
-            return bool(data.get("is_material_update", True))
+            user_prompt = MATERIAL_UPDATE_USER_PROMPT_TEMPLATE.format(
+                existing_text=existing_text,
+                new_title=new_article.title,
+                new_content=new_article.content or "",
+            )
+            messages = [
+                {"role": "system", "content": MATERIAL_UPDATE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+            response = await generate_completion(messages=messages, temperature=0.3)
+            data = json.loads(response.strip())
+            return bool(data.get("is_material_update", False))
         except Exception as exc:
-            logger.warning("material_update_detection_fallback", error=str(exc))
-            return True
+            logger.warning("material_update_check_failed", error=str(exc))
+            return False  # Conservative: assume no material update on error
 
-    async def cluster_articles(
-        self,
-        articles: list[ArticleIn],
-        active_days: int = 3,
-    ) -> list[ClusterItem]:
-        """Groups a list of articles into event clusters and associates them in database.
-
-        Args:
-            articles: List of ArticleIn instances to cluster.
-            active_days: Lookback window in days for matching active clusters.
-
-        Returns:
-            List of ClusterItem objects.
-        """
-        if not articles:
+    async def cluster_articles(self, payload: ClusterIn) -> list[ClusterItem]:
+        """Cluster articles by event fingerprint and detect material updates."""
+        if not payload.articles:
             return []
 
-        # 1. Extract fingerprints for all incoming articles
-        fingerprinted_articles: list[tuple[EventFingerprint, ArticleIn]] = []
-        for article in articles:
-            fp = await self.extract_fingerprint(article)
-            fingerprinted_articles.append((fp, article))
+        # 1. Get recent active clusters from DB (last 3 days)
+        recent_clusters = await self.repo.find_recent_clusters(active_days=3)
+        cluster_map: dict[str, dict[str, Any]] = {}
+        for cl in recent_clusters:
+            fp = cl["fingerprint"]
+            key = self._fingerprint_to_key(Fingerprint(**fp))
+            cluster_map[key] = {
+                "id": cl["id"],
+                "fingerprint": fp,
+                "articles": [],
+                "is_material_update": False,
+            }
 
-        # 2. Intra-batch grouping
-        batch_groups: list[dict] = []
-        for fp, article in fingerprinted_articles:
-            matched_group = None
-            for group in batch_groups:
-                if self._are_fingerprints_similar(fp, group["fingerprint"]):
-                    matched_group = group
-                    break
+        # 2. Process each article: extract fingerprint, match or create cluster
+        for article in payload.articles:
+            fp = await self._extract_fingerprint_llm(article.title, article.content)
+            key = self._fingerprint_to_key(fp)
 
-            if matched_group:
-                matched_group["articles"].append(article)
+            if key in cluster_map:
+                # Existing cluster: add article, check material update
+                cluster_map[key]["articles"].append(article)
+                if not cluster_map[key]["is_material_update"]:
+                    is_update = await self._check_material_update(
+                        cluster_map[key]["id"], article
+                    )
+                    cluster_map[key]["is_material_update"] = is_update
             else:
-                batch_groups.append(
-                    {
-                        "fingerprint": fp,
-                        "articles": [article],
-                    }
+                # New cluster: create in DB
+                cluster_id = await self.repo.create_cluster(fp.model_dump())
+                await self.repo.add_article_to_cluster(cluster_id, article.link)
+                cluster_map[key] = {
+                    "id": cluster_id,
+                    "fingerprint": fp.model_dump(),
+                    "articles": [article],
+                    "is_material_update": True,  # New cluster = material
+                }
+
+        # 3. Update last_seen for all touched clusters
+        for cluster_data in cluster_map.values():
+            await self.repo.update_cluster_last_seen(cluster_data["id"])
+
+        # 4. Build output ClusterItems
+        result: list[ClusterItem] = []
+        for cluster_data in cluster_map.values():
+            fp = Fingerprint(**cluster_data["fingerprint"])
+            result.append(
+                ClusterItem(
+                    cluster_id=cluster_data["id"],
+                    fingerprint=fp,
+                    articles=cluster_data["articles"],
+                    is_material_update=cluster_data["is_material_update"],
                 )
-
-        # 3. Match against recent database clusters & evaluate material updates
-        recent_db_clusters = await self.repo.find_recent_clusters(active_days=active_days)
-        result_clusters: list[ClusterItem] = []
-
-        for group in batch_groups:
-            group_fp: EventFingerprint = group["fingerprint"]
-            group_articles: list[ArticleIn] = group["articles"]
-
-            # Check if matching cluster exists in DB
-            matched_db_cluster = None
-            for db_c in recent_db_clusters:
-                db_fp = EventFingerprint(
-                    entity=db_c["fingerprint"].get("entity", ""),
-                    action=db_c["fingerprint"].get("action", ""),
-                    normalized_title_hash=db_c["fingerprint"].get("normalized_title_hash", ""),
-                )
-                if self._are_fingerprints_similar(group_fp, db_fp):
-                    matched_db_cluster = db_c
-                    break
-
-            if matched_db_cluster:
-                cluster_id = matched_db_cluster["id"]
-                is_delivered = await self.repo.is_cluster_delivered(cluster_id)
-
-                if is_delivered:
-                    # Check material update against previous articles
-                    existing_articles = await self.repo.get_cluster_articles(cluster_id)
-                    is_material = await self.check_material_update(
-                        existing_articles, group_articles[0]
-                    )
-                else:
-                    is_material = True
-
-                await self.repo.update_cluster_last_seen(cluster_id)
-                for art in group_articles:
-                    await self.repo.add_article_to_cluster(cluster_id, art.link)
-
-                result_clusters.append(
-                    ClusterItem(
-                        cluster_id=cluster_id,
-                        fingerprint=group_fp,
-                        articles=group_articles,
-                        is_material_update=is_material,
-                    )
-                )
-            else:
-                # Create brand new cluster
-                cluster_id = await self.repo.create_cluster(group_fp.model_dump())
-                for art in group_articles:
-                    await self.repo.add_article_to_cluster(cluster_id, art.link)
-
-                result_clusters.append(
-                    ClusterItem(
-                        cluster_id=cluster_id,
-                        fingerprint=group_fp,
-                        articles=group_articles,
-                        is_material_update=True,
-                    )
-                )
+            )
 
         logger.info(
             "clustering_completed",
-            input_articles=len(articles),
-            clusters_count=len(result_clusters),
+            total_articles=len(payload.articles),
+            clusters=len(result),
+            new_clusters=sum(1 for c in result if c.is_material_update and len(c.articles) == 1),
+            updated_clusters=sum(1 for c in result if c.is_material_update and len(c.articles) > 1),
         )
-        return result_clusters
+        return result

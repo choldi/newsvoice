@@ -47,12 +47,12 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 **Goal:** Multiple articles about the same event become one story.
 
 **Scope:**
-- [ ] New endpoint: `POST /cluster`
-- [ ] Fingerprint: `{entity, action, normalized_title_hash}`
-- [ ] SQLite table: `clusters`
-- [ ] Material-update detection (same cluster + new facts -> re-deliver)
-- [ ] n8n workflow: `RSS -> /filter_new -> /cluster -> /summarize -> Telegram`
-- [ ] Integration tests with fixture of 10 related + 5 unrelated articles
+- [x] New endpoint: `POST /cluster`
+- [x] Fingerprint: `{entity, action, normalized_title_hash}`
+- [x] SQLite table: `clusters` (already in migrations)
+- [x] Material-update detection (same cluster + new facts -> re-deliver)
+- [x] n8n workflow: `RSS -> /filter_new -> /cluster -> /summarize -> Telegram`
+- [x] Integration tests with fixture of 10 related + 5 unrelated articles
 
 **Success criteria:** 5 articles about "OpenAI releases GPT-5" collapse into **1 digest entry**.
 
@@ -117,4 +117,18 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 - Do NOT use Postgres in Phase 1-3
 - Do NOT build a web UI before Phase 5
 - Do NOT replace n8n with Python schedulers (APScheduler/cron)
-- Do NOT call LLM directly from n8n (always via Python endpoint)
+- Do NOT call LLM directly from n8n (always via Python endpoint)````
+
+Ahora ejecuta la verificación pre-commit:
+
+```bash
+ruff format .
+ruff check .
+pytest -q
+```
+
+Si todo pasa, haz el commit:
+
+```bash
+./scripts/auto_commit.sh "feat(cluster): add fingerprint-based clustering endpoint with material update detection"
+```

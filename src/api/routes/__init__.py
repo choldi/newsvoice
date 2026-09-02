@@ -1,4 +1,4 @@
-"""Routes package initialization."""
+"""API routes package."""
 
 from src.api.routes.cluster import router as cluster_router
 from src.api.routes.ingest import router as ingest_router

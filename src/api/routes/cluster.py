@@ -1,4 +1,4 @@
-"""Clustering route for grouping related news articles into event clusters."""
+"""Event clustering route for grouping articles by story."""
 
 import structlog
 from fastapi import APIRouter, HTTPException, status
@@ -16,35 +16,38 @@ cluster_service = ClusterService()
     "/cluster",
     response_model=ClusterOut,
     status_code=status.HTTP_200_OK,
-    summary="Group articles into event story clusters",
+    summary="Cluster articles by event fingerprint",
     description=(
-        "Derives event fingerprints ({entity, action, normalized_title_hash}), "
-        "groups related coverage of the same event into clusters, "
-        "and checks for material updates against previously seen events."
+        "Groups articles by {entity, action, title_hash} fingerprint. "
+        "Detects material updates for existing clusters. "
+        "Returns clusters ready for digest generation."
     ),
 )
 async def cluster_articles(payload: ClusterIn) -> ClusterOut:
     """POST /cluster endpoint handler.
 
     Args:
-        payload: ClusterIn model containing list of articles.
+        payload: ClusterIn model containing deduplicated articles.
 
     Returns:
-        ClusterOut model with grouped event clusters.
+        ClusterOut model containing event clusters with material update flags.
 
     Raises:
-        HTTPException: If an error occurs during event clustering.
+        HTTPException: If clustering fails.
     """
     try:
-        clusters = await cluster_service.cluster_articles(payload.articles)
+        clusters = await cluster_service.cluster_articles(payload)
+        new_clusters = sum(1 for c in clusters if c.is_material_update and len(c.articles) == 1)
+        updated_clusters = sum(1 for c in clusters if c.is_material_update and len(c.articles) > 1)
         return ClusterOut(
             status="ok",
             clusters=clusters,
             total_articles=len(payload.articles),
-            total_clusters=len(clusters),
+            new_clusters=new_clusters,
+            updated_clusters=updated_clusters,
         )
     except Exception as exc:
-        logger.error("cluster_articles_endpoint_failed", error=str(exc))
+        logger.error("cluster_articles_failed", error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cluster articles: {str(exc)}",
