@@ -35,9 +35,11 @@ Thumbs.db
 .vscode/
 .idea/
 .mimocode/
+scripts/
 
 # Binaries and Models
 models/
 *.gguf
 *.bin
 n8n_data/
+.aider*

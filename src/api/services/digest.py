@@ -4,6 +4,7 @@ import structlog
 
 from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn, DigestIn, DigestOut
+from src.api.models.cluster import ClusterItem
 from src.api.services.dedup import normalize_url
 from src.core.llm import generate_completion
 from src.core.prompts import (
@@ -15,7 +16,7 @@ logger = structlog.get_logger()
 
 
 class DigestService:
-    """Service to process RSS articles and generate AI news digest."""
+    """Service to process RSS articles / clusters and generate AI news digest."""
 
     def __init__(self, repository: ArticleRepository | None = None) -> None:
         """Initializes the DigestService with an ArticleRepository instance.
@@ -46,16 +47,79 @@ class DigestService:
             formatted_blocks.append(block)
         return "\n\n".join(formatted_blocks)
 
-    async def generate_digest(self, payload: DigestIn) -> DigestOut:
-        """Generates a news digest from incoming articles payload using LLM.
+    def _format_clusters(self, clusters: list[ClusterItem]) -> str:
+        """Formats a list of cluster groups into a structured text string for the prompt.
 
         Args:
-            payload: DigestIn containing a list of ArticleIn objects.
+            clusters: List of ClusterItem instances.
+
+        Returns:
+            Formatted string of story clusters.
+        """
+        formatted_blocks: list[str] = []
+        for i, cluster in enumerate(clusters, 1):
+            articles_info = []
+            for art in cluster.articles:
+                src = f" ({art.source})" if art.source else ""
+                snippet = f" - {art.content[:150]}" if art.content else ""
+                articles_info.append(f"  * {art.title}{src}: {art.link}{snippet}")
+
+            joined_articles = "\n".join(articles_info)
+            block = (
+                f"[Story Cluster #{i}] Entity: {cluster.fingerprint.entity} | "
+                f"Action: {cluster.fingerprint.action}\n"
+                f"Related Coverage ({len(cluster.articles)} sources):\n"
+                f"{joined_articles}"
+            )
+            formatted_blocks.append(block)
+        return "\n\n".join(formatted_blocks)
+
+    async def generate_digest(self, payload: DigestIn) -> DigestOut:
+        """Generates a news digest from incoming articles or clusters payload using LLM.
+
+        Args:
+            payload: DigestIn containing either articles or clusters.
 
         Returns:
             DigestOut containing execution status and generated Markdown text.
         """
+        clusters = payload.clusters
         articles = payload.articles
+
+        if clusters:
+            # Filter only clusters that are material updates
+            actionable_clusters = [c for c in clusters if c.is_material_update]
+            if not actionable_clusters:
+                actionable_clusters = clusters
+
+            logger.info("processing_digest_clusters", count=len(actionable_clusters))
+            stories_text = self._format_clusters(actionable_clusters)
+            total_items = sum(len(c.articles) for c in actionable_clusters)
+
+            user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(articles_text=stories_text)
+            messages = [
+                {"role": "system", "content": SUMMARIZE_DIGEST_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            digest_markdown = await generate_completion(messages=messages, temperature=0.3)
+
+            # Record cluster deliveries
+            for cluster in actionable_clusters:
+                if cluster.cluster_id:
+                    try:
+                        await self.repo.record_cluster_delivery(
+                            cluster.cluster_id, material_update=cluster.is_material_update
+                        )
+                    except Exception as exc:
+                        logger.warning("record_cluster_delivery_failed", error=str(exc))
+
+            return DigestOut(
+                status="ok",
+                digest=digest_markdown,
+                article_count=total_items,
+            )
+
         if not articles:
             logger.info("empty_articles_payload_received")
             return DigestOut(

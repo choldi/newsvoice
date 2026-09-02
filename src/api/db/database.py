@@ -1,5 +1,6 @@
 """Database management and SQLite connection layer using aiosqlite."""
 
+import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -91,7 +92,7 @@ async def get_db(db_path: str | None = None) -> AsyncGenerator[aiosqlite.Connect
 
 
 class ArticleRepository:
-    """Repository handling database operations for articles and deliveries."""
+    """Repository handling database operations for articles, clusters, and deliveries."""
 
     def __init__(self, db_path: str | None = None) -> None:
         """Initializes the repository with an optional database path.
@@ -181,3 +182,152 @@ class ArticleRepository:
         async with get_db(self.db_path) as db:
             await db.executemany(query, records)
             await db.commit()
+
+    async def create_cluster(self, fingerprint: dict[str, str]) -> int:
+        """Creates a new event cluster and returns its primary key ID.
+
+        Args:
+            fingerprint: Dictionary containing entity, action, and title hash.
+
+        Returns:
+            The newly inserted cluster ID.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        fp_json = json.dumps(fingerprint, sort_keys=True)
+
+        query = """
+            INSERT INTO clusters (fingerprint, first_seen, last_seen)
+            VALUES (?, ?, ?)
+        """
+
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(query, (fp_json, now_iso, now_iso))
+            await db.commit()
+            return cursor.lastrowid or 0
+
+    async def update_cluster_last_seen(self, cluster_id: int) -> None:
+        """Updates the last_seen timestamp for an existing cluster.
+
+        Args:
+            cluster_id: ID of the cluster to update.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = "UPDATE clusters SET last_seen = ? WHERE id = ?"
+
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (now_iso, cluster_id))
+            await db.commit()
+
+    async def add_article_to_cluster(self, cluster_id: int, article_url: str) -> None:
+        """Associates an article URL with a cluster.
+
+        Args:
+            cluster_id: ID of the event cluster.
+            article_url: URL of the article.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT OR IGNORE INTO cluster_articles (cluster_id, article_url, added_at)
+            VALUES (?, ?, ?)
+        """
+
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (cluster_id, article_url, now_iso))
+            await db.commit()
+
+    async def find_recent_clusters(self, active_days: int = 3) -> list[dict]:
+        """Retrieves recent active clusters within active_days window.
+
+        Args:
+            active_days: Time window in days to consider a cluster active.
+
+        Returns:
+            List of cluster dictionaries with id, fingerprint, and timestamps.
+        """
+        cutoff_date = (datetime.now(UTC) - timedelta(days=active_days)).isoformat()
+        query = """
+            SELECT id, fingerprint, first_seen, last_seen
+            FROM clusters
+            WHERE last_seen >= ?
+            ORDER BY last_seen DESC
+        """
+
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (cutoff_date,)) as cursor:
+                rows = await cursor.fetchall()
+                clusters = []
+                for row in rows:
+                    try:
+                        fp = json.loads(row["fingerprint"])
+                    except Exception:
+                        fp = {}
+                    clusters.append(
+                        {
+                            "id": row["id"],
+                            "fingerprint": fp,
+                            "first_seen": row["first_seen"],
+                            "last_seen": row["last_seen"],
+                        }
+                    )
+                return clusters
+
+    async def is_cluster_delivered(self, cluster_id: int) -> bool:
+        """Checks if a cluster has previously been delivered.
+
+        Args:
+            cluster_id: ID of the cluster.
+
+        Returns:
+            True if at least one delivery is recorded for this cluster ID.
+        """
+        query = "SELECT 1 FROM deliveries WHERE cluster_id = ? LIMIT 1"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (cluster_id,)) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+
+    async def record_cluster_delivery(self, cluster_id: int, material_update: bool = False) -> None:
+        """Records a delivery event for an event cluster.
+
+        Args:
+            cluster_id: ID of the delivered cluster.
+            material_update: Whether this delivery represents a material update.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO deliveries (cluster_id, delivered_at, material_update)
+            VALUES (?, ?, ?)
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (cluster_id, now_iso, 1 if material_update else 0))
+            await db.commit()
+
+    async def get_cluster_articles(self, cluster_id: int) -> list[dict[str, str | None]]:
+        """Fetches all article details associated with a cluster.
+
+        Args:
+            cluster_id: ID of the cluster.
+
+        Returns:
+            List of article dictionaries.
+        """
+        query = """
+            SELECT a.url, a.title, a.content, a.source, a.fetched_at
+            FROM articles a
+            JOIN cluster_articles ca ON a.url = ca.article_url
+            WHERE ca.cluster_id = ?
+            ORDER BY ca.added_at ASC
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (cluster_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "url": row["url"],
+                        "title": row["title"],
+                        "content": row["content"],
+                        "source": row["source"],
+                        "fetched_at": row["fetched_at"],
+                    }
+                    for row in rows
+                ]
