@@ -7,6 +7,7 @@ import structlog
 from fastapi import FastAPI
 
 from src.api.db.database import run_migrations
+from src.api.routes.cluster import router as cluster_router
 from src.api.routes.ingest import router as ingest_router
 from src.api.routes.mvp import router as mvp_router
 from src.api.routes.summarize import router as summarize_router
@@ -26,12 +27,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="AI News Digest Engine API",
     description="Microservices API for AI-curated news summarization and orchestration",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
 # Include route routers
 app.include_router(ingest_router)
+app.include_router(cluster_router)
 app.include_router(summarize_router)
 app.include_router(mvp_router)
 
