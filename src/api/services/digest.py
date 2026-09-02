@@ -2,15 +2,28 @@
 
 import structlog
 
+from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn, DigestIn, DigestOut
+from src.api.services.dedup import normalize_url
 from src.core.llm import generate_completion
-from src.core.prompts import SUMMARIZE_DIGEST_SYSTEM_PROMPT, SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE
+from src.core.prompts import (
+    SUMMARIZE_DIGEST_SYSTEM_PROMPT,
+    SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE,
+)
 
 logger = structlog.get_logger()
 
 
 class DigestService:
     """Service to process RSS articles and generate AI news digest."""
+
+    def __init__(self, repository: ArticleRepository | None = None) -> None:
+        """Initializes the DigestService with an ArticleRepository instance.
+
+        Args:
+            repository: Optional ArticleRepository instance. Defaults to new instance.
+        """
+        self.repo = repository or ArticleRepository()
 
     def _format_articles(self, articles: list[ArticleIn]) -> str:
         """Formats a list of articles into a structured text string for the prompt.
@@ -61,6 +74,15 @@ class DigestService:
         ]
 
         digest_markdown = await generate_completion(messages=messages, temperature=0.3)
+
+        # Record delivery for delivered articles
+        delivered_urls = [normalize_url(a.link) for a in articles if a.link]
+        if delivered_urls:
+            try:
+                await self.repo.record_deliveries(delivered_urls)
+                logger.info("deliveries_recorded", count=len(delivered_urls))
+            except Exception as exc:
+                logger.warning("recording_deliveries_failed", error=str(exc))
 
         return DigestOut(
             status="ok",

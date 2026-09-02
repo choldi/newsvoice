@@ -30,11 +30,11 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 **Goal:** Never send the same article twice.
 
 **Scope:**
-- [ ] SQLite schema: `articles`, `deliveries`
-- [ ] New endpoint: `POST /filter_new`
-- [ ] Replace `/mvp_digest` with `/summarize` (no RSS logic inside)
-- [ ] n8n workflow updated: `RSS -> /filter_new -> /summarize -> Telegram`
-- [ ] Unit tests for dedup logic (URL normalization, 7-day window)
+- [x] SQLite schema: `articles`, `deliveries`
+- [x] New endpoint: `POST /filter_new`
+- [x] Replace `/mvp_digest` with `/summarize` (no RSS logic inside)
+- [x] n8n workflow updated: `RSS -> /filter_new -> /summarize -> Telegram`
+- [x] Unit tests for dedup logic (URL normalization, 7-day window)
 
 **Success criteria:** Re-running the flow on the same RSS feed within 24h produces **zero duplicate deliveries**.
 
