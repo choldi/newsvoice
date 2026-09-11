@@ -18,6 +18,7 @@ from temporalio.worker import Worker
 
 from src.core.config import settings
 from src.workers import activities
+from src.workers.workflows import DigestPipelineWorkflow
 
 logger = structlog.get_logger(__name__)
 
@@ -57,7 +58,7 @@ async def run_worker(
         worker = Worker(
             client,
             task_queue=queue,
-            workflows=[],
+            workflows=[DigestPipelineWorkflow],
             activities=[
                 activities.fetch_rss_activity,
                 activities.filter_new_activity,
