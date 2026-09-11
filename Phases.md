@@ -1,79 +1,90 @@
-# PHASES.MD - Incremental Delivery Plan
+# PHASES.MD - Incremental Delivery Plan (Temporal-based)
 
-Each phase is **independently shippable**. Do NOT start phase N+1 until N is running reliably for **3+ days**.
+Each phase is **independently shippable**. Do NOT start phase N+1 until N is
+running reliably for **3+ days**.
 
 ---
 
-## PHASE 1 - MVP (Single Endpoint)
+## PHASE 1 - Foundations and Temporal Bootstrap
 
-**Goal:** End-to-end flow working in 1 weekend.
+**Goal:** Restore a healthy codebase and replace the n8n hub with Temporal.
 
 **Scope:**
-- [x] FastAPI app with ONE endpoint: `POST /mvp_digest`
-- [x] Receives list of articles from n8n
-- [x] Calls llama.cpp via LiteLLM
-- [x] Returns 5+5 markdown
-- [x] n8n workflow: `Schedule -> RSS -> /mvp_digest -> Telegram`
-- [x] `docker-compose.yml` with n8n + api
-- [x] `.env.example` documented
+- [x] Fix broken codebase (health endpoint, route prefixes, service imports)
+- [x] Add `temporalio` to `pyproject.toml` and install in the venv
+- [x] Docker Compose: `temporal` (server) + `temporal-ui` + `temporal-postgres`
+- [x] Remove n8n from `docker-compose.yml`
+- [x] Worker skeleton: `src/workers/run_worker.py`, `src/workers/activities.py`
+- [x] `.env.example` documented with `TEMPORAL_*` variables
 
-**Success criteria:** Receive a Telegram message every morning at **08:00** with 5 summaries + 5 headlines.
+**Success criteria:** `docker compose up` brings up Temporal on `:7233` and the
+API on `:8000`; `curl localhost:8000/health` returns `{"status": "ok"}`.
 
 **Effort:** 4-6 hours.
 
-**Skip:** DB, dedup, clustering, TTS.
-
 ---
 
-## PHASE 2 - State and Deduplication
+## PHASE 2 - RSS and Core Activities
 
-**Goal:** Never send the same article twice.
+**Goal:** Every step of the digest pipeline is a Temporal activity with a single
+responsibility.
 
 **Scope:**
-- [x] SQLite schema: `articles`, `deliveries`
-- [x] New endpoint: `POST /filter_new`
-- [x] Replace `/mvp_digest` with `/summarize` (no RSS logic inside)
-- [x] n8n workflow updated: `RSS -> /filter_new -> /summarize -> Telegram`
-- [x] Unit tests for dedup logic (URL normalization, 7-day window)
+- [x] `fetch_rss_activity` (feedparser, async, per-feed timeout)
+- [x] `filter_new_activity` (SQLite dedup, 7-day window)
+- [x] `cluster_activity` (entity+action fingerprint grouping)
+- [x] `generate_digest_activity` (LiteLLM → 5+5 markdown)
+- [x] `generate_tts_activity` (edge-tts, content-hash cache)
+- [x] `deliver_telegram_message_activity` / `deliver_telegram_audio_activity`
+- [x] Activity unit tests with `ActivityEnvironment`
 
-**Success criteria:** Re-running the flow on the same RSS feed within 24h produces **zero duplicate deliveries**.
+**Success criteria:** `test_activities.py` passes; each activity is callable
+from an `ActivityEnvironment` in isolation.
 
 **Effort:** 6-8 hours.
 
 ---
 
-## PHASE 3 - Event Clustering
+## PHASE 3 - Workflow Orchestration and Scheduling
 
-**Goal:** Multiple articles about the same event become one story.
+**Goal:** A durable workflow runs the full pipeline on a daily schedule.
 
 **Scope:**
-- [x] New endpoint: `POST /cluster`
-- [x] Fingerprint: `{entity, action, normalized_title_hash}`
-- [x] SQLite table: `clusters` (already in migrations)
-- [x] Material-update detection (same cluster + new facts -> re-deliver)
-- [x] n8n workflow: `RSS -> /filter_new -> /cluster -> /summarize -> Telegram`
-- [x] Integration tests with fixture of 10 related + 5 unrelated articles
+- [x] `DigestPipelineWorkflow` choreographing fetch → filter → cluster → digest
+  → TTS → deliver
+- [x] Early exit when no new articles
+- [x] Configurable TTS/audio delivery via `PipelineConfig`
+- [x] Per-activity start-to-close timeouts
+- [x] Worker service in `docker-compose.yml` (registers workflow + activities)
+- [x] `trigger.py` (manual one-shot run)
+- [x] `schedule.py` (native Temporal schedule, daily 08:00 UTC)
+- [x] Workflow integration tests with `WorkflowEnvironment` + stub activities
 
-**Success criteria:** 5 articles about "OpenAI releases GPT-5" collapse into **1 digest entry**.
+**Success criteria:** A started workflow returns a digest dict end-to-end in the
+test environment; the schedule starts one workflow per day.
 
-**Effort:** 10-14 hours.
+**Effort:** 8-10 hours.
 
 ---
 
-## PHASE 4 - Multimodal Output (TTS)
+## PHASE 4 - Documentation and Cleanup
 
-**Goal:** Audio version of the digest for commute listening.
+**Goal:** Remove all n8n traces and make the docs describe the Temporal design.
 
 **Scope:**
-- [x] New endpoint: `POST /generate_tts`
-- [x] Use `edge-tts` (free, high quality) or local piper
-- [x] Cache audio by content hash in `data/tts_cache/`
-- [x] n8n workflow: parallel branch for text + audio
-- [x] Telegram node sends both text message and audio file
+- [x] Rewrite this `Phases.md` from scratch
+- [x] Update `Architecture.md` (Temporal hub, new data flow, project tree)
+- [x] Update `CONVENTIONS.md` (drop n8n section, add Temporal conventions)
+- [x] Update `Deploy.md` (Temporal stack, worker, schedule, trigger)
+- [x] Update `AGENTS.md` (Temporal architecture, commands, examples)
+- [x] Delete `n8n/` directory
+- [x] Remove n8n references from code docstrings
+- [x] Final verification: ruff + pytest + `docker compose config`
 
-**Success criteria:** Receive both a text message and a 2-3 min **MP3** in Telegram.
+**Success criteria:** No `n8n` reference remains in code, config, or docs — except
+historical notes describing the migration itself.
 
-**Effort:** 4-6 hours.
+**Effort:** 2-3 hours.
 
 ---
 
@@ -83,7 +94,8 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 
 **Scope:**
 - [ ] `collections.toml` (inspired by Better Morning)
-- [ ] Each collection = independent n8n workflow + independent schedule
+- [ ] Per-collection `PipelineConfig` (feeds, TTS flag, delivery target)
+- [ ] One Temporal schedule per collection at a configurable time
 - [ ] Shared DB, collection-scoped dedup
 - [ ] Per-collection prompt templates
 
@@ -95,7 +107,7 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 
 ## PHASE 6 (Optional) - Web UI and Multi-user
 
-**Goal:** Manage sources and view history from browser.
+**Goal:** Manage sources and view history from a browser.
 
 **Scope:**
 - [ ] FastAPI + HTMX or simple React frontend
@@ -103,7 +115,8 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 - [ ] CRUD for collections and feeds
 - [ ] History viewer with re-deliver button
 
-**Success criteria:** Non-technical user can add an RSS feed without touching code.
+**Success criteria:** A non-technical user can add an RSS feed without touching
+code.
 
 **Effort:** 20-30 hours.
 
@@ -113,35 +126,10 @@ Each phase is **independently shippable**. Do NOT start phase N+1 until N is run
 
 ## ANTI-PATTERNS TO AVOID
 
-- Do NOT add clustering in Phase 1
-- Do NOT use Postgres in Phase 1-3
+- Do NOT add collections/multi-user before the single pipeline is stable
+- Do NOT use Postgres for application state in Phase 1-4 (Temporal's own
+  `temporal-postgres` is fine; news-engine state stays in SQLite)
 - Do NOT build a web UI before Phase 5
-- Do NOT replace n8n with Python schedulers (APScheduler/cron)
-- Do NOT call LLM directly from n8n (always via Python endpoint)````
-
-## Resumen de la Fase 4
-
-**Archivos nuevos**:
-1. `src/api/models/tts.py` — Modelos `TTSIn` / `TTSOut`.
-2. `src/api/services/tts.py` — `TTSService` con caché por hash SHA256, truncado seguro y wrapper de `edge-tts`.
-3. `src/api/routes/tts.py` — Endpoint `POST /generate_tts` con manejo de errores.
-4. `tests/unit/test_tts_service.py` — 7 tests unitarios.
-5. `tests/integration/test_tts_endpoint.py` — 3 tests de integración.
-6. `n8n/workflows/digest_pipeline_v4.json` — Workflow con rama paralela texto + audio.
-
-**Archivos modificados**:
-1. `src/api/main.py` — Registra `tts_router` con prefijo `/api` y sube versión a `0.4.0`.
-2. `Phases.md` — Marca los 5 checkboxes de Fase 4 como completados.
-
-**Cumplimiento de convenciones**:
-- ✅ Un endpoint por archivo en `src/api/routes/`
-- ✅ Lógica en `src/api/services/`
-- ✅ Modelos Pydantic con sufijos `In/Out`
-- ✅ Type hints y docstrings Google style
-- ✅ Respuesta JSON con `status: "ok"` y `audio_path` (no binario)
-- ✅ Configuración vía `pydantic-settings` (sin secretos hardcoded)
-- ✅ Logging con `structlog`
-- ✅ `edge-tts` ya estaba en `pyproject.toml`
-- ✅ Caché en `data/tts_cache/` (ya en `.gitignore`)
-
-**Siguiente paso**: ejecutar `ruff format .`, `ruff check .`, `pytest -q` y luego `./scripts/auto_commit.sh "feat(tts): add /generate_tts endpoint with edge-tts and content-hash caching"`.
+- Do NOT call LLM SDK directly from routes or workflows (always via LiteLLM)
+- Do NOT perform network I/O inside workflows (lives in activities)
+- Do NOT reintroduce APScheduler/cron while Temporal schedules are available

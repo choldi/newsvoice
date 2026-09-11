@@ -6,15 +6,15 @@ Estás trabajando en **news-engine**, un sistema modular self-hosted que genera 
 
 ### Arquitectura: Hub and Spoke
 
-- **Hub**: `n8n` (orquestación, scheduling, retries, notificaciones)
-- **Spokes**: FastAPI microservicios (cada endpoint = una responsabilidad)
+- **Hub**: `Temporal.io` (orquestación durable, scheduling, retries, estado)
+- **Spokes**: FastAPI microservicios + actividades Temporal (cada actividad = una responsabilidad)
 
 ## ARCHIVOS DE REFERENCIA OBLIGATORIOS
 
 Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 
 - `Architecture.md` — visión técnica, componentes, flujo de datos
-- `Conventions.md` — reglas de estilo, naming, API, DB, testing
+- `CONVENTIONS.md` — reglas de estilo, naming, API, DB, Temporal, testing
 - `Phases.md` — plan incremental de entrega (NO adelantes fases)
 - `Deploy.md` — guia de despliegue
 - `pyproject.toml` — dependencias permitidas
@@ -27,7 +27,6 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 
 ### Reglas:
 - NO implementes características de fases futuras
-- NO anades clustering, TTS o Web UI antes de tiempo
 - Si el usuario pide algo fuera de fase, **ADVÍETE** antes de codificar
 - Al completar una tarea, marca el checkbox correspondiente en `Phases.md`
 
@@ -40,6 +39,7 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 - aiosqlite para DB
 - structlog para logging
 - pydantic-settings para configuración
+- temporalio para workflows y actividades
 
 ### Estructura:
 - Un endpoint por archivo en `src/api/routes/`
@@ -47,6 +47,7 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 - Lógica de negocio en `src/api/services/`
 - Modelos Pydantic en `src/api/models/` con sufijos `In/Out/DB`
 - Prompts del LLM como constantes en `src/core/prompts.py`
+- Workflows en `src/workers/workflows.py` y actividades en `src/workers/activities.py`
 
 ### Estilo:
 - PEP 8
@@ -62,6 +63,15 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 - Endpoints stateless e idempotentes cuando sea posible
 - TTS endpoint devuelve JSON con `audio_path`, NO binario
 
+### Temporal (Workflows y Actividades):
+- **Determinismo**: los workflows NO hacen I/O ni llamadas externas; todo efecto secundario vive en actividades
+- Actividades llaman directo a `src/api/services/` (sin saltos HTTP)
+- Toda llamada `execute_activity` lleva `start_to_close_timeout`
+- Multi-argumento: usa `args=[...]` (NO posicionales extra)
+- NO uses kwargs con el logger del sandbox (`workflow.logger.info("m", foo=1)` falla; usa f-strings)
+- Tests de actividades: `ActivityEnvironment`
+- Tests de workflows: `WorkflowEnvironment` con stubs registrados con el MISMO nombre que la actividad real
+
 ### Base de Datos:
 - SQLite en `data/news.db`
 - Migraciones manuales en `src/api/db/migrations/`
@@ -71,7 +81,7 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 ### LLM:
 - SIEMPRE vía wrapper en `src/core/llm.py`
 - Temperature: **0.3** para resumenes, **0.7** para clustering
-- NO llamas a OpenAI/llama.cpp SDK directamente desde routes
+- NO llamas a OpenAI/llama.cpp SDK directamente desde routes ni workflows
 
 ### Configuración:
 - `pydantic-settings` leyendo `.env`
@@ -79,9 +89,10 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 - NO secrets en el código
 
 ### Testing:
-- `pytest` + `pytest-asyncio`
+- `pytest` + `pytest-asyncio` (`asyncio_mode = "auto"` — tests `async def` sin marker)
 - Unit tests para cada service (mock LLM, mock DB)
 - Integration tests por endpoint con TestClient
+- Tests de workflow con `WorkflowEnvironment`
 - Coverage objetivo: **80%** en `src/api/services/`
 
 ## REGLAS DE GIT Y COMMITS
@@ -108,10 +119,10 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
   - `chore` — configuración, CI, dependencias
 
 ### Ejemplos válidos:
-- `feat(cluster): add fingerprint-based grouping`
+- `feat(temporal): add worker service to docker-compose`
 - `fix(dedup): handle URL normalization edge case`
-- `docs(deploy): update SSH instructions`
-- `test(api): add integration tests for /filter_new`
+- `docs(deploy): update Temporal schedule instructions`
+- `test(workflow): add integration tests for DigestPipelineWorkflow`
 
 ### Reglas de commits:
 - Un cambio lógico por commit.
@@ -120,15 +131,16 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 
 ### Estrategia de branches:
 - `main` — estable, desplegable
-- `phase-N-<nombre>` — branches de features (ej: `phase-2-dedup`)
+- `phase-N-<nombre>` — branches de features (ej: `phase-3-cluster`)
 - Merge a `main` via Pull Request cuando la fase esté completa
 - **Nunca** hagas commit directo a main para Fase 2 en adelante
 
 ### Archivos que NUNCA debes commitear:
 - **Secrets y configuración sensible**: `.env` (solo commitea `.env.example`), `.env.local`, `.env.*.local`, `*.pem`, `*.key`, `credentials.json`
 - **Datos de runtime**: `data/` (todo el contenido, excepto `data/.gitkeep`), `*.db`, `*.db-journal`, `*.db-shm`, `*.db-wal`, `data/tts_cache/`
+- **Artefactos de build**: `build/`, `dist/`, `*.egg-info/`, `.coverage`
 - **Archivos de sistema e IDE**: `.vscode/`, `.idea/`, `.DS_Store`, `Thumbs.db`, `pycache/`, `*.pyc`
-- **Binarios y modelos**: `models/`, `*.gguf`, `*.bin`, `n8n_data/`
+- **Binarios y modelos**: `models/`, `*.gguf`, `*.bin`
 
 ### Verificación antes de push:
 1. Después de hacer commit, verifica que el push fue exitoso:
@@ -146,16 +158,17 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
   ./scripts/deploy.sh production
   ```
 - Confirma con el usuario antes de deploy a producción.
-- Después de deploy, verifica:
+- Después de deploy, verifica (ver `Deploy.md`):
   ```bash
-  curl <server>/api/health
+  curl http://localhost:8000/health
+  docker compose logs -f worker
   ```
-- Si falla, rollback inmediato (ver `Deploy.md`, sección 5).
+- Si falla, rollback inmediato (`docker compose down`).
 
 ## CHECKLIST DE FINALIZACIÓN DE TAREA
 
 Antes de decir "hecho" a cualquier tarea, verifica:
-- [ ] El código sigue `Conventions.md`
+- [ ] El código sigue `CONVENTIONS.md`
 - [ ] Tests pasan: `pytest -q`
 - [ ] Linter limpio: `ruff check .`
 - [ ] Cambios commiteados con mensaje correcto
@@ -183,29 +196,29 @@ Antes de decir "hecho" a cualquier tarea, verifica:
 
 ### Si algo falla:
 - NO intentes "arreglarlo rápidamente" sin entender la causa
-- Lee los logs: `docker compose logs api`
+- Lee los logs: `docker compose logs api` / `docker compose logs worker`
   - Si es un error de tests, muestra el output completo
   - Si es un error de deploy, muestra el error del servidor
 
 ## EJEMPLOS DE INTERACCION CORRECTA
 
 ### ✅ Correcto:
-- Usuario: "Implementa el endpoint `/filter_new`"
+- Usuario: "Implementa el workflow de digest diario"
 - Mimo Code:
-  1. Lee `Phases.md` y confirma que es Fase 2
-  2. Muestra el checklist de Fase 2
-  3. Implementa el endpoint siguiendo `Conventions.md`
+  1. Lee `Phases.md` y confirma que es Fase 3
+  2. Muestra el checklist de Fase 3
+  3. Implementa el workflow siguiendo `CONVENTIONS.md`
   4. Corre pytest y ruff
-  5. Usa `./scripts/auto_commit.sh "feat(dedup): add /filter_new endpoint"`
+  5. Usa `./scripts/auto_commit.sh "feat(temporal): add DigestPipelineWorkflow"`
   6. Marca el checkbox en `Phases.md`
 
 ### ❌ Incorrecto:
-- Usuario: "Anade clustering con embeddings"
+- Usuario: "Anade collections y multi-usuario"
 - Mimo Code:
-  1. Lee `Phases.md` y ve que es Fase 3
-  2. Si estamos en Fase 1, ADVÍETE: "Esto es Fase 3, quieres saltar fases?"
+  1. Lee `Phases.md` y ve que es Fase 5/6
+  2. Si estamos en Fase 3, ADVÍETE: "Esto es Fase 5/6, quieres saltar fases?"
   3. Si el usuario confirma, implementa siguiendo las reglas
-  4. **NO** implemente clustering en Fase 1 sin confirmación
+  4. **NO** implemente features de fases futuras sin confirmación
 
 ## COMANDOS UTILES
 
@@ -230,13 +243,20 @@ ruff format .
 ### Logs:
 ```bash
 docker compose logs -f api
-docker compose logs -f n8n
+docker compose logs -f worker
+docker compose logs -f temporal
 ```
 
 ### Health checks:
 ```bash
 curl http://localhost:8000/health
-curl http://localhost:5678/healthz
+```
+
+### Temporal (dev):
+```bash
+# UI: http://localhost:8080
+docker compose exec worker python -m src.workers.trigger --tts
+docker compose exec worker python -m src.workers.schedule --hour 8 --minute 0
 ```
 
 ## CONTACTO Y ESCALACIÓN

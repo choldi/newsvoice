@@ -18,7 +18,7 @@ digest_service = DigestService()
     status_code=status.HTTP_200_OK,
     summary="Generate daily MVP news digest",
     description=(
-        "Receives articles from n8n and returns 5 main stories + 5 headlines in Markdown format."
+        "Receives a list of articles and returns 5 main stories + 5 headlines in Markdown format."
     ),
 )
 async def generate_mvp_digest(payload: DigestIn) -> DigestOut:

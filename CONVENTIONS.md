@@ -21,9 +21,9 @@
 - Pydantic models: PascalCase + suffix
 
 ## Input/Output/Database Models
-- In: `ArticleIn` (from n8n)
-- Out: `ArticleDB` (persisted)
-- DB: `DigestOut` (to n8n)
+- In: `ArticleIn` (request payload)
+- Out: `ArticleOut` (response)
+- DB: `ArticleDB` (persisted)
 
 ## API Design (FastAPI)
 - One endpoint per file in `src/api/routes/`
@@ -31,7 +31,22 @@
 - Endpoints are stateless and idempotent where possible
 - Request/Response via Pydantic models, never raw dicts
 - Errors: raise `HTTPException` with meaningful detail
-- All endpoints return JSON; TTS endpoint returns JSON with `audio_path` (not binary)
+- All responses include a top-level `status` field (`"ok"` / `"error"`)
+- TTS endpoint returns JSON with `audio_path` (not binary)
+
+## Temporal (Workflows & Activities)
+- Workflows live in `src/workers/workflows.py`, activities in `src/workers/activities.py`
+- Workflows must be **deterministic**: no I/O, no randomness, no external calls
+  — all side effects happen in activities via `workflow.execute_activity`
+- Activities are plain `@activity.defn` functions calling `src/api/services/` directly
+- Multi-argument activity calls use the `args=[...]` keyword, not extra positionals
+- Use `workflow.unsafe.imports_passed_through()` for activity imports in workflows
+- Do NOT use keyword args with the sandbox logger (`workflow.logger.info("msg", foo=1)`
+  is unsupported — use an f-string)
+- Every `execute_activity` gets a `start_to_close_timeout`
+- Activity unit tests use `temporalio.testing.ActivityEnvironment`
+- Workflow integration tests use `WorkflowEnvironment.start_time_skipping()`
+  with stub activities registered under the SAME names as the real ones
 
 ## Database (SQLite)
 - Single file: `data/news.db`
@@ -50,11 +65,13 @@
 
 ## Configuration
 - `pydantic-settings` reading from `.env`
-- Required vars: `LLM_API_BASE`, `LLM_MODEL`, `TELEGRAM_CHAT_ID`
+- Required vars: `LLM_API_BASE`, `LLM_MODEL`, `TELEGRAM_CHAT_ID`,
+  `TELEGRAM_BOT_TOKEN`, `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`,
+  `TEMPORAL_TASK_QUEUE`, `RSS_FEED_URLS`
 - No hardcoded secrets; no default prod values
 
 ## Logging
-- `structlog` with JSON output
+- `structlog` with JSON output (workflows use the Temporal sandbox logger)
 - Levels:
   - ERROR (failures)
   - INFO (endpoint calls, LLM calls)
@@ -62,18 +79,14 @@
 - Never log full article content at INFO
 
 ## Testing
-- pytest + pytest-asyncio
+- pytest + pytest-asyncio (`asyncio_mode = "auto"`; write `async def` tests and `await`)
 - Unit tests for every service (mock LLM, mock DB)
 - Integration tests per endpoint using TestClient
+- Workflow integration tests with `WorkflowEnvironment`
 - Coverage target: 80% on `src/api/services/`
 
 ## GIT and Commits
-- Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`
+- Conventional Commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`
 - One logical change per commit
-- Branch naming: `phase-1-mvp`, `phase-2-dedup`, `phase-3-cluster`
-
-## N8N Integration
-- n8n calls endpoints via HTTP POST with Content-Type: `application/json`
-- All responses must include a top-level status field: `"ok"` | `"error"`
-- Error responses include `error_code` and `message`
-- n8n workflow JSONs versioned in `n8n/workflows/` with suffix `_v1.json`, `_v2.json`
+- Use `./scripts/auto_commit.sh "<type>(<scope>): <message>"`
+- Branch naming: `phase-1-mvp`, `phase-2-dedup`, `phase-3-cluster`, `phase-4-docs`

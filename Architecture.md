@@ -1,6 +1,8 @@
 # AI News Digest Engine — Overview
 
-A self-hosted modular system that produces a daily AI-curated news digest (5 main stories + 5 headlines) from RSS feeds, using a local LLM (`llama.cpp`) and delivering via **Telegram** / **Email**.
+A self-hosted modular system that produces a daily AI-curated news digest (5
+main stories + 5 headlines) from RSS feeds, using a local LLM (`llama.cpp`) and
+delivering via **Telegram** / **Email**.
 
 ---
 
@@ -8,8 +10,12 @@ A self-hosted modular system that produces a daily AI-curated news digest (5 mai
 
 | Role | Description | Technology |
 |------|-------------|------------|
-| **Hub (n8n)** | Orchestration, scheduling, retries, notifications | n8n (Docker, self-hosted) |
-| **Spokes (FastAPI microservices)** | Each Python endpoint owns **ONE responsibility** | FastAPI + Python 3.11+ |
+| **Hub (Temporal)** | Orchestration, scheduling, retries, state | Temporal.io (Docker, self-hosted) |
+| **Spokes (FastAPI + Temporal activities)** | Each activity owns **ONE responsibility** | FastAPI + Python 3.11+ |
+
+The hub is **Temporal**: a durable workflow (`DigestPipelineWorkflow`)
+choreographs the pipeline, and Temporal Schedules trigger it daily. The spokes
+are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 
 ---
 
@@ -17,9 +23,11 @@ A self-hosted modular system that produces a daily AI-curated news digest (5 mai
 
 | Component | Role | Technology |
 |-----------|------|------------|
-| **orchestrator** | Scheduling, flow control, delivery | n8n (Docker, self-hosted) |
-| **api** | Business logic, LLM calls, state | FastAPI + Python 3.11+ |
-| **llm** | Local inference server | `llama.cpp` (`/v1/chat/completions`) |
+| **temporal** | Orchestration, scheduling, retries | Temporal.io server (`temporalio/auto-setup`) |
+| **temporal-ui** | Web UI for workflows / schedules | `temporalio/ui` |
+| **worker** | Runs the workflow + activities | Python `temporalio.worker.Worker` |
+| **api** | Business logic via REST endpoints | FastAPI + Python 3.11+ |
+| **llm** | Local inference server | `llama.cpp` (`/v1/chat/completions`) via LiteLLM |
 | **db** | Delivery history, dedup state | SQLite (`news.db`) |
 | **storage** | Generated audio, cached articles | Local filesystem (`./data/`) |
 
@@ -28,23 +36,32 @@ A self-hosted modular system that produces a daily AI-curated news digest (5 mai
 ## Data Flow (Full Pipeline)
 
 ```
-[n8n Schedule 08:00]
+[Temporal Schedule 08:00 UTC]
     |
     v
-[n8n RSS Read] --> [POST /api/filter_new] --> [SQLite: unseen?]
+[DigestPipelineWorkflow.run]                  (src/workers/workflows.py)
     |
     v
-[POST /api/cluster] --> [group by event fingerprint]
+[fetch_rss_activity]            --> [feedparser → articles]
     |
     v
-[POST /api/summarize] --> [llama.cpp → 5+5 markdown]
+[filter_new_activity]           --> [SQLite: unseen in 7-day window?]
     |
     v
-[POST /api/generate_tts] --> [edge-tts → .mp3]
+[cluster_activity]              --> [group by event fingerprint]
     |
     v
-[n8n Telegram: text + audio]
+[generate_digest_activity]      --> [llama.cpp → 5+5 markdown]
+    |
+    v
+[generate_tts_activity] (opt.)  --> [edge-tts → .mp3]
+    |
+    v
+[deliver_telegram_*_activity]   --> [text + audio]
 ```
+
+Each arrow is a `workflow.execute_activity` call with a start-to-close timeout;
+the workflow is fully deterministic, so Temporal can resume it after any crash.
 
 ---
 
@@ -52,9 +69,10 @@ A self-hosted modular system that produces a daily AI-curated news digest (5 mai
 
 | Decision | Rationale |
 |----------|-----------|
-| **n8n over cron/GitHub Actions** | Visual retries, easy output switching, API-driven |
+| **Temporal over n8n / cron** | Durable execution, built-in retries, schedules as code, dev-friendly tests |
 | **FastAPI over monolithic script** | Each phase = one endpoint, independently testable |
-| **SQLite over Postgres** | Single file, zero ops, sufficient for personal use |
+| **Activities call services directly** | No HTTP hop between workflow steps; single deployable |
+| **SQLite over Postgres** | Single file, zero ops, sufficient for personal use (Temporal keeps its own Postgres) |
 | **llama.cpp over cloud LLMs** | Privacy, zero cost, local control |
 | **LiteLLM as LLM adapter** | Swap models without changing business code |
 | **Event fingerprinting over pure embeddings** | Faster, deterministic, debuggable first pass |
@@ -68,30 +86,35 @@ news-engine/
 ├── Architecture.md
 ├── CONVENTIONS.md
 ├── Phases.md
+├── Deploy.md
+├── AGENTS.md
 ├── pyproject.toml
-├── docker-compose.yml          # n8n + api
-│   ├── .env.example
-│   └── src/
-│       ├── api/
-│       │   ├── main.py          # FastAPI app
-│       │   └── routes/
-│       │       ├── ingest.py   # /filter_new
-│       │       ├── cluster.py   # /cluster
-│       │       ├── summarize.py # /summarize
-│       │       ├── tts.py       # /generate_tts
-│       │   └── services/        # Business logic
-│       │       ├── models/      # Pydantic schemas
-│       │       └── db/          # SQLite layer
-│       └── core/
-│           ├── config.py        # pydantic-settings
-│           └── llm.py           # LiteLLM wrapper
-├── data/                        # SQLite DB + TTS cache (gitignored)
-├── n8n/
-│   └── workflows/               # Exported JSON workflows
+├── docker-compose.yml          # api + worker + temporal + temporal-ui + postgres
+├── .env.example
+├── src/
+│   ├── api/
+│   │   ├── main.py             # FastAPI app
+│   │   ├── routes/             # /health, /mvp_digest, /filter_new, /cluster,
+│   │   │                       # /summarize, /generate_tts
+│   │   ├── services/           # Business logic (called by routes AND activities)
+│   │   ├── models/             # Pydantic schemas
+│   │   └── db/                 # SQLite layer + migrations
+│   ├── core/
+│   │   ├── config.py           # pydantic-settings
+│   │   └── llm.py              # LiteLLM wrapper
+│   └── workers/
+│       ├── workflows.py        # DigestPipelineWorkflow + PipelineConfig
+│       ├── activities.py       # RSS, filter, cluster, digest, TTS, Telegram
+│       ├── run_worker.py       # worker entry point
+│       ├── trigger.py          # manual one-shot run
+│       └── schedule.py         # register the daily Temporal schedule
+├── data/                       # SQLite DB + TTS cache (gitignored)
 ├── tests/
 │   ├── unit/
 │   └── integration/
-└── ...
+└── scripts/
+    ├── auto_commit.sh
+    └── deploy.sh
 ```
 
 ---
@@ -102,3 +125,4 @@ news-engine/
 - [ ] Vector database (Qdrant / Milvus)
 - [ ] Web administration UI
 - [ ] Real-time streaming
+- [ ] Multiple collections (planned for a later phase, see `Phases.md`)
