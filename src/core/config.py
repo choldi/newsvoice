@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "news-engine-task-queue"
+    rss_feed_urls: list[str] = []
     tts_cache_dir: str = "data/tts_cache"
     tts_voice: str = "es-ES-ElviraNeural"
     tts_max_chars: int = 5000

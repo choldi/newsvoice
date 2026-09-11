@@ -59,8 +59,13 @@ async def run_worker(
             task_queue=queue,
             workflows=[],
             activities=[
+                activities.fetch_rss_activity,
+                activities.filter_new_activity,
+                activities.cluster_activity,
                 activities.generate_digest_activity,
                 activities.generate_tts_activity,
+                activities.deliver_telegram_message_activity,
+                activities.deliver_telegram_audio_activity,
             ],
             activity_executor=activity_executor,
         )
