@@ -1,7 +1,8 @@
 """Unit tests for ClusterService."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from src.api.models.article import ArticleIn
 from src.api.models.cluster import ClusterIn, Fingerprint
@@ -72,9 +73,7 @@ class TestClusterService:
         assert "5" not in normalized
 
     @pytest.mark.asyncio
-    async def test_compute_title_hash_deterministic(
-        self, cluster_service: ClusterService
-    ) -> None:
+    async def test_compute_title_hash_deterministic(self, cluster_service: ClusterService) -> None:
         """Test title hash is deterministic and short."""
         title = "OpenAI releases GPT-5"
         hash1 = cluster_service._compute_title_hash(title)
@@ -83,20 +82,19 @@ class TestClusterService:
         assert len(hash1) == 12  # SHA256 truncated to 12 chars
 
     @pytest.mark.asyncio
-    async def test_fingerprint_to_key_consistent(
-        self, cluster_service: ClusterService
-    ) -> None:
+    async def test_fingerprint_to_key_consistent(self, cluster_service: ClusterService) -> None:
         """Test fingerprint key generation is consistent."""
         fp = Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="abc123")
         key1 = cluster_service._fingerprint_to_key(fp)
         key2 = cluster_service._fingerprint_to_key(fp)
         assert key1 == key2
-        assert key1 == "openai|releases gpt-5|abc123"
+        assert key1 == "openai|releases gpt-5"
+        # title_hash must not influence the grouping key
+        v2 = Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="xyz789")
+        assert cluster_service._fingerprint_to_key(v2) == key1
 
     @pytest.mark.asyncio
-    async def test_cluster_articles_empty_input(
-        self, cluster_service: ClusterService
-    ) -> None:
+    async def test_cluster_articles_empty_input(self, cluster_service: ClusterService) -> None:
         """Test clustering empty article list returns empty."""
         payload = ClusterIn(articles=[])
         result = await cluster_service.cluster_articles(payload)
@@ -109,11 +107,11 @@ class TestClusterService:
         mock_repo: MagicMock,
         sample_articles: list[ArticleIn],
     ) -> None:
-        """Test new clusters created for unseen fingerprints."""
+        """Test related articles about the same event collapse into one cluster."""
         with patch.object(
             cluster_service, "_extract_fingerprint_llm", new_callable=AsyncMock
         ) as mock_extract:
-            # Return different fingerprints for each article
+            # First two articles share entity+action (same event)
             mock_extract.side_effect = [
                 Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
                 Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash2"),
@@ -123,10 +121,12 @@ class TestClusterService:
             payload = ClusterIn(articles=sample_articles)
             result = await cluster_service.cluster_articles(payload)
 
-            assert len(result) == 3
-            assert mock_repo.create_cluster.call_count == 3
-            assert mock_repo.add_article_to_cluster.call_count == 3
+            assert len(result) == 2
+            assert mock_repo.create_cluster.call_count == 2
+            assert mock_repo.add_article_to_cluster.call_count == 2
             assert all(c.is_material_update for c in result)
+            openai_cluster = next(c for c in result if c.fingerprint.entity == "OpenAI")
+            assert len(openai_cluster.articles) == 2
 
     @pytest.mark.asyncio
     async def test_cluster_articles_matches_existing_cluster(
@@ -183,8 +183,13 @@ class TestClusterService:
             {"title": "OpenAI announces GPT-5", "content": "OpenAI will release GPT-5 soon."}
         ]
 
-        with patch("src.api.services.cluster.generate_completion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = '{"is_material_update": true, "reason": "Release date confirmed"}'
+        with patch(
+            "src.api.services.cluster.generate_completion",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = (
+                '{"is_material_update": true, "reason": "Release date confirmed"}'
+            )
             new_article = ArticleIn(
                 title="OpenAI releases GPT-5 today",
                 link="https://example.com/gpt5-released",
@@ -203,8 +208,13 @@ class TestClusterService:
             {"title": "OpenAI releases GPT-5", "content": "GPT-5 is now available."}
         ]
 
-        with patch("src.api.services.cluster.generate_completion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = '{"is_material_update": false, "reason": "Same facts re-reported"}'
+        with patch(
+            "src.api.services.cluster.generate_completion",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.return_value = (
+                '{"is_material_update": false, "reason": "Same facts re-reported"}'
+            )
             new_article = ArticleIn(
                 title="GPT-5 released by OpenAI",
                 link="https://example.com/gpt5-released-2",

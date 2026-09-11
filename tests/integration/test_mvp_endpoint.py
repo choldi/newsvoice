@@ -34,7 +34,7 @@ def test_mvp_digest_endpoint_success() -> None:
     mock_markdown = "# Daily News\n\n- Major Discovery"
 
     with patch("src.api.services.digest.generate_completion", return_value=mock_markdown):
-        response = client.post("/mvp_digest", json=payload)
+        response = client.post("/api/mvp_digest", json=payload)
         assert response.status_code == 200
 
         data = response.json()
@@ -44,6 +44,6 @@ def test_mvp_digest_endpoint_success() -> None:
 
 
 def test_mvp_digest_endpoint_invalid_payload() -> None:
-    """Tests POST /mvp_digest endpoint error handling with invalid schema."""
-    response = client.post("/mvp_digest", json={"invalid_field": "test"})
+    """Tests POST /api/mvp_digest endpoint error handling with invalid schema."""
+    response = client.post("/api/mvp_digest", json={"articles": "not-a-list"})
     assert response.status_code == 422  # Unprocessable Entity

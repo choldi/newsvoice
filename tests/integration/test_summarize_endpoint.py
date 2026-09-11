@@ -30,7 +30,7 @@ def test_summarize_endpoint_success() -> None:
     )
 
     with patch("src.api.services.digest.generate_completion", return_value=mock_markdown):
-        response = client.post("/summarize", json=payload)
+        response = client.post("/api/summarize", json=payload)
         assert response.status_code == 200
 
         data = response.json()
@@ -40,8 +40,8 @@ def test_summarize_endpoint_success() -> None:
 
 
 def test_summarize_endpoint_empty_articles() -> None:
-    """Tests POST /summarize endpoint when given an empty list of articles."""
-    response = client.post("/summarize", json={"articles": []})
+    """Tests POST /api/summarize endpoint when given an empty list of articles."""
+    response = client.post("/api/summarize", json={"articles": []})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"

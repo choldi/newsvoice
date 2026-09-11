@@ -27,7 +27,7 @@ def test_filter_new_first_and_second_run_deduplication() -> None:
     }
 
     # First run: should return 2 new articles with clean URLs
-    response1 = client.post("/filter_new", json=payload)
+    response1 = client.post("/api/filter_new", json=payload)
     assert response1.status_code == 200
     data1 = response1.json()
     assert data1["status"] == "ok"
@@ -36,7 +36,7 @@ def test_filter_new_first_and_second_run_deduplication() -> None:
     assert data1["new_articles"][0]["link"] == "https://example.com/art1"
 
     # Second run with same articles: should return 0 new articles
-    response2 = client.post("/filter_new", json=payload)
+    response2 = client.post("/api/filter_new", json=payload)
     assert response2.status_code == 200
     data2 = response2.json()
     assert data2["status"] == "ok"
@@ -46,8 +46,8 @@ def test_filter_new_first_and_second_run_deduplication() -> None:
 
 
 def test_filter_new_empty_payload() -> None:
-    """Tests POST /filter_new with empty articles array."""
-    response = client.post("/filter_new", json={"articles": []})
+    """Tests POST /api/filter_new with empty articles array."""
+    response = client.post("/api/filter_new", json={"articles": []})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"

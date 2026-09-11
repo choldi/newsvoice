@@ -64,9 +64,7 @@ async def test_generate_tts_uses_cache(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_tts_calls_edge_tts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_generate_tts_calls_edge_tts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """generate_tts invokes edge-tts when no cache exists."""
     service = TTSService(cache_dir=str(tmp_path))
 

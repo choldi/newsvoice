@@ -14,7 +14,7 @@ logger = structlog.get_logger(__name__)
 
 def _content_hash(markdown: str, voice: str) -> str:
     """Stable SHA256 hash of the (markdown, voice) pair."""
-    payload = f"{voice}::{markdown}".encode("utf-8")
+    payload = f"{voice}::{markdown}".encode()
     return hashlib.sha256(payload).hexdigest()[:16]
 
 

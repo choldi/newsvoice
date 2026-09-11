@@ -1,12 +1,26 @@
 """Integration tests for /cluster endpoint."""
 
-import pytest
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.models.article import ArticleIn
 
 client = TestClient(app)
+
+
+def fake_fingerprint_by_title(title: str) -> str:
+    """Return a deterministic fingerprint JSON based on the title keywords."""
+    if "OpenAI" in title or "GPT" in title:
+        return '{"entity": "OpenAI", "action": "releases GPT-5"}'
+    if "iPhone" in title:
+        return '{"entity": "Apple", "action": "announces iPhone 16"}'
+    return '{"entity": "Google", "action": "launches Gemini 2.0"}'
+
+
+def _fake_fingerprint_side_effect(messages: list[dict], **kwargs: object) -> str:
+    title = messages[1]["content"]
+    return fake_fingerprint_by_title(title)
 
 
 def test_cluster_endpoint_success() -> None:
@@ -33,14 +47,18 @@ def test_cluster_endpoint_success() -> None:
             },
         ]
     }
-    response = client.post("/api/cluster", json=payload)
+    with patch(
+        "src.api.services.cluster.generate_completion",
+        side_effect=_fake_fingerprint_side_effect,
+    ):
+        response = client.post("/api/cluster", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
     assert "clusters" in data
     assert data["total_articles"] == 3
-    # Should create at least 2 clusters (OpenAI + Apple)
-    assert len(data["clusters"]) >= 2
+    # Should create 2 clusters: OpenAI GPT-5 (2 articles) + Apple iPhone 16
+    assert len(data["clusters"]) == 2
 
 
 def test_cluster_endpoint_empty_payload() -> None:
@@ -97,7 +115,12 @@ def test_cluster_endpoint_related_articles_same_cluster() -> None:
             },
         ]
     }
-    response = client.post("/api/cluster", json=payload)
+
+    with patch(
+        "src.api.services.cluster.generate_completion",
+        side_effect=_fake_fingerprint_side_effect,
+    ):
+        response = client.post("/api/cluster", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"

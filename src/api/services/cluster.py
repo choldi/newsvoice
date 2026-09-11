@@ -9,7 +9,7 @@ import structlog
 
 from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn
-from src.api.models.cluster import ClusterItem, ClusterIn, Fingerprint
+from src.api.models.cluster import ClusterIn, ClusterItem, Fingerprint
 from src.core.llm import generate_completion
 from src.core.prompts import (
     EXTRACT_FINGERPRINT_SYSTEM_PROMPT,
@@ -22,16 +22,115 @@ logger = structlog.get_logger()
 
 # Stopwords for title normalization (English + Spanish common words)
 STOPWORDS: set[str] = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
-    "by", "from", "as", "is", "was", "are", "were", "be", "been", "being", "have",
-    "has", "had", "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "must", "can", "this", "that", "these", "those", "it", "its", "they",
-    "them", "their", "we", "us", "our", "you", "your", "he", "him", "his", "she",
-    "her", "hers", "i", "me", "my", "mine", "el", "la", "los", "las", "un", "una",
-    "unos", "unas", "y", "o", "pero", "en", "de", "del", "al", "por", "para", "con",
-    "sin", "sobre", "entre", "hasta", "desde", "durante", "mediante", "según", "como",
-    "es", "son", "era", "eran", "está", "están", "estaba", "estaban", "ha", "han",
-    "he", "has", "había", "habían", "ser", "estar", "tener", "hacer", "ir", "venir"
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "as",
+    "is",
+    "was",
+    "are",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "can",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "they",
+    "them",
+    "their",
+    "we",
+    "us",
+    "our",
+    "you",
+    "your",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "hers",
+    "i",
+    "me",
+    "my",
+    "mine",
+    "new",
+    "el",
+    "la",
+    "los",
+    "las",
+    "un",
+    "una",
+    "unos",
+    "unas",
+    "y",
+    "o",
+    "pero",
+    "en",
+    "de",
+    "del",
+    "al",
+    "por",
+    "para",
+    "con",
+    "sin",
+    "sobre",
+    "entre",
+    "hasta",
+    "desde",
+    "durante",
+    "mediante",
+    "según",
+    "como",
+    "es",
+    "son",
+    "era",
+    "eran",
+    "está",
+    "están",
+    "estaba",
+    "estaban",
+    "ha",
+    "han",
+    "he",
+    "has",
+    "había",
+    "habían",
+    "ser",
+    "estar",
+    "tener",
+    "hacer",
+    "ir",
+    "venir",
 }
 
 
@@ -46,12 +145,13 @@ class ClusterService:
         """Normalize title for hashing: lowercase, remove stopwords, punctuation, numbers."""
         if not title:
             return ""
-        # Lowercase and remove punctuation except spaces
-        normalized = re.sub(r"[^\w\s]", " ", title.lower())
-        # Remove numbers (version numbers, dates, etc.)
-        normalized = re.sub(r"\d+", "", normalized)
-        # Split and filter stopwords
-        words = [w for w in normalized.split() if w not in STOPWORDS and len(w) > 2]
+        words: list[str] = []
+        for raw_token in title.lower().split():
+            token = re.sub(r"[^\w]", "", raw_token)
+            if not token or any(c.isdigit() for c in token):
+                continue
+            if token not in STOPWORDS and len(token) > 2:
+                words.append(token)
         return " ".join(words)
 
     def _compute_title_hash(self, title: str) -> str:
@@ -82,12 +182,15 @@ class ClusterService:
             return Fingerprint(entity="Unknown", action="Unknown", title_hash=title_hash)
 
     def _fingerprint_to_key(self, fp: Fingerprint) -> str:
-        """Create a deterministic key for fingerprint matching."""
-        return f"{fp.entity.lower()}|{fp.action.lower()}|{fp.title_hash}"
+        """Create a deterministic key for fingerprint matching.
 
-    async def _check_material_update(
-        self, cluster_id: int, new_article: ArticleIn
-    ) -> bool:
+        The key is based on entity + action only so that different titles
+        covering the same event collapse into one cluster. title_hash is
+        kept as diagnostic metadata but does not influence grouping.
+        """
+        return f"{fp.entity.lower()}|{fp.action.lower()}"
+
+    async def _check_material_update(self, cluster_id: int, new_article: ArticleIn) -> bool:
         """Check if new article brings material updates to existing cluster."""
         try:
             existing_articles = await self.repo.get_cluster_articles(cluster_id)
@@ -95,8 +198,7 @@ class ClusterService:
                 return True  # First article in cluster is always material
 
             existing_text = "\n\n".join(
-                f"Title: {a['title']}\nContent: {a['content'] or ''}"
-                for a in existing_articles
+                f"Title: {a['title']}\nContent: {a['content'] or ''}" for a in existing_articles
             )
             user_prompt = MATERIAL_UPDATE_USER_PROMPT_TEMPLATE.format(
                 existing_text=existing_text,
@@ -141,9 +243,7 @@ class ClusterService:
                 # Existing cluster: add article, check material update
                 cluster_map[key]["articles"].append(article)
                 if not cluster_map[key]["is_material_update"]:
-                    is_update = await self._check_material_update(
-                        cluster_map[key]["id"], article
-                    )
+                    is_update = await self._check_material_update(cluster_map[key]["id"], article)
                     cluster_map[key]["is_material_update"] = is_update
             else:
                 # New cluster: create in DB

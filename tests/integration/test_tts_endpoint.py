@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.core.config import settings
 
 client = TestClient(app)
 
@@ -23,7 +24,7 @@ def fake_edge_tts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
             Path(path).write_bytes(b"fake-mp3-bytes")
 
     monkeypatch.setattr("src.api.services.tts.edge_tts.Communicate", FakeCommunicate)
-    monkeypatch.setenv("TTS_CACHE_DIR", str(tmp_path))
+    settings.tts_cache_dir = str(tmp_path)
 
 
 def test_tts_endpoint_success(fake_edge_tts: None) -> None:
