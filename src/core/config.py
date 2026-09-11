@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,10 +12,12 @@ class Settings(BaseSettings):
 
     llm_api_base: str = "http://localhost:8080/v1"
     llm_model: str = "openai/local-model"
-    llm_temperature: float = 0.3
+    llm_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    llm_timeout_seconds: int = Field(default=60, ge=1)
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
-    api_port: int = 8000
+    api_port: int = Field(default=8000, ge=1, lt=65536)
+    api_request_timeout: int = Field(default=120, ge=1)
     log_level: str = "INFO"
     database_path: str = "data/news.db"
     temporal_host: str = "localhost:7233"
@@ -23,7 +26,7 @@ class Settings(BaseSettings):
     rss_feed_urls: list[str] = []
     tts_cache_dir: str = "data/tts_cache"
     tts_voice: str = "es-ES-ElviraNeural"
-    tts_max_chars: int = 5000
+    tts_max_chars: int = Field(default=5000, gt=0)
 
     @property
     def data_dir(self) -> Path:

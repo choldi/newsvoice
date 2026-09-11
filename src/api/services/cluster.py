@@ -221,6 +221,20 @@ class ClusterService:
         if not payload.articles:
             return []
 
+        # Ensure every article exists in the articles table so the
+        # cluster_articles FK reference does not fail.
+        await self.repo.save_articles(
+            [
+                {
+                    "url": a.link,
+                    "title": a.title,
+                    "content": a.content or "",
+                    "source": a.source,
+                }
+                for a in payload.articles
+            ]
+        )
+
         # 1. Get recent active clusters from DB (last 3 days)
         recent_clusters = await self.repo.find_recent_clusters(active_days=3)
         cluster_map: dict[str, dict[str, Any]] = {}

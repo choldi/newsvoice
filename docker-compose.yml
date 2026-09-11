@@ -8,6 +8,8 @@ services:
       - "${API_PORT:-8000}:8000"
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -23,6 +25,8 @@ services:
       - .env
     environment:
       - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
     command: ["python", "-m", "src.workers.run_worker"]

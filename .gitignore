@@ -39,11 +39,12 @@ Thumbs.db
 .vscode/
 .idea/
 .mimocode/
-scripts/
+.aider*
 
 # Binaries and Models
 models/
 *.gguf
 *.bin
+
+# n8n (retired in favor of Temporal)
 n8n_data/
-.aider*

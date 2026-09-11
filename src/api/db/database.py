@@ -41,6 +41,9 @@ async def run_migrations(db_path: str | None = None) -> None:
     migration_files = sorted(migrations_dir.glob("*.sql"))
 
     async with aiosqlite.connect(target_path) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("PRAGMA foreign_keys=ON")
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -85,6 +88,9 @@ async def get_db(db_path: str | None = None) -> AsyncGenerator[aiosqlite.Connect
 
     conn = await aiosqlite.connect(target_path)
     conn.row_factory = aiosqlite.Row
+    await conn.execute("PRAGMA journal_mode=WAL")
+    await conn.execute("PRAGMA busy_timeout=5000")
+    await conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
     finally:

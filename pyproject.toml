@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "news-engine"
-version = "0.1.0"
+version = "0.4.0"
 description = "AI News Digest Engine - Daily curated news digest from RSS feeds using local LLM"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +30,9 @@ dev = [
     "ruff>=0.3.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
@@ -37,3 +44,10 @@ select = ["E", "F", "I", "N", "W", "UP"]
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 80

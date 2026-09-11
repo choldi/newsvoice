@@ -16,9 +16,23 @@ import structlog
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from src.api.db.database import run_migrations
 from src.core.config import settings
 from src.workers import activities
 from src.workers.workflows import DigestPipelineWorkflow
+
+
+def configure_logging() -> None:
+    """Configure structlog with JSON output for the worker process."""
+    structlog.configure(
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(settings.log_level),
+    )
+
 
 logger = structlog.get_logger(__name__)
 
@@ -76,7 +90,9 @@ async def run_worker(
 
 
 async def main() -> None:
-    """Start the worker and run until stopped."""
+    """Run DB migrations, start the worker, and run until stopped."""
+    configure_logging()
+    await run_migrations()
     client = await build_client()
     async with run_worker(client):
         logger.info("worker_running")

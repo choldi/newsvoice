@@ -14,6 +14,7 @@ def mock_repo() -> MagicMock:
     """Mock ArticleRepository."""
     repo = MagicMock()
     repo.find_recent_clusters = AsyncMock(return_value=[])
+    repo.save_articles = AsyncMock()
     repo.create_cluster = AsyncMock(return_value=1)
     repo.add_article_to_cluster = AsyncMock()
     repo.update_cluster_last_seen = AsyncMock()

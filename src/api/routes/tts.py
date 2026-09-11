@@ -1,10 +1,13 @@
 """Text-to-Speech route for generating MP3 audio from digest markdown."""
 
+import asyncio
+
 import structlog
 from fastapi import APIRouter, HTTPException, status
 
 from src.api.models.tts import TTSIn, TTSOut
 from src.api.services.tts import TTSService
+from src.core.config import settings
 
 logger = structlog.get_logger()
 
@@ -36,10 +39,19 @@ async def generate_tts(payload: TTSIn) -> TTSOut:
     """
     try:
         service = TTSService()
-        return await service.generate_tts(payload)
+        return await asyncio.wait_for(
+            service.generate_tts(payload),
+            timeout=settings.api_request_timeout,
+        )
+    except TimeoutError as exc:
+        logger.error("tts_generate_timeout")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Request timed out",
+        ) from exc
     except Exception as exc:
-        logger.error("tts_generate_failed", error=str(exc))
+        logger.error("tts_generate_failed", error=str(exc), exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate TTS audio: {str(exc)}",
+            detail="Internal server error",
         ) from exc
