@@ -1,9 +1,18 @@
-"""Text-to-Speech service using edge-tts."""
+"""Text-to-Speech service using the OmniVoice API (stock voice synthesis).
+
+The digest markdown is converted to speech-friendly plain text, fragmented into
+small paragraphs (<= tts_chunk_max_chars) to avoid long-input hallucinations in
+the TTS model, synthesized chunk by chunk via POST /tts, and the resulting WAV
+segments are concatenated into a single audio file.
+"""
 
 import hashlib
+import io
+import re
+import wave
 from pathlib import Path
 
-import edge_tts
+import httpx
 import structlog
 
 from src.api.models.tts import TTSIn, TTSOut
@@ -12,9 +21,9 @@ from src.core.config import get_settings
 logger = structlog.get_logger(__name__)
 
 
-def _content_hash(markdown: str, voice: str) -> str:
-    """Stable SHA256 hash of the (markdown, voice) pair."""
-    payload = f"{voice}::{markdown}".encode()
+def _content_hash(markdown: str, voice: str, language: str = "") -> str:
+    """Stable SHA256 hash of the (markdown, voice, language) triple."""
+    payload = f"{voice}::{language}::{markdown}".encode()
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
@@ -34,8 +43,108 @@ def _truncate_for_tts(text: str, max_chars: int) -> str:
     return truncated.strip()
 
 
+def _markdown_to_speech_text(text: str) -> str:
+    """Strip markdown syntax, keeping inline OmniVoice emotion tags untouched.
+
+    Args:
+        text: Digest markdown that may contain emotion tags like '[happy]'.
+
+    Returns:
+        Plain, speech-friendly text.
+    """
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        stripped = re.sub(r"^#{1,6}\s+", "", stripped)
+        stripped = re.sub(r"^\s*[-*+]\s+", "", stripped)
+        stripped = re.sub(r"^\s*\d+\.\s*", "", stripped)
+        lines.append(stripped)
+    return "\n".join(line for line in lines if line)
+
+
+def _split_sentences(paragraph: str) -> list[str]:
+    """Split a paragraph into sentences, keeping punctuation with each one.
+
+    Args:
+        paragraph: Text to split.
+
+    Returns:
+        List of sentence strings.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
+    result: list[str] = []
+    for sentence in sentences:
+        # Avoid emitting a trailing empty chunk.
+        if sentence:
+            result.append(sentence)
+    return result
+
+
+def _fragment_text(text: str, max_chars: int = 400) -> list[str]:
+    """Split text into small paragraph-sized fragments for TTS synthesis.
+
+    Paragraphs are kept intact when short enough; longer paragraphs are split at
+    sentence boundaries. Emotion tags stay at the start of their own fragment.
+
+    Args:
+        text: Plain text (emotion tags allowed).
+        max_chars: Maximum length of each fragment.
+
+    Returns:
+        List of text fragments.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
+    fragments: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            fragments.append(paragraph)
+            continue
+        current = ""
+        for sentence in _split_sentences(paragraph):
+            candidate = f"{current} {sentence}".strip() if current else sentence
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    fragments.append(current)
+                current = sentence
+        if current:
+            fragments.append(current)
+    return fragments
+
+
+def _concat_wav(chunks: list[bytes]) -> bytes:
+    """Concatenate WAV payloads into a single WAV file.
+
+    Args:
+        chunks: List of WAV file bytes.
+
+    Returns:
+        A single merged WAV file's bytes.
+
+    Raises:
+        ValueError: If chunks is empty.
+    """
+    if not chunks:
+        raise ValueError("No audio chunks to concatenate")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        for index, chunk in enumerate(chunks):
+            with wave.open(io.BytesIO(chunk), "rb") as reader:
+                if index == 0:
+                    writer.setnchannels(reader.getnchannels())
+                    writer.setsampwidth(reader.getsampwidth())
+                    writer.setframerate(reader.getframerate())
+                writer.writeframes(reader.readframes(reader.getnframes()))
+    return buffer.getvalue()
+
+
 class TTSService:
-    """Service to convert digest markdown into MP3 audio using edge-tts."""
+    """Service to convert digest markdown into WAV audio via the OmniVoice API."""
 
     def __init__(self, cache_dir: str | None = None) -> None:
         """Initializes the TTSService with an optional cache directory.
@@ -45,35 +154,47 @@ class TTSService:
         """
         settings = get_settings()
         self._cache_dir = Path(cache_dir or settings.tts_cache_dir)
+        self._api_base_url = settings.tts_api_base_url
+        self._api_key = settings.tts_api_key
         self._default_voice = settings.tts_voice
+        self._default_language = settings.tts_language
         self._max_chars = settings.tts_max_chars
+        self._chunk_max_chars = settings.tts_chunk_max_chars
 
     async def generate_tts(self, payload: TTSIn) -> TTSOut:
-        """Generate (or fetch from cache) an MP3 for the given markdown.
+        """Generate (or fetch from cache) a WAV for the given markdown.
 
         Args:
-            payload: TTSIn model containing the markdown text and optional voice.
+            payload: TTSIn model containing the markdown text and optional voice/language.
 
         Returns:
             TTSOut model with the audio file path, duration estimate, and cache status.
         """
         voice = payload.voice or self._default_voice
+        language = payload.language or self._default_language
         text = _truncate_for_tts(payload.markdown, self._max_chars)
-        content_hash = _content_hash(text, voice)
-        audio_path = self._cache_dir / f"{content_hash}.mp3"
+        speech_text = _markdown_to_speech_text(text)
+        content_hash = _content_hash(text, voice, language)
+        audio_path = self._cache_dir / f"{content_hash}.wav"
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         cached = audio_path.exists()
         if not cached:
-            await self._synthesize(text, voice, audio_path)
+            fragments = _fragment_text(speech_text, self._chunk_max_chars)
+            chunk_wavs: list[bytes] = []
+            for fragment in fragments:
+                chunk_wavs.append(await self._synthesize(fragment, voice, language))
+            audio_bytes = _concat_wav(chunk_wavs)
+            audio_path.write_bytes(audio_bytes)
 
-        duration = _estimate_duration(len(text))
+        duration = _estimate_duration(len(speech_text))
 
         logger.info(
             "tts_generate_done",
             voice=voice,
-            char_count=len(text),
+            language=language,
+            char_count=len(speech_text),
             cached=cached,
             audio_path=str(audio_path),
         )
@@ -83,20 +204,33 @@ class TTSService:
             duration_estimate=duration,
             cached=cached,
             voice=voice,
-            char_count=len(text),
+            char_count=len(speech_text),
         )
 
-    @staticmethod
-    async def _synthesize(text: str, voice: str, output_path: Path) -> None:
-        """Run edge-tts and write the MP3 to output_path.
+    async def _synthesize(self, text: str, voice: str, language: str) -> bytes:
+        """Call OmniVoice POST /tts and return the raw WAV bytes.
 
         Args:
-            text: Text to synthesize.
-            voice: TTS voice identifier (e.g., 'es-ES-ElviraNeural').
-            output_path: Destination path for the MP3 file.
+            text: Text fragment to synthesize.
+            voice: OmniVoice stock voice identifier.
+            language: ISO 639-1 language code.
+
+        Returns:
+            Audio/wav response bytes.
+
+        Raises:
+            httpx.HTTPStatusError: If the API returns a non-2xx status.
         """
-        communicate = edge_tts.Communicate(text=text, voice=voice)
-        await communicate.save(str(output_path))
+        settings = get_settings()
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["X-API-Key"] = self._api_key
+        payload = {"text": text, "voice_id": voice, "language": language}
+        url = self._api_base_url.rstrip("/") + "/tts"
+        async with httpx.AsyncClient(timeout=settings.api_request_timeout) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return response.content
 
 
 async def list_cached_audios(cache_dir: str | None = None) -> list[str]:
@@ -106,10 +240,10 @@ async def list_cached_audios(cache_dir: str | None = None) -> list[str]:
         cache_dir: Optional cache directory path. Defaults to settings.tts_cache_dir.
 
     Returns:
-        Sorted list of cached MP3 filenames.
+        Sorted list of cached WAV filenames.
     """
     settings = get_settings()
     base = Path(cache_dir or settings.tts_cache_dir)
     if not base.exists():
         return []
-    return sorted(p.name for p in base.glob("*.mp3"))
+    return sorted(p.name for p in base.glob("*.wav"))

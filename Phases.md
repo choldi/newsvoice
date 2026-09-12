@@ -34,7 +34,7 @@ responsibility.
 - [x] `filter_new_activity` (SQLite dedup, 7-day window)
 - [x] `cluster_activity` (entity+action fingerprint grouping)
 - [x] `generate_digest_activity` (LiteLLM → 5+5 markdown)
-- [x] `generate_tts_activity` (edge-tts, content-hash cache)
+- [x] `generate_tts_activity` (OmniVoice API, fragmentado, content-hash cache)
 - [x] `deliver_telegram_message_activity` / `deliver_telegram_audio_activity`
 - [x] Activity unit tests with `ActivityEnvironment`
 

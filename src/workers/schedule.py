@@ -34,9 +34,18 @@ async def main() -> None:
         action="store_true",
         help="Enable TTS audio generation in the scheduled runs",
     )
+    parser.add_argument(
+        "--podcast-behavior",
+        default=None,
+        help="Podcaster behavior prompt. Defaults to TTS_PODCAST_BEHAVIOR env config.",
+    )
     args = parser.parse_args()
 
-    config = PipelineConfig(feed_urls=settings.rss_feed_urls, tts_enabled=args.tts)
+    config = PipelineConfig(
+        feed_urls=settings.rss_feed_urls,
+        tts_enabled=args.tts,
+        podcast_behavior=args.podcast_behavior or settings.tts_podcast_behavior,
+    )
     schedule = Schedule(
         action=ScheduleActionStartWorkflow(
             DigestPipelineWorkflow.run,

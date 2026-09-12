@@ -21,6 +21,11 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Run one digest pipeline manually")
     parser.add_argument("--tts", action="store_true", help="Enable TTS audio generation")
     parser.add_argument(
+        "--podcast-behavior",
+        default=None,
+        help="Podcaster behavior prompt. Defaults to TTS_PODCAST_BEHAVIOR env config.",
+    )
+    parser.add_argument(
         "--feed",
         action="append",
         default=[],
@@ -32,7 +37,11 @@ async def main() -> None:
     if not feed_urls:
         raise SystemExit("No RSS feeds configured (use --feed or RSS_FEED_URLS).")
 
-    config = PipelineConfig(feed_urls=feed_urls, tts_enabled=args.tts)
+    config = PipelineConfig(
+        feed_urls=feed_urls,
+        tts_enabled=args.tts,
+        podcast_behavior=args.podcast_behavior or settings.tts_podcast_behavior,
+    )
     workflow_id = f"digest-pipeline-manual-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
 
     client = await build_client()

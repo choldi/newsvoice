@@ -6,10 +6,11 @@ from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn, DigestIn, DigestOut
 from src.api.models.cluster import ClusterItem
 from src.api.services.dedup import normalize_url
+from src.core.config import settings
 from src.core.llm import generate_completion
 from src.core.prompts import (
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT,
     SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE,
+    build_digest_system_prompt,
 )
 
 logger = structlog.get_logger()
@@ -74,6 +75,18 @@ class DigestService:
             formatted_blocks.append(block)
         return "\n\n".join(formatted_blocks)
 
+    def _system_prompt(self, payload: DigestIn) -> str:
+        """Build the digest system prompt, injecting the podcast behavior if set.
+
+        Args:
+            payload: The DigestIn payload, which may carry a podcast_behavior.
+
+        Returns:
+            The system prompt to use for digest generation.
+        """
+        behavior = payload.podcast_behavior or settings.tts_podcast_behavior
+        return build_digest_system_prompt(behavior)
+
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
         """Generates a news digest from incoming articles or clusters payload using LLM.
 
@@ -98,7 +111,7 @@ class DigestService:
 
             user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(articles_text=stories_text)
             messages = [
-                {"role": "system", "content": SUMMARIZE_DIGEST_SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt(payload)},
                 {"role": "user", "content": user_prompt},
             ]
 
@@ -133,7 +146,7 @@ class DigestService:
         user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(articles_text=articles_text)
 
         messages = [
-            {"role": "system", "content": SUMMARIZE_DIGEST_SYSTEM_PROMPT},
+            {"role": "system", "content": self._system_prompt(payload)},
             {"role": "user", "content": user_prompt},
         ]
 

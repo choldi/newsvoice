@@ -44,6 +44,7 @@ class PipelineConfig:
     feed_urls: list[str] = field(default_factory=list)
     tts_enabled: bool = True
     deliver_audio: bool = True
+    podcast_behavior: str = ""
 
 
 @workflow.defn
@@ -107,7 +108,7 @@ class DigestPipelineWorkflow:
 
         digest = await workflow.execute_activity(
             generate_digest_activity,
-            {"clusters": clusters},
+            {"clusters": clusters, "podcast_behavior": config.podcast_behavior},
             start_to_close_timeout=DIGEST_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )

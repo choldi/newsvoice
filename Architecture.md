@@ -54,7 +54,7 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 [generate_digest_activity]      --> [llama.cpp → 5+5 markdown]
     |
     v
-[generate_tts_activity] (opt.)  --> [edge-tts → .mp3]
+[generate_tts_activity] (opt.)  --> [OmniVoice API → fragmentado → .wav]
     |
     v
 [deliver_telegram_*_activity]   --> [text + audio]
@@ -62,6 +62,11 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 
 Each arrow is a `workflow.execute_activity` call with a start-to-close timeout;
 the workflow is fully deterministic, so Temporal can resume it after any crash.
+
+The TTS step converts the digest markdown to plain text (keeping inline OmniVoice
+emotion tags such as `[happy]`), fragments it into small paragraphs (default
+400 chars) to avoid long-input hallucinations, synthesizes each chunk via the
+OmniVoice `POST /api/v1/tts` endpoint, and concatenates the resulting WAV files.
 
 ---
 

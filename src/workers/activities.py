@@ -1,6 +1,7 @@
 """Temporal activities wrapping the news-engine services."""
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import feedparser
@@ -17,6 +18,7 @@ from src.api.services.dedup import DedupService
 from src.api.services.digest import DigestService
 from src.api.services.tts import TTSService
 from src.core.config import get_settings
+from src.core.prompts import strip_emotion_tags
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
 FEED_FETCH_TIMEOUT_SECONDS = 60
@@ -156,6 +158,8 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     activity.logger.info("Generating digest")
     try:
         digest_in = DigestIn.model_validate(payload)
+        if not digest_in.podcast_behavior:
+            digest_in.podcast_behavior = get_settings().tts_podcast_behavior
         result = await DigestService().generate_digest(digest_in)
     except Exception as exc:
         raise ApplicationError(f"Digest generation failed: {exc}", non_retryable=True) from exc
@@ -180,7 +184,8 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     if not markdown:
         raise ApplicationError("Digest text missing for TTS", non_retryable=True)
     try:
-        tts_in = TTSIn(markdown=str(markdown))
+        settings = get_settings()
+        tts_in = TTSIn(markdown=str(markdown), language=settings.tts_language)
         result = await TTSService().generate_tts(tts_in)
     except Exception as exc:
         raise ApplicationError(f"TTS generation failed: {exc}", non_retryable=True) from exc
@@ -243,7 +248,26 @@ async def deliver_telegram_message_activity(text: str) -> dict[str, Any]:
         Dict with status and Telegram message id.
     """
     activity.logger.info("Sending Telegram message")
-    return await _telegram_request("sendMessage", {"text": text, "parse_mode": "Markdown"})
+    return await _telegram_request(
+        "sendMessage", {"text": strip_emotion_tags(text), "parse_mode": "Markdown"}
+    )
+
+
+def _audio_mime_type(audio_path: str) -> str:
+    """Return the audio MIME type based on the file extension.
+
+    Args:
+        audio_path: Path to the audio file.
+
+    Returns:
+        MIME type string (defaults to audio/mpeg for unknown extensions).
+    """
+    suffix = Path(audio_path).suffix.lower()
+    if suffix == ".wav":
+        return "audio/wav"
+    if suffix == ".ogg":
+        return "audio/ogg"
+    return "audio/mpeg"
 
 
 @activity.defn
@@ -276,8 +300,10 @@ async def deliver_telegram_audio_activity(
         raise ApplicationError(
             f"Cannot open audio file {audio_path}: {exc}", non_retryable=True
         ) from exc
+    audio_mime = _audio_mime_type(audio_path)
     with audio_file:
-        files = {"audio": (audio_path.rsplit("/", 1)[-1], audio_file, "audio/mpeg")}
+        files = {"audio": (audio_path.rsplit("/", 1)[-1], audio_file, audio_mime)}
+        caption = strip_emotion_tags(caption) if caption else None
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
                 TELEGRAM_API_URL.format(token=settings.telegram_bot_token, method="sendAudio"),

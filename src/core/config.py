@@ -25,8 +25,13 @@ class Settings(BaseSettings):
     temporal_task_queue: str = "news-engine-task-queue"
     rss_feed_urls: list[str] = []
     tts_cache_dir: str = "data/tts_cache"
-    tts_voice: str = "es-ES-ElviraNeural"
+    tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
+    tts_api_key: str = ""
+    tts_language: str = "es"
+    tts_voice: str = "es-mx-male"
     tts_max_chars: int = Field(default=5000, gt=0)
+    tts_chunk_max_chars: int = Field(default=400, gt=0)
+    tts_podcast_behavior: str = ""
 
     @property
     def data_dir(self) -> Path:

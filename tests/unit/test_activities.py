@@ -87,16 +87,16 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
         new_callable=AsyncMock,
         return_value=TTSOut(
             status="ok",
-            audio_path="data/tts_cache/abc.mp3",
+            audio_path="data/tts_cache/abc.wav",
             duration_estimate=10.0,
             cached=False,
-            voice="es-ES-ElviraNeural",
+            voice="es-mx-male",
             char_count=150,
         ),
     ):
         result = await ActivityEnvironment().run(generate_tts_activity, {"digest": "# Top Stories"})
 
-    assert result["audio_path"].endswith(".mp3")
+    assert result["audio_path"].endswith(".wav")
     assert result["cached"] is False
 
 
@@ -135,20 +135,23 @@ async def test_fetch_rss_activity_parses_entries() -> None:
 
 
 async def test_deliver_telegram_message_activity_sends_text() -> None:
-    """deliver_telegram_message_activity calls the Telegram sendMessage API."""
+    """deliver_telegram_message_activity strips emotion tags before sending."""
     with patch(
         "src.workers.activities._telegram_request",
         new_callable=AsyncMock,
         return_value={"status": "ok", "message_id": 42},
     ) as mock_request:
-        result = await ActivityEnvironment().run(deliver_telegram_message_activity, "# Top Stories")
+        result = await ActivityEnvironment().run(
+            deliver_telegram_message_activity, "[happy] Top Stories [calm] continue"
+        )
 
-    mock_request.assert_called_once()
+    sent_payload = mock_request.call_args.args[1]
+    assert "[happy]" not in sent_payload
     assert result["message_id"] == 42
 
 
 async def test_deliver_telegram_audio_activity_posts_file() -> None:
-    """deliver_telegram_audio_activity uploads the MP3 to Telegram."""
+    """deliver_telegram_audio_activity uploads the WAV to Telegram as audio/wav."""
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -156,6 +159,8 @@ async def test_deliver_telegram_audio_activity_posts_file() -> None:
 
         def json(self) -> dict:
             return {"ok": True, "result": {"message_id": 7}}
+
+    captured: dict[str, object] = {}
 
     class FakeAsyncClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -168,11 +173,12 @@ async def test_deliver_telegram_audio_activity_posts_file() -> None:
             pass
 
         async def post(self, *args: object, **kwargs: object) -> FakeResponse:
+            captured["files"] = kwargs.get("files")
             return FakeResponse()
 
-    audio_file = "/tmp/opencode/fake_audio.mp3"
+    audio_file = "/tmp/opencode/fake_audio.wav"
     with open(audio_file, "wb") as fh:
-        fh.write(b"fake-mp3")
+        fh.write(b"fake-wav")
 
     with (
         patch("src.workers.activities.httpx.AsyncClient", FakeAsyncClient),
@@ -180,6 +186,11 @@ async def test_deliver_telegram_audio_activity_posts_file() -> None:
     ):
         mock_settings.return_value.telegram_bot_token = "token"
         mock_settings.return_value.telegram_chat_id = "chat"
-        result = await ActivityEnvironment().run(deliver_telegram_audio_activity, audio_file)
+        result = await ActivityEnvironment().run(
+            deliver_telegram_audio_activity, audio_file, caption="[happy] Gracias"
+        )
 
+    files = captured["files"]
+    assert isinstance(files, dict)
+    assert files["audio"][2] == "audio/wav"
     assert result["message_id"] == 7

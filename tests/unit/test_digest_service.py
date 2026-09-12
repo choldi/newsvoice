@@ -52,3 +52,26 @@ async def test_digest_service_with_articles() -> None:
         assert result.article_count == 2
         assert result.digest == expected_markdown
         mock_llm.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_digest_service_injects_podcast_behavior() -> None:
+    """Digest service passes the podcast behavior into the system prompt."""
+    service = DigestService()
+    articles = [
+        ArticleIn(
+            title="Tech News 1",
+            link="https://example.com/1",
+            content="Summary 1",
+            source="Tech",
+        ),
+    ]
+    payload = DigestIn(articles=articles, podcast_behavior="eres un podcaster")
+
+    with patch("src.api.services.digest.generate_completion", return_value="# Digest") as mock_llm:
+        await service.generate_digest(payload)
+
+    sent_messages = mock_llm.call_args.kwargs["messages"]
+    system_content = sent_messages[0]["content"]
+    assert "eres un podcaster" in system_content
+    assert "[happy]" in system_content

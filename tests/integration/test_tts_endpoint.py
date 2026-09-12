@@ -1,5 +1,7 @@
 """Integration tests for POST /generate_tts endpoint."""
 
+import io
+import wave
 from pathlib import Path
 
 import pytest
@@ -11,41 +13,65 @@ from src.core.config import settings
 client = TestClient(app)
 
 
+def _fake_wav(rate: int = 22050) -> bytes:
+    """Return a valid 1-second silent WAV payload for tests."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(rate)
+        writer.writeframes(b"\x00\x00" * rate)
+    return buffer.getvalue()
+
+
 @pytest.fixture
-def fake_edge_tts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Patch edge-tts to write a fake MP3 instead of calling the network."""
+def fake_omni_voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Patch the httpx client used by TTSService to return a fake WAV."""
 
-    class FakeCommunicate:
-        def __init__(self, text: str, voice: str) -> None:
-            self.text = text
-            self.voice = voice
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
 
-        async def save(self, path: str) -> None:
-            Path(path).write_bytes(b"fake-mp3-bytes")
+        def raise_for_status(self) -> None:
+            pass
 
-    monkeypatch.setattr("src.api.services.tts.edge_tts.Communicate", FakeCommunicate)
+    class FakeAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def post(self, *args: object, **kwargs: object) -> FakeResponse:
+            return FakeResponse(_fake_wav())
+
+    monkeypatch.setattr("src.api.services.tts.httpx.AsyncClient", FakeAsyncClient)
     settings.tts_cache_dir = str(tmp_path)
 
 
-def test_tts_endpoint_success(fake_edge_tts: None) -> None:
+def test_tts_endpoint_success(fake_omni_voice: None) -> None:
     """TTS endpoint returns audio_path JSON on success."""
     payload = {
         "markdown": "# Historias principales\n1. **A** — resumen",
-        "voice": "es-ES-ElviraNeural",
+        "voice": "es-mx-male",
+        "language": "es",
     }
     response = client.post("/api/generate_tts", json=payload)
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["audio_path"].endswith(".mp3")
+    assert body["audio_path"].endswith(".wav")
     assert body["cached"] is False
-    assert body["voice"] == "es-ES-ElviraNeural"
+    assert body["voice"] == "es-mx-male"
     assert body["char_count"] > 0
 
 
-def test_tts_endpoint_caches_second_call(fake_edge_tts: None) -> None:
+def test_tts_endpoint_caches_second_call(fake_omni_voice: None) -> None:
     """Second call with the same payload returns cached=True."""
-    payload = {"markdown": "contenido cacheable", "voice": "es-ES-ElviraNeural"}
+    payload = {"markdown": "contenido cacheable", "voice": "es-mx-male", "language": "es"}
     first = client.post("/api/generate_tts", json=payload).json()
     second = client.post("/api/generate_tts", json=payload).json()
     assert first["cached"] is False
