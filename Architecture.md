@@ -102,9 +102,15 @@ news-engine/
 ├── src/
 │   ├── api/
 │   │   ├── main.py             # FastAPI app
+│   │   ├── auth.py             # ADMIN_API_TOKEN middleware for /ui + /api/admin
+│   │   ├── routes_ui.py        # Jinja2 + HTMX admin GUI pages
+│   │   ├── templates/          # GUI templates (base + pages + HTMX partials)
+│   │   ├── static/             # vendored htmx.min.js
 │   │   ├── routes/             # /health, /mvp_digest, /filter_new, /cluster,
-│   │   │                       # /summarize, /generate_tts
+│   │   │                       # /summarize, /generate_tts, /admin/* (collections,
+│   │   │                       # voices, runs, schedules)
 │   │   ├── services/           # Business logic (called by routes AND activities)
+│   │   │                       # incl. collections_repo, voices, temporal_admin
 │   │   ├── models/             # Pydantic schemas
 │   │   └── db/                 # SQLite layer + migrations
 │   ├── core/
@@ -114,7 +120,8 @@ news-engine/
 │   │   └── llm.py              # LiteLLM wrapper
 │   └── workers/
 │       ├── workflows.py        # DigestPipelineWorkflow + PipelineConfig
-│       ├── activities.py       # RSS, filter, cluster, digest, TTS, Telegram
+│       ├── activities.py       # RSS, filter, cluster, digest, TTS, Telegram,
+│       │                       # record_run (run history)
 │       ├── run_worker.py       # worker entry point
 │       ├── trigger.py          # manual one-shot run (--collection)
 │       └── schedule.py         # one Temporal schedule per collection
@@ -131,7 +138,7 @@ news-engine/
 
 ## Non-Goals (v1)
 
-- [ ] Multi-user / authentication
+- [ ] Multi-user / per-user accounts (the admin GUI uses a single shared token)
 - [ ] Vector database (Qdrant / Milvus)
-- [ ] Web administration UI
+- [ ] Web administration UI → **done in Phase 6** (FastAPI + Jinja2 + HTMX)
 - [ ] Real-time streaming

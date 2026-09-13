@@ -31,7 +31,11 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
      collection when no `collections.toml` is present)
    - `COLLECTIONS_FILE` — path to the collections config (default `collections.toml`)
    - `TEMPORAL_HOST` & `TEMPORAL_TASK_QUEUE` (defaults work for the bundled
-     Temporal server; set `temporal:7233` for container-to-container access)
+     Temporal server; the Compose `api`/`worker` services override it to
+     `temporal:7233` for container-to-container access)
+   - `ADMIN_API_TOKEN` — token for the admin web GUI (`/ui`) and the admin REST
+     API (`/api/admin/*`). Leave empty to keep the GUI locked (secure default).
+     Generate one with `openssl rand -hex 24`.
 4. Copy `collections.toml.example` to `collections.toml` and define your
    collections (names, feed URLs, per-collection schedule `time`, TTS flags,
    prompt templates, optional per-collection `chat_id`)
@@ -46,7 +50,8 @@ docker compose up -d --build
 ```
 
 This starts:
-- `api` — FastAPI on `:8000`
+- `api` — FastAPI on `:8000` (serves the REST API, `/api/admin/*`, and the
+  admin GUI at `/ui`)
 - `worker` — Temporal worker polling the dev task queue
 - `temporal` — Temporal server on `:7233`
 - `temporal-ui` — Temporal web UI on `:8080`
@@ -56,6 +61,16 @@ Verify service status:
 ```bash
 docker compose ps
 ```
+
+### Admin GUI
+
+Log in at `http://<host>:8000/ui/login` with `ADMIN_API_TOKEN`. From there you
+can, without touching code or `collections.toml` by hand:
+
+- Create / edit / delete collections (feeds, time, TTS, podcast identity)
+- See the weekly schedule calendar and resync Temporal schedules
+- Browse run history and launch an immediate run
+- Manage voices (stock voices and cloning new ones from an audio reference)
 
 ---
 

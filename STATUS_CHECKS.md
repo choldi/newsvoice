@@ -27,6 +27,7 @@ starts a real digest pipeline run.
 | `LLM_API_BASE` | `.env` | llama.cpp/LiteLLM base URL (deployed: `http://192.168.5.4:9000/`) |
 | `TTS_API_BASE_URL` | `.env` | OmniVoice base URL (deployed: `http://192.168.5.4:8000/api/v1`) |
 | `TEMPORAL_HOST` | `.env` | Composes to `temporal:7233` (UI runs on host port `8080`) |
+| `ADMIN_API_TOKEN` | `.env` | Token protecting `/ui/*` (cookie) and `/api/admin/*` (header) |
 | `DATABASE_PATH` | `.env` | SQLite file resolved inside the containers |
 | `TELEGRAM_BOT_TOKEN` | `.env` | Used for the `getMe` telegram check |
 
@@ -74,6 +75,28 @@ The endpoint lives in `src/api/main.py` and only confirms the app booted
 ```bash
 docker compose logs api --tail 100
 ```
+
+### 2.1 Admin GUI and admin REST API
+
+Both require `ADMIN_API_TOKEN` in `.env`. Without a cookie/header the web GUI
+redirects to `/ui/login` and `/api/admin/*` returns 401:
+
+```bash
+# web GUI reachable and login accepts the token
+curl -sf -c /tmp/cj "http://localhost:${API_PORT:-8800}/ui/login" -o /dev/null
+curl -sf -b /tmp/cj -c /tmp/cj \
+  -X POST -d "token=${ADMIN_API_TOKEN}" \
+  "http://localhost:${API_PORT:-8800}/ui/login" -o /dev/null
+
+# REST API with the token header
+curl -sf -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
+  "http://localhost:${API_PORT:-8800}/api/admin/collections" | head -c 400
+```
+
+Expected: login returns a 302 setting the `news_engine_admin` cookie; the
+REST call returns the JSON collection list. If these fail, confirm
+`ADMIN_API_TOKEN` is set and the `api` container can reach Temporal
+(`docker compose logs api | tail -50`).
 
 ## 3. Temporal server + UI
 
@@ -284,6 +307,7 @@ Interpretation:
 | `llm_call_failed` in logs | Section 6 | Fix `LLM_API_BASE` / restart llama.cpp |
 | Digest sent but no audio | `logs worker` for TTS errors | MTTS backend (Section 7), TTS is optional |
 | Telegram silent | Section 8 + `delivery_status` | Fix `TELEGRAM_BOT_TOKEN`/`CHAT_ID` |
+| `/ui` login loops or 401 on `/api/admin/*` | Section 2.1 | Set `ADMIN_API_TOKEN` in `.env`, restart `api` |
 
 ## Useful one-liners
 
@@ -293,6 +317,14 @@ Interpretation:
 
 # Tail all logs
 docker compose logs -f api worker temporal temporal-ui temporal-postgres
+
+# Admin GUI login + collections listing (grep your ADMIN_API_TOKEN response)
+curl -s -c /tmp/cj "http://localhost:${API_PORT:-8800}/ui/login" -o /dev/null \
+  && curl -s -b /tmp/cj -c /tmp/cj \
+     -X POST -d "token=${ADMIN_API_TOKEN}" \
+     "http://localhost:${API_PORT:-8800}/ui/login" -o /dev/null \
+  && curl -s -b /tmp/cj -H "X-Admin-Token: ${ADMIN_API_TOKEN}" \
+     "http://localhost:${API_PORT:-8800}/api/admin/collections"
 
 # Last workflow runs for a schedule in the UI
 #   http://localhost:8080/namespaces/default/schedules/daily-digest-tech

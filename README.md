@@ -20,10 +20,16 @@ docker compose up -d --build
 
 | Service | Port | Description |
 |---------|------|-------------|
-| api | 8000 | FastAPI REST API |
+| api | 8000 | FastAPI REST API + admin GUI at `/ui` |
 | worker | — | Temporal workflow worker |
 | temporal | 7233 | Temporal server |
 | temporal-ui | 8080 | Temporal web UI |
+
+## Admin GUI
+
+Manage collections, schedules, run history, and voices from the browser at
+`/ui` (login with `ADMIN_API_TOKEN` from `.env`). REST equivalents live under
+`/api/admin/*` (header `X-Admin-Token`).
 
 ## Schedule a digest
 
