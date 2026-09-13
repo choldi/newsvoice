@@ -314,6 +314,12 @@ Interpretation:
 ```bash
 # One-pass sanity: API + UI + worker + LLM + TTS
 ./scripts/status.sh
+# same thing via make
+make status
+
+# Quick health + pre-commit gate via make
+make health
+make check
 
 # Tail all logs
 docker compose logs -f api worker temporal temporal-ui temporal-postgres

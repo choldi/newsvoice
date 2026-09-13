@@ -222,6 +222,10 @@ Antes de decir "hecho" a cualquier tarea, verifica:
 
 ## COMANDOS UTILES
 
+> Todos los comandos sueltos de abajo tienen un equivalente `make` (ver
+> `make help`). Favorece `make check`, `make test`, `make commit`,
+> `make up`, `make status` cuando aplique.
+
 ### Desarrollo:
 ```bash
 docker compose up -d

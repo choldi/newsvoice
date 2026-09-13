@@ -62,6 +62,20 @@ Verify service status:
 docker compose ps
 ```
 
+### Quick reference (`make`)
+
+Most deploy/recurring actions have a `make` wrapper (run `make help` for the
+full list):
+
+| Action | Command |
+|--------|---------|
+| Start/build services | `make up` |
+| Health + status checks | `make health` / `make status` |
+| Tail logs | `make logs` / `make logs-api` / `make logs-worker` |
+| Register schedules | `make schedule` |
+| Manual run | `make trigger` |
+| Deploy | `make deploy` (default `production`) |
+
 ### Admin GUI
 
 Log in at `http://<host>:8000/ui/login` with `ADMIN_API_TOKEN`. From there you
