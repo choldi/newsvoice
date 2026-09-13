@@ -38,6 +38,10 @@ class CollectionConfig(BaseModel):
     )
     tts_enabled: bool = Field(default=False, description="Generate audio for this digest")
     deliver_audio: bool = Field(default=False, description="Deliver the generated audio")
+    podcast_name: str = Field(
+        default="",
+        description="Podcast name displayed in the GUI and injected into the LLM prompt",
+    )
     podcast_behavior: str = Field(
         default="", description="Podcaster behavior instruction (empty = off)"
     )
