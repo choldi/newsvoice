@@ -1,9 +1,11 @@
 """Unit tests for src/core/prompts.py."""
 
 from src.core.prompts import (
+    DIGEST_TEMPLATES,
     EMOTION_TAGS,
     SUMMARIZE_DIGEST_SYSTEM_PROMPT,
     build_digest_system_prompt,
+    get_digest_template,
     strip_emotion_tags,
 )
 
@@ -71,3 +73,36 @@ def test_strip_emotion_tags_keeps_unknown_brackets() -> None:
     text = "[calm] Nota con [nota] rara"
     cleaned = strip_emotion_tags(text)
     assert "nota" in cleaned
+
+
+def test_get_digest_template_default() -> None:
+    """Unknown or blank template names fall back to the base prompt."""
+    assert get_digest_template(None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert get_digest_template("") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert get_digest_template("does-not-exist") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert get_digest_template("default") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+
+
+def test_get_digest_template_known() -> None:
+    """Named templates are returned and build on the base prompt."""
+    finance = get_digest_template("finance")
+    assert finance is not SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert "Finance-specific requirements" in finance
+    assert {"finance", "health", "investigative"} <= set(DIGEST_TEMPLATES)
+
+
+def test_build_digest_system_prompt_with_template() -> None:
+    """build_digest_system_prompt embeds the requested template."""
+    prompt = build_digest_system_prompt(None, template="finance")
+    assert "Finance-specific requirements" in prompt
+    # The base prompt mentions Markdown only once; the finance suffix adds a
+    # second mention via the "Keep the Markdown structure" instruction.
+    assert prompt.count("Keep the Markdown") == 1
+
+
+def test_build_digest_system_prompt_template_and_behavior() -> None:
+    """Template, behavior, and language compose into one system prompt."""
+    prompt = build_digest_system_prompt("eres un podcaster", language="es", template="health")
+    assert "Health-specific requirements" in prompt
+    assert "eres un podcaster" in prompt
+    assert "Language requirement" in prompt

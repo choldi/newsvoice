@@ -95,11 +95,14 @@ def _validate_articles(articles: list[dict[str, Any]]) -> list[ArticleIn]:
 
 
 @activity.defn
-async def filter_new_activity(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def filter_new_activity(
+    articles: list[dict[str, Any]], collection: str = "default"
+) -> list[dict[str, Any]]:
     """Filter out articles already delivered within the retention window.
 
     Args:
         articles: List of article dicts to deduplicate.
+        collection: Collection name scoping the dedup window.
 
     Returns:
         List of new unseen article dicts.
@@ -107,23 +110,26 @@ async def filter_new_activity(articles: list[dict[str, Any]]) -> list[dict[str, 
     Raises:
         ApplicationError: If deduplication fails for a non-validation reason.
     """
-    activity.logger.info("Filtering new articles", count=len(articles))
+    activity.logger.info("Filtering new articles", count=len(articles), collection=collection)
     validated = _validate_articles(articles)
     if not validated:
         return []
     try:
-        new_articles = await DedupService().filter_new_articles(validated)
+        new_articles = await DedupService().filter_new_articles(validated, collection=collection)
     except Exception as exc:
         raise ApplicationError(f"Deduplication failed: {exc}", non_retryable=True) from exc
     return [a.model_dump() for a in new_articles]
 
 
 @activity.defn
-async def cluster_activity(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def cluster_activity(
+    articles: list[dict[str, Any]], collection: str = "default"
+) -> list[dict[str, Any]]:
     """Group articles into event clusters.
 
     Args:
         articles: List of article dicts to cluster.
+        collection: Collection name scoping cluster state.
 
     Returns:
         List of cluster dicts conforming to the ClusterItem schema.
@@ -131,12 +137,14 @@ async def cluster_activity(articles: list[dict[str, Any]]) -> list[dict[str, Any
     Raises:
         ApplicationError: If clustering fails for a non-validation reason.
     """
-    activity.logger.info("Clustering articles", count=len(articles))
+    activity.logger.info("Clustering articles", count=len(articles), collection=collection)
     validated = _validate_articles(articles)
     if not validated:
         return []
     try:
-        clusters = await ClusterService().cluster_articles(ClusterIn(articles=validated))
+        clusters = await ClusterService().cluster_articles(
+            ClusterIn(articles=validated, collection=collection)
+        )
     except Exception as exc:
         raise ApplicationError(f"Clustering failed: {exc}", non_retryable=True) from exc
     return [c.model_dump() for c in clusters]
@@ -198,12 +206,17 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     return result.model_dump()
 
 
-async def _telegram_request(method: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _telegram_request(
+    method: str,
+    payload: dict[str, Any],
+    chat_id: str | None = None,
+) -> dict[str, Any]:
     """Call the Telegram Bot API and normalize the response.
 
     Args:
         method: Telegram API method name (e.g. sendMessage, sendAudio).
         payload: JSON body for the request.
+        chat_id: Optional per-collection chat id; falls back to settings.
 
     Returns:
         Dict with status and Telegram message id.
@@ -213,14 +226,15 @@ async def _telegram_request(method: str, payload: dict[str, Any]) -> dict[str, A
             returns an error or an unexpected response shape.
     """
     settings = get_settings()
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+    target_chat = chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token or not target_chat:
         raise ApplicationError(
             "Telegram bot token and chat id must be configured",
             non_retryable=True,
         )
     url = TELEGRAM_API_URL.format(token=settings.telegram_bot_token, method=method)
     body = dict(payload)
-    body["chat_id"] = settings.telegram_chat_id
+    body["chat_id"] = target_chat
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(url, json=body)
         response.raise_for_status()
@@ -244,18 +258,23 @@ async def _telegram_request(method: str, payload: dict[str, Any]) -> dict[str, A
 
 
 @activity.defn
-async def deliver_telegram_message_activity(text: str) -> dict[str, Any]:
+async def deliver_telegram_message_activity(
+    text: str, chat_id: str | None = None
+) -> dict[str, Any]:
     """Send the digest text via Telegram.
 
     Args:
         text: The digest markdown text to send.
+        chat_id: Optional per-collection chat id; falls back to settings.
 
     Returns:
         Dict with status and Telegram message id.
     """
     activity.logger.info("Sending Telegram message")
     return await _telegram_request(
-        "sendMessage", {"text": strip_emotion_tags(text), "parse_mode": "Markdown"}
+        "sendMessage",
+        {"text": strip_emotion_tags(text), "parse_mode": "Markdown"},
+        chat_id=chat_id,
     )
 
 
@@ -278,13 +297,14 @@ def _audio_mime_type(audio_path: str) -> str:
 
 @activity.defn
 async def deliver_telegram_audio_activity(
-    audio_path: str, caption: str | None = None
+    audio_path: str, caption: str | None = None, chat_id: str | None = None
 ) -> dict[str, Any]:
     """Send a generated audio file via Telegram.
 
     Args:
         audio_path: Path to the MP3 file on disk.
         caption: Optional caption text for the audio message.
+        chat_id: Optional per-collection chat id; falls back to settings.
 
     Returns:
         Dict with status and Telegram message id.
@@ -295,7 +315,8 @@ async def deliver_telegram_audio_activity(
     """
     activity.logger.info("Sending Telegram audio", audio_path=audio_path)
     settings = get_settings()
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+    target_chat = chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token or not target_chat:
         raise ApplicationError(
             "Telegram bot token and chat id must be configured",
             non_retryable=True,
@@ -313,7 +334,7 @@ async def deliver_telegram_audio_activity(
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
                 TELEGRAM_API_URL.format(token=settings.telegram_bot_token, method="sendAudio"),
-                data={"chat_id": settings.telegram_chat_id, "caption": caption},
+                data={"chat_id": target_chat, "caption": caption},
                 files=files,
             )
             response.raise_for_status()

@@ -50,12 +50,12 @@ async def stub_fetch_rss(feed_urls: list[str]) -> list[dict]:
 
 
 @activity.defn(name="filter_new_activity")
-async def stub_filter_new(articles: list[dict]) -> list[dict]:
+async def stub_filter_new(articles: list[dict], collection: str = "default") -> list[dict]:
     return articles
 
 
 @activity.defn(name="cluster_activity")
-async def stub_cluster(articles: list[dict]) -> list[dict]:
+async def stub_cluster(articles: list[dict], collection: str = "default") -> list[dict]:
     return [CLUSTER]
 
 
@@ -70,12 +70,14 @@ async def stub_generate_tts(digest: dict) -> dict:
 
 
 @activity.defn(name="deliver_telegram_message_activity")
-async def stub_deliver_message(text: str) -> dict:
+async def stub_deliver_message(text: str, chat_id: str | None = None) -> dict:
     return DELIVERY
 
 
 @activity.defn(name="deliver_telegram_audio_activity")
-async def stub_deliver_audio(audio_path: str, caption: str | None) -> dict:
+async def stub_deliver_audio(
+    audio_path: str, caption: str | None = None, chat_id: str | None = None
+) -> dict:
     return DELIVERY
 
 
@@ -240,7 +242,7 @@ async def test_no_new_articles_skips_digest() -> None:
     async with await WorkflowEnvironment.start_time_skipping() as env:
 
         @activity.defn(name="filter_new_activity")
-        async def noop_filter(articles: list[dict]) -> list[dict]:
+        async def noop_filter(articles: list[dict], collection: str = "default") -> list[dict]:
             return []
 
         async with Worker(
@@ -280,3 +282,133 @@ async def test_tts_disabled_skips_audio() -> None:
     assert result["status"] == "ok"
     # Only the text delivery should be recorded
     assert len(result["delivery_status"]) == 1
+
+
+async def test_collection_passed_to_filter_and_cluster() -> None:
+    """collection in PipelineConfig reaches the filter and cluster activities."""
+    seen: dict[str, str | None] = {}
+
+    @activity.defn(name="filter_new_activity")
+    async def filter_recorder(articles: list[dict], collection: str = "default") -> list[dict]:
+        seen["filter"] = collection
+        return articles
+
+    @activity.defn(name="cluster_activity")
+    async def cluster_recorder(articles: list[dict], collection: str = "default") -> list[dict]:
+        seen["cluster"] = collection
+        return [CLUSTER]
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                filter_recorder,
+                cluster_recorder,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="tech",
+                ),
+                id="workflow-test-collection",
+                task_queue="tq",
+            )
+
+    assert seen == {"filter": "tech", "cluster": "tech"}
+
+
+async def test_prompt_template_and_collection_reach_digest() -> None:
+    """prompt_template and collection in PipelineConfig reach the digest payload."""
+    received: dict = {}
+
+    @activity.defn(name="generate_digest_activity")
+    async def recording_digest(payload: dict) -> dict:
+        received["payload"] = payload
+        return DIGEST
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                recording_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="finance",
+                    prompt_template="finance",
+                ),
+                id="workflow-test-template",
+                task_queue="tq",
+            )
+
+    assert received["payload"].get("prompt_template") == "finance"
+    assert received["payload"].get("collection") == "finance"
+
+
+async def test_chat_id_passed_to_delivery() -> None:
+    """chat_id in PipelineConfig reaches the delivery activities."""
+    seen: dict[str, object] = {}
+
+    @activity.defn(name="deliver_telegram_message_activity")
+    async def message_recorder(text: str, chat_id: str | None = None) -> dict:
+        seen["message_chat"] = chat_id
+        return DELIVERY
+
+    @activity.defn(name="deliver_telegram_audio_activity")
+    async def audio_recorder(
+        audio_path: str, caption: str | None = None, chat_id: str | None = None
+    ) -> dict:
+        seen["audio_chat"] = chat_id
+        return DELIVERY
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                message_recorder,
+                audio_recorder,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=True,
+                    collection="health",
+                    chat_id="-1001234567890",
+                ),
+                id="workflow-test-chat",
+                task_queue="tq",
+            )
+
+    assert seen == {"message_chat": "-1001234567890", "audio_chat": "-1001234567890"}

@@ -85,12 +85,14 @@ class DedupService:
         self,
         articles: list[ArticleIn],
         days_window: int = 7,
+        collection: str = "default",
     ) -> list[ArticleIn]:
         """Filters a list of articles to return only those not seen within the days_window.
 
         Args:
             articles: List of incoming ArticleIn objects.
             days_window: Time window in days to consider an article seen. Defaults to 7.
+            collection: Collection name to scope deduplication to.
 
         Returns:
             List of ArticleIn objects with normalized links that are new/unseen.
@@ -117,7 +119,9 @@ class DedupService:
         all_urls = [url for url, _ in normalized_articles]
 
         # 2. Query repository for seen URLs within the retention window
-        seen_in_db = await self.repo.get_seen_urls(all_urls, days_window=days_window)
+        seen_in_db = await self.repo.get_seen_urls(
+            all_urls, days_window=days_window, collection=collection
+        )
 
         # 3. Filter out seen URLs
         unseen_pairs = [
@@ -145,6 +149,6 @@ class DedupService:
             }
             for url, art in unseen_pairs
         ]
-        await self.repo.save_articles(articles_to_save)
+        await self.repo.save_articles(articles_to_save, collection=collection)
 
         return [art for _, art in unseen_pairs]

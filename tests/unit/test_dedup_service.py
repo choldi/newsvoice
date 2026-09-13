@@ -87,3 +87,36 @@ async def test_dedup_service_filters_already_seen_urls() -> None:
     assert len(new_articles) == 1
     assert new_articles[0].link == "https://example.com/news/new"
     mock_repo.save_articles.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dedup_service_collection_scoped() -> None:
+    """A URL seen in one collection is not filtered out in another."""
+    mock_repo = AsyncMock()
+    mock_repo.get_seen_urls.return_value = set()
+    mock_repo.save_articles.return_value = None
+
+    service = DedupService(repository=mock_repo)
+    articles = [ArticleIn(title="Shared Story", link="https://example.com/news/shared")]
+
+    # First run in "tech": nothing seen, article passes through.
+    tech_new = await service.filter_new_articles(articles, days_window=7, collection="tech")
+    assert len(tech_new) == 1
+    # The repository consult must be scoped to the tech collection.
+    mock_repo.get_seen_urls.assert_called_with(
+        ["https://example.com/news/shared"], days_window=7, collection="tech"
+    )
+
+    # Same URL in "finance": still new because the previous run was scoped to tech.
+    mock_repo.get_seen_urls.reset_mock()
+    finance_new = await service.filter_new_articles(articles, days_window=7, collection="finance")
+    assert len(finance_new) == 1
+    mock_repo.get_seen_urls.assert_called_with(
+        ["https://example.com/news/shared"], days_window=7, collection="finance"
+    )
+
+    # The same URL again in "tech" is filtered out.
+    mock_repo.get_seen_urls.reset_mock()
+    mock_repo.get_seen_urls.return_value = {"https://example.com/news/shared"}
+    tech_again = await service.filter_new_articles(articles, days_window=7, collection="tech")
+    assert tech_again == []

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_task_queue: str = "news-engine-task-queue"
     rss_feed_urls: list[str] = []
+    collections_file: str = "collections.toml"
     tts_cache_dir: str = "data/tts_cache"
     tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
     tts_api_key: str = ""

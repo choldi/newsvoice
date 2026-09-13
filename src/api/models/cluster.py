@@ -31,6 +31,9 @@ class ClusterIn(BaseModel):
     """Input payload to cluster a batch of articles."""
 
     articles: list[ArticleIn] = Field(..., description="Raw or filtered articles to cluster")
+    collection: str = Field(
+        default="default", description="Collection name, used for scoped cluster state"
+    )
 
 
 class ClusterOut(BaseModel):

@@ -76,17 +76,18 @@ class DigestService:
         return "\n\n".join(formatted_blocks)
 
     def _system_prompt(self, payload: DigestIn) -> str:
-        """Build the digest system prompt, injecting podcast behavior and language.
+        """Build the digest system prompt, injecting template, behavior, and language.
 
         Args:
-            payload: The DigestIn payload, which may carry podcast_behavior/language.
+            payload: The DigestIn payload, which may carry template/behavior/language.
 
         Returns:
             The system prompt to use for digest generation.
         """
         behavior = payload.podcast_behavior or settings.tts_podcast_behavior
         language = payload.language or settings.tts_language
-        return build_digest_system_prompt(behavior, language)
+        template = payload.prompt_template or "default"
+        return build_digest_system_prompt(behavior, language, template=template)
 
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
         """Generates a news digest from incoming articles or clusters payload using LLM.
@@ -123,7 +124,9 @@ class DigestService:
                 if cluster.cluster_id:
                     try:
                         await self.repo.record_cluster_delivery(
-                            cluster.cluster_id, material_update=cluster.is_material_update
+                            cluster.cluster_id,
+                            material_update=cluster.is_material_update,
+                            collection=payload.collection,
                         )
                     except Exception as exc:
                         logger.warning("record_cluster_delivery_failed", error=str(exc))
@@ -157,7 +160,7 @@ class DigestService:
         delivered_urls = [normalize_url(a.link) for a in articles if a.link]
         if delivered_urls:
             try:
-                await self.repo.record_deliveries(delivered_urls)
+                await self.repo.record_deliveries(delivered_urls, collection=payload.collection)
                 logger.info("deliveries_recorded", count=len(delivered_urls))
             except Exception as exc:
                 logger.warning("recording_deliveries_failed", error=str(exc))

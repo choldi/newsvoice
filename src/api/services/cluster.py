@@ -190,10 +190,14 @@ class ClusterService:
         """
         return f"{fp.entity.lower()}|{fp.action.lower()}"
 
-    async def _check_material_update(self, cluster_id: int, new_article: ArticleIn) -> bool:
+    async def _check_material_update(
+        self, cluster_id: int, new_article: ArticleIn, collection: str = "default"
+    ) -> bool:
         """Check if new article brings material updates to existing cluster."""
         try:
-            existing_articles = await self.repo.get_cluster_articles(cluster_id)
+            existing_articles = await self.repo.get_cluster_articles(
+                cluster_id, collection=collection
+            )
             if not existing_articles:
                 return True  # First article in cluster is always material
 
@@ -221,6 +225,8 @@ class ClusterService:
         if not payload.articles:
             return []
 
+        collection = payload.collection
+
         # Ensure every article exists in the articles table so the
         # cluster_articles FK reference does not fail.
         await self.repo.save_articles(
@@ -232,11 +238,12 @@ class ClusterService:
                     "source": a.source,
                 }
                 for a in payload.articles
-            ]
+            ],
+            collection=collection,
         )
 
         # 1. Get recent active clusters from DB (last 3 days)
-        recent_clusters = await self.repo.find_recent_clusters(active_days=3)
+        recent_clusters = await self.repo.find_recent_clusters(active_days=3, collection=collection)
         cluster_map: dict[str, dict[str, Any]] = {}
         for cl in recent_clusters:
             fp = cl["fingerprint"]
@@ -257,12 +264,16 @@ class ClusterService:
                 # Existing cluster: add article, check material update
                 cluster_map[key]["articles"].append(article)
                 if not cluster_map[key]["is_material_update"]:
-                    is_update = await self._check_material_update(cluster_map[key]["id"], article)
+                    is_update = await self._check_material_update(
+                        cluster_map[key]["id"], article, collection
+                    )
                     cluster_map[key]["is_material_update"] = is_update
             else:
                 # New cluster: create in DB
-                cluster_id = await self.repo.create_cluster(fp.model_dump())
-                await self.repo.add_article_to_cluster(cluster_id, article.link)
+                cluster_id = await self.repo.create_cluster(fp.model_dump(), collection=collection)
+                await self.repo.add_article_to_cluster(
+                    cluster_id, article.link, collection=collection
+                )
                 cluster_map[key] = {
                     "id": cluster_id,
                     "fingerprint": fp.model_dump(),

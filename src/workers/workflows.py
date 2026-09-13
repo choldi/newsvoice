@@ -47,6 +47,9 @@ class PipelineConfig:
     podcast_behavior: str = ""
     language: str = ""
     voice: str = ""
+    collection: str = "default"
+    prompt_template: str = "default"
+    chat_id: str | None = None
 
 
 @workflow.defn
@@ -63,7 +66,10 @@ class DigestPipelineWorkflow:
         Returns:
             Dict summarizing the run outcome (digest, counts, delivery status).
         """
-        workflow.logger.info(f"Pipeline started with {len(config.feed_urls)} feeds")
+        workflow.logger.info(
+            f"Pipeline started for collection '{config.collection}' "
+            f"with {len(config.feed_urls)} feeds"
+        )
 
         articles = await workflow.execute_activity(
             fetch_rss_activity,
@@ -80,7 +86,7 @@ class DigestPipelineWorkflow:
 
         new_articles = await workflow.execute_activity(
             filter_new_activity,
-            articles,
+            args=[articles, config.collection],
             start_to_close_timeout=FILTER_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -97,7 +103,7 @@ class DigestPipelineWorkflow:
 
         clusters = await workflow.execute_activity(
             cluster_activity,
-            new_articles,
+            args=[new_articles, config.collection],
             start_to_close_timeout=CLUSTER_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -114,19 +120,23 @@ class DigestPipelineWorkflow:
                 "clusters": clusters,
                 "podcast_behavior": config.podcast_behavior,
                 "language": config.language,
+                "prompt_template": config.prompt_template,
+                "collection": config.collection,
             },
             start_to_close_timeout=DIGEST_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
         digest_markdown = self._extract_digest_text(digest)
         article_count = self._extract_article_count(digest)
-        workflow.logger.info(f"Digest generated for {article_count} articles")
+        workflow.logger.info(
+            f"Digest generated for {article_count} articles (collection '{config.collection}')"
+        )
 
         # Deliver the text digest FIRST; it is the primary deliverable and must
         # not be blocked by (optional) TTS/audio failures.
         text_delivery = await workflow.execute_activity(
             deliver_telegram_message_activity,
-            digest_markdown,
+            args=[digest_markdown, config.chat_id],
             start_to_close_timeout=DELIVERY_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -148,7 +158,7 @@ class DigestPipelineWorkflow:
                 if config.deliver_audio and audio.get("audio_path"):
                     audio_delivery = await workflow.execute_activity(
                         deliver_telegram_audio_activity,
-                        args=[audio["audio_path"], digest_markdown[:1000]],
+                        args=[audio["audio_path"], digest_markdown[:1000], config.chat_id],
                         start_to_close_timeout=DELIVERY_TIMEOUT,
                         retry_policy=NETWORK_RETRY_POLICY,
                     )

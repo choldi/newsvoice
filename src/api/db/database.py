@@ -108,15 +108,21 @@ class ArticleRepository:
         """
         self.db_path = db_path
 
-    async def get_seen_urls(self, urls: list[str], days_window: int = 7) -> set[str]:
-        """Returns the subset of URLs that have already been recorded within days_window.
+    async def get_seen_urls(
+        self,
+        urls: list[str],
+        days_window: int = 7,
+        collection: str = "default",
+    ) -> set[str]:
+        """Returns the subset of URLs seen in a collection within days_window.
 
         Args:
             urls: List of normalized URLs to check.
             days_window: Retention window in days to consider an article recently seen.
+            collection: Collection name limiting the dedup scope.
 
         Returns:
-            Set of URLs that are already stored in the database.
+            Set of URLs that are already stored in the database for the collection.
         """
         if not urls:
             return set()
@@ -125,10 +131,11 @@ class ArticleRepository:
         placeholders = ",".join("?" for _ in urls)
         query = f"""
             SELECT url FROM articles
-            WHERE url IN ({placeholders})
+            WHERE collection = ?
+            AND url IN ({placeholders})
             AND fetched_at >= ?
         """
-        params = list(urls) + [cutoff_date]
+        params = [collection] + list(urls) + [cutoff_date]
 
         async with get_db(self.db_path) as db:
             async with db.execute(query, params) as cursor:
@@ -138,11 +145,13 @@ class ArticleRepository:
     async def save_articles(
         self,
         articles_data: list[dict[str, str | None]],
+        collection: str = "default",
     ) -> None:
-        """Persists new articles into the articles table.
+        """Persists new articles into the articles table for a collection.
 
         Args:
             articles_data: List of article dicts with keys 'url', 'title', 'content', 'source'.
+            collection: Collection name the articles belong to.
         """
         if not articles_data:
             return
@@ -150,6 +159,7 @@ class ArticleRepository:
         now_iso = datetime.now(UTC).isoformat()
         records = [
             (
+                collection,
                 item["url"],
                 item["title"],
                 item.get("content"),
@@ -160,40 +170,50 @@ class ArticleRepository:
         ]
 
         query = """
-            INSERT OR REPLACE INTO articles (url, title, content, source, fetched_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO articles (collection, url, title, content, source, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         """
 
         async with get_db(self.db_path) as db:
             await db.executemany(query, records)
             await db.commit()
 
-    async def record_deliveries(self, article_urls: list[str]) -> None:
-        """Records delivery timestamps for a list of delivered article URLs.
+    async def record_deliveries(
+        self,
+        article_urls: list[str],
+        collection: str = "default",
+    ) -> None:
+        """Records delivery timestamps for delivered article URLs in a collection.
 
         Args:
             article_urls: List of article URLs that were included in a delivery digest.
+            collection: Collection name the delivery belongs to.
         """
         if not article_urls:
             return
 
         now_iso = datetime.now(UTC).isoformat()
-        records = [(url, now_iso) for url in article_urls]
+        records = [(collection, url, now_iso) for url in article_urls]
 
         query = """
-            INSERT INTO deliveries (article_url, delivered_at)
-            VALUES (?, ?)
+            INSERT INTO deliveries (collection, article_url, delivered_at)
+            VALUES (?, ?, ?)
         """
 
         async with get_db(self.db_path) as db:
             await db.executemany(query, records)
             await db.commit()
 
-    async def create_cluster(self, fingerprint: dict[str, str]) -> int:
-        """Creates a new event cluster and returns its primary key ID.
+    async def create_cluster(
+        self,
+        fingerprint: dict[str, str],
+        collection: str = "default",
+    ) -> int:
+        """Creates a new event cluster for a collection and returns its primary key ID.
 
         Args:
             fingerprint: Dictionary containing entity, action, and title hash.
+            collection: Collection name the cluster belongs to.
 
         Returns:
             The newly inserted cluster ID.
@@ -202,12 +222,12 @@ class ArticleRepository:
         fp_json = json.dumps(fingerprint, sort_keys=True)
 
         query = """
-            INSERT INTO clusters (fingerprint, first_seen, last_seen)
-            VALUES (?, ?, ?)
+            INSERT INTO clusters (collection, fingerprint, first_seen, last_seen)
+            VALUES (?, ?, ?, ?)
         """
 
         async with get_db(self.db_path) as db:
-            cursor = await db.execute(query, (fp_json, now_iso, now_iso))
+            cursor = await db.execute(query, (collection, fp_json, now_iso, now_iso))
             await db.commit()
             return cursor.lastrowid or 0
 
@@ -224,28 +244,39 @@ class ArticleRepository:
             await db.execute(query, (now_iso, cluster_id))
             await db.commit()
 
-    async def add_article_to_cluster(self, cluster_id: int, article_url: str) -> None:
-        """Associates an article URL with a cluster.
+    async def add_article_to_cluster(
+        self,
+        cluster_id: int,
+        article_url: str,
+        collection: str = "default",
+    ) -> None:
+        """Associates an article URL with a cluster in a collection.
 
         Args:
             cluster_id: ID of the event cluster.
             article_url: URL of the article.
+            collection: Collection name for the association.
         """
         now_iso = datetime.now(UTC).isoformat()
         query = """
-            INSERT OR IGNORE INTO cluster_articles (cluster_id, article_url, added_at)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO cluster_articles (collection, cluster_id, article_url, added_at)
+            VALUES (?, ?, ?, ?)
         """
 
         async with get_db(self.db_path) as db:
-            await db.execute(query, (cluster_id, article_url, now_iso))
+            await db.execute(query, (collection, cluster_id, article_url, now_iso))
             await db.commit()
 
-    async def find_recent_clusters(self, active_days: int = 3) -> list[dict]:
-        """Retrieves recent active clusters within active_days window.
+    async def find_recent_clusters(
+        self,
+        active_days: int = 3,
+        collection: str = "default",
+    ) -> list[dict]:
+        """Retrieves recent active clusters within active_days window for a collection.
 
         Args:
             active_days: Time window in days to consider a cluster active.
+            collection: Collection name to limit cluster lookup to.
 
         Returns:
             List of cluster dictionaries with id, fingerprint, and timestamps.
@@ -254,12 +285,13 @@ class ArticleRepository:
         query = """
             SELECT id, fingerprint, first_seen, last_seen
             FROM clusters
-            WHERE last_seen >= ?
+            WHERE collection = ?
+            AND last_seen >= ?
             ORDER BY last_seen DESC
         """
 
         async with get_db(self.db_path) as db:
-            async with db.execute(query, (cutoff_date,)) as cursor:
+            async with db.execute(query, (collection, cutoff_date)) as cursor:
                 rows = await cursor.fetchall()
                 clusters = []
                 for row in rows:
@@ -292,27 +324,38 @@ class ArticleRepository:
                 row = await cursor.fetchone()
                 return row is not None
 
-    async def record_cluster_delivery(self, cluster_id: int, material_update: bool = False) -> None:
-        """Records a delivery event for an event cluster.
+    async def record_cluster_delivery(
+        self,
+        cluster_id: int,
+        material_update: bool = False,
+        collection: str = "default",
+    ) -> None:
+        """Records a delivery event for an event cluster in a collection.
 
         Args:
             cluster_id: ID of the delivered cluster.
             material_update: Whether this delivery represents a material update.
+            collection: Collection name the delivery belongs to.
         """
         now_iso = datetime.now(UTC).isoformat()
         query = """
-            INSERT INTO deliveries (cluster_id, delivered_at, material_update)
-            VALUES (?, ?, ?)
+            INSERT INTO deliveries (collection, cluster_id, delivered_at, material_update)
+            VALUES (?, ?, ?, ?)
         """
         async with get_db(self.db_path) as db:
-            await db.execute(query, (cluster_id, now_iso, 1 if material_update else 0))
+            await db.execute(query, (collection, cluster_id, now_iso, 1 if material_update else 0))
             await db.commit()
 
-    async def get_cluster_articles(self, cluster_id: int) -> list[dict[str, str | None]]:
-        """Fetches all article details associated with a cluster.
+    async def get_cluster_articles(
+        self,
+        cluster_id: int,
+        collection: str = "default",
+    ) -> list[dict[str, str | None]]:
+        """Fetches all article details associated with a cluster in a collection.
 
         Args:
             cluster_id: ID of the cluster.
+            collection: Collection name the cluster belongs to.
 
         Returns:
             List of article dictionaries.
@@ -320,12 +363,13 @@ class ArticleRepository:
         query = """
             SELECT a.url, a.title, a.content, a.source, a.fetched_at
             FROM articles a
-            JOIN cluster_articles ca ON a.url = ca.article_url
-            WHERE ca.cluster_id = ?
+            JOIN cluster_articles ca
+              ON a.collection = ca.collection AND a.url = ca.article_url
+            WHERE ca.cluster_id = ? AND ca.collection = ?
             ORDER BY ca.added_at ASC
         """
         async with get_db(self.db_path) as db:
-            async with db.execute(query, (cluster_id,)) as cursor:
+            async with db.execute(query, (cluster_id, collection)) as cursor:
                 rows = await cursor.fetchall()
                 return [
                     {

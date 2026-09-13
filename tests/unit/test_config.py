@@ -9,3 +9,4 @@ def test_settings_default_values() -> None:
     assert settings.api_port == 8000
     assert settings.llm_temperature == 0.3
     assert settings.database_path == "data/news.db"
+    assert settings.collections_file == "collections.toml"

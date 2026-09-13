@@ -98,3 +98,35 @@ async def test_digest_service_injects_language() -> None:
     system_content = sent_messages[0]["content"]
     assert "Language requirement" in system_content
     assert "es" in system_content
+
+
+@pytest.mark.asyncio
+async def test_digest_service_injects_prompt_template() -> None:
+    """Per-collection templates are injected into the system prompt."""
+    service = DigestService()
+    articles = [
+        ArticleIn(title="Finance News", link="https://example.com/1", source="Bloomberg"),
+    ]
+    payload = DigestIn(articles=articles, prompt_template="finance", collection="finance")
+
+    with patch("src.api.services.digest.generate_completion", return_value="# Digest") as mock_llm:
+        await service.generate_digest(payload)
+
+    sent_messages = mock_llm.call_args.kwargs["messages"]
+    system_content = sent_messages[0]["content"]
+    assert "Finance-specific requirements" in system_content
+
+
+@pytest.mark.asyncio
+async def test_digest_service_unknown_template_falls_back() -> None:
+    """An unknown template name keeps the base prompt."""
+    service = DigestService()
+    articles = [ArticleIn(title="Tech News", link="https://example.com/2", source="Tech")]
+    payload = DigestIn(articles=articles, prompt_template="does-not-exist")
+
+    with patch("src.api.services.digest.generate_completion", return_value="# Digest") as mock_llm:
+        await service.generate_digest(payload)
+
+    sent_messages = mock_llm.call_args.kwargs["messages"]
+    system_content = sent_messages[0]["content"]
+    assert "Finance-specific requirements" not in system_content

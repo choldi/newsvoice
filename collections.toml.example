@@ -1,0 +1,47 @@
+# collections.toml.example
+#
+# Copy to collections.toml to define multiple independent news digests, each on
+# its own Temporal schedule. Inspired by Better Morning.
+#
+# - Shared defaults can live in the optional [collection_defaults] table.
+# - Each [[collections]] block overrides those defaults for one collection.
+# - `time` is HH:MM 24-hour UTC — this collection's digest will run daily at it.
+# - `enabled = false` pauses a collection without deleting its config.
+# - `prompt_template` selects a system prompt from src/core/prompts.py
+#   (built-in: default, finance, health, investigative).
+# - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
+
+[collection_defaults]
+tts_enabled = false
+deliver_audio = false
+language = "es"
+voice = "es-mx-male"
+
+[[collections]]
+name = "tech"
+time = "08:00"
+feed_urls = [
+    "https://techcrunch.com/feed/",
+    "https://www.theverge.com/rss/index.xml",
+]
+prompt_template = "default"
+
+[[collections]]
+name = "health"
+time = "09:30"
+feed_urls = [
+    "https://www.healthline.com/rss",
+]
+language = "en"
+voice = "en-gb-female"
+prompt_template = "health"
+
+[[collections]]
+name = "finance"
+time = "17:15"
+feed_urls = [
+    "https://feeds.bloomberg.com/markets/news.rss",
+]
+prompt_template = "finance"
+# chat_id = "optional_per_collection_chat_id"
+enabled = false

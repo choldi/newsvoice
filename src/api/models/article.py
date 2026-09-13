@@ -64,6 +64,14 @@ class DigestIn(BaseModel):
         description="ISO 639-1 language code for the digest text (e.g. 'es'). "
         "Defaults to settings.",
     )
+    prompt_template: str | None = Field(
+        default=None,
+        description="Name of the per-collection prompt template in src/core/prompts.py. "
+        "Defaults to 'default'.",
+    )
+    collection: str = Field(
+        default="default", description="Collection name, used for scoped delivery tracking"
+    )
 
 
 class DigestOut(BaseModel):

@@ -44,17 +44,83 @@ Rules:
 - If the language code is empty/unspecified, fall back to the source articles' language."""
 
 
-def build_digest_system_prompt(behavior: str | None, language: str | None = None) -> str:
-    """Build the digest system prompt, optionally adding podcast behavior and language.
+# Registry of per-collection digest system prompts. A collection selects a
+# template by name via its `prompt_template` field. Each template must deliver
+# the 5 main stories + 5 headlines structure specified in the base prompt.
+DIGEST_TEMPLATES: dict[str, str] = {
+    "default": SUMMARIZE_DIGEST_SYSTEM_PROMPT,
+}
+
+# Finance: prioritizes markets, deals, earnings, and regulatory news.
+DIGEST_TEMPLATES["finance"] = (
+    SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    + """
+
+Finance-specific requirements:
+- Prioritize market-moving stories: earnings, M&A, fundraising, central bank moves.
+- Quote figures (percentages, amounts) when present in the source articles.
+- Flag volatility and risk clearly in the summary.
+
+Keep the Markdown structure described at the top."""
+)
+
+# Health: prioritizes clinically relevant and safety-relevant research.
+DIGEST_TEMPLATES["health"] = (
+    SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    + """
+
+Health-specific requirements:
+- Prioritize breakthroughs in diagnosis, treatment, prevention, and policy.
+- Distinguish peer-reviewed findings from preliminary trials and speculation.
+- Note the affected population and the confidence level of the evidence.
+
+Keep the Markdown structure described at the top."""
+)
+
+# Investigative/tech-adjacent: prioritizes policy, regulation, and long reads.
+DIGEST_TEMPLATES["investigative"] = (
+    SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    + """
+
+Investigative-specific requirements:
+- Prioritize stories with policy, regulatory, or societal impact.
+- Preserve nuance: attribute claims to sources and distinguish fact from opinion.
+- Surface accountability questions (who, what decision, at what cost).
+
+Keep the Markdown structure described at the top."""
+)
+
+
+def get_digest_template(name: str | None) -> str:
+    """Return the system prompt for a template name, defaulting to the base one.
+
+    Args:
+        name: Template name from the DIGEST_TEMPLATES registry.
+
+    Returns:
+        The system prompt string to use for digest generation.
+    """
+    if not name or name not in DIGEST_TEMPLATES:
+        return SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    return DIGEST_TEMPLATES[name]
+
+
+def build_digest_system_prompt(
+    behavior: str | None,
+    language: str | None = None,
+    template: str | None = None,
+) -> str:
+    """Build the digest system prompt, optionally adding template, behavior, and language.
 
     Args:
         behavior: Free-form podcaster instruction. Empty/None means no extra behavior.
         language: ISO 639-1 language code. Empty/None means keep source language.
+        template: Per-collection prompt template name. Empty/None means 'default'.
 
     Returns:
         The system prompt for digest generation.
     """
-    prompt = SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    prompt = get_digest_template(template)
     if behavior and behavior.strip():
         prompt += PODCAST_BEHAVIOR_PROMPT.format(
             behavior=behavior.strip(),

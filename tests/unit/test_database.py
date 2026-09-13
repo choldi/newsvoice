@@ -98,3 +98,37 @@ async def test_article_repository_window_expiration(tmp_path: Path) -> None:
 
     seen_14_days = await repo.get_seen_urls(["https://example.com/old"], days_window=14)
     assert "https://example.com/old" in seen_14_days
+
+
+@pytest.mark.asyncio
+async def test_article_repository_collection_scoped_dedup(tmp_path: Path) -> None:
+    """Articles are deduplicated per collection, not globally."""
+    db_file = tmp_path / "test_news.db"
+    await run_migrations(str(db_file))
+    repo = ArticleRepository(str(db_file))
+
+    article = {
+        "url": "https://example.com/shared",
+        "title": "Shared Story",
+        "content": "Content",
+        "source": "RSS",
+    }
+    await repo.save_articles([article], collection="tech")
+
+    # Seen again within the window in the same collection.
+    seen_tech = await repo.get_seen_urls(
+        ["https://example.com/shared"], days_window=7, collection="tech"
+    )
+    assert "https://example.com/shared" in seen_tech
+
+    # Not considered seen in a collection that never stored it.
+    seen_other = await repo.get_seen_urls(
+        ["https://example.com/shared"], days_window=7, collection="finance"
+    )
+    assert "https://example.com/shared" not in seen_other
+
+    # Untouched "default" collection is unaffected either.
+    seen_default = await repo.get_seen_urls(
+        ["https://example.com/shared"], days_window=7, collection="default"
+    )
+    assert "https://example.com/shared" not in seen_default
