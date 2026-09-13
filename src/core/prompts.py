@@ -34,21 +34,35 @@ Rules:
 - Keep the same Markdown structure described at the top."""
 
 
-def build_digest_system_prompt(behavior: str | None) -> str:
-    """Build the digest system prompt, optionally including a podcast behavior.
+LANGUAGE_PROMPT = """\n\nLanguage requirement:
+{language}
+
+Rules:
+- Write the ENTIRE digest in the language code above.
+- Translate titles, summaries, and headlines into that language.
+- Keep URLs and source names unchanged.
+- If the language code is empty/unspecified, fall back to the source articles' language."""
+
+
+def build_digest_system_prompt(behavior: str | None, language: str | None = None) -> str:
+    """Build the digest system prompt, optionally adding podcast behavior and language.
 
     Args:
         behavior: Free-form podcaster instruction. Empty/None means no extra behavior.
+        language: ISO 639-1 language code. Empty/None means keep source language.
 
     Returns:
         The system prompt for digest generation.
     """
-    if not behavior or not behavior.strip():
-        return SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    return SUMMARIZE_DIGEST_SYSTEM_PROMPT + PODCAST_BEHAVIOR_PROMPT.format(
-        behavior=behavior.strip(),
-        emotion_tags=", ".join(sorted(EMOTION_TAGS)),
-    )
+    prompt = SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    if behavior and behavior.strip():
+        prompt += PODCAST_BEHAVIOR_PROMPT.format(
+            behavior=behavior.strip(),
+            emotion_tags=", ".join(sorted(EMOTION_TAGS)),
+        )
+    if language and language.strip():
+        prompt += LANGUAGE_PROMPT.format(language=language.strip())
+    return prompt
 
 
 def strip_emotion_tags(text: str) -> str:

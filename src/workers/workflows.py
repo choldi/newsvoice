@@ -45,6 +45,8 @@ class PipelineConfig:
     tts_enabled: bool = True
     deliver_audio: bool = True
     podcast_behavior: str = ""
+    language: str = ""
+    voice: str = ""
 
 
 @workflow.defn
@@ -108,7 +110,11 @@ class DigestPipelineWorkflow:
 
         digest = await workflow.execute_activity(
             generate_digest_activity,
-            {"clusters": clusters, "podcast_behavior": config.podcast_behavior},
+            {
+                "clusters": clusters,
+                "podcast_behavior": config.podcast_behavior,
+                "language": config.language,
+            },
             start_to_close_timeout=DIGEST_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -131,7 +137,11 @@ class DigestPipelineWorkflow:
             try:
                 audio = await workflow.execute_activity(
                     generate_tts_activity,
-                    {"digest": digest_markdown},
+                    {
+                        "digest": digest_markdown,
+                        "language": config.language,
+                        "voice": config.voice,
+                    },
                     start_to_close_timeout=TTS_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
                 )

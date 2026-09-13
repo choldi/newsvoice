@@ -157,9 +157,12 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """
     activity.logger.info("Generating digest")
     try:
+        settings = get_settings()
         digest_in = DigestIn.model_validate(payload)
         if not digest_in.podcast_behavior:
-            digest_in.podcast_behavior = get_settings().tts_podcast_behavior
+            digest_in.podcast_behavior = settings.tts_podcast_behavior
+        if not digest_in.language:
+            digest_in.language = settings.tts_language
         result = await DigestService().generate_digest(digest_in)
     except Exception as exc:
         raise ApplicationError(f"Digest generation failed: {exc}", non_retryable=True) from exc
@@ -171,7 +174,8 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     """Convert the digest markdown into MP3 audio.
 
     Args:
-        digest: Dict containing the digest text under the 'digest' key.
+        digest: Dict containing the digest text under the 'digest' key, and optional
+            'language'/'voice' overrides for this podcast.
 
     Returns:
         Dict with audio_path, duration_estimate, cached, voice, and char_count.
@@ -185,7 +189,9 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
         raise ApplicationError("Digest text missing for TTS", non_retryable=True)
     try:
         settings = get_settings()
-        tts_in = TTSIn(markdown=str(markdown), language=settings.tts_language)
+        language = digest.get("language") or settings.tts_language
+        voice = digest.get("voice") or settings.tts_voice
+        tts_in = TTSIn(markdown=str(markdown), language=language, voice=voice)
         result = await TTSService().generate_tts(tts_in)
     except Exception as exc:
         raise ApplicationError(f"TTS generation failed: {exc}", non_retryable=True) from exc

@@ -75,3 +75,26 @@ async def test_digest_service_injects_podcast_behavior() -> None:
     system_content = sent_messages[0]["content"]
     assert "eres un podcaster" in system_content
     assert "[happy]" in system_content
+
+
+@pytest.mark.asyncio
+async def test_digest_service_injects_language() -> None:
+    """Digest service passes the per-podcast language into the system prompt."""
+    service = DigestService()
+    articles = [
+        ArticleIn(
+            title="Tech News 1",
+            link="https://example.com/1",
+            content="Summary 1",
+            source="Tech",
+        ),
+    ]
+    payload = DigestIn(articles=articles, language="es")
+
+    with patch("src.api.services.digest.generate_completion", return_value="# Digest") as mock_llm:
+        await service.generate_digest(payload)
+
+    sent_messages = mock_llm.call_args.kwargs["messages"]
+    system_content = sent_messages[0]["content"]
+    assert "Language requirement" in system_content
+    assert "es" in system_content

@@ -24,6 +24,31 @@ def test_build_digest_system_prompt_with_behavior() -> None:
         assert tag in prompt
 
 
+def test_build_digest_system_prompt_with_language_only() -> None:
+    """build_digest_system_prompt adds the language requirement without behavior."""
+    prompt = build_digest_system_prompt(None, language="en")
+    assert "Language requirement" in prompt
+    assert "Write the ENTIRE digest in the language code above." in prompt
+    assert "en" in prompt
+    assert "Additional instruction" not in prompt
+
+
+def test_build_digest_system_prompt_with_language_and_behavior() -> None:
+    """build_digest_system_prompt combines both the behavior and the language."""
+    prompt = build_digest_system_prompt("eres un podcaster", language="es")
+    assert "Additional instruction" in prompt
+    assert "eres un podcaster" in prompt
+    assert "Language requirement" in prompt
+    assert "es" in prompt
+
+
+def test_build_digest_system_prompt_ignores_blank_language() -> None:
+    """build_digest_system_prompt ignores blank/None language, returning base prompt."""
+    assert build_digest_system_prompt(None, language="  ") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert build_digest_system_prompt(None, language=None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert build_digest_system_prompt("", language="") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+
+
 def test_emotion_tags_match_spec() -> None:
     """EMOTION_TAGS matches the OmniVoice supported emotion list."""
     assert EMOTION_TAGS == frozenset(

@@ -71,13 +71,16 @@ async def test_generate_digest_activity_returns_digest() -> None:
         "src.workers.activities.DigestService.generate_digest",
         new_callable=AsyncMock,
         return_value=DigestOut(status="ok", digest="# Top Stories", article_count=1),
-    ):
+    ) as mock_digest:
         result = await ActivityEnvironment().run(
-            generate_digest_activity, {"articles": [SAMPLE_ARTICLE]}
+            generate_digest_activity,
+            {"articles": [SAMPLE_ARTICLE], "language": "es"},
         )
 
     assert result["digest"] == "# Top Stories"
     assert result["article_count"] == 1
+    digest_in = mock_digest.call_args.args[0]
+    assert digest_in.language == "es"
 
 
 async def test_generate_tts_activity_returns_audio_path() -> None:
@@ -93,11 +96,43 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
             voice="es-mx-male",
             char_count=150,
         ),
-    ):
-        result = await ActivityEnvironment().run(generate_tts_activity, {"digest": "# Top Stories"})
+    ) as mock_tts:
+        result = await ActivityEnvironment().run(
+            generate_tts_activity,
+            {"digest": "# Top Stories", "language": "en", "voice": "en-gb-female"},
+        )
 
     assert result["audio_path"].endswith(".wav")
     assert result["cached"] is False
+    tts_in = mock_tts.call_args.args[0]
+    assert tts_in.language == "en"
+    assert tts_in.voice == "en-gb-female"
+
+
+async def test_generate_tts_activity_falls_back_to_settings() -> None:
+    """generate_tts_activity uses settings defaults when payload omits them."""
+    with (
+        patch(
+            "src.workers.activities.TTSService.generate_tts",
+            new_callable=AsyncMock,
+            return_value=TTSOut(
+                status="ok",
+                audio_path="data/tts_cache/abc.wav",
+                duration_estimate=5.0,
+                cached=False,
+                voice="es-mx-male",
+                char_count=100,
+            ),
+        ) as mock_tts,
+        patch("src.workers.activities.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.tts_language = "es"
+        mock_settings.return_value.tts_voice = "es-mx-male"
+        await ActivityEnvironment().run(generate_tts_activity, {"digest": "# Top Stories"})
+
+    tts_in = mock_tts.call_args.args[0]
+    assert tts_in.language == "es"
+    assert tts_in.voice == "es-mx-male"
 
 
 async def test_fetch_rss_activity_parses_entries() -> None:

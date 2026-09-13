@@ -156,6 +156,85 @@ async def test_podcast_behavior_passed_to_digest_activity() -> None:
     assert received["payload"].get("podcast_behavior") == "eres un podcaster"
 
 
+async def test_language_passed_to_digest_activity() -> None:
+    """language in PipelineConfig reaches the digest activity payload."""
+    received: dict = {}
+
+    @activity.defn(name="generate_digest_activity")
+    async def recording_digest(payload: dict) -> dict:
+        received["payload"] = payload
+        return DIGEST
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                recording_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    language="es",
+                ),
+                id="workflow-test-language",
+                task_queue="tq",
+            )
+
+    assert received["payload"].get("language") == "es"
+
+
+async def test_language_and_voice_passed_to_tts_activity() -> None:
+    """language and voice in PipelineConfig reach the generate_tts_activity payload."""
+    received: dict = {}
+
+    @activity.defn(name="generate_tts_activity")
+    async def recording_tts(payload: dict) -> dict:
+        received["payload"] = payload
+        return AUDIO
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                recording_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=False,
+                    language="en",
+                    voice="en-gb-female",
+                ),
+                id="workflow-test-tts",
+                task_queue="tq",
+            )
+
+    assert received["payload"].get("language") == "en"
+    assert received["payload"].get("voice") == "en-gb-female"
+
+
 async def test_no_new_articles_skips_digest() -> None:
     """When filtering returns nothing, the pipeline stops before the LLM steps."""
     async with await WorkflowEnvironment.start_time_skipping() as env:

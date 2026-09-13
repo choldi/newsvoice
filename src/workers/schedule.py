@@ -39,12 +39,24 @@ async def main() -> None:
         default=None,
         help="Podcaster behavior prompt. Defaults to TTS_PODCAST_BEHAVIOR env config.",
     )
+    parser.add_argument(
+        "--language",
+        default=None,
+        help="ISO 639-1 language code for this podcast. Defaults to TTS_LANGUAGE env config.",
+    )
+    parser.add_argument(
+        "--voice",
+        default=None,
+        help="OmniVoice voice for this podcast. Defaults to TTS_VOICE env config.",
+    )
     args = parser.parse_args()
 
     config = PipelineConfig(
         feed_urls=settings.rss_feed_urls,
         tts_enabled=args.tts,
         podcast_behavior=args.podcast_behavior or settings.tts_podcast_behavior,
+        language=args.language or settings.tts_language,
+        voice=args.voice or settings.tts_voice,
     )
     schedule = Schedule(
         action=ScheduleActionStartWorkflow(

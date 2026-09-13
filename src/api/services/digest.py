@@ -76,16 +76,17 @@ class DigestService:
         return "\n\n".join(formatted_blocks)
 
     def _system_prompt(self, payload: DigestIn) -> str:
-        """Build the digest system prompt, injecting the podcast behavior if set.
+        """Build the digest system prompt, injecting podcast behavior and language.
 
         Args:
-            payload: The DigestIn payload, which may carry a podcast_behavior.
+            payload: The DigestIn payload, which may carry podcast_behavior/language.
 
         Returns:
             The system prompt to use for digest generation.
         """
         behavior = payload.podcast_behavior or settings.tts_podcast_behavior
-        return build_digest_system_prompt(behavior)
+        language = payload.language or settings.tts_language
+        return build_digest_system_prompt(behavior, language)
 
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
         """Generates a news digest from incoming articles or clusters payload using LLM.
