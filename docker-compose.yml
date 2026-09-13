@@ -20,7 +20,8 @@ services:
       dockerfile: Dockerfile
     container_name: news_engine_worker
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -52,15 +53,21 @@ services:
     image: temporalio/auto-setup:latest
     container_name: news_engine_temporal
     depends_on:
-      - temporal-postgres
+      temporal-postgres:
+        condition: service_healthy
     ports:
       - "7233:7233"
     environment:
-      - DB=postgresql
+      - DB=postgres12
       - DB_PORT=5432
       - POSTGRES_USER=temporal
       - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=temporal-postgres
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/7233' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   temporal-ui:
