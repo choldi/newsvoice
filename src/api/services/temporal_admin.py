@@ -134,3 +134,30 @@ class TemporalAdminService:
                     )
 
         return result
+
+    async def trigger_collection(self, collection: CollectionConfig) -> str:
+        """Start a digest pipeline for a collection immediately (outside its schedule).
+
+        Args:
+            collection: Collection config to run now.
+
+        Returns:
+            The Temporal workflow id of the started run.
+        """
+        from datetime import UTC, datetime
+
+        from src.core.config import settings
+        from src.workers.workflows import DigestPipelineWorkflow
+
+        config = pipeline_config_for(collection, tts_flag=None)
+        workflow_id = (
+            f"digest-pipeline-{collection.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        )
+        client = await self.client()
+        await client.execute_workflow(
+            DigestPipelineWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=settings.temporal_task_queue,
+        )
+        return workflow_id

@@ -9,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.db.database import run_migrations
 from src.api.routes import (
+    admin_collections_router,
+    admin_runs_router,
+    admin_schedules_router,
+    admin_voices_router,
     cluster_router,
     ingest_router,
     mvp_router,
@@ -37,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="News Engine API",
     description="AI-curated news digest generation (5 main stories + 5 headlines)",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -55,6 +59,10 @@ app.include_router(cluster_router, prefix="/api")
 app.include_router(summarize_router, prefix="/api")
 app.include_router(mvp_router, prefix="/api")
 app.include_router(tts_router, prefix="/api")
+app.include_router(admin_collections_router, prefix="/api")
+app.include_router(admin_voices_router, prefix="/api")
+app.include_router(admin_runs_router, prefix="/api")
+app.include_router(admin_schedules_router, prefix="/api")
 
 
 @app.get("/health", tags=["health"])
