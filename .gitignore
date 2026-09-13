@@ -42,7 +42,7 @@ Thumbs.db
 .aider*
 
 # Binaries and Models
-models/
+/models/
 *.gguf
 *.bin
 
