@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     tts_max_chars: int = Field(default=5000, gt=0)
     tts_chunk_max_chars: int = Field(default=400, gt=0)
     tts_podcast_behavior: str = ""
+    tts_podcast_name: str = ""
 
     @property
     def data_dir(self) -> Path:

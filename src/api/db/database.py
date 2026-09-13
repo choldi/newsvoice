@@ -404,7 +404,7 @@ class RunsRepository:
         digest_preview: str | None = None,
         audio_path: str | None = None,
         error: str | None = None,
-    ) -> None:
+    ) -> int:
         """Upsert a digest pipeline run row keyed by workflow_id.
 
         Args:
@@ -416,6 +416,9 @@ class RunsRepository:
             digest_preview: First chars of the generated digest.
             audio_path: Generated audio file path, if any.
             error: Error message for failed runs.
+
+        Returns:
+            The row id of the recorded run.
         """
         now_iso = datetime.now(UTC).isoformat()
         query = """
@@ -450,6 +453,11 @@ class RunsRepository:
                 ),
             )
             await db.commit()
+            async with db.execute(
+                "SELECT id FROM digest_runs WHERE workflow_id = ?", (workflow_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row["id"]) if row else 0
 
     async def list_runs(
         self,

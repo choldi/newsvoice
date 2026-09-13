@@ -16,6 +16,7 @@ from src.workers.activities import (
     filter_new_activity,
     generate_digest_activity,
     generate_tts_activity,
+    record_run_activity,
 )
 
 SAMPLE_ARTICLE = {
@@ -229,3 +230,27 @@ async def test_deliver_telegram_audio_activity_posts_file() -> None:
     assert isinstance(files, dict)
     assert files["audio"][2] == "audio/wav"
     assert result["message_id"] == 7
+
+
+async def test_record_run_activity_persists_run() -> None:
+    """record_run_activity calls RunsRepository.record_run with the run dict."""
+    with patch(
+        "src.workers.activities.RunsRepository.record_run",
+        new_callable=AsyncMock,
+        return_value=17,
+    ) as mock_record:
+        run = {
+            "workflow_id": "workflow-1",
+            "collection": "tech",
+            "status": "ok",
+            "article_count": 3,
+            "cluster_count": 2,
+            "digest_preview": "# Summary",
+            "audio_path": None,
+            "error": None,
+        }
+        result = await ActivityEnvironment().run(record_run_activity, run)
+
+    mock_record.assert_awaited_once_with(**run)
+    assert result["status"] == "ok"
+    assert result["run_id"] == 17

@@ -37,6 +37,14 @@ def test_pipeline_config_for_maps_collection_fields() -> None:
     assert config.chat_id == "-100abcdef"
 
 
+def test_pipeline_config_for_propagates_podcast_name() -> None:
+    """PipelineConfig inherits the podcast_name from the collection."""
+    collection = _collection(podcast_name="ByteCast")
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.podcast_name == "ByteCast"
+
+
 def test_pipeline_config_for_tts_flag_overrides() -> None:
     """A CLI tts flag overrides the collection's tts_enabled value."""
     collection = _collection(tts_enabled=False)

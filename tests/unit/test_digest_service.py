@@ -130,3 +130,26 @@ async def test_digest_service_unknown_template_falls_back() -> None:
     sent_messages = mock_llm.call_args.kwargs["messages"]
     system_content = sent_messages[0]["content"]
     assert "Finance-specific requirements" not in system_content
+
+
+@pytest.mark.asyncio
+async def test_digest_service_injects_podcast_name() -> None:
+    """Podcast name is injected into the system prompt."""
+    service = DigestService()
+    articles = [
+        ArticleIn(
+            title="Tech News 1",
+            link="https://example.com/1",
+            content="Summary 1",
+            source="Tech",
+        ),
+    ]
+    payload = DigestIn(articles=articles, podcast_name="ByteCast")
+
+    with patch("src.api.services.digest.generate_completion", return_value="# Digest") as mock_llm:
+        await service.generate_digest(payload)
+
+    sent_messages = mock_llm.call_args.kwargs["messages"]
+    system_content = sent_messages[0]["content"]
+    assert "Podcast identity" in system_content
+    assert "This is ByteCast" in system_content

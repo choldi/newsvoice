@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from src.api.db.database import RunsRepository
 from src.api.models.article import ArticleIn, DigestIn
 from src.api.models.cluster import ClusterIn
 from src.api.models.tts import TTSIn
@@ -169,6 +170,8 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
         digest_in = DigestIn.model_validate(payload)
         if not digest_in.podcast_behavior:
             digest_in.podcast_behavior = settings.tts_podcast_behavior
+        if not digest_in.podcast_name:
+            digest_in.podcast_name = settings.tts_podcast_name
         if not digest_in.language:
             digest_in.language = settings.tts_language
         result = await DigestService().generate_digest(digest_in)
@@ -255,6 +258,33 @@ async def _telegram_request(
             non_retryable=True,
         )
     return {"status": "ok", "message_id": message_id}
+
+
+@activity.defn
+async def record_run_activity(run: dict[str, Any]) -> dict[str, Any]:
+    """Persist a run summary to the digest_runs table for the admin GUI.
+
+    Args:
+        run: Dict with workflow_id, collection, status, article_count,
+            cluster_count, digest_preview, audio_path, and error.
+
+    Returns:
+        Dict with status and the recorded run id.
+
+    Raises:
+        ApplicationError: If recording the run fails.
+    """
+    activity.logger.info(
+        "Recording run",
+        collection=run.get("collection"),
+        status=run.get("status"),
+        workflow_id=run.get("workflow_id"),
+    )
+    try:
+        run_id = await RunsRepository().record_run(**run)
+    except Exception as exc:
+        raise ApplicationError(f"Recording run failed: {exc}", non_retryable=True) from exc
+    return {"status": "ok", "run_id": run_id}
 
 
 @activity.defn

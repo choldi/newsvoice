@@ -81,6 +81,11 @@ async def stub_deliver_audio(
     return DELIVERY
 
 
+@activity.defn(name="record_run_activity")
+async def stub_record_run(run: dict) -> dict:
+    return {"status": "ok", "run_id": 1}
+
+
 async def _run_workflow(config: PipelineConfig) -> dict:
     """Run DigestPipelineWorkflow once against the time-skipping server."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -96,6 +101,7 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             return await env.client.execute_workflow(
@@ -142,6 +148,7 @@ async def test_podcast_behavior_passed_to_digest_activity() -> None:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(
@@ -180,6 +187,7 @@ async def test_language_passed_to_digest_activity() -> None:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(
@@ -218,6 +226,7 @@ async def test_language_and_voice_passed_to_tts_activity() -> None:
                 recording_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(
@@ -257,6 +266,7 @@ async def test_no_new_articles_skips_digest() -> None:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             result = await env.client.execute_workflow(
@@ -282,6 +292,137 @@ async def test_tts_disabled_skips_audio() -> None:
     assert result["status"] == "ok"
     # Only the text delivery should be recorded
     assert len(result["delivery_status"]) == 1
+
+
+async def test_run_is_recorded_for_happy_path() -> None:
+    """record_run_activity receives the run summary after a successful pipeline."""
+    recorded: dict = {}
+
+    @activity.defn(name="record_run_activity")
+    async def recording_run(run: dict) -> dict:
+        recorded.update(run)
+        return {"status": "ok", "run_id": 7}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                recording_run,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="recorded-col",
+                ),
+                id="workflow-test-recorded",
+                task_queue="tq",
+            )
+
+    assert recorded["workflow_id"] == "workflow-test-recorded"
+    assert recorded["collection"] == "recorded-col"
+    assert recorded["status"] == "ok"
+    assert recorded["article_count"] == 2
+    assert recorded["cluster_count"] == 1
+    assert recorded["digest_preview"] == DIGEST["digest"]
+    assert recorded["audio_path"] is None
+    assert recorded["error"] is None
+
+
+async def test_run_is_recorded_when_no_new_articles() -> None:
+    """record_run_activity receives a no_new_articles summary when filtering is empty."""
+    recorded: dict = {}
+
+    @activity.defn(name="filter_new_activity")
+    async def noop_filter(articles: list[dict], collection: str = "default") -> list[dict]:
+        return []
+
+    @activity.defn(name="record_run_activity")
+    async def recording_run(run: dict) -> dict:
+        recorded.update(run)
+        return {"status": "ok", "run_id": 8}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                noop_filter,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                recording_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    collection="empty-col",
+                ),
+                id="workflow-test-empty-recorded",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "no_new_articles"
+    assert recorded["workflow_id"] == "workflow-test-empty-recorded"
+    assert recorded["collection"] == "empty-col"
+    assert recorded["status"] == "no_new_articles"
+    assert recorded["article_count"] == 0
+
+
+async def test_podcast_name_passed_to_digest_activity() -> None:
+    """podcast_name in PipelineConfig reaches the digest activity payload."""
+    received: dict = {}
+
+    @activity.defn(name="generate_digest_activity")
+    async def recording_digest(payload: dict) -> dict:
+        received["payload"] = payload
+        return DIGEST
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                recording_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                stub_record_run,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    podcast_name="ByteCast",
+                ),
+                id="workflow-test-podcast-name",
+                task_queue="tq",
+            )
+
+    assert received["payload"].get("podcast_name") == "ByteCast"
 
 
 async def test_collection_passed_to_filter_and_cluster() -> None:
@@ -311,6 +452,7 @@ async def test_collection_passed_to_filter_and_cluster() -> None:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(
@@ -349,6 +491,7 @@ async def test_prompt_template_and_collection_reach_digest() -> None:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(
@@ -396,6 +539,7 @@ async def test_chat_id_passed_to_delivery() -> None:
                 stub_generate_tts,
                 message_recorder,
                 audio_recorder,
+                stub_record_run,
             ],
         ):
             await env.client.execute_workflow(

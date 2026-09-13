@@ -55,6 +55,10 @@ class DigestIn(BaseModel):
     clusters: list[ClusterItem] | None = Field(
         default=None, description="Optional pre-grouped event clusters to summarize"
     )
+    podcast_name: str | None = Field(
+        default=None,
+        description="Name of the podcast whose identity the digest should adopt",
+    )
     podcast_behavior: str | None = Field(
         default=None,
         description="Optional podcaster behavior instruction injected into the LLM prompt",

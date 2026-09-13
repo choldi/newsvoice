@@ -87,7 +87,12 @@ class DigestService:
         behavior = payload.podcast_behavior or settings.tts_podcast_behavior
         language = payload.language or settings.tts_language
         template = payload.prompt_template or "default"
-        return build_digest_system_prompt(behavior, language, template=template)
+        return build_digest_system_prompt(
+            behavior,
+            language=language,
+            template=template,
+            podcast_name=payload.podcast_name,
+        )
 
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
         """Generates a news digest from incoming articles or clusters payload using LLM.

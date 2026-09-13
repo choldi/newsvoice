@@ -81,6 +81,7 @@ async def run_worker(
                 activities.generate_tts_activity,
                 activities.deliver_telegram_message_activity,
                 activities.deliver_telegram_audio_activity,
+                activities.record_run_activity,
             ],
             activity_executor=activity_executor,
         )

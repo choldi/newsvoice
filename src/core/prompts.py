@@ -34,6 +34,17 @@ Rules:
 - Keep the same Markdown structure described at the top."""
 
 
+PODCAST_NAME_PROMPT = """\n\nPodcast identity:
+{podcast_name}
+
+Rules:
+- You are the co-host/anchor of the news podcast named above.
+- Open by introducing the podcast: "This is {podcast_name}".
+- Write the digest as spoken content for the podcast, not as a written article.
+
+Keep the Markdown structure described at the top."""
+
+
 LANGUAGE_PROMPT = """\n\nLanguage requirement:
 {language}
 
@@ -109,6 +120,7 @@ def build_digest_system_prompt(
     behavior: str | None,
     language: str | None = None,
     template: str | None = None,
+    podcast_name: str | None = None,
 ) -> str:
     """Build the digest system prompt, optionally adding template, behavior, and language.
 
@@ -116,11 +128,14 @@ def build_digest_system_prompt(
         behavior: Free-form podcaster instruction. Empty/None means no extra behavior.
         language: ISO 639-1 language code. Empty/None means keep source language.
         template: Per-collection prompt template name. Empty/None means 'default'.
+        podcast_name: Name of the podcast. Empty/None means no podcast identity injection.
 
     Returns:
         The system prompt for digest generation.
     """
     prompt = get_digest_template(template)
+    if podcast_name and podcast_name.strip():
+        prompt += PODCAST_NAME_PROMPT.format(podcast_name=podcast_name.strip())
     if behavior and behavior.strip():
         prompt += PODCAST_BEHAVIOR_PROMPT.format(
             behavior=behavior.strip(),

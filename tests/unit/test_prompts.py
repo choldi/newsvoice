@@ -106,3 +106,30 @@ def test_build_digest_system_prompt_template_and_behavior() -> None:
     assert "Health-specific requirements" in prompt
     assert "eres un podcaster" in prompt
     assert "Language requirement" in prompt
+
+
+def test_build_digest_system_prompt_ignores_blank_podcast_name() -> None:
+    """Blank/None podcast_name leaves the base prompt unchanged."""
+    assert build_digest_system_prompt(None, podcast_name=None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert build_digest_system_prompt(None, podcast_name="  ") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert build_digest_system_prompt("", podcast_name="") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+
+
+def test_build_digest_system_prompt_with_podcast_name() -> None:
+    """podcast_name adds the podcast identity block to the system prompt."""
+    prompt = build_digest_system_prompt(None, podcast_name="ByteCast")
+    assert "Podcast identity" in prompt
+    assert "This is ByteCast" in prompt
+    assert "co-host/anchor of the news podcast" in prompt
+    assert "Additional instruction" not in prompt
+
+
+def test_build_digest_system_prompt_with_podcast_name_and_behavior() -> None:
+    """podcast_name composes with behavior and language sections."""
+    prompt = build_digest_system_prompt(
+        "usa un tono fresco", language="es", podcast_name="ByteCast"
+    )
+    assert "Podcast identity" in prompt
+    assert "This is ByteCast" in prompt
+    assert "usa un tono fresco" in prompt
+    assert "Language requirement" in prompt

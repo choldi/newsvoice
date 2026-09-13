@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         filter_new_activity,
         generate_digest_activity,
         generate_tts_activity,
+        record_run_activity,
     )
 
 # Reasonable per-step timeouts for activity execution.
@@ -30,6 +31,7 @@ CLUSTER_TIMEOUT = timedelta(seconds=300)
 DIGEST_TIMEOUT = timedelta(seconds=300)
 TTS_TIMEOUT = timedelta(seconds=180)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
+RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 
 # Bounded retries for network-dependent activities so a transient failure does
 # not replay forever. Deterministic errors (validation etc.) should be raised as
@@ -100,6 +102,15 @@ class DigestPipelineWorkflow:
 
         if not new_articles:
             workflow.logger.info("No new articles; skipping digest")
+            await self._record_run(
+                status="no_new_articles",
+                collection=config.collection,
+                article_count=0,
+                cluster_count=0,
+                digest_preview=None,
+                audio_path=None,
+                error=None,
+            )
             return {"status": "no_new_articles", "article_count": 0}
 
         clusters = await workflow.execute_activity(
@@ -119,6 +130,7 @@ class DigestPipelineWorkflow:
             generate_digest_activity,
             {
                 "clusters": clusters,
+                "podcast_name": config.podcast_name,
                 "podcast_behavior": config.podcast_behavior,
                 "language": config.language,
                 "prompt_template": config.prompt_template,
@@ -143,6 +155,7 @@ class DigestPipelineWorkflow:
         )
         delivery_status: list[dict[str, Any]] = [text_delivery]
 
+        audio: dict[str, Any] | None = None
         if config.tts_enabled:
             workflow.logger.info("Generating TTS audio")
             try:
@@ -173,6 +186,16 @@ class DigestPipelineWorkflow:
                 delivery_status.append({"status": "error", "error": str(exc)})
 
         workflow.logger.info("Pipeline completed")
+        audio_path = audio.get("audio_path") if audio else None
+        await self._record_run(
+            status="ok",
+            collection=config.collection,
+            article_count=article_count,
+            cluster_count=len(clusters),
+            digest_preview=digest_markdown,
+            audio_path=audio_path,
+            error=None,
+        )
         return {
             "status": "ok",
             "article_count": article_count,
@@ -180,6 +203,43 @@ class DigestPipelineWorkflow:
             "digest": digest_markdown,
             "delivery_status": delivery_status,
         }
+
+    async def _record_run(
+        self,
+        status: str,
+        collection: str,
+        article_count: int,
+        cluster_count: int,
+        digest_preview: str | None,
+        audio_path: str | None,
+        error: str | None,
+    ) -> None:
+        """Persist a summary of this run via the record_run_activity.
+
+        Args:
+            status: Run status ('ok', 'no_new_articles', 'failed').
+            collection: Collection name the run belongs to.
+            article_count: Number of summarized articles.
+            cluster_count: Number of story clusters.
+            digest_preview: First chars of the digest text.
+            audio_path: Generated audio path, if any.
+            error: Error message for failed runs (None for successful ones).
+        """
+        await workflow.execute_activity(
+            record_run_activity,
+            {
+                "workflow_id": workflow.info().workflow_id,
+                "collection": collection,
+                "status": status,
+                "article_count": article_count,
+                "cluster_count": cluster_count,
+                "digest_preview": digest_preview,
+                "audio_path": audio_path,
+                "error": error,
+            },
+            start_to_close_timeout=RECORD_RUN_TIMEOUT,
+            retry_policy=NETWORK_RETRY_POLICY,
+        )
 
     @staticmethod
     def _extract_digest_text(digest: Any) -> str:
