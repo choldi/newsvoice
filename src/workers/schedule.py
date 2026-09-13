@@ -43,6 +43,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         feed_urls=collection.feed_urls,
         tts_enabled=collection.tts_enabled if tts_flag is None else tts_flag,
         deliver_audio=collection.deliver_audio,
+        podcast_name=collection.podcast_name,
         podcast_behavior=collection.podcast_behavior or settings.tts_podcast_behavior,
         language=collection.language or settings.tts_language,
         voice=collection.voice or settings.tts_voice,

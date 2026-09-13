@@ -44,6 +44,7 @@ class PipelineConfig:
     feed_urls: list[str] = field(default_factory=list)
     tts_enabled: bool = True
     deliver_audio: bool = True
+    podcast_name: str = ""
     podcast_behavior: str = ""
     language: str = ""
     voice: str = ""
