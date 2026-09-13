@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Colecciones{% endblock %}
+{% block app %}
+<h1>Colecciones</h1>
+<div class="tags">
+  <a class="btn" href="/ui/collections#nueva">Nueva colección</a>
+  <form method="post" action="/ui/schedules/resync" style="display:inline">
+    <button type="submit" class="primary">Resincronizar schedules</button>
+  </form>
+</div>
+
+{% for c in collections %}
+<div class="card" id="coleccion-{{ c.name }}">
+  <h2>
+    {{ c.name }}
+    {% if not c.enabled %}<span class="badge no_new_articles">pausada</span>{% endif %}
+    {% if c.tts_enabled %}<span class="badge ok">🎙 TTS</span>{% endif %}
+  </h2>
+  <p class="muted" style="margin:0 0 8px">
+    Hora: <strong>{{ c.time }} UTC</strong> ·
+    Feeds: <strong>{{ c.feed_urls|length }}</strong> ·
+    Idioma: <strong>{{ c.language or '—' }}</strong> ·
+    Voz: <strong>{{ c.voice or '—' }}</strong>
+  </p>
+  <p class="muted" style="margin:0 0 12px">
+    {{ '🎧 ' ~ c.podcast_name if c.podcast_name else 'Podcast: —' }}{% if c.podcast_behavior %} · <em>{{ c.podcast_behavior|truncate(60) }}</em>{% endif %}
+  </p>
+  <form method="post" action="/ui/collections/{{ c.name }}/run" style="display:inline">
+    <button type="submit" class="primary">Ejecutar ahora</button>
+  </form>
+  <a class="btn" href="#edit-{{ c.name }}">Editar</a>
+  <form method="post" action="/ui/collections/{{ c.name }}/delete" style="display:inline"
+        onsubmit="return confirm('¿Eliminar la colección {{ c.name }}?')">
+    <button type="submit" class="danger">Eliminar</button>
+  </form>
+</div>
+
+<div class="card" id="edit-{{ c.name }}">
+  <h2>Editar: {{ c.name }}</h2>
+  <form method="post" action="/ui/collections/{{ c.name }}/update">
+    <div class="row">
+      <div class="col">
+        <label>Nombre</label>
+        <input type="text" name="new_name" value="{{ c.name }}" required>
+      </div>
+      <div class="col">
+        <label>Hora (HH:MM UTC)</label>
+        <input type="text" name="time" value="{{ c.time }}" required>
+      </div>
+    </div>
+    <label>Feed URLs (una por línea)</label>
+    <textarea name="feed_urls">{{ c.feed_urls|join('\n') }}</textarea>
+    <div class="row">
+      <div class="col">
+        <label>Podcast name</label>
+        <input type="text" name="podcast_name" value="{{ c.podcast_name }}">
+      </div>
+      <div class="col">
+        <label>Idioma (es/en/…)</label>
+        <input type="text" name="language" value="{{ c.language }}">
+      </div>
+      <div class="col">
+        <label>Voz (OmniVoice)</label>
+        <input type="text" name="voice" value="{{ c.voice }}">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Prompt template</label>
+        <select name="prompt_template">
+          {% for t in ['default', 'finance', 'health', 'investigative'] %}
+          <option value="{{ t }}" {{ 'selected' if c.prompt_template == t else '' }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label>Chat ID (opcional)</label>
+        <input type="text" name="chat_id" value="{{ c.chat_id or '' }}">
+      </div>
+    </div>
+    <label>Comportamiento del podcaster</label>
+    <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
+    <div class="row">
+      <div class="col">
+        <div class="check"><input type="checkbox" name="tts_enabled" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
+        <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
+        <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
+      </div>
+      <div class="col" style="display:flex;align-items:flex-end">
+        <button type="submit" class="primary">Guardar</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endfor %}
+
+<div class="card" id="nueva">
+  <h2>Nueva colección</h2>
+  <form method="post" action="/ui/collections">
+    <div class="row">
+      <div class="col">
+        <label>Nombre</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="col">
+        <label>Hora (HH:MM UTC)</label>
+        <input type="text" name="time" value="08:00" required>
+      </div>
+    </div>
+    <label>Feed URLs (una por línea)</label>
+    <textarea name="feed_urls"></textarea>
+    <div class="row">
+      <div class="col">
+        <label>Podcast name</label>
+        <input type="text" name="podcast_name">
+      </div>
+      <div class="col">
+        <label>Idioma</label>
+        <input type="text" name="language" value="es">
+      </div>
+      <div class="col">
+        <label>Voz</label>
+        <input type="text" name="voice">
+      </div>
+    </div>
+    <label>Comportamiento del podcaster</label>
+    <input type="text" name="podcast_behavior">
+    <div class="check"><input type="checkbox" name="tts_enabled"><label>TTS habilitado</label></div>
+    <div class="check"><input type="checkbox" name="deliver_audio"><label>Entregar audio</label></div>
+    <button type="submit" class="primary">Crear</button>
+  </form>
+</div>
+{% endblock %}

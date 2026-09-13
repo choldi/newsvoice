@@ -10,15 +10,16 @@ from src.api.db.database import RunsRepository
 from src.api.main import app
 from src.core.config import settings
 
-client = TestClient(app)
+AUTH_HEADERS = {"X-Admin-Token": "test-token"}
+client = TestClient(app, headers=AUTH_HEADERS)
 
 
 @pytest.fixture(autouse=True)
 def _tmp_collections_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point settings.collections_file at an isolated TOML per test."""
-    path = tmp_path / "collections.toml"
-    monkeypatch.setattr(settings, "collections_file", str(path))
-    return path
+    monkeypatch.setattr(settings, "collections_file", str(tmp_path / "collections.toml"))
+    monkeypatch.setattr(settings, "admin_api_token", "test-token")
+    return tmp_path / "collections.toml"
 
 
 def _collection_payload(**overrides: object) -> dict[str, object]:

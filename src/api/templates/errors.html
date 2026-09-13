@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Errores{% endblock %}
+{% block app %}
+<h1>Errores</h1>
+<div class="card">
+  <p class="muted">Ejecuciones fallidas. Se refresca automáticamente.</p>
+</div>
+<div id="errors-table" hx-get="/ui/fragments/errors" hx-trigger="load, every 15s" hx-swap="outerHTML">
+  <div class="empty">Cargando…</div>
+</div>
+{% endblock %}

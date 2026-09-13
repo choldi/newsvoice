@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Calendario{% endblock %}
+{% block app %}
+<h1>Calendario semanal</h1>
+<div class="card">
+  <p class="muted">Semana del {{ week_start.strftime('%d/%m/%Y') }} · cada colección se ejecuta diariamente a su hora en UTC.</p>
+</div>
+<div id="calendar-body" hx-get="/ui/fragments/calendar" hx-trigger="every 60s" hx-swap="outerHTML">
+  {% include "partials/_calendar.html" %}
+</div>
+{% endblock %}

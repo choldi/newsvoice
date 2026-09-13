@@ -1,0 +1,30 @@
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Colección</th>
+        <th>Estado</th>
+        <th>Art.</th>
+        <th>Clústeres</th>
+        <th>Workflow</th>
+        <th>Finalizado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td class="muted">{{ r.id }}</td>
+        <td>{{ r.collection }}</td>
+        <td><span class="badge {{ r.status }}">{{ status_labels.get(r.status, r.status) }}</span></td>
+        <td>{{ r.article_count }}</td>
+        <td>{{ r.cluster_count }}</td>
+        <td class="muted">{{ r.workflow_id }}</td>
+        <td class="muted">{{ r.completed_at[:19].replace('T', ' ') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">Sin ejecuciones registradas</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

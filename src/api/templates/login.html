@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Login{% endblock %}
+{% block login %}
+<div class="card login-box">
+  <h2>Acceso admin</h2>
+  <form method="post" action="/ui/login">
+    <label>Token (ADMIN_API_TOKEN)</label>
+    <input type="password" name="token" required autofocus>
+    <div style="margin-top:14px">
+      <button type="submit" class="primary" style="width:100%">Entrar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

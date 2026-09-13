@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Voces{% endblock %}
+{% block app %}
+<h1>Voces OmniVoice</h1>
+
+<div class="card">
+  <h2>Clonar nueva voz</h2>
+  <p class="muted">Sube audio de referencia (WAV, 5–30s) codificado en base64.</p>
+  <form method="post" action="/ui/voices/clone">
+    <div class="row">
+      <div class="col">
+        <label>Nombre (^[a-zA-Z0-9_-]+$)</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="col">
+        <label>Idioma</label>
+        <input type="text" name="language" value="es" required>
+      </div>
+    </div>
+    <label>Audio en base64</label>
+    <textarea name="audio_base64" required></textarea>
+    <label>Nombre de archivo</label>
+    <input type="text" name="filename" value="reference.wav">
+    <button type="submit" class="primary">Clonar</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Voces clonadas</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Idioma</th></tr></thead>
+    <tbody>
+      {% for v in cloned %}
+      <tr><td>{{ v.get('voice_id', v.get('name', '')) }}</td><td>{{ v.get('language', '—') }}</td></tr>
+      {% else %}
+      <tr><td colspan="2" class="empty">Sin voces clonadas</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Voces de stock</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Idioma</th><th>Género</th><th>Nombre</th></tr></thead>
+    <tbody>
+      {% for v in stock %}
+      <tr>
+        <td>{{ v.get('voice_id', '') }}</td>
+        <td>{{ v.get('language', '—') }}</td>
+        <td>{{ v.get('gender', '—') }}</td>
+        <td>{{ v.get('name', '—') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No se pudieron cargar las voces de stock (¿OmniVoice accesible?)</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

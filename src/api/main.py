@@ -2,11 +2,14 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from src.api.auth import admin_middleware
 from src.api.db.database import run_migrations
 from src.api.routes import (
     admin_collections_router,
@@ -19,6 +22,7 @@ from src.api.routes import (
     summarize_router,
     tts_router,
 )
+from src.api.routes_ui import router as ui_router
 from src.core.config import settings
 
 structlog.configure(
@@ -52,6 +56,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.middleware("http")(admin_middleware)
+
+# Static assets (bundled htmx.js for the self-hosted GUI)
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 # Routes
 app.include_router(ingest_router, prefix="/api")
@@ -63,6 +71,7 @@ app.include_router(admin_collections_router, prefix="/api")
 app.include_router(admin_voices_router, prefix="/api")
 app.include_router(admin_runs_router, prefix="/api")
 app.include_router(admin_schedules_router, prefix="/api")
+app.include_router(ui_router)
 
 
 @app.get("/health", tags=["health"])

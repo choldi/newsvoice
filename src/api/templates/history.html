@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Historial{% endblock %}
+{% block app %}
+<h1>Historial de ejecuciones</h1>
+<div class="card">
+  <p class="muted">Últimas 50 ejecuciones. Se refresca automáticamente.</p>
+</div>
+<div id="history-table" hx-get="/ui/fragments/history" hx-trigger="load, every 15s" hx-swap="outerHTML">
+  <div class="empty">Cargando…</div>
+</div>
+{% endblock %}

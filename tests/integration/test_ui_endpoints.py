@@ -1,0 +1,224 @@
+"""Integration tests for the admin GUI pages (/ui, Jinja2 + HTMX)."""
+
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.api.main import app
+from src.core.config import settings
+
+TOKEN = "secret-admin-token"
+
+
+@pytest.fixture(autouse=True)
+def _ui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point collections file and auth config at isolated values."""
+    monkeypatch.setattr(settings, "collections_file", str(tmp_path / "collections.toml"))
+    monkeypatch.setattr(settings, "admin_api_token", TOKEN)
+    return tmp_path / "collections.toml"
+
+
+def _ui_client() -> TestClient:
+    """Build a client that auto-follows redirects and stores cookies."""
+    return TestClient(app)
+
+
+def _login(client: TestClient, token: str = TOKEN) -> None:
+    """Authenticate a client via the login endpoint."""
+    response = client.post("/ui/login", data={"token": token}, follow_redirects=False)
+    assert response.status_code == 302
+
+
+def test_unauthenticated_ui_redirects_to_login() -> None:
+    """/ui/* without a cookie redirects to the login page."""
+    client = _ui_client()
+    response = client.get("/ui/collections", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/ui/login"
+
+
+def test_login_wrong_token_rejected() -> None:
+    """POST /ui/login with a bad token redirects back to login with an error."""
+    client = _ui_client()
+    response = client.post("/ui/login", data={"token": "wrong"}, follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/ui/login")
+    assert "level=error" in response.headers["location"]
+
+
+def test_login_sets_cookie_and_grants_access() -> None:
+    """After login, /ui/collections renders the collections page."""
+    client = _ui_client()
+    _login(client)
+
+    response = client.get("/ui/collections")
+    assert response.status_code == 200
+    assert "Colecciones" in response.text
+    assert settings.admin_api_token not in response.text
+
+
+def test_collections_page_lists_created_collection() -> None:
+    """A collection created via the GUI form shows in the collections page."""
+    client = _ui_client()
+    _login(client)
+
+    created = client.post(
+        "/ui/collections",
+        data={
+            "name": "science",
+            "time": "09:30",
+            "feed_urls": "https://example.com/rss\nhttps://example2.com/rss",
+            "tts_enabled": "on",
+            "podcast_name": "CienciaCast",
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert "science" in page.text
+    assert "CienciaCast" in page.text
+    assert "09:30 UTC" in page.text
+
+
+def test_collections_page_duplicate_conflict() -> None:
+    """Creating a duplicate collection flashes an error."""
+    client = _ui_client()
+    _login(client)
+    payload = {"name": "tech", "feed_urls": "https://example.com/rss"}
+
+    client.post("/ui/collections", data=payload)
+    second = client.post("/ui/collections", data=payload, follow_redirects=False)
+
+    assert second.status_code == 302
+    location = second.headers["location"]
+    assert "level=error" in location
+
+
+def test_update_collection_via_gui() -> None:
+    """Updating a collection via the GUI modifies its fields."""
+    client = _ui_client()
+    _login(client)
+    client.post("/ui/collections", data={"name": "tech", "feed_urls": "https://a/rss"})
+
+    response = client.post(
+        "/ui/collections/tech/update",
+        data={"new_name": "tech2", "time": "11:00", "feed_urls": "https://b/rss"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert "tech2" in page.text
+    assert "tech-editar" not in page.text.replace("tech2", "")
+
+
+def test_delete_collection_via_gui() -> None:
+    """Deleting a collection via the GUI removes it."""
+    client = _ui_client()
+    _login(client)
+    client.post("/ui/collections", data={"name": "tech", "feed_urls": "https://a/rss"})
+
+    response = client.post("/ui/collections/tech/delete", follow_redirects=False)
+    assert response.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert ">tech</" not in page.text
+
+
+def test_calendar_page_renders() -> None:
+    """The calendar page renders the weekly grid."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections", data={"name": "tech", "time": "10:00", "feed_urls": "https://a/rss"}
+    )
+
+    page = client.get("/ui/calendar")
+    assert page.status_code == 200
+    assert "Calendario semanal" in page.text
+    assert "tech" in page.text
+
+
+def test_history_and_errors_pages_render() -> None:
+    """History and errors pages load and their fragments refresh."""
+    client = _ui_client()
+    _login(client)
+
+    history = client.get("/ui/history")
+    assert history.status_code == 200
+    errors = client.get("/ui/errors")
+    assert errors.status_code == 200
+
+    fragment = client.get("/ui/fragments/history")
+    assert fragment.status_code == 200
+    assert "Sin ejecuciones registradas" in fragment.text
+
+
+def test_voices_page_renders_with_mock_service() -> None:
+    """Voices page renders stock and cloned lists from the voices service."""
+    client = _ui_client()
+    _login(client)
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            return_value=[{"voice_id": "es-mx-male", "language": "es"}],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[{"voice_id": "mario", "language": "es"}],
+        ),
+    ):
+        page = client.get("/ui/voices")
+
+    assert page.status_code == 200
+    assert "es-mx-male" in page.text
+    assert "mario" in page.text
+
+
+def test_run_now_button_triggers_pipeline() -> None:
+    """POST /ui/collections/{name}/run starts the pipeline and redirects."""
+    client = _ui_client()
+    _login(client)
+    client.post("/ui/collections", data={"name": "tech", "feed_urls": "https://a/rss"})
+
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.trigger_collection",
+        new_callable=AsyncMock,
+        return_value="digest-pipeline-tech-20260101000000",
+    ):
+        response = client.post("/ui/collections/tech/run", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "workflow" in response.headers["location"] or "history" in response.headers["location"]
+
+
+def test_resync_button() -> None:
+    """POST /ui/schedules/resync reconciles schedules."""
+    client = _ui_client()
+    _login(client)
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.resync_schedules",
+        new_callable=AsyncMock,
+        return_value={"created_or_updated": ["daily-digest-tech"], "removed": []},
+    ):
+        response = client.post("/ui/schedules/resync", follow_redirects=False)
+
+    assert response.status_code == 302
+    location = response.headers["location"].lower().replace("%20", " ").replace("+", " ")
+    assert "resincronizados" in location
+
+
+def test_logout_clears_cookie() -> None:
+    """POST /ui/logout removes the admin cookie."""
+    client = _ui_client()
+    _login(client)
+    assert client.get("/ui/collections").status_code == 200
+
+    client.post("/ui/logout", follow_redirects=False)
+
+    assert client.get("/ui/collections", follow_redirects=False).status_code == 302
