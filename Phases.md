@@ -110,10 +110,10 @@ historical notes describing the migration itself.
 **Goal:** Manage sources and view history from a browser.
 
 **Scope:**
-- [ ] FastAPI + HTMX or simple React frontend
-- [ ] Auth (basic token)
-- [ ] CRUD for collections and feeds
-- [ ] History viewer with re-deliver button
+- [x] FastAPI + HTMX or simple React frontend
+- [x] Auth (basic token)
+- [x] CRUD for collections and feeds
+- [x] History viewer with re-deliver button
 
 **Success criteria:** A non-technical user can add an RSS feed without touching
 code.
