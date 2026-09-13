@@ -63,5 +63,5 @@ def test_build_schedule_has_per_collection_ids() -> None:
     assert schedule.action.id == "digest-pipeline-tech"
 
     calendar = schedule.spec.calendars[0]
-    assert calendar.hour.start == 17
-    assert calendar.minute.start == 15
+    assert calendar.hour[0].start == 17
+    assert calendar.minute[0].start == 15

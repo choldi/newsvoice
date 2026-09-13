@@ -74,8 +74,8 @@ def build_schedule(collection: CollectionConfig, config: PipelineConfig) -> Sche
         spec=ScheduleSpec(
             calendars=[
                 ScheduleCalendarSpec(
-                    hour=ScheduleRange(start=hour, end=hour),
-                    minute=ScheduleRange(start=minute, end=minute),
+                    hour=[ScheduleRange(start=hour, end=hour)],
+                    minute=[ScheduleRange(start=minute, end=minute)],
                 )
             ]
         ),
