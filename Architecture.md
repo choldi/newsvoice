@@ -36,32 +36,34 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 ## Data Flow (Full Pipeline)
 
 ```
-[Temporal Schedule 08:00 UTC]
+[Temporal Schedules — one per collection]   (collections.toml → HH:MM UTC each)
     |
     v
 [DigestPipelineWorkflow.run]                  (src/workers/workflows.py)
-    |
+    |                                         config.collection scopes everything
     v
 [fetch_rss_activity]            --> [feedparser → articles]
     |
     v
-[filter_new_activity]           --> [SQLite: unseen in 7-day window?]
+[filter_new_activity]           --> [SQLite: (collection, url) unseen in 7-day window?]
     |
     v
-[cluster_activity]              --> [group by event fingerprint]
+[cluster_activity]              --> [group by event fingerprint, collection-scoped]
     |
     v
-[generate_digest_activity]      --> [llama.cpp → 5+5 markdown]
+[generate_digest_activity]      --> [llama.cpp → 5+5 markdown, per-collection template]
     |
     v
 [generate_tts_activity] (opt.)  --> [OmniVoice API → fragmentado → .wav]
     |
     v
-[deliver_telegram_*_activity]   --> [text + audio]
+[deliver_telegram_*_activity]   --> [text + audio]  (per-collection chat_id optional)
 ```
 
 Each arrow is a `workflow.execute_activity` call with a start-to-close timeout;
 the workflow is fully deterministic, so Temporal can resume it after any crash.
+Article dedup, event clusters, and delivery history are all keyed by collection
+in the shared SQLite database, so the same URL may appear in several digests.
 
 The TTS step converts the digest markdown to plain text (keeping inline OmniVoice
 emotion tags such as `[happy]`), fragments it into small paragraphs (default
@@ -95,6 +97,7 @@ news-engine/
 ├── AGENTS.md
 ├── pyproject.toml
 ├── docker-compose.yml          # api + worker + temporal + temporal-ui + postgres
+├── collections.toml            # collections config (copy of collections.toml.example)
 ├── .env.example
 ├── src/
 │   ├── api/
@@ -106,13 +109,15 @@ news-engine/
 │   │   └── db/                 # SQLite layer + migrations
 │   ├── core/
 │   │   ├── config.py           # pydantic-settings
+│   │   ├── collections.py      # collections.toml loader (CollectionConfig)
+│   │   ├── prompts.py          # LLM prompt templates + DIGEST_TEMPLATES registry
 │   │   └── llm.py              # LiteLLM wrapper
 │   └── workers/
 │       ├── workflows.py        # DigestPipelineWorkflow + PipelineConfig
 │       ├── activities.py       # RSS, filter, cluster, digest, TTS, Telegram
 │       ├── run_worker.py       # worker entry point
-│       ├── trigger.py          # manual one-shot run
-│       └── schedule.py         # register the daily Temporal schedule
+│       ├── trigger.py          # manual one-shot run (--collection)
+│       └── schedule.py         # one Temporal schedule per collection
 ├── data/                       # SQLite DB + TTS cache (gitignored)
 ├── tests/
 │   ├── unit/
@@ -130,4 +135,3 @@ news-engine/
 - [ ] Vector database (Qdrant / Milvus)
 - [ ] Web administration UI
 - [ ] Real-time streaming
-- [ ] Multiple collections (planned for a later phase, see `Phases.md`)

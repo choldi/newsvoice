@@ -93,11 +93,11 @@ historical notes describing the migration itself.
 **Goal:** Separate digests for "Tech", "Health", "Finance".
 
 **Scope:**
-- [ ] `collections.toml` (inspired by Better Morning)
-- [ ] Per-collection `PipelineConfig` (feeds, TTS flag, delivery target)
-- [ ] One Temporal schedule per collection at a configurable time
-- [ ] Shared DB, collection-scoped dedup
-- [ ] Per-collection prompt templates
+- [x] `collections.toml` (inspired by Better Morning)
+- [x] Per-collection `PipelineConfig` (feeds, TTS flag, delivery target)
+- [x] One Temporal schedule per collection at a configurable time
+- [x] Shared DB, collection-scoped dedup
+- [x] Per-collection prompt templates
 
 **Success criteria:** 3 independent Telegram digests at different times.
 

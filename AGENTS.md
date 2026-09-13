@@ -255,8 +255,14 @@ curl http://localhost:8000/health
 ### Temporal (dev):
 ```bash
 # UI: http://localhost:8080
-docker compose exec worker python -m src.workers.trigger --tts
-docker compose exec worker python -m src.workers.schedule --hour 8 --minute 0
+docker compose exec worker python -m src.workers.run_worker
+
+# Registra un schedule POR COLECCIÓN (usa collections.toml)
+docker compose exec worker python -m src.workers.schedule
+docker compose exec worker python -m src.workers.schedule --collection tech
+
+# Run manual de una colección
+docker compose exec worker python -m src.workers.trigger --collection tech
 ```
 
 ## CONTACTO Y ESCALACIÓN

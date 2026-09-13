@@ -27,9 +27,14 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
 3. Update `.env` with production values:
    - `LLM_API_BASE` — URL of your llama.cpp instance
    - `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`
-   - `RSS_FEED_URLS` — JSON list of feed URLs
+   - `RSS_FEED_URLS` — JSON list of feed URLs (fallback for the implicit default
+     collection when no `collections.toml` is present)
+   - `COLLECTIONS_FILE` — path to the collections config (default `collections.toml`)
    - `TEMPORAL_HOST` & `TEMPORAL_TASK_QUEUE` (defaults work for the bundled
      Temporal server; set `temporal:7233` for container-to-container access)
+4. Copy `collections.toml.example` to `collections.toml` and define your
+   collections (names, feed URLs, per-collection schedule `time`, TTS flags,
+   prompt templates, optional per-collection `chat_id`)
 
 ---
 
@@ -54,21 +59,32 @@ docker compose ps
 
 ---
 
-## 4. Registering the Daily Schedule
+## 4. Registering the Schedules
 
-Once the worker is running, register the daily schedule (08:00 UTC by default):
+Once the worker is running, create **one schedule per collection**. Collections
+are defined in `collections.toml` (copy `collections.toml.example`), each with
+its own name, feed URLs, delivery options, and `time` (HH:MM UTC):
 
 ```bash
-docker compose exec worker python -m src.workers.schedule --hour 8 --minute 0
+cp collections.toml.example collections.toml
+# edit collections.toml: names, feeds, times
+docker compose exec worker python -m src.workers.schedule
 ```
 
-Optional: enable TTS audio in the scheduled runs with `--tts`.
+This registers `daily-digest-<name>` schedules for every enabled collection.
+Target a single collection with `--collection <name>`.
+
+Optional: force-enable TTS audio in all scheduled runs with `--tts`.
 
 To run a one-off digest manually (useful for debugging):
 
 ```bash
-docker compose exec worker python -m src.workers.trigger --tts
+docker compose exec worker python -m src.workers.trigger --collection tech
 ```
+
+With no `collections.toml`, the legacy single-schedule behavior applies:
+`python -m src.workers.schedule --hour 8 --minute 0` creates one daily digest
+from `RSS_FEED_URLS`.
 
 ---
 ## 5. Health Checks

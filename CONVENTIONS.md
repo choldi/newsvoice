@@ -70,6 +70,26 @@
   `TEMPORAL_TASK_QUEUE`, `RSS_FEED_URLS`
 - No hardcoded secrets; no default prod values
 
+## Collections (Phase 5)
+- Collections live in `collections.toml` (see `collections.toml.example`),
+  loaded by `src/core/collections.py` via stdlib `tomllib` — no new dependency
+- Each `[[collections]]` entry = one independent digest on its own Temporal
+  schedule, with fields: `name`, `time` (HH:MM UTC), `feed_urls`,
+  `tts_enabled`, `deliver_audio`, `podcast_behavior`, `language`, `voice`,
+  `prompt_template`, `chat_id`, `enabled`
+- Shared defaults go under `[collection_defaults]`; entries override them
+- Collection names must be unique and non-empty; `enabled = false` pauses a
+  collection without deleting the config
+- With no `collections.toml`, an implicit `default` collection is built from
+  `RSS_FEED_URLS` (legacy single-digest behavior)
+- One Temporal schedule per collection: id `daily-digest-<name>`, workflow id
+  `digest-pipeline-<name>`, run via `python -m src.workers.schedule`
+- Manual one-off run per collection: `python -m src.workers.trigger --collection <name>`
+- Dedup, clusters, and deliveries are **collection-scoped** in the shared SQLite
+  DB (migration `003`); `PipelineConfig` carries `collection` through the workflow
+- Per-collection prompt templates are registered in `src/core/prompts.py` under
+  `DIGEST_TEMPLATES` (built-in: `default`, `finance`, `health`, `investigative`)
+
 ## Logging
 - `structlog` with JSON output (workflows use the Temporal sandbox logger)
 - Levels:
