@@ -21,6 +21,7 @@ async def test_run_migrations(tmp_path: Path) -> None:
         assert "articles" in tables
         assert "deliveries" in tables
         assert "schema_migrations" in tables
+        assert "digest_runs" in tables
 
 
 @pytest.mark.asyncio

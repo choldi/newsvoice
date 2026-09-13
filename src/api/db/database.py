@@ -381,3 +381,157 @@ class ArticleRepository:
                     }
                     for row in rows
                 ]
+
+
+class RunsRepository:
+    """Repository for digest run history consumed by the admin GUI."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def record_run(
+        self,
+        workflow_id: str,
+        collection: str,
+        status: str,
+        article_count: int,
+        cluster_count: int,
+        digest_preview: str | None = None,
+        audio_path: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Upsert a digest pipeline run row keyed by workflow_id.
+
+        Args:
+            workflow_id: Temporal workflow id of the run.
+            collection: Collection name the run belongs to.
+            status: Run outcome ('ok', 'no_new_articles', 'failed').
+            article_count: Number of articles summarized (0 for no-new-articles).
+            cluster_count: Number of clusters summarized.
+            digest_preview: First chars of the generated digest.
+            audio_path: Generated audio file path, if any.
+            error: Error message for failed runs.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO digest_runs (
+                workflow_id, collection, status, article_count, cluster_count,
+                digest_preview, audio_path, error, started_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workflow_id) DO UPDATE SET
+                collection = excluded.collection,
+                status = excluded.status,
+                article_count = excluded.article_count,
+                cluster_count = excluded.cluster_count,
+                digest_preview = excluded.digest_preview,
+                audio_path = excluded.audio_path,
+                error = excluded.error,
+                completed_at = excluded.completed_at
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                query,
+                (
+                    workflow_id,
+                    collection,
+                    status,
+                    int(article_count or 0),
+                    int(cluster_count or 0),
+                    digest_preview,
+                    audio_path,
+                    error,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            await db.commit()
+
+    async def list_runs(
+        self,
+        collection: str | None = None,
+        status_filter: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List recent digest runs, newest first, with optional filters.
+
+        Args:
+            collection: Filter by collection name.
+            status_filter: Filter by run status.
+            limit: Maximum number of rows to return.
+            offset: Pagination offset.
+
+        Returns:
+            List of run dicts.
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+        if collection:
+            conditions.append("collection = ?")
+            params.append(collection)
+        if status_filter:
+            conditions.append("status = ?")
+            params.append(status_filter)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        query = f"""
+            SELECT id, workflow_id, collection, status, article_count, cluster_count,
+                   digest_preview, audio_path, error, started_at, completed_at
+            FROM digest_runs
+            {where}
+            ORDER BY completed_at DESC
+            LIMIT ? OFFSET ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, [*params, limit, offset]) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_run(self, run_id: int) -> dict | None:
+        """Return a single run by its database id.
+
+        Args:
+            run_id: Id of the digest run row.
+
+        Returns:
+            The run dict, or None if not found.
+        """
+        query = """
+            SELECT id, workflow_id, collection, status, article_count, cluster_count,
+                   digest_preview, audio_path, error, started_at, completed_at
+            FROM digest_runs
+            WHERE id = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (run_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def count(self, collection: str | None = None, status_filter: str | None = None) -> int:
+        """Count runs matching the optional filters.
+
+        Args:
+            collection: Filter by collection name.
+            status_filter: Filter by run status.
+
+        Returns:
+            Matching row count.
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+        if collection:
+            conditions.append("collection = ?")
+            params.append(collection)
+        if status_filter:
+            conditions.append("status = ?")
+            params.append(status_filter)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        async with get_db(self.db_path) as db:
+            async with db.execute(f"SELECT COUNT(*) FROM digest_runs {where}", params) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
