@@ -150,13 +150,21 @@ class DigestPipelineWorkflow:
         )
 
         # Deliver the text digest FIRST; it is the primary deliverable and must
-        # not be blocked by (optional) TTS/audio failures.
-        text_delivery = await workflow.execute_activity(
-            deliver_telegram_message_activity,
-            args=[digest_markdown, config.chat_id],
-            start_to_close_timeout=DELIVERY_TIMEOUT,
-            retry_policy=NETWORK_RETRY_POLICY,
-        )
+        # not be blocked by (optional) TTS/audio failures. A delivery failure on
+        # one channel (Telegram/email) is recorded and does not abort the run.
+        try:
+            text_delivery = await workflow.execute_activity(
+                deliver_telegram_message_activity,
+                args=[digest_markdown, config.chat_id],
+                start_to_close_timeout=DELIVERY_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+        except (ActivityError, ApplicationError) as exc:
+            detail = getattr(exc, "cause", None) or exc
+            workflow.logger.warning(
+                f"Telegram text step failed; continuing with other channels: {detail}"
+            )
+            text_delivery = {"status": "error", "error": str(detail)}
         delivery_status: list[dict[str, Any]] = [text_delivery]
 
         # Deliver the digest via email when the collection configures
