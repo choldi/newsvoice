@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     llm_api_base: str = "http://localhost:8080/v1"
     llm_model: str = "openai/local-model"
     llm_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
-    llm_timeout_seconds: int = Field(default=60, ge=1)
+    llm_timeout_seconds: int = Field(default=300, ge=1)
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
     api_port: int = Field(default=8000, ge=1, lt=65536)

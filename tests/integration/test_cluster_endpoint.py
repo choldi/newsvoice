@@ -1,5 +1,6 @@
 """Integration tests for /cluster endpoint."""
 
+import json
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -18,9 +19,18 @@ def fake_fingerprint_by_title(title: str) -> str:
     return '{"entity": "Google", "action": "launches Gemini 2.0"}'
 
 
-def _fake_fingerprint_side_effect(messages: list[dict], **kwargs: object) -> str:
-    title = messages[1]["content"]
-    return fake_fingerprint_by_title(title)
+def _fake_batch_fingerprint_side_effect(messages: list[dict], **kwargs: object) -> str:
+    """Return a batch fingerprint JSON keyed by item number for the batched prompt."""
+    items_section = messages[1]["content"].split("\n\n", 1)[1]
+    out: dict[str, str] = {}
+    for line in items_section.splitlines():
+        line = line.strip()
+        if not line or ". Title:" not in line:
+            continue
+        number, _, title = line.partition(". Title:")
+        title = title.split(" | Content:")[0].strip()
+        out[number.strip()] = json.loads(fake_fingerprint_by_title(title))
+    return json.dumps(out)
 
 
 def test_cluster_endpoint_success() -> None:
@@ -49,7 +59,7 @@ def test_cluster_endpoint_success() -> None:
     }
     with patch(
         "src.api.services.cluster.generate_completion",
-        side_effect=_fake_fingerprint_side_effect,
+        side_effect=_fake_batch_fingerprint_side_effect,
     ):
         response = client.post("/api/cluster", json=payload)
     assert response.status_code == 200
@@ -118,7 +128,7 @@ def test_cluster_endpoint_related_articles_same_cluster() -> None:
 
     with patch(
         "src.api.services.cluster.generate_completion",
-        side_effect=_fake_fingerprint_side_effect,
+        side_effect=_fake_batch_fingerprint_side_effect,
     ):
         response = client.post("/api/cluster", json=payload)
     assert response.status_code == 200

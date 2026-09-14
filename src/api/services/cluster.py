@@ -12,8 +12,8 @@ from src.api.models.article import ArticleIn
 from src.api.models.cluster import ClusterIn, ClusterItem, Fingerprint
 from src.core.llm import generate_completion
 from src.core.prompts import (
-    EXTRACT_FINGERPRINT_SYSTEM_PROMPT,
-    EXTRACT_FINGERPRINT_USER_PROMPT_TEMPLATE,
+    EXTRACT_FINGERPRINTS_BATCH_SYSTEM_PROMPT,
+    EXTRACT_FINGERPRINTS_BATCH_USER_PROMPT_TEMPLATE,
     MATERIAL_UPDATE_SYSTEM_PROMPT,
     MATERIAL_UPDATE_USER_PROMPT_TEMPLATE,
 )
@@ -159,27 +159,85 @@ class ClusterService:
         normalized = self._normalize_title(title)
         return hashlib.sha256(normalized.encode()).hexdigest()[:12]
 
-    async def _extract_fingerprint_llm(self, title: str, content: str | None) -> Fingerprint:
-        """Extract entity and action using LLM."""
-        user_prompt = EXTRACT_FINGERPRINT_USER_PROMPT_TEMPLATE.format(
-            title=title, content=content or ""
+    async def _extract_fingerprints_batch(
+        self, articles: list[ArticleIn]
+    ) -> dict[int, Fingerprint]:
+        """Extract entity/action fingerprints for all articles in one LLM call.
+
+        Args:
+            articles: Articles to fingerprint.
+
+        Returns:
+            Mapping of article index (0-based) to Fingerprint. Entries that
+            fail to extract (LLM error or malformed JSON) fall back to an
+            "Unknown" fingerprint keyed by the article's title hash.
+        """
+        numbered: list[str] = []
+        for i, article in enumerate(articles, start=1):
+            snippet = (article.content or "").strip().replace("\n", " ")[:300]
+            content_clause = f" | Content: {snippet}" if snippet else ""
+            numbered.append(f"{i}. Title: {article.title}{content_clause}")
+        user_prompt = EXTRACT_FINGERPRINTS_BATCH_USER_PROMPT_TEMPLATE.format(
+            items="\n".join(numbered)
         )
         messages = [
-            {"role": "system", "content": EXTRACT_FINGERPRINT_SYSTEM_PROMPT},
+            {"role": "system", "content": EXTRACT_FINGERPRINTS_BATCH_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
         try:
             response = await generate_completion(messages=messages, temperature=0.7)
             data = json.loads(response.strip())
-            entity = data.get("entity", "Unknown").strip()
-            action = data.get("action", "Unknown").strip()
-            title_hash = self._compute_title_hash(title)
-            return Fingerprint(entity=entity, action=action, title_hash=title_hash)
+            pairs = self._parse_fingerprint_pair_batch(data, len(articles))
         except Exception as exc:
-            logger.warning("fingerprint_llm_failed", error=str(exc), title=title[:50])
-            # Fallback: simple heuristic
-            title_hash = self._compute_title_hash(title)
-            return Fingerprint(entity="Unknown", action="Unknown", title_hash=title_hash)
+            logger.warning("fingerprints_batch_llm_failed", error=str(exc), total=len(articles))
+            pairs = {i: ("Unknown", "Unknown") for i in range(len(articles))}
+
+        return {
+            i: Fingerprint(
+                entity=entity,
+                action=action,
+                title_hash=self._compute_title_hash(articles[i].title),
+            )
+            for i, (entity, action) in pairs.items()
+        }
+
+    @staticmethod
+    def _parse_fingerprint_pair_batch(data: Any, expected: int) -> dict[int, tuple[str, str]]:
+        """Normalize a batch fingerprint LLM response.
+
+        Args:
+            data: Parsed JSON from the LLM. Either a list aligned to the input
+                order or an object keyed by 1-based item number.
+            expected: Number of articles; indices 0..expected-1 must exist.
+
+        Returns:
+            Map of article index to (entity, action); missing or malformed
+            entries default to ("Unknown", "Unknown").
+        """
+        raw: dict[int, Any] = {}
+        if isinstance(data, list):
+            for idx, item in enumerate(data):
+                if isinstance(item, dict):
+                    raw[idx] = item
+        elif isinstance(data, dict):
+            for key, item in data.items():
+                try:
+                    parsed_key = int(key)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(item, dict):
+                    raw[parsed_key - 1 if parsed_key >= 1 else parsed_key] = item
+
+        pairs: dict[int, tuple[str, str]] = {}
+        for idx in range(expected):
+            item = raw.get(idx)
+            if isinstance(item, dict):
+                entity = str(item.get("entity") or "Unknown").strip() or "Unknown"
+                action = str(item.get("action") or "Unknown").strip() or "Unknown"
+            else:
+                entity, action = "Unknown", "Unknown"
+            pairs[idx] = (entity, action)
+        return pairs
 
     def _fingerprint_to_key(self, fp: Fingerprint) -> str:
         """Create a deterministic key for fingerprint matching.
@@ -255,9 +313,11 @@ class ClusterService:
                 "is_material_update": False,
             }
 
-        # 2. Process each article: extract fingerprint, match or create cluster
-        for article in payload.articles:
-            fp = await self._extract_fingerprint_llm(article.title, article.content)
+        # 2. Extract fingerprints for every article in a single batched LLM
+        #    call, then match or create clusters.
+        fingerprints = await self._extract_fingerprints_batch(payload.articles)
+        for idx, article in enumerate(payload.articles):
+            fp = fingerprints[idx]
             key = self._fingerprint_to_key(fp)
 
             if key in cluster_map:

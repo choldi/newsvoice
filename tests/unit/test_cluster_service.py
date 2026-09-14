@@ -110,14 +110,14 @@ class TestClusterService:
     ) -> None:
         """Test related articles about the same event collapse into one cluster."""
         with patch.object(
-            cluster_service, "_extract_fingerprint_llm", new_callable=AsyncMock
+            cluster_service, "_extract_fingerprints_batch", new_callable=AsyncMock
         ) as mock_extract:
             # First two articles share entity+action (same event)
-            mock_extract.side_effect = [
-                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
-                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash2"),
-                Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
-            ]
+            mock_extract.return_value = {
+                0: Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
+                1: Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash2"),
+                2: Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
+            }
 
             payload = ClusterIn(articles=sample_articles)
             result = await cluster_service.cluster_articles(payload)
@@ -155,13 +155,13 @@ class TestClusterService:
         ]
 
         with patch.object(
-            cluster_service, "_extract_fingerprint_llm", new_callable=AsyncMock
+            cluster_service, "_extract_fingerprints_batch", new_callable=AsyncMock
         ) as mock_extract:
             # First article matches existing cluster
-            mock_extract.side_effect = [
-                Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
-                Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
-            ]
+            mock_extract.return_value = {
+                0: Fingerprint(entity="OpenAI", action="releases GPT-5", title_hash="hash1"),
+                1: Fingerprint(entity="Apple", action="announces iPhone 16", title_hash="hash3"),
+            }
 
             payload = ClusterIn(articles=sample_articles[:2])
             result = await cluster_service.cluster_articles(payload)
@@ -174,6 +174,58 @@ class TestClusterService:
             # Second cluster should be new
             apple_cluster = next(c for c in result if c.fingerprint.entity == "Apple")
             assert apple_cluster.cluster_id != 42
+
+    @pytest.mark.asyncio
+    async def test_parse_fingerprint_pair_batch_list(self) -> None:
+        """Test batch parser accepts a JSON list aligned to input order."""
+        data = [
+            {"entity": "OpenAI", "action": "releases GPT-5"},
+            {"entity": "Apple", "action": "announces iPhone 16"},
+        ]
+        pairs = ClusterService._parse_fingerprint_pair_batch(data, expected=2)
+        assert pairs == {
+            0: ("OpenAI", "releases GPT-5"),
+            1: ("Apple", "announces iPhone 16"),
+        }
+
+    @pytest.mark.asyncio
+    async def test_parse_fingerprint_pair_batch_object_1based(self) -> None:
+        """Test batch parser accepts a JSON object keyed by 1-based numbers."""
+        data = {
+            "1": {"entity": "OpenAI", "action": "releases GPT-5"},
+            "2": {"entity": "Apple", "action": "announces iPhone 16"},
+        }
+        pairs = ClusterService._parse_fingerprint_pair_batch(data, expected=2)
+        assert pairs == {
+            0: ("OpenAI", "releases GPT-5"),
+            1: ("Apple", "announces iPhone 16"),
+        }
+
+    @pytest.mark.asyncio
+    async def test_parse_fingerprint_pair_batch_missing_entries_unknown(self) -> None:
+        """Test missing/malformed entries fall back to Unknown."""
+        data = [{"entity": "OpenAI", "action": "releases GPT-5"}, "garbage"]
+        pairs = ClusterService._parse_fingerprint_pair_batch(data, expected=3)
+        assert pairs[0] == ("OpenAI", "releases GPT-5")
+        assert pairs[1] == ("Unknown", "Unknown")
+        assert pairs[2] == ("Unknown", "Unknown")
+
+    @pytest.mark.asyncio
+    async def test_extract_fingerprints_batch_fallback_on_llm_error(
+        self, cluster_service: ClusterService, sample_articles: list[ArticleIn]
+    ) -> None:
+        """Test batch extraction falls back to Unknown when the LLM call fails."""
+        with patch(
+            "src.api.services.cluster.generate_completion",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            mock_llm.side_effect = RuntimeError("LLM down")
+            fingerprints = await cluster_service._extract_fingerprints_batch(sample_articles[:2])
+            assert len(fingerprints) == 2
+            for fp in fingerprints.values():
+                assert fp.entity == "Unknown"
+                assert fp.action == "Unknown"
+                assert len(fp.title_hash) == 12
 
     @pytest.mark.asyncio
     async def test_check_material_update_true(

@@ -183,6 +183,31 @@ EXTRACT_FINGERPRINT_USER_PROMPT_TEMPLATE = """Title: {title}
 Content: {content}
 """
 
+EXTRACT_FINGERPRINTS_BATCH_SYSTEM_PROMPT = """You are an information extraction system.
+Extract the primary main entity and main event action from each numbered news item below.
+
+Output strictly a single valid JSON object with each item number as key:
+{
+  "1": {
+    "entity": "Primary named entity (person, company, government, or key organization)",
+    "action": "Core verb or concise event action phrase (3-6 words)"
+  },
+  "2": {
+    "entity": "...",
+    "action": "..."
+  },
+  ...
+}
+Cover EVERY numbered item exactly once with no extra keys. Do not include any
+explanation or markdown formatting outside the JSON.
+"""
+
+EXTRACT_FINGERPRINTS_BATCH_USER_PROMPT_TEMPLATE = """\
+Extract the primary entity and action for each numbered news item:
+
+{items}
+"""
+
 MATERIAL_UPDATE_SYSTEM_PROMPT = """You are a news editor evaluating article updates.
 Determine if the NEW article introduces significant, material new facts or major developments
 compared to PREVIOUSLY REPORTED articles for this same event story.
