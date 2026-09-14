@@ -273,16 +273,17 @@ async def _telegram_request(
     body["chat_id"] = target_chat
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(url, json=body)
-        response.raise_for_status()
         try:
             data = response.json()
         except ValueError as exc:
+            response.raise_for_status()
             raise ApplicationError(
                 f"Telegram returned a non-JSON response: {exc}",
                 non_retryable=True,
             ) from exc
-    if not data.get("ok"):
-        raise ApplicationError(f"Telegram API error: {data}", non_retryable=True)
+    if not response.is_success or not data.get("ok"):
+        description = data.get("description") or data
+        raise ApplicationError(f"Telegram API error: {description}", non_retryable=True)
     result = data.get("result") or {}
     message_id = result.get("message_id")
     if message_id is None:
@@ -337,12 +338,19 @@ async def deliver_telegram_message_activity(
     chunks = split_message_chunks(strip_emotion_tags(text))
     if not chunks:
         raise ApplicationError("Telegram message is empty", non_retryable=True)
-    results = [
-        await _telegram_request(
-            "sendMessage", {"text": chunk, "parse_mode": "Markdown"}, chat_id=chat_id
-        )
-        for chunk in chunks
-    ]
+    results = []
+    for chunk in chunks:
+        try:
+            results.append(
+                await _telegram_request(
+                    "sendMessage", {"text": chunk, "parse_mode": "Markdown"}, chat_id=chat_id
+                )
+            )
+        except ApplicationError:
+            activity.logger.warning(
+                f"telegram_markdown_rejected_sending_plain_text chunk_len={len(chunk)}"
+            )
+            results.append(await _telegram_request("sendMessage", {"text": chunk}, chat_id=chat_id))
     if len(results) == 1:
         return results[0]
     return {"status": "ok", "message_ids": [r["message_id"] for r in results]}

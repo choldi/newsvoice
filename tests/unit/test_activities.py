@@ -204,6 +204,31 @@ async def test_deliver_telegram_message_activity_splits_long_text() -> None:
     assert len(result["message_ids"]) == mock_request.await_count
 
 
+async def test_deliver_telegram_message_activity_falls_back_to_plain_text() -> None:
+    """When Markdown is rejected by Telegram, the chunk is resent as plain text."""
+    from temporalio.exceptions import ApplicationError as TemporalError
+
+    with patch(
+        "src.workers.activities._telegram_request",
+        new_callable=AsyncMock,
+    ) as mock_request:
+        mock_request.side_effect = [
+            TemporalError("Telegram API error: can't parse entities", non_retryable=True),
+            {"status": "ok", "message_id": 7},
+        ]
+        result = await ActivityEnvironment().run(
+            deliver_telegram_message_activity,
+            "## Heading\n\nBody with _unescaped_ markdown",
+        )
+
+    assert mock_request.await_count == 2
+    first_payload = mock_request.call_args_list[0].args[1]
+    second_payload = mock_request.call_args_list[1].args[1]
+    assert first_payload["parse_mode"] == "Markdown"
+    assert "parse_mode" not in second_payload
+    assert result["message_id"] == 7
+
+
 async def test_split_message_chunks_one_chunk_for_short_text() -> None:
     """Short texts are returned unchanged as a single chunk."""
     chunks = split_message_chunks("## Heading\n\nShort body")
