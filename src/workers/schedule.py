@@ -18,9 +18,11 @@ from temporalio.client import (
     RPCError,
     Schedule,
     ScheduleActionStartWorkflow,
+    ScheduleAlreadyRunningError,
     ScheduleCalendarSpec,
     ScheduleRange,
     ScheduleSpec,
+    ScheduleUpdate,
 )
 
 from src.core.collections import CollectionConfig, get_collections
@@ -112,6 +114,13 @@ async def create_schedules(
                 f"(daily at {collection.time} UTC)"
             )
             print(await handle.describe())
+        except ScheduleAlreadyRunningError:
+            handle = client.get_schedule_handle(schedule_id)
+            await handle.update(lambda _: ScheduleUpdate(schedule=schedule))
+            print(
+                f"Updated schedule '{schedule_id}' for collection '{collection.name}' "
+                f"(daily at {collection.time} UTC)"
+            )
         except RPCError as exc:
             print(f"Could not create schedule '{schedule_id}': {exc}")
             print("It may already exist; update handle instead.")
