@@ -29,8 +29,8 @@ with workflow.unsafe.imports_passed_through():
 # Reasonable per-step timeouts for activity execution.
 RSS_FETCH_TIMEOUT = timedelta(seconds=120)
 FILTER_TIMEOUT = timedelta(seconds=30)
-CLUSTER_TIMEOUT = timedelta(seconds=900)
-DIGEST_TIMEOUT = timedelta(seconds=900)
+CLUSTER_TIMEOUT = timedelta(seconds=1800)
+DIGEST_TIMEOUT = timedelta(seconds=1800)
 TTS_TIMEOUT = timedelta(seconds=180)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
 EMAIL_TIMEOUT = timedelta(seconds=90)
