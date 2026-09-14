@@ -40,6 +40,10 @@ class CollectionIn(BaseModel):
         default=None,
         description="Telegram chat id override; global TELEGRAM_CHAT_ID if empty",
     )
+    email_recipients: list[str] = Field(
+        default_factory=list,
+        description="Email recipients for HTML email delivery (empty = off)",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     def to_config(self) -> CollectionConfig:

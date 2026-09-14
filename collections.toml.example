@@ -10,6 +10,8 @@
 # - `prompt_template` selects a system prompt from src/core/prompts.py
 #   (built-in: default, finance, health, investigative).
 # - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
+# - `email_recipients` enables HTML email delivery (SMTP from .env) to these
+#   addresses; leave empty (default) to send no email for this collection.
 
 [collection_defaults]
 tts_enabled = false
@@ -25,6 +27,7 @@ feed_urls = [
     "https://www.theverge.com/rss/index.xml",
 ]
 prompt_template = "default"
+# email_recipients = ["you@example.com", "teammate@example.com"]
 
 [[collections]]
 name = "health"

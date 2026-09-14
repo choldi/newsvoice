@@ -11,10 +11,12 @@ from typing import Any
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from src.workers.activities import (
         cluster_activity,
+        deliver_email_activity,
         deliver_telegram_audio_activity,
         deliver_telegram_message_activity,
         fetch_rss_activity,
@@ -31,6 +33,7 @@ CLUSTER_TIMEOUT = timedelta(seconds=300)
 DIGEST_TIMEOUT = timedelta(seconds=300)
 TTS_TIMEOUT = timedelta(seconds=180)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
+EMAIL_TIMEOUT = timedelta(seconds=90)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 
 # Bounded retries for network-dependent activities so a transient failure does
@@ -53,6 +56,7 @@ class PipelineConfig:
     collection: str = "default"
     prompt_template: str = "default"
     chat_id: str | None = None
+    email_recipients: list[str] = field(default_factory=list)
 
 
 @workflow.defn
@@ -155,6 +159,26 @@ class DigestPipelineWorkflow:
         )
         delivery_status: list[dict[str, Any]] = [text_delivery]
 
+        # Deliver the digest via email when the collection configures
+        # recipients. A failure here must not fail the whole pipeline (the
+        # Telegram digest already went out), matching the TTS error handling.
+        if config.email_recipients:
+            workflow.logger.info("Delivering email digest")
+            try:
+                email_delivery = await workflow.execute_activity(
+                    deliver_email_activity,
+                    args=[config.email_recipients, digest_markdown, config.collection],
+                    start_to_close_timeout=EMAIL_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append(email_delivery)
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(
+                    f"Email step failed; text digest already delivered: {detail}"
+                )
+                delivery_status.append({"status": "error", "error": str(detail)})
+
         audio: dict[str, Any] | None = None
         if config.tts_enabled:
             workflow.logger.info("Generating TTS audio")
@@ -179,9 +203,10 @@ class DigestPipelineWorkflow:
                     delivery_status.append(audio_delivery)
                 else:
                     delivery_status.append({"status": "error", "error": "no audio generated"})
-            except activity.ActivityError as exc:
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
                 workflow.logger.warning(
-                    f"TTS/audio step failed; text digest already delivered: {exc}"
+                    f"TTS/audio step failed; text digest already delivered: {detail}"
                 )
                 delivery_status.append({"status": "error", "error": str(exc)})
 

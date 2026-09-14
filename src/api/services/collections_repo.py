@@ -235,6 +235,7 @@ class CollectionsRepository:
                 "voice",
                 "prompt_template",
                 "chat_id",
+                "email_recipients",
                 "enabled",
             ):
                 value = data.get(key)

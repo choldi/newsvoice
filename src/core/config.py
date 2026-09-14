@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=600, ge=1)
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = Field(default=587, ge=1, lt=65536)
+    smtp_user: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""
+    mail_from_name: str = "News Engine"
     api_port: int = Field(default=8000, ge=1, lt=65536)
     api_request_timeout: int = Field(default=120, ge=1)
     log_level: str = "INFO"

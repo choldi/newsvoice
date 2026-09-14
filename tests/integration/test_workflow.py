@@ -81,6 +81,11 @@ async def stub_deliver_audio(
     return DELIVERY
 
 
+@activity.defn(name="deliver_email_activity")
+async def stub_deliver_email(recipients: list[str], markdown_text: str, collection: str) -> dict:
+    return {"status": "ok", "recipients": len(recipients)}
+
+
 @activity.defn(name="record_run_activity")
 async def stub_record_run(run: dict) -> dict:
     return {"status": "ok", "run_id": 1}
@@ -101,6 +106,7 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_generate_tts,
                 stub_deliver_message,
                 stub_deliver_audio,
+                stub_deliver_email,
                 stub_record_run,
             ],
         ):
@@ -556,3 +562,134 @@ async def test_chat_id_passed_to_delivery() -> None:
             )
 
     assert seen == {"message_chat": "-1001234567890", "audio_chat": "-1001234567890"}
+
+
+async def test_email_recipients_passed_to_delivery() -> None:
+    """email_recipients in PipelineConfig reaches the email delivery activity."""
+    seen: dict[str, object] = {}
+
+    @activity.defn(name="deliver_email_activity")
+    async def email_recorder(recipients: list[str], markdown_text: str, collection: str) -> dict:
+        seen["recipients"] = recipients
+        seen["text"] = markdown_text
+        seen["collection"] = collection
+        return {"status": "ok", "recipients": len(recipients)}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                email_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="tech",
+                    email_recipients=["a@example.com", "b@example.com"],
+                ),
+                id="workflow-test-email",
+                task_queue="tq",
+            )
+
+    assert seen["recipients"] == ["a@example.com", "b@example.com"]
+    assert seen["text"] == DIGEST["digest"]
+    assert seen["collection"] == "tech"
+    assert any(d.get("recipients") == 2 for d in result["delivery_status"])
+
+
+async def test_email_delivery_skipped_without_recipients() -> None:
+    """With no email_recipients, the email activity is not invoked."""
+    invites: list[str] = []
+
+    @activity.defn(name="deliver_email_activity")
+    async def email_recorder(recipients: list[str], markdown_text: str, collection: str) -> dict:
+        invites.append(collection)
+        return {"status": "ok", "recipients": len(recipients)}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                email_recorder,
+                stub_record_run,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="tech",
+                ),
+                id="workflow-test-no-email",
+                task_queue="tq",
+            )
+
+    assert invites == []
+
+
+async def test_email_failure_does_not_fail_workflow() -> None:
+    """A failing email delivery is appended as an error status, not fatal."""
+    from temporalio.exceptions import ApplicationError as TemporalError
+
+    @activity.defn(name="deliver_email_activity")
+    async def failing_email(recipients: list[str], markdown_text: str, collection: str) -> dict:
+        raise TemporalError("Email delivery failed: relay down", non_retryable=True)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                failing_email,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="tech",
+                    email_recipients=["a@example.com"],
+                ),
+                id="workflow-test-email-fail",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert any(
+        d.get("status") == "error" and "relay down" in d.get("error", "")
+        for d in result["delivery_status"]
+    )
+    assert any(d.get("status") == "ok" for d in result["delivery_status"])

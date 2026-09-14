@@ -17,6 +17,7 @@ from src.api.models.tts import TTSIn
 from src.api.services.cluster import ClusterService
 from src.api.services.dedup import DedupService
 from src.api.services.digest import DigestService
+from src.api.services.email import EmailService
 from src.api.services.tts import TTSService
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
@@ -433,3 +434,35 @@ async def deliver_telegram_audio_activity(
             non_retryable=True,
         )
     return {"status": "ok", "message_id": message_id}
+
+
+@activity.defn
+async def deliver_email_activity(
+    recipients: list[str],
+    markdown_text: str,
+    collection: str,
+) -> dict[str, Any]:
+    """Send the digest as an HTML email to a list of recipients.
+
+    Args:
+        recipients: Destination email addresses.
+        markdown_text: Raw digest markdown content.
+        collection: Collection name (used in subject and header).
+
+    Returns:
+        Dict with status and recipient count.
+
+    Raises:
+        ApplicationError: If the email service is not configured or SMTP
+            fails to deliver the message.
+    """
+    activity.logger.info("Sending digest email", collection=collection, recipients=len(recipients))
+    try:
+        result = await EmailService().send_digest_email(
+            recipients,
+            markdown_text,
+            collection,
+        )
+    except Exception as exc:
+        raise ApplicationError(f"Email delivery failed: {exc}", non_retryable=True) from exc
+    return result
