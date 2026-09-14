@@ -17,6 +17,7 @@ from src.workers.activities import (
     generate_digest_activity,
     generate_tts_activity,
     record_run_activity,
+    split_message_chunks,
 )
 
 SAMPLE_ARTICLE = {
@@ -184,6 +185,37 @@ async def test_deliver_telegram_message_activity_sends_text() -> None:
     sent_payload = mock_request.call_args.args[1]
     assert "[happy]" not in sent_payload
     assert result["message_id"] == 42
+
+
+async def test_deliver_telegram_message_activity_splits_long_text() -> None:
+    """Long messages are split into Telegram-safe chunks and sent separately."""
+    long_text = "## Story\n\n" + ("Some paragraph text for the digest.\n\n" * 300)
+    with patch(
+        "src.workers.activities._telegram_request",
+        new_callable=AsyncMock,
+        return_value={"status": "ok", "message_id": 1},
+    ) as mock_request:
+        result = await ActivityEnvironment().run(deliver_telegram_message_activity, long_text)
+
+    assert mock_request.await_count > 1
+    for call in mock_request.call_args_list:
+        assert len(call.args[1]["text"]) <= 4000
+    assert result["status"] == "ok"
+    assert len(result["message_ids"]) == mock_request.await_count
+
+
+async def test_split_message_chunks_one_chunk_for_short_text() -> None:
+    """Short texts are returned unchanged as a single chunk."""
+    chunks = split_message_chunks("## Heading\n\nShort body")
+    assert chunks == ["## Heading\n\nShort body"]
+
+
+async def test_split_message_chunks_respects_max_chars() -> None:
+    """Every chunk stays within the character budget."""
+    text = "\n\n".join(f"Section {i}: " + ("x" * 80) for i in range(100))
+    for chunk in split_message_chunks(text, max_chars=400):
+        assert len(chunk) <= 400
+    assert len(split_message_chunks(text, max_chars=400)) > 1
 
 
 async def test_deliver_telegram_audio_activity_posts_file() -> None:

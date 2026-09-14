@@ -22,7 +22,40 @@ from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
+# Telegram hard limit is 4096 chars per sendMessage; keep a safety margin.
+TELEGRAM_MESSAGE_MAX_CHARS = 4000
 FEED_FETCH_TIMEOUT_SECONDS = 60
+
+
+def split_message_chunks(text: str, max_chars: int = TELEGRAM_MESSAGE_MAX_CHARS) -> list[str]:
+    """Split long text into Telegram-safe message chunks.
+
+    Args:
+        text: The full message body to send.
+        max_chars: Maximum number of characters per chunk.
+
+    Returns:
+        List of trimmed chunks. Prefers splitting at paragraph breaks so each
+        chunk stays coherent when rendered with Telegram's Markdown parse mode.
+    """
+    remaining = text.strip()
+    if len(remaining) <= max_chars:
+        return [remaining] if remaining else []
+
+    chunks: list[str] = []
+    while len(remaining) > max_chars:
+        split_at = remaining.rfind("\n\n", 0, max_chars)
+        if split_at <= 0:
+            split_at = remaining.rfind("\n", 0, max_chars)
+        if split_at <= 0:
+            split_at = max_chars
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 @activity.defn
@@ -301,11 +334,18 @@ async def deliver_telegram_message_activity(
         Dict with status and Telegram message id.
     """
     activity.logger.info("Sending Telegram message")
-    return await _telegram_request(
-        "sendMessage",
-        {"text": strip_emotion_tags(text), "parse_mode": "Markdown"},
-        chat_id=chat_id,
-    )
+    chunks = split_message_chunks(strip_emotion_tags(text))
+    if not chunks:
+        raise ApplicationError("Telegram message is empty", non_retryable=True)
+    results = [
+        await _telegram_request(
+            "sendMessage", {"text": chunk, "parse_mode": "Markdown"}, chat_id=chat_id
+        )
+        for chunk in chunks
+    ]
+    if len(results) == 1:
+        return results[0]
+    return {"status": "ok", "message_ids": [r["message_id"] for r in results]}
 
 
 def _audio_mime_type(audio_path: str) -> str:
