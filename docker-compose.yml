@@ -17,6 +17,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
+      - ./collections.toml:/app/collections.toml:ro
     restart: unless-stopped
 
   worker:
@@ -35,6 +36,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
+      - ./collections.toml:/app/collections.toml:ro
     command: ["python", "-m", "src.workers.run_worker"]
     restart: unless-stopped
 
