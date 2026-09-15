@@ -234,6 +234,7 @@ class CollectionsRepository:
                 "language",
                 "voice",
                 "prompt_template",
+                "custom_prompt",
                 "chat_id",
                 "email_recipients",
                 "enabled",

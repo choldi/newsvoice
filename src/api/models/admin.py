@@ -36,6 +36,10 @@ class CollectionIn(BaseModel):
         default=DEFAULT_PROMPT_TEMPLATE,
         description="Prompt template name from DIGEST_TEMPLATES",
     )
+    custom_prompt: str = Field(
+        default="",
+        description="Optional full custom system prompt overriding prompt_template",
+    )
     chat_id: str | None = Field(
         default=None,
         description="Telegram chat id override; global TELEGRAM_CHAT_ID if empty",

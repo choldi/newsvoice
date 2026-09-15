@@ -133,3 +133,19 @@ def test_build_digest_system_prompt_with_podcast_name_and_behavior() -> None:
     assert "This is ByteCast" in prompt
     assert "usa un tono fresco" in prompt
     assert "Language requirement" in prompt
+
+
+def test_build_digest_system_prompt_custom_overrides_template() -> None:
+    """A non-blank custom_prompt replaces the built-in template entirely."""
+    custom = "You are a financial analyst. Focus exclusively on market risk."
+    prompt = build_digest_system_prompt(None, template="finance", custom_prompt=custom)
+    assert "Finance-specific requirements" not in prompt
+    assert custom in prompt
+
+
+def test_build_digest_system_prompt_custom_ignores_blank() -> None:
+    """Blank/None custom_prompt falls back to the template."""
+    base = build_digest_system_prompt(None, template="finance")
+    assert base == build_digest_system_prompt(None, template="finance", custom_prompt="")
+    assert base == build_digest_system_prompt(None, template="finance", custom_prompt=None)
+    assert base == build_digest_system_prompt(None, template="finance", custom_prompt="   ") == base

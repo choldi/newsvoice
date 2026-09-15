@@ -52,6 +52,10 @@ class CollectionConfig(BaseModel):
         description="Prompt template name from src/core/prompts.py"
         "(e.g. 'default', 'finance', 'investigative')",
     )
+    custom_prompt: str = Field(
+        default="",
+        description="Optional full custom system prompt that overrides prompt_template",
+    )
     chat_id: str | None = Field(
         default=None,
         description="Telegram chat id override; global TELEGRAM_CHAT_ID if empty",

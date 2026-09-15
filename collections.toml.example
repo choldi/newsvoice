@@ -9,6 +9,8 @@
 # - `enabled = false` pauses a collection without deleting its config.
 # - `prompt_template` selects a system prompt from src/core/prompts.py
 #   (built-in: default, finance, health, investigative).
+# - `custom_prompt` (optional) replaces prompt_template entirely: when set, the
+#   collection uses this full custom system prompt instead of any built-in one.
 # - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
 # - `email_recipients` enables HTML email delivery (SMTP from .env) to these
 #   addresses; leave empty (default) to send no email for this collection.
@@ -27,6 +29,7 @@ feed_urls = [
     "https://www.theverge.com/rss/index.xml",
 ]
 prompt_template = "default"
+# custom_prompt = "You are a senior tech editor. Emphasize startups and venture deals."
 # email_recipients = ["you@example.com", "teammate@example.com"]
 
 [[collections]]

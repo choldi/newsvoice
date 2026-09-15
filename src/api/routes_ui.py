@@ -417,6 +417,7 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
             prompt_template=fields.get("prompt_template") or "default",
+            custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
         ).to_config()
@@ -461,6 +462,7 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
             prompt_template=fields.get("prompt_template") or "default",
+            custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
             enabled=fields.get("enabled") == "on",

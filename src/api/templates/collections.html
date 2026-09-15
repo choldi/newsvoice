@@ -82,6 +82,8 @@
         <textarea name="email_recipients">{{ c.email_recipients|join('\n') }}</textarea>
       </div>
     </div>
+    <label>Custom prompt (opcional, sustituye a la plantilla)</label>
+    <textarea name="custom_prompt" rows="4">{{ c.custom_prompt }}</textarea>
     <label>Comportamiento del podcaster</label>
     <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
     <div class="row">
@@ -145,6 +147,8 @@
         <textarea name="email_recipients"></textarea>
       </div>
     </div>
+    <label>Custom prompt (opcional, sustituye a la plantilla)</label>
+    <textarea name="custom_prompt" rows="4"></textarea>
     <label>Comportamiento del podcaster</label>
     <input type="text" name="podcast_behavior">
     <div class="row">

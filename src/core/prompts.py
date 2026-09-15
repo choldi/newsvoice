@@ -121,6 +121,7 @@ def build_digest_system_prompt(
     language: str | None = None,
     template: str | None = None,
     podcast_name: str | None = None,
+    custom_prompt: str | None = None,
 ) -> str:
     """Build the digest system prompt, optionally adding template, behavior, and language.
 
@@ -129,11 +130,17 @@ def build_digest_system_prompt(
         language: ISO 639-1 language code. Empty/None means keep source language.
         template: Per-collection prompt template name. Empty/None means 'default'.
         podcast_name: Name of the podcast. Empty/None means no podcast identity injection.
+        custom_prompt: Full custom system prompt. When provided (non-blank) it
+            replaces the template entirely, overriding prompt_template.
 
     Returns:
         The system prompt for digest generation.
     """
-    prompt = get_digest_template(template)
+    prompt = (
+        custom_prompt.strip()
+        if custom_prompt and custom_prompt.strip()
+        else get_digest_template(template)
+    )
     if podcast_name and podcast_name.strip():
         prompt += PODCAST_NAME_PROMPT.format(podcast_name=podcast_name.strip())
     if behavior and behavior.strip():

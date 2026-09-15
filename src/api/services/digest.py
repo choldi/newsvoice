@@ -92,6 +92,7 @@ class DigestService:
             language=language,
             template=template,
             podcast_name=payload.podcast_name,
+            custom_prompt=payload.custom_prompt,
         )
 
     async def generate_digest(self, payload: DigestIn) -> DigestOut:

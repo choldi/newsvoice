@@ -51,6 +51,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         voice=collection.voice or settings.tts_voice,
         collection=collection.name,
         prompt_template=collection.prompt_template,
+        custom_prompt=collection.custom_prompt,
         chat_id=collection.chat_id,
         email_recipients=collection.email_recipients,
     )

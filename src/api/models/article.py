@@ -73,6 +73,10 @@ class DigestIn(BaseModel):
         description="Name of the per-collection prompt template in src/core/prompts.py. "
         "Defaults to 'default'.",
     )
+    custom_prompt: str | None = Field(
+        default=None,
+        description="Optional full custom system prompt that overrides prompt_template.",
+    )
     collection: str = Field(
         default="default", description="Collection name, used for scoped delivery tracking"
     )

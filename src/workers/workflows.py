@@ -55,6 +55,7 @@ class PipelineConfig:
     voice: str = ""
     collection: str = "default"
     prompt_template: str = "default"
+    custom_prompt: str = ""
     chat_id: str | None = None
     email_recipients: list[str] = field(default_factory=list)
 
@@ -138,6 +139,7 @@ class DigestPipelineWorkflow:
                 "podcast_behavior": config.podcast_behavior,
                 "language": config.language,
                 "prompt_template": config.prompt_template,
+                "custom_prompt": config.custom_prompt or None,
                 "collection": config.collection,
             },
             start_to_close_timeout=DIGEST_TIMEOUT,

@@ -250,6 +250,26 @@ def test_email_recipients_round_trip_via_gui() -> None:
     assert "b@example.com" not in page.text
 
 
+def test_custom_prompt_round_trip_via_gui() -> None:
+    """A saved custom_prompt overrides the template and persists in the form."""
+    client = _ui_client()
+    _login(client)
+    custom = "You are a senior tech editor. Emphasize startups and venture deals."
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "prompt_template": "finance",
+            "custom_prompt": custom,
+        },
+    )
+
+    page = client.get("/ui/collections")
+    assert custom in page.text
+    assert f'<textarea name="custom_prompt" rows="4">{custom}</textarea>' in page.text
+
+
 def test_collections_page_duplicate_conflict() -> None:
     """Creating a duplicate collection flashes an error."""
     client = _ui_client()
