@@ -83,6 +83,27 @@ OmniVoice `POST /api/v1/tts` endpoint, and concatenates the resulting WAV files.
 | **llama.cpp over cloud LLMs** | Privacy, zero cost, local control |
 | **LiteLLM as LLM adapter** | Swap models without changing business code |
 | **Event fingerprinting over pure embeddings** | Faster, deterministic, debuggable first pass |
+| **No zigflow; Temporal Flow as optional desktop viewer** | zigflow's YAML DSL compiles to its own Go worker and would replace the tested Python SDK workflows; Temporal Flow is a read-mostly overlay that needs no code/container changes (see Observability) |
+
+---
+
+## Observability
+
+The built-in **Temporal Web UI** (docker-compose `temporal-ui`, `http://localhost:8080`) is the
+primary debugging surface: worklist, Compact view, and the Timeline view render each workflow's
+event history (activities, timers, retries) without extra tooling.
+
+**Temporal Flow** (`github.com/itaisoudry/temporal-flow-web`, community-contributed, MIT server
+component / proprietary desktop app) is an optional interactive graph overlay for exploring parent
+and child workflows. It is **not** a container or a docker-compose overlay: it is a desktop
+(Electron) application that connects to the self-hosted Temporal UI address (e.g.
+`localhost:8080`) and discovers namespaces automatically. It requires no code changes and no new
+service. To use it from a dev machine other than the server, expose `:8080` (or use an SSH tunnel).
+
+Thoroughly evaluated but deliberately **not** adopted: **zigflow** (CNCF Open Workflow Spec DSL
+that compiles to Temporal workflows with its own Go worker). It would require abandoning the Python
+SDK workflows, `WorkflowEnvironment` tests, and the non-blocking delivery logic in
+`DigestPipelineWorkflow`, with no benefit for a single-workflow pipeline.
 
 ---
 

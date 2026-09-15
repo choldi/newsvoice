@@ -122,6 +122,14 @@ code.
 
 > **Only if Phase 1-5 are stable.**
 
+**Observability decision (evaluated, done):** zigflow was evaluated and rejected
+(its YAML DSL compiles to a separate Go worker, incompatible with the Python SDK
+workflows + `WorkflowEnvironment` tests). Temporal Flow is an optional desktop
+(graph) viewer, not a container overlay: it connects to the existing
+`temporal-ui` at `:8080` with no code or compose changes. Default debugging stays
+on the built-in Temporal UI (Compact + Timeline views). See Architecture.md →
+Observability.
+
 ---
 
 ## ANTI-PATTERNS TO AVOID
