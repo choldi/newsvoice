@@ -1,5 +1,6 @@
 """Integration tests for the admin GUI pages (/ui, Jinja2 + HTMX)."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +19,137 @@ def _ui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(settings, "collections_file", str(tmp_path / "collections.toml"))
     monkeypatch.setattr(settings, "admin_api_token", TOKEN)
     return tmp_path / "collections.toml"
+
+
+OMNI_KEYWORDS = "omni_languages"
+_SELECT_MARKER = '<select name="language"'
+_TTS_FRAGMENT_URL = "/ui/fragments/tts_options"
+
+
+def test_tts_options_fragment_renders_selects_when_enabled() -> None:
+    """The TTS fragment renders selects populated from OmniVoice on demand."""
+    client = _ui_client()
+    _login(client)
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_languages",
+            new_callable=AsyncMock,
+            return_value=["en", "es"],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            return_value=[
+                {"voice_id": "es-mx-male", "language": "es"},
+                {"voice_id": "en-us-female", "language": "en"},
+            ],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        fragment = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=on&language=es&voice=es-mx-male")
+
+    assert fragment.status_code == 200
+    assert '<select name="language"' in fragment.text
+    assert '<option value="es"' in fragment.text
+    assert '<option value="en"' in fragment.text
+    assert 'value="es-mx-male"' in fragment.text
+    assert "selected" in fragment.text
+
+
+def test_tts_options_fragment_renders_text_inputs_when_disabled() -> None:
+    """Without TTS the fragment falls back to free-text language/voice inputs."""
+    client = _ui_client()
+    _login(client)
+
+    fragment = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=&language=es&voice=es-mx-male")
+
+    assert fragment.status_code == 200
+    assert '<select name="language"' not in fragment.text
+    assert '<input type="text" name="language"' in fragment.text
+    assert 'value="es"' in fragment.text
+    assert 'value="es-mx-male"' in fragment.text
+
+
+def test_collections_page_shows_omni_selects_for_tts_collection() -> None:
+    """A collection with TTS enabled renders language/voice as OmniVoice selects."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "cast",
+            "tts_enabled": "on",
+            "language": "es",
+            "voice": "es-mx-male",
+            "feed_urls": "https://a/rss",
+        },
+    )
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_languages",
+            new_callable=AsyncMock,
+            return_value=["en", "es"],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            return_value=[{"voice_id": "es-mx-male", "language": "es"}],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        page = client.get("/ui/collections")
+
+    assert page.status_code == 200
+    assert '<select name="language"' in page.text
+
+
+def test_collections_page_keeps_text_inputs_without_tts() -> None:
+    """A collection without TTS keeps free-text language/voice inputs."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={"name": "texto", "language": "es", "voice": "voz1", "feed_urls": "https://a/rss"},
+    )
+
+    page = client.get("/ui/collections")
+
+    assert page.status_code == 200
+    assert _SELECT_MARKER not in page.text
+    assert '<input type="text" name="language"' in page.text
+    assert 'value="es"' in page.text
+    assert 'value="voz1"' in page.text
+
+
+@pytest.fixture(autouse=True)
+def _no_omni_network() -> Iterator[None]:
+    """Keep the GUI tests offline: stub the OmniVoice service methods."""
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_languages",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        yield
 
 
 def _ui_client() -> TestClient:

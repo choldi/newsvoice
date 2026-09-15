@@ -37,7 +37,7 @@
 
 <div class="card" id="edit-{{ c.name }}">
   <h2>Editar: {{ c.name }}</h2>
-  <form method="post" action="/ui/collections/{{ c.name }}/update">
+  <form method="post" action="/ui/collections/{{ c.name }}/update" id="edit-form-{{ c.name }}">
     <div class="row">
       <div class="col">
         <label>Nombre</label>
@@ -55,13 +55,13 @@
         <label>Podcast name</label>
         <input type="text" name="podcast_name" value="{{ c.podcast_name }}">
       </div>
-      <div class="col">
-        <label>Idioma (es/en/…)</label>
-        <input type="text" name="language" value="{{ c.language }}">
-      </div>
-      <div class="col">
-        <label>Voz (OmniVoice)</label>
-        <input type="text" name="voice" value="{{ c.voice }}">
+      {% set tts_enabled = c.tts_enabled %}
+      {% set current_language = c.language %}
+      {% set current_voice = c.voice %}
+      {% set omni_languages = omni.languages %}
+      {% set omni_voices = omni.voices %}
+      <div id="tts-options-{{ c.name }}" style="display:contents">
+        {% include "partials/_tts_options.html" %}
       </div>
     </div>
     <div class="row">
@@ -82,7 +82,7 @@
     <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
     <div class="row">
       <div class="col">
-        <div class="check"><input type="checkbox" name="tts_enabled" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
+        <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-{{ c.name }}" hx-swap="innerHTML" hx-include="#edit-form-{{ c.name }}" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
         <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
         <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
       </div>
@@ -96,7 +96,7 @@
 
 <div class="card" id="nueva">
   <h2>Nueva colección</h2>
-  <form method="post" action="/ui/collections">
+  <form method="post" action="/ui/collections" id="create-form">
     <div class="row">
       <div class="col">
         <label>Nombre</label>
@@ -114,20 +114,41 @@
         <label>Podcast name</label>
         <input type="text" name="podcast_name">
       </div>
+      {% set tts_enabled = false %}
+      {% set current_language = 'es' %}
+      {% set current_voice = '' %}
+      {% set omni_languages = omni.languages %}
+      {% set omni_voices = omni.voices %}
+      <div id="tts-options-nueva" style="display:contents">
+        {% include "partials/_tts_options.html" %}
+      </div>
+    </div>
+    <div class="row">
       <div class="col">
-        <label>Idioma</label>
-        <input type="text" name="language" value="es">
+        <label>Prompt template</label>
+        <select name="prompt_template">
+          {% for t in ['default', 'finance', 'health', 'investigative'] %}
+          <option value="{{ t }}" {{ 'selected' if t == 'default' else '' }}>{{ t }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col">
-        <label>Voz</label>
-        <input type="text" name="voice">
+        <label>Chat ID (opcional)</label>
+        <input type="text" name="chat_id">
       </div>
     </div>
     <label>Comportamiento del podcaster</label>
     <input type="text" name="podcast_behavior">
-    <div class="check"><input type="checkbox" name="tts_enabled"><label>TTS habilitado</label></div>
-    <div class="check"><input type="checkbox" name="deliver_audio"><label>Entregar audio</label></div>
-    <button type="submit" class="primary">Crear</button>
+    <div class="row">
+      <div class="col">
+        <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-nueva" hx-swap="innerHTML" hx-include="#create-form"><label>TTS habilitado</label></div>
+        <div class="check"><input type="checkbox" name="deliver_audio"><label>Entregar audio</label></div>
+        <div class="check"><input type="checkbox" name="enabled" checked><label>Habilitada</label></div>
+      </div>
+      <div class="col" style="display:flex;align-items:flex-end">
+        <button type="submit" class="primary">Crear</button>
+      </div>
+    </div>
   </form>
 </div>
 {% endblock %}

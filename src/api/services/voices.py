@@ -98,6 +98,20 @@ class VoicesService:
             voices = [v for v in voices if v.get("language") == language]
         return voices
 
+    async def list_languages(self, force: bool = False) -> list[str]:
+        """List unique ISO 639-1 language codes across stock voices.
+
+        Args:
+            force: Bypass the short-TTL cache.
+
+        Returns:
+            Sorted list of unique language codes found in the stock voices
+            (empty if OmniVoice is unreachable).
+        """
+        voices = await self.list_stock(force=force)
+        languages = sorted({str(v["language"]).strip() for v in voices if v.get("language")})
+        return languages
+
     async def list_cloned(self, force: bool = False) -> list[dict[str, Any]]:
         """List cloned voices.
 

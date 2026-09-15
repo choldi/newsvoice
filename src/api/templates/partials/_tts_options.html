@@ -1,0 +1,29 @@
+{% if tts_enabled and omni_languages %}
+<div class="col">
+  <label>Idioma (OmniVoice)</label>
+  <select name="language">
+    {% for lang in omni_languages %}
+    <option value="{{ lang }}" {{ 'selected' if lang == current_language else '' }}>{{ lang }}</option>
+    {% endfor %}
+  </select>
+</div>
+<div class="col">
+  <label>Voz (OmniVoice)</label>
+  <select name="voice">
+    {% for v in omni_voices %}
+    <option value="{{ v.get('voice_id') or v.get('name') }}" {{ 'selected' if (v.get('voice_id') or v.get('name')) == current_voice else '' }}>
+      {{ v.get('voice_id') or v.get('name') }} ({{ v.get('language', '—') }})
+    </option>
+    {% endfor %}
+  </select>
+</div>
+{% else %}
+<div class="col">
+  <label>Idioma (es/en/…)</label>
+  <input type="text" name="language" value="{{ current_language }}">
+</div>
+<div class="col">
+  <label>Voz (OmniVoice)</label>
+  <input type="text" name="voice" value="{{ current_voice }}">
+</div>
+{% endif %}

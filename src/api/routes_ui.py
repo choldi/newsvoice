@@ -65,6 +65,23 @@ def _collections() -> list:
     return CollectionsRepository().list()
 
 
+async def _omni_options() -> dict:
+    """Fetch OmniVoice languages and voices for the TTS dropdowns.
+
+    Returns:
+        Dict with 'languages' (sorted unique codes) and 'voices' (stock +
+        cloned). Empty lists if OmniVoice is unreachable.
+    """
+    service = VoicesService()
+    try:
+        languages = await service.list_languages()
+        voices = await service.list_stock() + await service.list_cloned()
+    except Exception as exc:
+        logger.warning("omni_options_failed", error=str(exc))
+        return {"languages": [], "voices": []}
+    return {"languages": languages, "voices": voices}
+
+
 def _flash(redirect_url: str, message: str, level: str = "ok") -> RedirectResponse:
     """Redirect with a flash message attached as a query parameter.
 
@@ -155,7 +172,15 @@ async def ui_collections(request: Request) -> HTMLResponse:
         HTMLResponse for the collections page.
     """
     collections = _collections()
-    return _render(request, "collections.html", {"collections": collections})
+    omni = (
+        await _omni_options()
+        if any(c.tts_enabled for c in collections)
+        else {
+            "languages": [],
+            "voices": [],
+        }
+    )
+    return _render(request, "collections.html", {"collections": collections, "omni": omni})
 
 
 @router.get("/ui/calendar", response_class=HTMLResponse, include_in_schema=False)
@@ -281,6 +306,39 @@ async def ui_fragment_errors(request: Request) -> HTMLResponse:
         request,
         "partials/_runs.html",
         {"runs": runs, "status_labels": STATUS_LABELS},
+    )
+
+
+@router.get("/ui/fragments/tts_options", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_tts_options(
+    request: Request, tts_enabled: str = "", language: str = "", voice: str = ""
+) -> HTMLResponse:
+    """Render the language/voice fields for a collection form (TTS on/off).
+
+    When ``tts_enabled`` is truthy and OmniVoice is reachable, renders selects
+    populated with real voices; otherwise renders free-text inputs. Used by the
+    collections form via an HTMX swap on the TTS checkbox.
+
+    Args:
+        request: Incoming request.
+        tts_enabled: 'on' when TTS is enabled for the collection.
+        language: Current language value to keep selected.
+        voice: Current voice value to keep selected.
+
+    Returns:
+        HTMLResponse with the _tts_options partial.
+    """
+    omni = await _omni_options() if tts_enabled else {"languages": [], "voices": []}
+    return _render(
+        request,
+        "partials/_tts_options.html",
+        {
+            "tts_enabled": bool(tts_enabled),
+            "omni_languages": omni["languages"],
+            "omni_voices": omni["voices"],
+            "current_language": language,
+            "current_voice": voice,
+        },
     )
 
 
