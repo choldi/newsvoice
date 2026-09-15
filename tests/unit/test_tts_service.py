@@ -167,7 +167,18 @@ async def test_generate_tts_calls_omni_voice_api(
             captured["headers"] = headers
             return FakeResponse(_fake_wav())
 
+    class FakeVoicesService:
+        def __init__(self, base: object = None, key: object = None) -> None:
+            pass
+
+        async def list_stock(self, force: bool = False) -> list[dict]:
+            return [{"voice_id": "es-mx-male", "language": "es", "gender": "male"}]
+
+        async def list_cloned(self, force: bool = False) -> list[dict]:
+            return []
+
     monkeypatch.setattr("src.api.services.tts.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
 
     payload = TTSIn(markdown="contenido de prueba", voice="es-mx-male", language="es")
     result = await service.generate_tts(payload)
@@ -196,6 +207,11 @@ async def test_generate_tts_fragments_and_concatenates(
 
     monkeypatch.setattr(service, "_synthesize", fake_synthesize)
 
+    async def fake_resolve(voice: str) -> str:
+        return voice
+
+    monkeypatch.setattr(service, "_resolve_voice_id", fake_resolve)
+
     long_text = "[calm] Historia uno. Detalles relevantes aqui. " + (
         "Frase extra larga para relleno y fragmentacion. " * 15
     )
@@ -207,3 +223,125 @@ async def test_generate_tts_fragments_and_concatenates(
     assert result.audio_path.endswith(".wav")
     with wave.open(str(result.audio_path), "rb") as reader:
         assert reader.getnframes() == 22050 * len(calls)
+
+
+@pytest.mark.asyncio
+async def test_resolve_voice_id_stock_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_resolve_voice_id returns stock voice IDs unchanged."""
+    service = TTSService()
+
+    class FakeVoicesService:
+        def __init__(self, base: object = None, key: object = None) -> None:
+            pass
+
+        async def list_stock(self, force: bool = False) -> list[dict]:
+            return [
+                {"voice_id": "en-us-male", "language": "en", "gender": "male"},
+                {"voice_id": "es-mx-female", "language": "es", "gender": "female"},
+            ]
+
+        async def list_cloned(self, force: bool = False) -> list[dict]:
+            return []
+
+    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
+    assert await service._resolve_voice_id("en-us-male") == "en-us-male"
+
+
+@pytest.mark.asyncio
+async def test_resolve_voice_id_cloned_maps_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_resolve_voice_id maps a cloned voice name to its OmniVoice UUID."""
+    service = TTSService()
+
+    class FakeVoicesService:
+        def __init__(self, base: object = None, key: object = None) -> None:
+            pass
+
+        async def list_stock(self, force: bool = False) -> list[dict]:
+            return [
+                {"voice_id": "en-us-male", "language": "en", "gender": "male"},
+                {"voice_id": "es-mx-female", "language": "es", "gender": "female"},
+            ]
+
+        async def list_cloned(self, force: bool = False) -> list[dict]:
+            return [
+                {
+                    "id": "fb47cfd4-4c8f-4c20-9974-e2de03e3903a",
+                    "name": "DaveMaleVoiceUS",
+                },
+                {"id": "2acee590-ad88-4c00-9200-968ec538793c", "name": "MelFemVoiceUK"},
+            ]
+
+    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
+    assert (
+        await service._resolve_voice_id("DaveMaleVoiceUS") == "fb47cfd4-4c8f-4c20-9974-e2de03e3903a"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_voice_id_unknown_returns_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_resolve_voice_id falls back to the configured name when not found."""
+    service = TTSService()
+
+    class FakeVoicesService:
+        def __init__(self, base: object = None, key: object = None) -> None:
+            pass
+
+        async def list_stock(self, force: bool = False) -> list[dict]:
+            return []
+
+        async def list_cloned(self, force: bool = False) -> list[dict]:
+            return []
+
+    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
+    assert await service._resolve_voice_id("nueva-voz") == "nueva-voz"
+
+
+@pytest.mark.asyncio
+async def test_generate_tts_cloned_voice_uses_uuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """generate_tts sends the cloned voice UUID when a cloned name is configured."""
+    service = TTSService(cache_dir=str(tmp_path))
+    captured: dict[str, dict] = {}
+
+    class FakeResponse:
+        content = _fake_wav()
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class FakeAsyncClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            captured["json"] = json
+            return FakeResponse()
+
+    class FakeVoicesService:
+        def __init__(self, base: object = None, key: object = None) -> None:
+            pass
+
+        async def list_stock(self, force: bool = False) -> list[dict]:
+            return [{"voice_id": "es-mx-male", "language": "es", "gender": "male"}]
+
+        async def list_cloned(self, force: bool = False) -> list[dict]:
+            return [{"id": "fb47cfd4-uuid", "name": "DaveMaleVoiceUS"}]
+
+    monkeypatch.setattr("src.api.services.tts.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
+
+    payload = TTSIn(markdown="hola desde voz clonada", voice="DaveMaleVoiceUS", language="en")
+    result = await service.generate_tts(payload)
+
+    assert result.cached is False
+    assert captured["json"]["voice_id"] == "fb47cfd4-uuid"
+    assert result.voice == "DaveMaleVoiceUS"

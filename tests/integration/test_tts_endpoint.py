@@ -1,6 +1,7 @@
 """Integration tests for POST /generate_tts endpoint."""
 
 import io
+import json
 import wave
 from pathlib import Path
 
@@ -29,11 +30,14 @@ def fake_omni_voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Patch the httpx client used by TTSService to return a fake WAV."""
 
     class FakeResponse:
-        def __init__(self, content: bytes) -> None:
-            self.content = content
+        def __init__(self, content: bytes | None = None) -> None:
+            self.content = content or b""
 
         def raise_for_status(self) -> None:
             pass
+
+        def json(self) -> list | dict:
+            return json.loads(self.content)
 
     class FakeAsyncClient:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -44,6 +48,12 @@ def fake_omni_voice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
         async def __aexit__(self, *args: object) -> None:
             pass
+
+        async def get(self, url: str, headers: dict | None = None) -> FakeResponse:
+            if url.endswith("/voices/stock"):
+                payload = b'[{"voice_id": "es-mx-male", "language": "es", "gender": "male"}]'
+                return FakeResponse(payload)
+            return FakeResponse(b"[]")
 
         async def post(self, *args: object, **kwargs: object) -> FakeResponse:
             return FakeResponse(_fake_wav())

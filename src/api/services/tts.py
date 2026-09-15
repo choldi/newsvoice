@@ -16,6 +16,7 @@ import httpx
 import structlog
 
 from src.api.models.tts import TTSIn, TTSOut
+from src.api.services.voices import VoicesService
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -161,6 +162,33 @@ class TTSService:
         self._max_chars = settings.tts_max_chars
         self._chunk_max_chars = settings.tts_chunk_max_chars
 
+    async def _resolve_voice_id(self, voice: str) -> str:
+        """Resolve a voice name or stock ID to the OmniVoice voice_id.
+
+        Stock voices are returned unchanged.  For cloned voices the friendly
+        name stored in ``collections.toml`` is looked up via
+        ``GET /voices/cloned`` and resolved to the UUID ``id`` that OmniVoice
+        expects in ``POST /tts``.
+
+        Args:
+            voice: Configured voice name or stock voice id.
+
+        Returns:
+            The ``voice_id`` to send to OmniVoice.
+        """
+        voices_svc = VoicesService(self._api_base_url, self._api_key)
+        stock = await voices_svc.list_stock(force=True)
+        stock_ids = {v.get("voice_id") for v in stock}
+        if voice in stock_ids:
+            return voice
+        cloned = await voices_svc.list_cloned(force=True)
+        for entry in cloned:
+            if entry.get("name") == voice:
+                clone_id = entry.get("id")
+                if clone_id:
+                    return clone_id
+        return voice
+
     async def generate_tts(self, payload: TTSIn) -> TTSOut:
         """Generate (or fetch from cache) a WAV for the given markdown.
 
@@ -181,10 +209,11 @@ class TTSService:
 
         cached = audio_path.exists()
         if not cached:
+            resolved_voice = await self._resolve_voice_id(voice)
             fragments = _fragment_text(speech_text, self._chunk_max_chars)
             chunk_wavs: list[bytes] = []
             for fragment in fragments:
-                chunk_wavs.append(await self._synthesize(fragment, voice, language))
+                chunk_wavs.append(await self._synthesize(fragment, resolved_voice, language))
             audio_bytes = _concat_wav(chunk_wavs)
             audio_path.write_bytes(audio_bytes)
 
