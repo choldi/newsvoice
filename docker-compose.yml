@@ -17,7 +17,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
-      - ./collections.toml:/app/collections.toml:ro
+      - ./collections.toml:/app/collections.toml
     restart: unless-stopped
 
   worker:

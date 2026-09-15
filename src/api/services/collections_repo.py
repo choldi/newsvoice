@@ -13,6 +13,7 @@ write fails fast in tests instead of corrupting production config.
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from pathlib import Path
@@ -174,7 +175,18 @@ class CollectionsRepository:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(document)
-            os.replace(tmp_name, self.path)
+            try:
+                os.replace(tmp_name, self.path)
+            except OSError as exc:
+                if exc.errno == errno.EBUSY:
+                    # The target is a bind-mounted file (docker `./collections.toml`
+                    # volume): rename over a mount point yields EBUSY. Write the
+                    # document in place instead (requires a rw mount).
+                    logger.warning("replace_failed_ebusy_writing_in_place", path=str(self.path))
+                    with self.path.open("w", encoding="utf-8") as handle:
+                        handle.write(document)
+                else:
+                    raise
         finally:
             if os.path.exists(tmp_name):
                 os.unlink(tmp_name)

@@ -1,5 +1,6 @@
 """Unit tests for the collections repository (TOML read/write)."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -150,4 +151,28 @@ def test_write_is_atomic(tmp_path: Path) -> None:
         repo.save_all([_tech(), _tech()])  # duplicate names -> abort
 
     assert path.read_text(encoding="utf-8") == original
+    load_collections.cache_clear()
+
+
+def test_save_all_falls_back_when_replace_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EBUSY on os.replace (bind-mounted file) falls back to in-place write."""
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    repo = CollectionsRepository(str(path))
+
+    original_replace = os.replace
+
+    def busy_replace(src: str, dst: str) -> None:
+        """Simulate a bind-mounted target the same way docker does."""
+        if dst == str(path):
+            raise OSError(16, "Device or resource busy", dst)
+        original_replace(src, dst)
+
+    monkeypatch.setattr("src.api.services.collections_repo.os.replace", busy_replace)
+    repo.save_all([_tech()])
+
+    reloaded = CollectionsRepository(str(path)).list()
+    assert [c.name for c in reloaded] == ["tech"]
     load_collections.cache_clear()
