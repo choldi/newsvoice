@@ -175,7 +175,7 @@ class TemporalAdminService:
         query = (
             f'WorkflowType="DigestPipelineWorkflow" '
             f'AND ExecutionStatus="Running" '
-            f'AND WorkflowId STARTS WITH "{WORKFLOW_PREFIX}{collection_name}-"'
+            f"AND WorkflowId LIKE '{WORKFLOW_PREFIX}{collection_name}-%'"
         )
         client = await self.client()
         count = await client.count_workflows(query=query)

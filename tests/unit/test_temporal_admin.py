@@ -116,9 +116,9 @@ class FakeClient:
         return FakeWorkflowHandle(workflow_id)
 
     async def count_workflows(self, query: str) -> SimpleNamespace:
-        marker = 'WorkflowId STARTS WITH "'
-        prefix = query.split(marker, 1)[1].split('"', 1)[0]
-        name = prefix.removeprefix("digest-pipeline-").rstrip("-")
+        marker = "WorkflowId LIKE '"
+        prefix = query.split(marker, 1)[1].split("'", 1)[0]
+        name = prefix.removeprefix("digest-pipeline-").rstrip("-%")
         return SimpleNamespace(count=int(name in self.running_collections))
 
     async def list_workflows(self, query: str = "", limit: int = 10):  # type: ignore[override]
