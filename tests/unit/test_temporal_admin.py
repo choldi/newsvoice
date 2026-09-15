@@ -1,7 +1,6 @@
 """Unit tests for the Temporal schedule admin service."""
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -84,14 +83,12 @@ class FakeClient:
         self,
         existing: list[str] | None = None,
         executions: list[FakeWorkflow] | None = None,
-        running_collections: set[str] | None = None,
     ) -> None:
         self.schedules: dict[str, FakeHandle] = {
             schedule_id: FakeHandle(schedule_id) for schedule_id in (existing or [])
         }
         self.created: list[str] = []
         self.executions = executions or []
-        self.running_collections = running_collections or set()
         self.started: list[str] = []
         self.workflow_handles: dict[str, FakeWorkflowHandle] = {}
 
@@ -114,12 +111,6 @@ class FakeClient:
         workflow_id = str(kwargs.get("id") or args[0])
         self.started.append(workflow_id)
         return FakeWorkflowHandle(workflow_id)
-
-    async def count_workflows(self, query: str) -> SimpleNamespace:
-        marker = "WorkflowId LIKE '"
-        prefix = query.split(marker, 1)[1].split("'", 1)[0]
-        name = prefix.removeprefix("digest-pipeline-").rstrip("-%")
-        return SimpleNamespace(count=int(name in self.running_collections))
 
     async def list_workflows(self, query: str = "", limit: int = 10):  # type: ignore[override]
         del query
@@ -210,7 +201,12 @@ async def test_trigger_collection_starts_fire_and_forget() -> None:
 @pytest.mark.asyncio
 async def test_is_collection_running() -> None:
     """A running digest workflow for the collection is detected via visibility."""
-    fake = FakeClient(running_collections={"tech"})
+    now = datetime.now(UTC)
+    fake = FakeClient(
+        executions=[
+            FakeWorkflow("digest-pipeline-tech-20260101000000", "running", now, None),
+        ]
+    )
     service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
 
     assert await service.is_collection_running("tech") is True

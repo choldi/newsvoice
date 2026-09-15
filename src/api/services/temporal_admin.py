@@ -172,14 +172,13 @@ class TemporalAdminService:
         Returns:
             True if a workflow is currently running for the collection.
         """
-        query = (
-            f'WorkflowType="DigestPipelineWorkflow" '
-            f'AND ExecutionStatus="Running" '
-            f"AND WorkflowId LIKE '{WORKFLOW_PREFIX}{collection_name}-%'"
-        )
+        query = 'WorkflowType="DigestPipelineWorkflow" AND ExecutionStatus="Running"'
+        prefix = f"{WORKFLOW_PREFIX}{collection_name}-"
         client = await self.client()
-        count = await client.count_workflows(query=query)
-        return count.count > 0
+        async for info in client.list_workflows(query=query, limit=100):
+            if info.id.startswith(prefix):
+                return True
+        return False
 
     async def list_executions(self, limit: int = 50) -> list[dict]:
         """List digest pipeline workflow executions from Temporal visibility.
@@ -188,12 +187,13 @@ class TemporalAdminService:
             limit: Maximum results to return.
 
         Returns:
-            List of dicts with workflow_id, status, start_time, close_time.
+            List of dicts with workflow_id, status, start_time, close_time,
+            sorted by start time descending.
         """
-        query = 'WorkflowType="DigestPipelineWorkflow" ORDER BY StartTime DESC'
+        query = 'WorkflowType="DigestPipelineWorkflow"'
         client = await self.client()
         results: list[dict] = []
-        async for info in client.list_workflows(query=query, limit=limit):
+        async for info in client.list_workflows(query=query, limit=limit * 4):
             results.append(
                 {
                     "workflow_id": info.id,
@@ -202,7 +202,8 @@ class TemporalAdminService:
                     "close_time": info.close_time,
                 }
             )
-        return results
+        results.sort(key=lambda r: r["start_time"] or datetime.min, reverse=True)
+        return results[:limit]
 
     async def terminate_workflow(self, workflow_id: str, reason: str = "GUI") -> None:
         """Terminate a running workflow.
