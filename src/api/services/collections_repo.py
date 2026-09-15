@@ -28,18 +28,35 @@ logger = structlog.get_logger(__name__)
 
 
 def _toml_string(value: str) -> str:
-    """Quote a string as a TOML literal (single-line).
+    """Quote a string as TOML, keeping it on a single line.
+
+    Uses single-quoted literals when the value is safe (no newlines, tabs, or
+    CR); otherwise falls back to a double-quoted basic string with escaped
+    control characters. TOML literal strings cannot contain newlines, so this
+    matters for multi-line fields such as ``custom_prompt``.
 
     Args:
         value: Raw string value.
 
     Returns:
-        A TOML literal string (single-quoted when safe, else escaped).
+        A single-line TOML string literal.
     """
-    if "'" not in value:
+    if not (
+        "'" in value
+        or '"' in value
+        or "\\" in value
+        or "\t" in value
+        or "\n" in value
+        or "\r" in value
+    ):
         return f"'{value}'"
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    escaped = escaped.replace("\t", "\\t").replace("\n", "\\n")
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
     return f'"{escaped}"'
 
 

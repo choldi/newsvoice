@@ -176,3 +176,21 @@ def test_save_all_falls_back_when_replace_busy(
     reloaded = CollectionsRepository(str(path)).list()
     assert [c.name for c in reloaded] == ["tech"]
     load_collections.cache_clear()
+
+
+def test_save_all_multiline_custom_prompt(tmp_path: Path) -> None:
+    """A multi-line custom_prompt survives the TOML round trip as valid TOML."""
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    prompt = 'Opening:\nStart with:\n\n"Tech news!\u201d\n\n{{RSS_ARTICLES}}'
+    tech = _tech().model_copy(update={"prompt_template": "default", "custom_prompt": prompt})
+    CollectionsRepository(str(path)).save_all([tech])
+
+    import tomllib
+
+    with path.open("rb") as fh:
+        tomllib.load(fh)  # must parse without error
+
+    reloaded = CollectionsRepository(str(path)).list()
+    assert reloaded[0].custom_prompt == prompt
+    load_collections.cache_clear()
