@@ -204,6 +204,7 @@ def test_collections_page_lists_created_collection() -> None:
             "feed_urls": "https://example.com/rss\nhttps://example2.com/rss",
             "tts_enabled": "on",
             "podcast_name": "CienciaCast",
+            "email_recipients": "a@example.com\nb@example.com",
         },
         follow_redirects=False,
     )
@@ -213,6 +214,40 @@ def test_collections_page_lists_created_collection() -> None:
     assert "science" in page.text
     assert "CienciaCast" in page.text
     assert "09:30 UTC" in page.text
+
+
+def test_email_recipients_round_trip_via_gui() -> None:
+    """Creating and updating a collection preserves email recipients."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "email_recipients": "a@example.com, b@example.com",
+        },
+    )
+
+    created = client.get("/ui/collections")
+    assert "a@example.com" in created.text
+    assert "b@example.com" in created.text
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "08:00",
+            "feed_urls": "https://a/rss",
+            "email_recipients": "only@example.com\n a@example.com",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert "only@example.com" in page.text
+    assert "b@example.com" not in page.text
 
 
 def test_collections_page_duplicate_conflict() -> None:

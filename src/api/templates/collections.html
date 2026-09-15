@@ -77,6 +77,10 @@
         <label>Chat ID (opcional)</label>
         <input type="text" name="chat_id" value="{{ c.chat_id or '' }}">
       </div>
+      <div class="col">
+        <label>Email recipients (uno por línea, vacío = sin email)</label>
+        <textarea name="email_recipients">{{ c.email_recipients|join('\n') }}</textarea>
+      </div>
     </div>
     <label>Comportamiento del podcaster</label>
     <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
@@ -135,6 +139,10 @@
       <div class="col">
         <label>Chat ID (opcional)</label>
         <input type="text" name="chat_id">
+      </div>
+      <div class="col">
+        <label>Email recipients (uno por línea, vacío = sin email)</label>
+        <textarea name="email_recipients"></textarea>
       </div>
     </div>
     <label>Comportamiento del podcaster</label>

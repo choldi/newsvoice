@@ -82,6 +82,25 @@ async def _omni_options() -> dict:
     return {"languages": languages, "voices": voices}
 
 
+def _split_emails(raw: str) -> list[str]:
+    """Split a form value into a cleaned list of email recipients.
+
+    Accepts newline- or comma-separated addresses; blank entries are dropped.
+
+    Args:
+        raw: Raw textarea value.
+
+    Returns:
+        List of unique, non-empty trimmed addresses.
+    """
+    seen: list[str] = []
+    for addr in raw.replace(",", "\n").splitlines():
+        addr = addr.strip()
+        if addr and addr not in seen:
+            seen.append(addr)
+    return seen
+
+
 def _flash(redirect_url: str, message: str, level: str = "ok") -> RedirectResponse:
     """Redirect with a flash message attached as a query parameter.
 
@@ -399,6 +418,7 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             voice=fields.get("voice", ""),
             prompt_template=fields.get("prompt_template") or "default",
             chat_id=fields.get("chat_id") or None,
+            email_recipients=_split_emails(fields.get("email_recipients", "")),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -442,6 +462,7 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             voice=fields.get("voice", ""),
             prompt_template=fields.get("prompt_template") or "default",
             chat_id=fields.get("chat_id") or None,
+            email_recipients=_split_emails(fields.get("email_recipients", "")),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]
