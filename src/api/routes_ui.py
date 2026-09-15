@@ -1,9 +1,9 @@
 """Admin web GUI routes (Jinja2 + HTMX) for Phase 6.
 
 Self-hosted single-page-ish admin console served under /ui. The GUI renders
-collections, schedule calendar, run history, errors, and voice management. It
-uses the admin REST services directly (no HTTP hop) and HTMX for live partial
-refreshes (run history polling, calendar, tables).
+collections, schedule calendar, executions (merged Temporal + DB runs), and
+voice management. It uses the admin REST services directly (no HTTP hop) and
+HTMX for live partial refreshes (executions polling, calendar, tables).
 
 Auth is handled by the ADMIN_API_TOKEN cookie middleware (`src/api/auth.py`).
 
@@ -55,8 +55,14 @@ async def _form(request: Request) -> dict[str, str]:
 
 STATUS_LABELS = {
     "ok": "ok",
+    "completed": "ok",
     "no_new_articles": "sin novedades",
     "failed": "error",
+    "running": "en ejecución",
+    "terminated": "parado",
+    "canceled": "cancelado",
+    "timed_out": "tiempo agotado",
+    "continued_as_new": "continúa como nuevo",
 }
 
 
@@ -107,7 +113,7 @@ def _flash(redirect_url: str, message: str, level: str = "ok") -> RedirectRespon
     Args:
         redirect_url: Target page URL.
         message: Message to show to the user.
-        level: Flash level ('ok' or 'error').
+        level: Flash level ('ok', 'warn' or 'error').
 
     Returns:
         A RedirectResponse carrying the flash in its query string.
@@ -228,48 +234,130 @@ async def ui_calendar(request: Request) -> HTMLResponse:
     )
 
 
-async def _runs_rows(
-    collection: str | None = None, run_status: str | None = None, limit: int = 50
-) -> list[dict]:
-    """Fetch recent runs, newest first.
+def _collection_from_workflow_id(workflow_id: str, known: list[str]) -> str:
+    """Best-effort parse of the collection name from a digest workflow id.
+
+    Matches the longest known collection name that prefixes the id suffix;
+    falls back to stripping the trailing timestamp.
 
     Args:
-        collection: Optional collection filter.
-        run_status: Optional status filter.
-        limit: Max rows.
+        workflow_id: Temporal workflow id ('digest-pipeline-<name>-<ts>').
+        known: Known collection names.
 
     Returns:
-        List of run dicts.
+        The inferred collection name.
     """
-    return await RunsRepository().list_runs(
-        collection=collection, status_filter=run_status, limit=limit
-    )
+    suffix = workflow_id.removeprefix("digest-pipeline-")
+    for name in sorted(known, key=len, reverse=True):
+        if suffix == name or suffix.startswith(f"{name}-"):
+            return name
+    return suffix.rsplit("-", 1)[0]
 
 
-@router.get("/ui/history", response_class=HTMLResponse, include_in_schema=False)
-async def ui_history(request: Request) -> HTMLResponse:
-    """Render the run history page.
+def _fmt_utc(value: datetime | None) -> str:
+    """Format a UTC datetime for display.
+
+    Args:
+        value: Datetime or None.
+
+    Returns:
+        'YYYY-MM-DD HH:MM UTC' or an empty string when None.
+    """
+    if value is None:
+        return ""
+    return f"{value.strftime('%Y-%m-%d %H:%M')} UTC"
+
+
+def _fmt_iso(value: str | None) -> str:
+    """Format an ISO timestamp string (as stored in the DB) for display.
+
+    Args:
+        value: ISO string like '2026-09-14T08:00:00+00:00' or None.
+
+    Returns:
+        'YYYY-MM-DD HH:MM UTC' or an empty string when None.
+    """
+    if not value:
+        return ""
+    return f"{value[:16].replace('T', ' ')} UTC"
+
+
+async def _executions(limit: int = 50) -> list[dict]:
+    """Merge Temporal visibility executions with the DB run history.
+
+    Inventory of the digest pipeline's executions: Temporal visibility provides
+    the real status (running/completed/failed/terminated/...) while the DB adds
+    article/cluster counts, digest preview and stored error messages.
+
+    Args:
+        limit: Maximum number of Temporal executions to fetch.
+
+    Returns:
+        Merged list of run dicts, newest first.
+    """
+    service = TemporalAdminService()
+    known = [c.name for c in _collections()]
+    try:
+        execs = await service.list_executions(limit=limit)
+    except Exception as exc:
+        logger.warning("list_executions_failed", error=str(exc))
+        execs = []
+
+    db_runs = await RunsRepository().list_runs(limit=300)
+    db_by_wf = {r["workflow_id"]: r for r in db_runs}
+
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for exec in execs:
+        wf = exec["workflow_id"]
+        seen.add(wf)
+        db = db_by_wf.get(wf, {})
+        merged.append(
+            {
+                "workflow_id": wf,
+                "collection": db.get("collection") or _collection_from_workflow_id(wf, known),
+                "status": exec["status"],
+                "start_label": _fmt_utc(exec["start_time"]),
+                "end_label": _fmt_utc(exec["close_time"]),
+                "article_count": db.get("article_count"),
+                "cluster_count": db.get("cluster_count"),
+                "digest_preview": db.get("digest_preview"),
+                "error": db.get("error"),
+                "run_id": db.get("id"),
+            }
+        )
+    for wf, db in db_by_wf.items():
+        if wf in seen:
+            continue
+        merged.append(
+            {
+                "workflow_id": wf,
+                "collection": db.get("collection"),
+                "status": db["status"],
+                "start_label": _fmt_iso(db.get("started_at")),
+                "end_label": _fmt_iso(db.get("completed_at")),
+                "article_count": db.get("article_count"),
+                "cluster_count": db.get("cluster_count"),
+                "digest_preview": db.get("digest_preview"),
+                "error": db.get("error"),
+                "run_id": db.get("id"),
+            }
+        )
+    merged.sort(key=lambda r: r["start_label"], reverse=True)
+    return merged
+
+
+@router.get("/ui/runs", response_class=HTMLResponse, include_in_schema=False)
+async def ui_runs(request: Request) -> HTMLResponse:
+    """Render the executions page (merged Temporal + DB runs).
 
     Args:
         request: Incoming request.
 
     Returns:
-        HTMLResponse for the history page.
+        HTMLResponse for the executions page.
     """
-    return _render(request, "history.html", {})
-
-
-@router.get("/ui/errors", response_class=HTMLResponse, include_in_schema=False)
-async def ui_errors(request: Request) -> HTMLResponse:
-    """Render the errors page (failed runs).
-
-    Args:
-        request: Incoming request.
-
-    Returns:
-        HTMLResponse for the errors page.
-    """
-    return _render(request, "errors.html", {})
+    return _render(request, "runs.html", {})
 
 
 @router.get("/ui/voices", response_class=HTMLResponse, include_in_schema=False)
@@ -288,44 +376,72 @@ async def ui_voices(request: Request) -> HTMLResponse:
     return _render(request, "voices.html", {"stock": stock, "cloned": cloned})
 
 
-@router.get("/ui/fragments/history", response_class=HTMLResponse, include_in_schema=False)
-async def ui_fragment_history(
-    request: Request, collection: str | None = None, run_status: str | None = None
+@router.get("/ui/fragments/runs", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_runs(request: Request) -> HTMLResponse:
+    """Render the executions table fragment for HTMX polling.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the executions table body.
+    """
+    runs = await _executions()
+    return _render(
+        request,
+        "partials/_executions.html",
+        {"runs": runs, "status_labels": STATUS_LABELS},
+    )
+
+
+@router.get("/ui/fragments/run_detail", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_run_detail(
+    request: Request, workflow_id: str, run_id: int | None = None
 ) -> HTMLResponse:
-    """Render the run history rows fragment for HTMX polling.
+    """Render the detail panel for a single execution.
 
     Args:
         request: Incoming request.
-        collection: Optional collection filter.
-        run_status: Optional status filter.
+        workflow_id: Temporal workflow id.
+        run_id: Optional DB row id.
 
     Returns:
-        HTMLResponse with the history table body.
+        HTMLResponse with the run detail partial.
     """
-    runs = await _runs_rows(collection=collection, run_status=run_status, limit=50)
-    return _render(
-        request,
-        "partials/_runs.html",
-        {"runs": runs, "status_labels": STATUS_LABELS},
-    )
+    detail: dict = {
+        "error": None,
+        "digest_preview": None,
+        "article_count": None,
+        "cluster_count": None,
+    }
+    if run_id:
+        row = await RunsRepository().get_run(run_id)
+        if row:
+            detail = {**detail, **row}
+    if not detail.get("error"):
+        try:
+            detail["error"] = await TemporalAdminService().execution_error(workflow_id)
+        except Exception as exc:
+            logger.warning("execution_error_failed", workflow_id=workflow_id, error=str(exc))
+    return _render(request, "partials/_run_detail.html", {"workflow_id": workflow_id, **detail})
 
 
-@router.get("/ui/fragments/errors", response_class=HTMLResponse, include_in_schema=False)
-async def ui_fragment_errors(request: Request) -> HTMLResponse:
-    """Render the failed-runs fragment for HTMX polling.
+@router.post("/ui/runs/{workflow_id}/terminate", include_in_schema=False)
+async def ui_terminate_run(workflow_id: str) -> RedirectResponse:
+    """Terminate a running execution from the GUI.
 
     Args:
-        request: Incoming request.
+        workflow_id: Temporal workflow id to terminate.
 
     Returns:
-        HTMLResponse with the failed-runs table body.
+        Redirect to the executions page with a flash.
     """
-    runs = await _runs_rows(run_status="failed", limit=50)
-    return _render(
-        request,
-        "partials/_runs.html",
-        {"runs": runs, "status_labels": STATUS_LABELS},
-    )
+    try:
+        await TemporalAdminService().terminate_workflow(workflow_id)
+    except Exception as exc:
+        logger.error("ui_terminate_failed", workflow_id=workflow_id, error=str(exc), exc_info=True)
+        return _flash("/ui/runs", f"Fallo al detener: {exc}", "error")
+    return _flash("/ui/runs", f"Ejecución '{workflow_id}' detenida")
 
 
 @router.get("/ui/fragments/tts_options", response_class=HTMLResponse, include_in_schema=False)
@@ -497,22 +613,33 @@ async def ui_delete_collection(name: str) -> RedirectResponse:
 async def ui_run_collection(name: str) -> RedirectResponse:
     """Trigger a collection run immediately.
 
+    If a workflow for the collection is already running, does not start a new
+    one and flashes a notice instead.
+
     Args:
         name: Collection name.
 
     Returns:
-        Redirect to history with a flash.
+        Redirect to the collections page with a flash.
     """
     repo = CollectionsRepository()
     collection = repo.get(name)
     if collection is None:
         return _flash("/ui/collections", f"Colección '{name}' no encontrada", "error")
+    service = TemporalAdminService()
     try:
-        workflow_id = await TemporalAdminService().trigger_collection(collection)
+        running = await service.is_collection_running(collection.name)
+    except Exception as exc:
+        logger.error("ui_run_check_failed", collection=name, error=str(exc), exc_info=True)
+        return _flash("/ui/collections", f"Fallo al comprobar la ejecución: {exc}", "error")
+    if running:
+        return _flash("/ui/collections", f"Ya hay una ejecución en curso para '{name}'", "warn")
+    try:
+        workflow_id = await service.trigger_collection(collection)
     except Exception as exc:
         logger.error("ui_run_failed", collection=name, error=str(exc), exc_info=True)
         return _flash("/ui/collections", f"Fallo al lanzar: {exc}", "error")
-    return _flash("/ui/history", f"Lanzada: {workflow_id}")
+    return _flash("/ui/collections", f"Workflow lanzado: {workflow_id}")
 
 
 @router.post("/ui/schedules/resync", include_in_schema=False)

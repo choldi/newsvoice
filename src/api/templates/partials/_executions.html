@@ -1,0 +1,45 @@
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Inicio</th>
+        <th>Colección</th>
+        <th>Estado</th>
+        <th>Art.</th>
+        <th>Clústeres</th>
+        <th>Workflow</th>
+        <th>Detalles</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td class="muted">{{ r.start_label }}</td>
+        <td>{{ r.collection }}</td>
+        <td>
+          <span class="badge {{ r.status }}">{{ status_labels.get(r.status, r.status) }}</span>
+          {% if r.status == 'running' %}
+          <form method="post" action="/ui/runs/{{ r.workflow_id }}/terminate" style="display:inline"
+                onsubmit="return confirm('¿Detener la ejecución {{ r.workflow_id }}?')">
+            <button type="submit" class="btn danger" style="margin:0;padding:2px 8px;font-size:11px">Detener</button>
+          </form>
+          {% endif %}
+        </td>
+        <td>{{ r.article_count if r.article_count is not none else '—' }}</td>
+        <td>{{ r.cluster_count if r.cluster_count is not none else '—' }}</td>
+        <td class="muted">{{ r.workflow_id }}</td>
+        <td>
+          <button class="btn" style="margin:0;padding:2px 8px;font-size:11px"
+                  hx-get="/ui/fragments/run_detail?workflow_id={{ r.workflow_id }}{% if r.run_id %}&run_id={{ r.run_id }}{% endif %}"
+                  hx-target="#detail-{{ loop.index }}" hx-swap="innerHTML">Ver</button>
+        </td>
+      </tr>
+      <tr id="detail-{{ loop.index }}" class="run-detail-row">
+        <td colspan="7" style="padding:0"></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">Sin ejecuciones registradas</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

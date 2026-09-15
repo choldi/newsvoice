@@ -33,12 +33,25 @@
       padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; border: 1px solid var(--border);
     }
     .flash.ok { border-color: var(--ok); color: var(--ok); }
+    .flash.warn { border-color: var(--warn); color: var(--warn); }
     .flash.error { border-color: var(--err); color: var(--err); }
     .card {
       background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
       padding: 16px; margin-bottom: 16px;
     }
     .card h2 { font-size: 15px; margin: 0 0 12px; }
+    details.card { padding: 0; }
+    details.card summary {
+      list-style: none; cursor: pointer; padding: 14px 16px; border-radius: 8px;
+      user-select: none;
+    }
+    details.card summary::-webkit-details-marker { display: none; }
+    details.card summary .triangle {
+      display: inline-block; margin-right: 8px; transition: transform .15s; color: var(--muted);
+    }
+    details.card[open] summary { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+    details.card[open] summary .triangle { transform: rotate(90deg); }
+    details.card > .inner { padding: 16px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
@@ -62,8 +75,12 @@
     .btn.danger { border-color: var(--err); color: var(--err); }
     .btn.danger:hover { background: var(--err); color: #fff; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
-    .badge.ok { background: rgba(53,198,107,.15); color: var(--ok); }
+    .badge.ok, .badge.completed { background: rgba(53,198,107,.15); color: var(--ok); }
     .badge.failed { background: rgba(239,97,97,.15); color: var(--err); }
+    .badge.running { background: rgba(79,140,255,.15); color: var(--accent); }
+    .badge.terminated { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.canceled { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.timed_out { background: rgba(239,97,97,.15); color: var(--err); }
     .badge.no_new_articles { background: rgba(139,147,163,.15); color: var(--muted); }
     .muted { color: var(--muted); }
     .tags { margin-bottom: 16px; }
@@ -82,8 +99,7 @@
       <div class="brand">News Engine</div>
       <a class="nav {{ 'active' if active == 'collections' else '' }}" href="/ui/collections">Colecciones</a>
       <a class="nav {{ 'active' if active == 'calendar' else '' }}" href="/ui/calendar">Calendario</a>
-      <a class="nav {{ 'active' if active == 'history' else '' }}" href="/ui/history">Historial</a>
-      <a class="nav {{ 'active' if active == 'errors' else '' }}" href="/ui/errors">Errores</a>
+      <a class="nav {{ 'active' if active == 'runs' else '' }}" href="/ui/runs">Ejecuciones</a>
       <a class="nav {{ 'active' if active == 'voices' else '' }}" href="/ui/voices">Voces</a>
       <form method="post" action="/ui/logout" style="margin-top:24px">
         <button type="submit" class="danger">Cerrar sesión</button>

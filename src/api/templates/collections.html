@@ -3,101 +3,102 @@
 {% block app %}
 <h1>Colecciones</h1>
 <div class="tags">
-  <a class="btn" href="/ui/collections#nueva">Nueva colección</a>
+  <a class="btn" href="#nueva">Nueva colección</a>
   <form method="post" action="/ui/schedules/resync" style="display:inline">
     <button type="submit" class="primary">Resincronizar schedules</button>
   </form>
 </div>
 
 {% for c in collections %}
-<div class="card" id="coleccion-{{ c.name }}">
-  <h2>
-    {{ c.name }}
-    {% if not c.enabled %}<span class="badge no_new_articles">pausada</span>{% endif %}
-    {% if c.tts_enabled %}<span class="badge ok">🎙 TTS</span>{% endif %}
-  </h2>
-  <p class="muted" style="margin:0 0 8px">
-    Hora: <strong>{{ c.time }} UTC</strong> ·
-    Feeds: <strong>{{ c.feed_urls|length }}</strong> ·
-    Idioma: <strong>{{ c.language or '—' }}</strong> ·
-    Voz: <strong>{{ c.voice or '—' }}</strong>
-  </p>
-  <p class="muted" style="margin:0 0 12px">
-    {{ '🎧 ' ~ c.podcast_name if c.podcast_name else 'Podcast: —' }}{% if c.podcast_behavior %} · <em>{{ c.podcast_behavior|truncate(60) }}</em>{% endif %}
-  </p>
-  <form method="post" action="/ui/collections/{{ c.name }}/run" style="display:inline">
-    <button type="submit" class="primary">Ejecutar ahora</button>
-  </form>
-  <a class="btn" href="#edit-{{ c.name }}">Editar</a>
-  <form method="post" action="/ui/collections/{{ c.name }}/delete" style="display:inline"
-        onsubmit="return confirm('¿Eliminar la colección {{ c.name }}?')">
-    <button type="submit" class="danger">Eliminar</button>
-  </form>
-</div>
-
-<div class="card" id="edit-{{ c.name }}">
-  <h2>Editar: {{ c.name }}</h2>
-  <form method="post" action="/ui/collections/{{ c.name }}/update" id="edit-form-{{ c.name }}">
-    <div class="row">
-      <div class="col">
-        <label>Nombre</label>
-        <input type="text" name="new_name" value="{{ c.name }}" required>
+<details class="card" id="d-{{ c.name }}">
+  <summary>
+    <span class="triangle">▶</span>
+    <span style="flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <strong>{{ c.name }}</strong>
+      {% if not c.enabled %}<span class="badge no_new_articles">pausada</span>{% endif %}
+      {% if c.tts_enabled %}<span class="badge ok">🎙 TTS</span>{% endif %}
+      <span class="muted" style="font-size:13px">
+        Hora: {{ c.time }} UTC ·
+        Feeds: {{ c.feed_urls|length }} ·
+        Idioma: {{ c.language or '—' }} ·
+        Voz: {{ c.voice or '—' }}
+      </span>
+    </span>
+    <span style="display:flex;gap:4px;align-items:center">
+      <form method="post" action="/ui/collections/{{ c.name }}/run" onclick="event.stopPropagation()" style="display:inline">
+        <button type="submit" class="btn primary" style="margin:0">Ejecutar ahora</button>
+      </form>
+      <button class="btn"
+              onclick="event.preventDefault();event.stopPropagation();var d=document.getElementById('d-{{ c.name }}');d.open=true;setTimeout(function(){var el=document.getElementById('edit-form-{{ c.name }}');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});},100);">Editar</button>
+      <form method="post" action="/ui/collections/{{ c.name }}/delete" onclick="event.stopPropagation()" style="display:inline"
+            onsubmit="return confirm('¿Eliminar la colección {{ c.name }}?')">
+        <button type="submit" class="btn danger" style="margin:0">Eliminar</button>
+      </form>
+    </span>
+  </summary>
+  <div class="inner">
+    <form method="post" action="/ui/collections/{{ c.name }}/update" id="edit-form-{{ c.name }}">
+      <div class="row">
+        <div class="col">
+          <label>Nombre</label>
+          <input type="text" name="new_name" value="{{ c.name }}" required>
+        </div>
+        <div class="col">
+          <label>Hora (HH:MM UTC)</label>
+          <input type="text" name="time" value="{{ c.time }}" required>
+        </div>
       </div>
-      <div class="col">
-        <label>Hora (HH:MM UTC)</label>
-        <input type="text" name="time" value="{{ c.time }}" required>
+      <label>Feed URLs (una por línea)</label>
+      <textarea name="feed_urls">{{ c.feed_urls|join('\n') }}</textarea>
+      <div class="row">
+        <div class="col">
+          <label>Podcast name</label>
+          <input type="text" name="podcast_name" value="{{ c.podcast_name }}">
+        </div>
+        {% set tts_enabled = c.tts_enabled %}
+        {% set current_language = c.language %}
+        {% set current_voice = c.voice %}
+        {% set omni_languages = omni.languages %}
+        {% set omni_voices = omni.voices %}
+        <div id="tts-options-{{ c.name }}" style="display:contents">
+          {% include "partials/_tts_options.html" %}
+        </div>
       </div>
-    </div>
-    <label>Feed URLs (una por línea)</label>
-    <textarea name="feed_urls">{{ c.feed_urls|join('\n') }}</textarea>
-    <div class="row">
-      <div class="col">
-        <label>Podcast name</label>
-        <input type="text" name="podcast_name" value="{{ c.podcast_name }}">
+      <div class="row">
+        <div class="col">
+          <label>Prompt template</label>
+          <select name="prompt_template">
+            {% for t in ['default', 'finance', 'health', 'investigative'] %}
+            <option value="{{ t }}" {{ 'selected' if c.prompt_template == t else '' }}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col">
+          <label>Chat ID (opcional)</label>
+          <input type="text" name="chat_id" value="{{ c.chat_id or '' }}">
+        </div>
+        <div class="col">
+          <label>Email recipients (uno por línea, vacío = sin email)</label>
+          <textarea name="email_recipients">{{ c.email_recipients|join('\n') }}</textarea>
+        </div>
       </div>
-      {% set tts_enabled = c.tts_enabled %}
-      {% set current_language = c.language %}
-      {% set current_voice = c.voice %}
-      {% set omni_languages = omni.languages %}
-      {% set omni_voices = omni.voices %}
-      <div id="tts-options-{{ c.name }}" style="display:contents">
-        {% include "partials/_tts_options.html" %}
+      <label>Custom prompt (opcional, sustituye a la plantilla)</label>
+      <textarea name="custom_prompt" rows="4">{{ c.custom_prompt }}</textarea>
+      <label>Comportamiento del podcaster</label>
+      <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
+      <div class="row">
+        <div class="col">
+          <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-{{ c.name }}" hx-swap="innerHTML" hx-include="#edit-form-{{ c.name }}" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
+          <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
+          <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
+        </div>
+        <div class="col" style="display:flex;align-items:flex-end">
+          <button type="submit" class="primary">Guardar</button>
+        </div>
       </div>
-    </div>
-    <div class="row">
-      <div class="col">
-        <label>Prompt template</label>
-        <select name="prompt_template">
-          {% for t in ['default', 'finance', 'health', 'investigative'] %}
-          <option value="{{ t }}" {{ 'selected' if c.prompt_template == t else '' }}>{{ t }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col">
-        <label>Chat ID (opcional)</label>
-        <input type="text" name="chat_id" value="{{ c.chat_id or '' }}">
-      </div>
-      <div class="col">
-        <label>Email recipients (uno por línea, vacío = sin email)</label>
-        <textarea name="email_recipients">{{ c.email_recipients|join('\n') }}</textarea>
-      </div>
-    </div>
-    <label>Custom prompt (opcional, sustituye a la plantilla)</label>
-    <textarea name="custom_prompt" rows="4">{{ c.custom_prompt }}</textarea>
-    <label>Comportamiento del podcaster</label>
-    <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
-    <div class="row">
-      <div class="col">
-        <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-{{ c.name }}" hx-swap="innerHTML" hx-include="#edit-form-{{ c.name }}" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
-        <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
-        <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
-      </div>
-      <div class="col" style="display:flex;align-items:flex-end">
-        <button type="submit" class="primary">Guardar</button>
-      </div>
-    </div>
-  </form>
-</div>
+    </form>
+  </div>
+</details>
 {% endfor %}
 
 <div class="card" id="nueva">

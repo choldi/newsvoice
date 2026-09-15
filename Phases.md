@@ -113,7 +113,7 @@ historical notes describing the migration itself.
 - [x] FastAPI + HTMX or simple React frontend
 - [x] Auth (basic token)
 - [x] CRUD for collections and feeds
-- [x] History viewer with re-deliver button
+- [x] History + executions viewer with live Temporal status and stop button
 
 **Success criteria:** A non-technical user can add an RSS feed without touching
 code.

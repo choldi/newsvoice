@@ -1,0 +1,24 @@
+<div style="background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin:6px 0;font-size:13px">
+  <div class="muted" style="margin-bottom:6px">
+    <strong>{{ workflow_id }}</strong>
+  </div>
+  {% if error %}
+  <div class="muted" style="margin-bottom:6px">Error:</div>
+  <pre style="color:var(--err)">{{ error }}</pre>
+  {% endif %}
+  {% if digest_preview %}
+  <div class="muted" style="margin-bottom:6px">Resumen:</div>
+  <pre>{{ digest_preview }}</pre>
+  {% endif %}
+  {% if article_count is not none or cluster_count is not none %}
+  <div class="muted">
+    Artículos: <strong>{{ article_count if article_count is not none else '—' }}</strong> ·
+    Clústeres: <strong>{{ cluster_count if cluster_count is not none else '—' }}</strong>
+    {% if started_at %} · Inicio: <strong>{{ started_at[:19].replace('T', ' ') }} UTC</strong>{% endif %}
+    {% if completed_at %} · Fin: <strong>{{ completed_at[:19].replace('T', ' ') }} UTC</strong>{% endif %}
+  </div>
+  {% endif %}
+  {% if not error and not digest_preview and article_count is none and cluster_count is none %}
+  <span class="muted">Sin detalles adicionales.</span>
+  {% endif %}
+</div>

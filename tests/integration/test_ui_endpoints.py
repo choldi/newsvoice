@@ -329,19 +329,67 @@ def test_calendar_page_renders() -> None:
     assert "tech" in page.text
 
 
-def test_history_and_errors_pages_render() -> None:
-    """History and errors pages load and their fragments refresh."""
+def test_runs_page_renders() -> None:
+    """Runs page loads and its fragment renders the executions table."""
     client = _ui_client()
     _login(client)
 
-    history = client.get("/ui/history")
-    assert history.status_code == 200
-    errors = client.get("/ui/errors")
-    assert errors.status_code == 200
+    page = client.get("/ui/runs")
+    assert page.status_code == 200
+    assert "Ejecuciones" in page.text
 
-    fragment = client.get("/ui/fragments/history")
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.list_executions",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        fragment = client.get("/ui/fragments/runs")
+
     assert fragment.status_code == 200
     assert "Sin ejecuciones registradas" in fragment.text
+
+
+def test_runs_fragment_shows_running_execution_with_stop_button() -> None:
+    """A running execution shows the running badge and a Detener button."""
+    from datetime import UTC, datetime
+
+    client = _ui_client()
+    _login(client)
+    now = datetime(2026, 9, 15, 8, 0, tzinfo=UTC)
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.list_executions",
+        new_callable=AsyncMock,
+        return_value=[
+            {
+                "workflow_id": "digest-pipeline-tech-20260915080000",
+                "status": "running",
+                "start_time": now,
+                "close_time": None,
+            }
+        ],
+    ):
+        fragment = client.get("/ui/fragments/runs")
+
+    assert fragment.status_code == 200
+    assert "en ejecución" in fragment.text
+    assert "Detener" in fragment.text
+
+
+def test_terminate_run_endpoint() -> None:
+    """POST /ui/runs/{id}/terminate terminates and redirects with a flash."""
+    client = _ui_client()
+    _login(client)
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.terminate_workflow",
+        new_callable=AsyncMock,
+    ):
+        response = client.post(
+            "/ui/runs/digest-pipeline-tech-20260915080000/terminate",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert "detenida" in response.headers["location"].lower()
 
 
 def test_voices_page_renders_with_mock_service() -> None:
@@ -373,15 +421,46 @@ def test_run_now_button_triggers_pipeline() -> None:
     _login(client)
     client.post("/ui/collections", data={"name": "tech", "feed_urls": "https://a/rss"})
 
-    with patch(
-        "src.api.routes_ui.TemporalAdminService.trigger_collection",
-        new_callable=AsyncMock,
-        return_value="digest-pipeline-tech-20260101000000",
+    with (
+        patch(
+            "src.api.routes_ui.TemporalAdminService.is_collection_running",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "src.api.routes_ui.TemporalAdminService.trigger_collection",
+            new_callable=AsyncMock,
+            return_value="digest-pipeline-tech-20260101000000",
+        ),
     ):
         response = client.post("/ui/collections/tech/run", follow_redirects=False)
 
     assert response.status_code == 302
-    assert "workflow" in response.headers["location"] or "history" in response.headers["location"]
+    assert "workflow%20lanzado" in response.headers["location"].lower()
+
+
+def test_run_now_skips_when_already_running() -> None:
+    """POST run while already running does not start a new workflow."""
+    client = _ui_client()
+    _login(client)
+    client.post("/ui/collections", data={"name": "tech", "feed_urls": "https://a/rss"})
+
+    with (
+        patch(
+            "src.api.routes_ui.TemporalAdminService.is_collection_running",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "src.api.routes_ui.TemporalAdminService.trigger_collection",
+            new_callable=AsyncMock,
+        ) as trigger,
+    ):
+        response = client.post("/ui/collections/tech/run", follow_redirects=False)
+
+    assert response.status_code == 302
+    trigger.assert_not_awaited()
+    assert "ejecuci%c3%b3n%20en%20curso" in response.headers["location"].lower()
 
 
 def test_resync_button() -> None:

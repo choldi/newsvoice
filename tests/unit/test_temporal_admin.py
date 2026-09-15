@@ -1,9 +1,11 @@
 """Unit tests for the Temporal schedule admin service."""
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from temporalio.client import RPCError
+from temporalio.client import RPCError, WorkflowExecutionStatus
 from temporalio.service import RPCStatusCode
 
 from src.api.services.temporal_admin import TemporalAdminService
@@ -31,14 +33,67 @@ class FakeHandle:
         self.deleted = True
 
 
-class FakeClient:
-    """Fake Temporal client supporting list/create/update/delete schedules."""
+class FakeWorkflow:
+    """Minimal WorkflowExecution stand-in from Temporal visibility."""
 
-    def __init__(self, existing: list[str] | None = None) -> None:
+    _STATUS = {
+        "running": WorkflowExecutionStatus.RUNNING,
+        "completed": WorkflowExecutionStatus.COMPLETED,
+        "failed": WorkflowExecutionStatus.FAILED,
+        "terminated": WorkflowExecutionStatus.TERMINATED,
+    }
+
+    def __init__(
+        self,
+        workflow_id: str,
+        status: str,
+        start_time: datetime,
+        close_time: datetime | None,
+    ) -> None:
+        self.id = workflow_id
+        self.status = self._STATUS[status]
+        self.start_time = start_time
+        self.close_time = close_time
+
+
+class FakeWorkflowHandle:
+    """Minimal WorkflowHandle stand-in supporting terminate/result."""
+
+    def __init__(
+        self, workflow_id: str, raise_on_result: bool = False, error: str = "boom"
+    ) -> None:
+        self.workflow_id = workflow_id
+        self.terminated_reason: str | None = None
+        self.result_called = False
+        self._raise_on_result = raise_on_result
+        self._error = error
+
+    async def terminate(self, reason: str = "") -> None:
+        self.terminated_reason = reason
+
+    async def result(self) -> None:
+        self.result_called = True
+        if self._raise_on_result:
+            raise RuntimeError(self._error)
+
+
+class FakeClient:
+    """Fake Temporal client supporting schedules, workflows and visibility."""
+
+    def __init__(
+        self,
+        existing: list[str] | None = None,
+        executions: list[FakeWorkflow] | None = None,
+        running_collections: set[str] | None = None,
+    ) -> None:
         self.schedules: dict[str, FakeHandle] = {
             schedule_id: FakeHandle(schedule_id) for schedule_id in (existing or [])
         }
         self.created: list[str] = []
+        self.executions = executions or []
+        self.running_collections = running_collections or set()
+        self.started: list[str] = []
+        self.workflow_handles: dict[str, FakeWorkflowHandle] = {}
 
     async def list_schedules(self):  # type: ignore[override]
         for handle in list(self.schedules.values()):
@@ -54,6 +109,28 @@ class FakeClient:
         self.schedules[schedule_id] = handle
         self.created.append(schedule_id)
         return handle
+
+    async def start_workflow(self, *args: object, **kwargs: object) -> FakeWorkflowHandle:
+        workflow_id = str(kwargs.get("id") or args[0])
+        self.started.append(workflow_id)
+        return FakeWorkflowHandle(workflow_id)
+
+    async def count_workflows(self, query: str) -> SimpleNamespace:
+        marker = 'WorkflowId STARTS WITH "'
+        prefix = query.split(marker, 1)[1].split('"', 1)[0]
+        name = prefix.removeprefix("digest-pipeline-").rstrip("-")
+        return SimpleNamespace(count=int(name in self.running_collections))
+
+    async def list_workflows(self, query: str = "", limit: int = 10):  # type: ignore[override]
+        del query
+        for entry in self.executions[:limit]:
+            yield entry
+
+    def get_workflow_handle(self, workflow_id: str, run_id: str = "") -> FakeWorkflowHandle:
+        del run_id
+        if workflow_id not in self.workflow_handles:
+            self.workflow_handles[workflow_id] = FakeWorkflowHandle(workflow_id)
+        return self.workflow_handles[workflow_id]
 
 
 def _tech(name: str = "tech") -> CollectionConfig:
@@ -116,3 +193,85 @@ async def test_uses_build_client_when_no_client_given() -> None:
         await service.resync_schedules([_tech()])
         mock_build.assert_awaited_once()
     assert "daily-digest-tech" in fake.created
+
+
+@pytest.mark.asyncio
+async def test_trigger_collection_starts_fire_and_forget() -> None:
+    """trigger_collection starts the workflow without waiting for completion."""
+    fake = FakeClient()
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    workflow_id = await service.trigger_collection(_tech())
+
+    assert workflow_id.startswith("digest-pipeline-tech-")
+    assert fake.started == [workflow_id]
+
+
+@pytest.mark.asyncio
+async def test_is_collection_running() -> None:
+    """A running digest workflow for the collection is detected via visibility."""
+    fake = FakeClient(running_collections={"tech"})
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    assert await service.is_collection_running("tech") is True
+    assert await service.is_collection_running("health") is False
+
+
+@pytest.mark.asyncio
+async def test_list_executions_maps_visibility() -> None:
+    """list_executions normalizes status/dates coming from Temporal visibility."""
+    now = datetime.now(UTC)
+    fake = FakeClient(
+        executions=[
+            FakeWorkflow("digest-pipeline-tech-20260101000000", "completed", now, now),
+            FakeWorkflow("digest-pipeline-health-20260101000000", "running", now, None),
+        ]
+    )
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    result = await service.list_executions()
+
+    assert len(result) == 2
+    assert result[0]["status"] == "completed"
+    assert result[0]["close_time"] == now
+    assert result[1]["status"] == "running"
+    assert result[1]["close_time"] is None
+
+
+@pytest.mark.asyncio
+async def test_terminate_workflow_calls_handle() -> None:
+    """terminate_workflow terminates the workflow handle with a reason."""
+    fake = FakeClient()
+    handle = FakeWorkflowHandle("digest-pipeline-tech-20260101000000")
+    fake.workflow_handles["digest-pipeline-tech-20260101000000"] = handle
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    await service.terminate_workflow("digest-pipeline-tech-20260101000000", reason="GUI")
+
+    assert handle.terminated_reason == "GUI"
+
+
+@pytest.mark.asyncio
+async def test_execution_error_returned_on_failure() -> None:
+    """A failed workflow surfaces its error via handle.result()."""
+    fake = FakeClient()
+    handle = FakeWorkflowHandle(
+        "digest-pipeline-tech-20260101000000", raise_on_result=True, error="timeout"
+    )
+    fake.workflow_handles["digest-pipeline-tech-20260101000000"] = handle
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    error = await service.execution_error("digest-pipeline-tech-20260101000000")
+
+    assert error == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_execution_error_none_on_success() -> None:
+    """A completed workflow yields no error from execution_error."""
+    fake = FakeClient()
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    error = await service.execution_error("digest-pipeline-tech-20260101000000")
+
+    assert error is None

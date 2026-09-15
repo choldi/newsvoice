@@ -1,13 +1,14 @@
 """Temporal schedule administration for the admin GUI.
 
-Provides `resync_schedules` which reconciles the Temporal server's `daily-digest-*`
-schedules with the current collections.toml configuration: schedules are created
-for new collections, updated for existing ones, and deleted for removed ones.
+Provides schedule reconciliation (``resync_schedules``), fire-and-forget workflow
+starts (``trigger_collection``), running-workflow detection, termination, and
+execution listing via the Temporal visibility API.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 import structlog
 from temporalio.client import Client, RPCError, ScheduleHandle
@@ -19,6 +20,7 @@ from src.workers.schedule import build_schedule, pipeline_config_for
 logger = structlog.get_logger(__name__)
 
 SCHEDULE_PREFIX = "daily-digest-"
+WORKFLOW_PREFIX = "digest-pipeline-"
 
 
 class TemporalAdminService:
@@ -136,7 +138,7 @@ class TemporalAdminService:
         return result
 
     async def trigger_collection(self, collection: CollectionConfig) -> str:
-        """Start a digest pipeline for a collection immediately (outside its schedule).
+        """Start a digest pipeline for a collection immediately (fire-and-forget).
 
         Args:
             collection: Collection config to run now.
@@ -144,8 +146,6 @@ class TemporalAdminService:
         Returns:
             The Temporal workflow id of the started run.
         """
-        from datetime import UTC, datetime
-
         from src.core.config import settings
         from src.workers.workflows import DigestPipelineWorkflow
 
@@ -154,10 +154,87 @@ class TemporalAdminService:
             f"digest-pipeline-{collection.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
         )
         client = await self.client()
-        await client.execute_workflow(
+        await client.start_workflow(
             DigestPipelineWorkflow.run,
             config,
             id=workflow_id,
             task_queue=settings.temporal_task_queue,
         )
+        logger.info("workflow_started", workflow_id=workflow_id, collection=collection.name)
         return workflow_id
+
+    async def is_collection_running(self, collection_name: str) -> bool:
+        """Check if a collection already has a running digest workflow.
+
+        Args:
+            collection_name: Name of the collection.
+
+        Returns:
+            True if a workflow is currently running for the collection.
+        """
+        query = (
+            f'WorkflowType="DigestPipelineWorkflow" '
+            f'AND ExecutionStatus="Running" '
+            f'AND WorkflowId STARTS WITH "{WORKFLOW_PREFIX}{collection_name}-"'
+        )
+        client = await self.client()
+        count = await client.count_workflows(query=query)
+        return count.count > 0
+
+    async def list_executions(self, limit: int = 50) -> list[dict]:
+        """List digest pipeline workflow executions from Temporal visibility.
+
+        Args:
+            limit: Maximum results to return.
+
+        Returns:
+            List of dicts with workflow_id, status, start_time, close_time.
+        """
+        query = 'WorkflowType="DigestPipelineWorkflow" ORDER BY StartTime DESC'
+        client = await self.client()
+        results: list[dict] = []
+        async for info in client.list_workflows(query=query, limit=limit):
+            results.append(
+                {
+                    "workflow_id": info.id,
+                    "status": info.status.name.lower(),
+                    "start_time": info.start_time,
+                    "close_time": info.close_time,
+                }
+            )
+        return results
+
+    async def terminate_workflow(self, workflow_id: str, reason: str = "GUI") -> None:
+        """Terminate a running workflow.
+
+        Args:
+            workflow_id: Temporal workflow id to terminate.
+            reason: Termination reason.
+
+        Raises:
+            RPCError: If the terminate call fails.
+        """
+        client = await self.client()
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.terminate(reason=reason)
+        logger.info("workflow_terminated", workflow_id=workflow_id, reason=reason)
+
+    async def execution_error(self, workflow_id: str) -> str | None:
+        """Extract the error from a failed/terminated workflow.
+
+        Attempts ``handle.result()`` and catches the failure; returns the
+        exception message or None if no error can be extracted.
+
+        Args:
+            workflow_id: Temporal workflow id.
+
+        Returns:
+            Error message string, or None.
+        """
+        try:
+            client = await self.client()
+            handle = client.get_workflow_handle(workflow_id)
+            await handle.result()
+            return None
+        except Exception as exc:
+            return str(exc)[:500]
