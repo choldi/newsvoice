@@ -248,6 +248,25 @@ async def test_terminate_workflow_calls_handle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execution_error_skips_running_workflow() -> None:
+    """A running workflow yields no error without blocking on result()."""
+    now = datetime.now(UTC)
+    fake = FakeClient(
+        executions=[
+            FakeWorkflow("digest-pipeline-tech-20260101000000", "running", now, None),
+        ]
+    )
+    handle = FakeWorkflowHandle("digest-pipeline-tech-20260101000000")
+    fake.workflow_handles["digest-pipeline-tech-20260101000000"] = handle
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    error = await service.execution_error("digest-pipeline-tech-20260101000000")
+
+    assert error is None
+    assert handle.result_called is False
+
+
+@pytest.mark.asyncio
 async def test_execution_error_returned_on_failure() -> None:
     """A failed workflow surfaces its error via handle.result()."""
     fake = FakeClient()

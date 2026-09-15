@@ -223,8 +223,10 @@ class TemporalAdminService:
     async def execution_error(self, workflow_id: str) -> str | None:
         """Extract the error from a failed/terminated workflow.
 
-        Attempts ``handle.result()`` and catches the failure; returns the
-        exception message or None if no error can be extracted.
+        Skips running workflows (their ``result()`` call would block until
+        completion). For finished workflows, attempts ``handle.result()`` and
+        catches the failure, returning the exception message or None if no
+        error can be extracted.
 
         Args:
             workflow_id: Temporal workflow id.
@@ -232,8 +234,16 @@ class TemporalAdminService:
         Returns:
             Error message string, or None.
         """
+        client = await self.client()
         try:
-            client = await self.client()
+            async for info in client.list_workflows(
+                query=f'WorkflowId="{workflow_id}"', limit=1
+            ):
+                if info.status.name.upper() == "RUNNING":
+                    return None
+        except Exception:
+            pass
+        try:
             handle = client.get_workflow_handle(workflow_id)
             await handle.result()
             return None
