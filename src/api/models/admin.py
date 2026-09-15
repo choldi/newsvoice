@@ -48,6 +48,10 @@ class CollectionIn(BaseModel):
         default_factory=list,
         description="Email recipients for HTML email delivery (empty = off)",
     )
+    delivery_channels: list[str] = Field(
+        default_factory=lambda: ["telegram"],
+        description="Delivery channels ('telegram', 'email'); empty defaults to telegram",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     def to_config(self) -> CollectionConfig:

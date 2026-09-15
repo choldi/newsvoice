@@ -80,6 +80,46 @@ def test_build_message_raises_without_valid_recipients() -> None:
         raise AssertionError("expected ValueError")
 
 
+def test_build_message_attaches_audio(tmp_path: object) -> None:
+    """An audio_path adds an audio/wav attachment to the email."""
+    from pathlib import Path
+
+    audio = Path(tmp_path) / "digest.wav"  # type: ignore[operator]
+    audio.write_bytes(b"\x00\x01\x02")
+    service = EmailService(smtp_settings=email_config)
+
+    message = service.build_message(
+        ["a@example.com"],
+        "# Titulo",
+        collection="tech",
+        audio_path=str(audio),
+    )
+
+    parts = list(message.walk())
+    audio_parts = [p for p in parts if p.get_content_type() == "audio/wav"]
+    assert len(audio_parts) == 1
+    assert audio_parts[0].get_filename() == "digest.wav"
+    assert audio_parts[0].get_payload(decode=True) == b"\x00\x01\x02"
+
+
+def test_build_message_ignores_missing_audio(tmp_path: object) -> None:
+    """A missing audio file is skipped, the email is still built."""
+    from pathlib import Path
+
+    missing = Path(tmp_path) / "nope.wav"  # type: ignore[operator]
+    service = EmailService(smtp_settings=email_config)
+
+    message = service.build_message(
+        ["a@example.com"],
+        "# Titulo",
+        collection="tech",
+        audio_path=str(missing),
+    )
+
+    parts = list(message.walk())
+    assert not any(p.get_content_type().startswith("audio/") for p in parts)
+
+
 def test_send_message_logs_in_and_sends_via_starttls() -> None:
     """Port 587 uses SMTP + STARTTLS and logs in before sending."""
 
@@ -172,7 +212,10 @@ async def test_deliver_email_activity_calls_service() -> None:
             ["a@example.com", "b@example.com"],
             "# digest",
             "tech",
+            "/tmp/digest.wav",
         )
 
     assert result["status"] == "ok"
     assert mock_email.await_count == 1
+    _, kwargs = mock_email.await_args
+    assert kwargs["audio_path"] == "/tmp/digest.wav"

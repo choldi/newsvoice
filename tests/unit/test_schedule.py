@@ -24,6 +24,8 @@ def test_pipeline_config_for_maps_collection_fields() -> None:
         voice="en-gb-female",
         prompt_template="finance",
         chat_id="-100abcdef",
+        email_recipients=["a@example.com"],
+        delivery_channels=["telegram", "email"],
     )
     config = pipeline_config_for(collection, tts_flag=None)
 
@@ -35,6 +37,8 @@ def test_pipeline_config_for_maps_collection_fields() -> None:
     assert config.collection == "tech"
     assert config.prompt_template == "finance"
     assert config.chat_id == "-100abcdef"
+    assert config.email_recipients == ["a@example.com"]
+    assert config.delivery_channels == ["telegram", "email"]
 
 
 def test_pipeline_config_for_propagates_podcast_name() -> None:

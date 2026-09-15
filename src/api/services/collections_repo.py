@@ -266,6 +266,7 @@ class CollectionsRepository:
                 "custom_prompt",
                 "chat_id",
                 "email_recipients",
+                "delivery_channels",
                 "enabled",
             ):
                 value = data.get(key)

@@ -117,6 +117,37 @@ def test_loader_assigns_indexed_name_when_missing(tmp_path: Path) -> None:
     assert collection.name == "collection-1"
 
 
+def test_default_delivery_channels_is_telegram(tmp_path: Path) -> None:
+    """Collections without delivery_channels default to Telegram delivery."""
+    path = _write_collections(
+        tmp_path, '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.delivery_channels == ["telegram"]
+
+
+def test_delivery_channels_parsed_and_normalized(tmp_path: Path) -> None:
+    """Known channels are kept in order; unknown values and duplicates dropped."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'delivery_channels = ["email", "telegram", "telegram", "sms"]\n',
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.delivery_channels == ["telegram", "email"]
+
+
+def test_empty_delivery_channels_falls_back_to_telegram(tmp_path: Path) -> None:
+    """An empty delivery_channels list defaults to telegram delivery."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        "delivery_channels = []\n",
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.delivery_channels == ["telegram"]
+
+
 def test_get_collection_lookup(tmp_path: Path) -> None:
     """get_collection finds a collection by name."""
     path = _write_collections(tmp_path, SAMPLE_TOML)

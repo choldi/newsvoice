@@ -236,9 +236,7 @@ class TemporalAdminService:
         """
         client = await self.client()
         try:
-            async for info in client.list_workflows(
-                query=f'WorkflowId="{workflow_id}"', limit=1
-            ):
+            async for info in client.list_workflows(query=f'WorkflowId="{workflow_id}"', limit=1):
                 if info.status.name.upper() == "RUNNING":
                     return None
         except Exception:

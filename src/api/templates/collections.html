@@ -88,6 +88,15 @@
       <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
       <div class="row">
         <div class="col">
+          <label>Canales de entrega</label>
+          <div style="display:flex;gap:14px">
+            <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" {{ 'checked' if 'telegram' in c.delivery_channels else '' }}><label>Telegram</label></div>
+            <div class="check"><input type="checkbox" name="delivery_channels" value="email" {{ 'checked' if 'email' in c.delivery_channels else '' }}><label>Email</label></div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
           <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-{{ c.name }}" hx-swap="innerHTML" hx-include="#edit-form-{{ c.name }}" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
           <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
           <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
@@ -152,6 +161,15 @@
     <textarea name="custom_prompt" rows="4"></textarea>
     <label>Comportamiento del podcaster</label>
     <input type="text" name="podcast_behavior">
+    <div class="row">
+      <div class="col">
+        <label>Canales de entrega</label>
+        <div style="display:flex;gap:14px">
+          <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" checked><label>Telegram</label></div>
+          <div class="check"><input type="checkbox" name="delivery_channels" value="email"><label>Email</label></div>
+        </div>
+      </div>
+    </div>
     <div class="row">
       <div class="col">
         <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-nueva" hx-swap="innerHTML" hx-include="#create-form"><label>TTS habilitado</label></div>

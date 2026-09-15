@@ -64,6 +64,12 @@ class CollectionConfig(BaseModel):
         default_factory=list,
         description="Email recipients addressed per delivery; empty disables email",
     )
+    delivery_channels: list[str] = Field(
+        default_factory=lambda: ["telegram"],
+        description=(
+            "Delivery channels ('telegram', 'email'); empty or unset defaults to telegram"
+        ),
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     @field_validator("name")
@@ -91,6 +97,21 @@ class CollectionConfig(BaseModel):
     def _feed_urls(cls, value: list[str]) -> list[str]:
         """Return only non-blank feed URLs."""
         return [url.strip() for url in value if url.strip()]
+
+    @field_validator("delivery_channels")
+    @classmethod
+    def _delivery_channels(cls, value: list[str]) -> list[str]:
+        """Keep only known channels, de-duplicated, falling back to telegram.
+
+        Args:
+            value: Raw channel list from the config.
+
+        Returns:
+            Ordered, de-duplicated channels; ['telegram'] when nothing valid.
+        """
+        known = ("telegram", "email")
+        channels = [channel for channel in known if channel in value]
+        return channels or ["telegram"]
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

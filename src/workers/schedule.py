@@ -54,6 +54,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         custom_prompt=collection.custom_prompt,
         chat_id=collection.chat_id,
         email_recipients=collection.email_recipients,
+        delivery_channels=collection.delivery_channels,
     )
 
 

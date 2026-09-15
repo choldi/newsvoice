@@ -178,6 +178,22 @@ def test_save_all_falls_back_when_replace_busy(
     load_collections.cache_clear()
 
 
+def test_delivery_channels_round_trip(tmp_path: Path) -> None:
+    """delivery_channels persists through the TOML round trip."""
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    repo = CollectionsRepository(str(path))
+    tech = _tech().model_copy(update={"delivery_channels": ["telegram", "email"]})
+    repo.save_all([tech])
+
+    raw = path.read_text(encoding="utf-8")
+    assert "delivery_channels = ['telegram', 'email']" in raw
+
+    reloaded = CollectionsRepository(str(path)).list()[0]
+    assert reloaded.delivery_channels == ["telegram", "email"]
+    load_collections.cache_clear()
+
+
 def test_save_all_multiline_custom_prompt(tmp_path: Path) -> None:
     """A multi-line custom_prompt survives the TOML round trip as valid TOML."""
     path = _file(tmp_path)

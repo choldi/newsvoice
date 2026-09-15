@@ -98,6 +98,8 @@ historical notes describing the migration itself.
 - [x] One Temporal schedule per collection at a configurable time
 - [x] Shared DB, collection-scoped dedup
 - [x] Per-collection prompt templates
+- [x] Per-collection delivery channels (`delivery_channels`: telegram, email o
+      ambos) con audio adjunto en email cuando corresponda
 
 **Success criteria:** 3 independent Telegram digests at different times.
 

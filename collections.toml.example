@@ -14,6 +14,11 @@
 # - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
 # - `email_recipients` enables HTML email delivery (SMTP from .env) to these
 #   addresses; leave empty (default) to send no email for this collection.
+# - `delivery_channels` selects which channels deliver this digest: "telegram",
+#   "email", or both ("telegram", "email"). Defaults to ["telegram"] (email must
+#   be explicitly enabled in addition to configuring email_recipients).
+# - `deliver_audio = true` attaches the generated audio to Telegram AND to the
+#   email (when email is an active delivery channel).
 
 [collection_defaults]
 tts_enabled = false
@@ -31,6 +36,7 @@ feed_urls = [
 prompt_template = "default"
 # custom_prompt = "You are a senior tech editor. Emphasize startups and venture deals."
 # email_recipients = ["you@example.com", "teammate@example.com"]
+# delivery_channels = ["telegram", "email"]
 
 [[collections]]
 name = "health"

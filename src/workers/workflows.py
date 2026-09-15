@@ -58,6 +58,7 @@ class PipelineConfig:
     custom_prompt: str = ""
     chat_id: str | None = None
     email_recipients: list[str] = field(default_factory=list)
+    delivery_channels: list[str] = field(default_factory=lambda: ["telegram"])
 
 
 @workflow.defn
@@ -151,44 +152,33 @@ class DigestPipelineWorkflow:
             f"Digest generated for {article_count} articles (collection '{config.collection}')"
         )
 
+        channels = config.delivery_channels or ["telegram"]
+        use_telegram = "telegram" in channels
+        use_email = "email" in channels
+        delivery_status: list[dict[str, Any]] = []
+
         # Deliver the text digest FIRST; it is the primary deliverable and must
         # not be blocked by (optional) TTS/audio failures. A delivery failure on
         # one channel (Telegram/email) is recorded and does not abort the run.
-        try:
-            text_delivery = await workflow.execute_activity(
-                deliver_telegram_message_activity,
-                args=[digest_markdown, config.chat_id],
-                start_to_close_timeout=DELIVERY_TIMEOUT,
-                retry_policy=NETWORK_RETRY_POLICY,
-            )
-        except (ActivityError, ApplicationError) as exc:
-            detail = getattr(exc, "cause", None) or exc
-            workflow.logger.warning(
-                f"Telegram text step failed; continuing with other channels: {detail}"
-            )
-            text_delivery = {"status": "error", "error": str(detail)}
-        delivery_status: list[dict[str, Any]] = [text_delivery]
-
-        # Deliver the digest via email when the collection configures
-        # recipients. A failure here must not fail the whole pipeline (the
-        # Telegram digest already went out), matching the TTS error handling.
-        if config.email_recipients:
-            workflow.logger.info("Delivering email digest")
+        if use_telegram:
             try:
-                email_delivery = await workflow.execute_activity(
-                    deliver_email_activity,
-                    args=[config.email_recipients, digest_markdown, config.collection],
-                    start_to_close_timeout=EMAIL_TIMEOUT,
+                text_delivery = await workflow.execute_activity(
+                    deliver_telegram_message_activity,
+                    args=[digest_markdown, config.chat_id],
+                    start_to_close_timeout=DELIVERY_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
                 )
-                delivery_status.append(email_delivery)
+                delivery_status.append(text_delivery)
             except (ActivityError, ApplicationError) as exc:
                 detail = getattr(exc, "cause", None) or exc
                 workflow.logger.warning(
-                    f"Email step failed; text digest already delivered: {detail}"
+                    f"Telegram text step failed; continuing with other channels: {detail}"
                 )
                 delivery_status.append({"status": "error", "error": str(detail)})
 
+        # Generate TTS audio BEFORE the email step so the audio file (when
+        # produced) can be attached to the email. A failure here must not fail
+        # the pipeline: the text digest already went out and the run continues.
         audio: dict[str, Any] | None = None
         if config.tts_enabled:
             workflow.logger.info("Generating TTS audio")
@@ -203,7 +193,49 @@ class DigestPipelineWorkflow:
                     start_to_close_timeout=TTS_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
                 )
-                if config.deliver_audio and audio.get("audio_path"):
+                if config.deliver_audio and not audio.get("audio_path"):
+                    delivery_status.append({"status": "error", "error": "no audio generated"})
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(
+                    f"TTS/audio step failed; text digest already delivered: {detail}"
+                )
+                delivery_status.append({"status": "error", "error": str(detail)})
+                audio = None
+
+        # Deliver the digest via email when the collection enables the email
+        # channel and configures recipients. When audio was generated and
+        # delivery is requested, the audio file is attached to this email. A
+        # failure here must not fail the whole pipeline (the Telegram digest
+        # already went out).
+        if use_email and config.email_recipients:
+            workflow.logger.info("Delivering email digest")
+            audio_for_email = audio.get("audio_path") if audio and config.deliver_audio else None
+            try:
+                email_delivery = await workflow.execute_activity(
+                    deliver_email_activity,
+                    args=[
+                        config.email_recipients,
+                        digest_markdown,
+                        config.collection,
+                        audio_for_email,
+                    ],
+                    start_to_close_timeout=EMAIL_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append(email_delivery)
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(
+                    f"Email step failed; text digest already delivered: {detail}"
+                )
+                delivery_status.append({"status": "error", "error": str(detail)})
+
+        # Deliver audio to Telegram when the channel is selected, delivery is
+        # requested, and the TTS step produced an audio file.
+        if use_telegram and config.tts_enabled and config.deliver_audio:
+            if audio and audio.get("audio_path"):
+                try:
                     audio_delivery = await workflow.execute_activity(
                         deliver_telegram_audio_activity,
                         args=[audio["audio_path"], digest_markdown[:1000], config.chat_id],
@@ -211,14 +243,12 @@ class DigestPipelineWorkflow:
                         retry_policy=NETWORK_RETRY_POLICY,
                     )
                     delivery_status.append(audio_delivery)
-                else:
-                    delivery_status.append({"status": "error", "error": "no audio generated"})
-            except (ActivityError, ApplicationError) as exc:
-                detail = getattr(exc, "cause", None) or exc
-                workflow.logger.warning(
-                    f"TTS/audio step failed; text digest already delivered: {detail}"
-                )
-                delivery_status.append({"status": "error", "error": str(exc)})
+                except (ActivityError, ApplicationError) as exc:
+                    detail = getattr(exc, "cause", None) or exc
+                    workflow.logger.warning(
+                        f"Telegram audio step failed; text digest already delivered: {detail}"
+                    )
+                    delivery_status.append({"status": "error", "error": str(detail)})
 
         workflow.logger.info("Pipeline completed")
         audio_path = audio.get("audio_path") if audio else None

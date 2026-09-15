@@ -250,6 +250,62 @@ def test_email_recipients_round_trip_via_gui() -> None:
     assert "b@example.com" not in page.text
 
 
+def test_delivery_channels_round_trip_via_gui() -> None:
+    """Creating with delivery_channels and updating preserves the selection."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "email_recipients": "a@example.com",
+            "delivery_channels": ["telegram", "email"],
+        },
+    )
+
+    page = client.get("/ui/collections")
+    telegram_checkbox = 'name="delivery_channels" value="telegram" checked'
+    email_checkbox = 'name="delivery_channels" value="email" checked'
+    # Both the "nueva" form (always telegram) and the tech edit form render it.
+    assert page.text.count(telegram_checkbox) == 2
+    assert page.text.count(email_checkbox) == 1
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "08:00",
+            "feed_urls": "https://a/rss",
+            "email_recipients": "a@example.com",
+            "delivery_channels": "email",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    # tech dropped telegram; only the "nueva" form still renders it checked.
+    assert page.text.count(telegram_checkbox) == 1
+    assert page.text.count(email_checkbox) == 1
+
+
+def test_delivery_channels_default_to_telegram_when_unset() -> None:
+    """With no delivery_channels checkboxes, creation defaults to telegram."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={"name": "tech", "feed_urls": "https://a/rss"},
+    )
+
+    page = client.get("/ui/collections")
+    telegram_checkbox = 'name="delivery_channels" value="telegram" checked'
+    email_checkbox = 'name="delivery_channels" value="email" checked'
+    assert page.text.count(telegram_checkbox) == 2
+    assert page.text.count(email_checkbox) == 0
+
+
 def test_custom_prompt_round_trip_via_gui() -> None:
     """A saved custom_prompt overrides the template and persists in the form."""
     client = _ui_client()

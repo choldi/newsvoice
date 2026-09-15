@@ -53,6 +53,23 @@ def _normalize_recipients(recipients: list[str]) -> list[str]:
     return result
 
 
+def _audio_mime_subtype(audio_path: str) -> str:
+    """Return the RFC 2046 audio subtype for a file path.
+
+    Args:
+        audio_path: Path to the audio file.
+
+    Returns:
+        MIME audio subtype (wav, ogg, else mpeg).
+    """
+    suffix = Path(audio_path).suffix.lower()
+    if suffix == ".ogg":
+        return "ogg"
+    if suffix == ".wav":
+        return "wav"
+    return "mpeg"
+
+
 def _subject(collection: str) -> str:
     """Build the email subject line.
 
@@ -123,6 +140,7 @@ class EmailService:
         markdown_text: str,
         collection: str,
         subject: str | None = None,
+        audio_path: str | None = None,
     ) -> EmailMessage:
         """Build a MIME email with an HTML and plain-text alternative.
 
@@ -131,6 +149,7 @@ class EmailService:
             markdown_text: Raw digest markdown.
             collection: Collection name.
             subject: Optional subject override; auto-generated when None.
+            audio_path: Optional audio file to attach (missing file is ignored).
 
         Returns:
             A ready-to-send ``EmailMessage`` instance.
@@ -152,6 +171,20 @@ class EmailService:
         msg["To"] = ", ".join(valid_recipients)
         msg.set_content(plain_body)
         msg.add_alternative(html_body, subtype="html")
+
+        if audio_path:
+            audio_file = Path(audio_path)
+            if audio_file.exists():
+                audio_payload = audio_file.read_bytes()
+                msg.add_attachment(
+                    audio_payload,
+                    maintype="audio",
+                    subtype=_audio_mime_subtype(audio_path),
+                    filename=audio_file.name,
+                )
+            else:
+                logger.warning("email_audio_missing", audio_path=audio_path)
+
         return msg
 
     def send_message(self, message: EmailMessage) -> None:
@@ -197,6 +230,7 @@ class EmailService:
         markdown_text: str,
         collection: str,
         subject: str | None = None,
+        audio_path: str | None = None,
     ) -> dict[str, str]:
         """Build and send the digest email asynchronously.
 
@@ -208,6 +242,7 @@ class EmailService:
             markdown_text: Digest markdown content.
             collection: Collection name.
             subject: Optional subject line override.
+            audio_path: Optional audio file to attach to the email.
 
         Returns:
             Dict with status and recipient count.
@@ -218,7 +253,13 @@ class EmailService:
             smtplib.SMTPException: On SMTP errors.
         """
         valid_recipients = _normalize_recipients(recipients)
-        message = self.build_message(valid_recipients, markdown_text, collection, subject=subject)
+        message = self.build_message(
+            valid_recipients,
+            markdown_text,
+            collection,
+            subject=subject,
+            audio_path=audio_path,
+        )
         await asyncio.to_thread(self.send_message, message)
         logger.info(
             "email_sent",

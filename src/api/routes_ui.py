@@ -107,6 +107,27 @@ def _split_emails(raw: str) -> list[str]:
     return seen
 
 
+async def _selected_channels(request: Request) -> list[str]:
+    """Extract the delivery channel checkboxes from a form body.
+
+    Checkbox values are 'telegram' and 'email'; an empty selection (no
+    checkbox ticked) falls back to the default telegram-only delivery.
+
+    Args:
+        request: Incoming form request.
+
+    Returns:
+        Ordered, validated list of selected delivery channels.
+    """
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    channels = [
+        value
+        for key, value in parse_qsl(raw, keep_blank_values=True)
+        if key == "delivery_channels" and value in ("telegram", "email")
+    ]
+    return list(dict.fromkeys(channels)) or ["telegram"]
+
+
 def _flash(redirect_url: str, message: str, level: str = "ok") -> RedirectResponse:
     """Redirect with a flash message attached as a query parameter.
 
@@ -536,6 +557,7 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
+            delivery_channels=await _selected_channels(request),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -581,6 +603,7 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
+            delivery_channels=await _selected_channels(request),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

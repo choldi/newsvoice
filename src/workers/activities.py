@@ -441,6 +441,7 @@ async def deliver_email_activity(
     recipients: list[str],
     markdown_text: str,
     collection: str,
+    audio_path: str | None = None,
 ) -> dict[str, Any]:
     """Send the digest as an HTML email to a list of recipients.
 
@@ -448,6 +449,7 @@ async def deliver_email_activity(
         recipients: Destination email addresses.
         markdown_text: Raw digest markdown content.
         collection: Collection name (used in subject and header).
+        audio_path: Optional audio file to attach to the email.
 
     Returns:
         Dict with status and recipient count.
@@ -462,6 +464,7 @@ async def deliver_email_activity(
             recipients,
             markdown_text,
             collection,
+            audio_path=audio_path,
         )
     except Exception as exc:
         raise ApplicationError(f"Email delivery failed: {exc}", non_retryable=True) from exc
