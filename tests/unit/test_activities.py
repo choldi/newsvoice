@@ -137,6 +137,31 @@ async def test_generate_tts_activity_falls_back_to_settings() -> None:
     assert tts_in.voice == "es-mx-male"
 
 
+async def test_fetch_rss_activity_skips_failed_feed_without_crashing() -> None:
+    """A feed that throws during parse is skipped and does not abort the batch."""
+    good_feed = SimpleNamespace(
+        feed=SimpleNamespace(title="Tech Feed"),
+        entries=[SimpleNamespace(title="Article One", link="https://example.com/1")],
+    )
+    good_feed.entries[0].get = lambda key, default=None: {
+        "summary": "Summary one",
+        "published": "2026-09-11T08:00:00",
+    }.get(key, default)
+
+    def fake_parse(url: str):
+        if "broken" in url:
+            raise TimeoutError("timed out")
+        return good_feed
+
+    with patch("src.workers.activities.feedparser.parse", side_effect=fake_parse):
+        result = await ActivityEnvironment().run(
+            fetch_rss_activity, ["https://feed.example/broken", "https://feed.example/good"]
+        )
+
+    assert len(result) == 1
+    assert result[0]["title"] == "Article One"
+
+
 async def test_fetch_rss_activity_parses_entries() -> None:
     """fetch_rss_activity normalizes feed entries into article dicts."""
 

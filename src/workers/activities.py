@@ -72,7 +72,7 @@ async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
     Returns:
         List of article dicts compatible with the ArticleIn schema.
     """
-    activity.logger.info("Fetching RSS feeds", feeds=len(feed_urls))
+    activity.logger.info(f"Fetching RSS feeds: {len(feed_urls)} feeds")
     articles: list[dict[str, Any]] = []
     for url in feed_urls:
         try:
@@ -81,14 +81,12 @@ async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
                 timeout=FEED_FETCH_TIMEOUT_SECONDS,
             )
         except Exception as exc:
-            activity.logger.warning("feed_fetch_failed", feed=url, error=str(exc))
+            activity.logger.warning(f"feed_fetch_failed: {url} ({exc})")
             continue
 
         entries = getattr(feed, "entries", []) or []
         if getattr(feed, "bozo", 0) and getattr(feed, "bozo_exception", None):
-            activity.logger.warning(
-                "feed_has_parse_errors", feed=url, error=str(feed.bozo_exception)
-            )
+            activity.logger.warning(f"feed_has_parse_errors: {url} ({feed.bozo_exception})")
 
         feed_obj = getattr(feed, "feed", None)
         source = getattr(feed_obj, "title", None) or url
@@ -107,7 +105,7 @@ async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
                     "source": source,
                 }
             )
-    activity.logger.info("RSS fetch completed", articles=len(articles))
+    activity.logger.info(f"RSS fetch completed: {len(articles)} articles")
     return articles
 
 
@@ -125,7 +123,7 @@ def _validate_articles(articles: list[dict[str, Any]]) -> list[ArticleIn]:
         try:
             validated.append(ArticleIn.model_validate(item))
         except ValidationError as exc:
-            activity.logger.warning("article_validation_failed", error=str(exc))
+            activity.logger.warning(f"article_validation_failed: {exc}")
     return validated
 
 
@@ -145,7 +143,7 @@ async def filter_new_activity(
     Raises:
         ApplicationError: If deduplication fails for a non-validation reason.
     """
-    activity.logger.info("Filtering new articles", count=len(articles), collection=collection)
+    activity.logger.info(f"Filtering new articles: {len(articles)}, collection={collection}")
     validated = _validate_articles(articles)
     if not validated:
         return []
@@ -172,7 +170,7 @@ async def cluster_activity(
     Raises:
         ApplicationError: If clustering fails for a non-validation reason.
     """
-    activity.logger.info("Clustering articles", count=len(articles), collection=collection)
+    activity.logger.info(f"Clustering articles: {len(articles)}, collection={collection}")
     validated = _validate_articles(articles)
     if not validated:
         return []
@@ -392,7 +390,7 @@ async def deliver_telegram_audio_activity(
         ApplicationError: If credentials are missing, the file does not exist,
             or the API returns an error.
     """
-    activity.logger.info("Sending Telegram audio", audio_path=audio_path)
+    activity.logger.info(f"Sending Telegram audio: {audio_path}")
     settings = get_settings()
     target_chat = chat_id or settings.telegram_chat_id
     if not settings.telegram_bot_token or not target_chat:
@@ -458,7 +456,9 @@ async def deliver_email_activity(
         ApplicationError: If the email service is not configured or SMTP
             fails to deliver the message.
     """
-    activity.logger.info("Sending digest email", collection=collection, recipients=len(recipients))
+    activity.logger.info(
+        f"Sending digest email: collection={collection}, recipients={len(recipients)}"
+    )
     try:
         result = await EmailService().send_digest_email(
             recipients,
