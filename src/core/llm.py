@@ -42,13 +42,20 @@ async def generate_completion(
     )
 
     try:
-        response: Any = await litellm.acompletion(
-            model=target_model,
-            messages=messages,
-            api_base=target_api_base,
-            temperature=target_temp,
-            timeout=settings.llm_timeout_seconds,
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": target_model,
+            "messages": messages,
+            "api_base": target_api_base,
+            "temperature": target_temp,
+            "timeout": settings.llm_timeout_seconds,
+            "max_tokens": settings.llm_max_tokens,
+        }
+        if settings.llm_disable_thinking:
+            # llama.cpp reasoning models (e.g. Qwen3) emit their answer into
+            # reasoning_content and leave content empty while thinking is on.
+            # Disable it and treat content as the only output channel.
+            request_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+        response: Any = await litellm.acompletion(**request_kwargs)
         content = response.choices[0].message.content or ""
         if not content.strip():
             raise RuntimeError("LLM returned empty output")

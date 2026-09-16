@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     llm_model: str = "openai/local-model"
     llm_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     llm_timeout_seconds: int = Field(default=1800, ge=1)
+    llm_max_tokens: int = Field(default=4096, gt=0)
+    llm_disable_thinking: bool = True
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
     smtp_host: str = "smtp.gmail.com"

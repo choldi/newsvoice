@@ -21,6 +21,34 @@ async def test_generate_completion_success() -> None:
 
         assert result == "Mocked Markdown response"
         mock_acompletion.assert_called_once()
+        kwargs = mock_acompletion.call_args.kwargs
+        assert kwargs["max_tokens"] > 0
+        assert kwargs["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+@pytest.mark.asyncio
+async def test_generate_completion_does_not_disable_thinking_when_configured() -> None:
+    """When llm_disable_thinking is off, no extra_body is sent."""
+    mock_choice = AsyncMock()
+    mock_choice.message.content = "Response"
+    mock_response = AsyncMock()
+    mock_response.choices = [mock_choice]
+
+    with (
+        patch("litellm.acompletion", return_value=mock_response) as mock_acompletion,
+        patch("src.core.llm.settings") as mock_settings,
+    ):
+        mock_settings.llm_model = "openai/local-model"
+        mock_settings.llm_api_base = "http://localhost:8080/v1"
+        mock_settings.llm_temperature = 0.3
+        mock_settings.llm_timeout_seconds = 1800
+        mock_settings.llm_max_tokens = 4096
+        mock_settings.llm_disable_thinking = False
+        await generate_completion(messages=[{"role": "user", "content": "Hello"}])
+
+    kwargs = mock_acompletion.call_args.kwargs
+    assert "extra_body" not in kwargs
+    assert kwargs["max_tokens"] == 4096
 
 
 @pytest.mark.asyncio
