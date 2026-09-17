@@ -282,7 +282,7 @@ class TTSService:
             headers["X-API-Key"] = self._api_key
         payload = {"text": text, "voice_id": voice, "language": language}
         url = self._api_base_url.rstrip("/") + "/tts"
-        async with httpx.AsyncClient(timeout=settings.api_request_timeout) as client:
+        async with httpx.AsyncClient(timeout=settings.tts_request_timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return response.content

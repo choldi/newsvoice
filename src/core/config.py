@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     tts_max_chars: int = Field(default=5000, gt=0)
     tts_chunk_max_chars: int = Field(default=400, gt=0)
     tts_synthesis_concurrency: int = Field(default=1, ge=1)
+    # Per-request timeout for a single TTS synthesis call. The cloned-voice
+    # backend takes ~0.9 s/char, so a full 400-char chunk can take ~6 min;
+    # keep this comfortably above the slowest chunk.
+    tts_request_timeout: int = Field(default=600, ge=1)
     tts_podcast_behavior: str = ""
     tts_podcast_name: str = ""
     admin_api_token: str = ""

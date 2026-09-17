@@ -31,7 +31,11 @@ RSS_FETCH_TIMEOUT = timedelta(seconds=120)
 FILTER_TIMEOUT = timedelta(seconds=30)
 CLUSTER_TIMEOUT = timedelta(seconds=1800)
 DIGEST_TIMEOUT = timedelta(seconds=1800)
-TTS_TIMEOUT = timedelta(seconds=1800)
+# Timeout for a single TTS activity. The OmniVoice cloned-voice backend runs at
+# ~0.9 s/char (a 400-char chunk took ~345s); a 5000-char digest = ~13 chunks x
+# up to tts_request_timeout(600s) = ~130 min worst case, so keep this above
+# 13 x 600s while the real expected duration is ~75 min.
+TTS_TIMEOUT = timedelta(seconds=8100)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
 EMAIL_TIMEOUT = timedelta(seconds=90)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
