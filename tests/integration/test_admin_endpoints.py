@@ -165,6 +165,67 @@ def test_runs_missing_404() -> None:
     assert response.status_code == 404
 
 
+def test_run_audio_status() -> None:
+    """The audio job status endpoint returns TTS generation progress."""
+    from src.api.db.database import AudioJobsRepository
+
+    async def _seed() -> None:
+        await RunsRepository(db_path=settings.database_path).record_run(
+            workflow_id="wf-audio",
+            collection="tech",
+            status="ok",
+            article_count=3,
+            cluster_count=2,
+            digest_preview="# Digest",
+        )
+        await AudioJobsRepository(db_path=settings.database_path).start_job("wf-audio", "tech")
+        await AudioJobsRepository(db_path=settings.database_path).set_generating("wf-audio")
+        await AudioJobsRepository(db_path=settings.database_path).finish_job(
+            "wf-audio",
+            status="FINISHED_OK",
+            audio_path="data/tts_cache/z.wav",
+            elapsed_seconds=912.0,
+        )
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    runs = client.get("/api/admin/runs").json()["runs"]
+    run_id = runs[0]["id"]
+
+    response = client.get(f"/api/admin/runs/{run_id}/audio")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["job"]["run_id"] == "wf-audio"
+    assert body["job"]["status"] == "FINISHED_OK"
+    assert body["job"]["audio_path"] == "data/tts_cache/z.wav"
+    assert body["job"]["elapsed_seconds"] == 912.0
+
+
+def test_run_audio_missing_404() -> None:
+    """A run without a recorded audio job returns 404 on its audio endpoint."""
+
+    async def _seed() -> None:
+        await RunsRepository(db_path=settings.database_path).record_run(
+            workflow_id="wf-noaudio",
+            collection="tech",
+            status="ok",
+            article_count=1,
+            cluster_count=1,
+            digest_preview="# Digest",
+        )
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    run_id = client.get("/api/admin/runs").json()["runs"][0]["id"]
+    response = client.get(f"/api/admin/runs/{run_id}/audio")
+    assert response.status_code == 404
+
+
 def test_trigger_run_unknown_collection_404() -> None:
     """POST run for an unknown collection returns 404."""
     response = client.post("/api/admin/collections/nope/run")

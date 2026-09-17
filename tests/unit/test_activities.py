@@ -3,8 +3,11 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
+from src.api.db.database import AudioJobsRepository
 from src.api.models.article import ArticleIn, DigestOut
 from src.api.models.cluster import ClusterItem
 from src.api.models.tts import TTSOut
@@ -101,7 +104,12 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
     ) as mock_tts:
         result = await ActivityEnvironment().run(
             generate_tts_activity,
-            {"digest": "# Top Stories", "language": "en", "voice": "en-gb-female"},
+            {
+                "digest": "# Top Stories",
+                "language": "en",
+                "voice": "en-gb-female",
+                "run_id": "test-tts-run",
+            },
         )
 
     assert result["audio_path"].endswith(".wav")
@@ -109,6 +117,32 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
     tts_in = mock_tts.call_args.args[0]
     assert tts_in.language == "en"
     assert tts_in.voice == "en-gb-female"
+
+    job = await AudioJobsRepository().get_job("test-tts-run")
+    assert job is not None
+    assert job["status"] == "FINISHED_OK"
+    assert job["audio_path"] == "data/tts_cache/abc.wav"
+    assert job["elapsed_seconds"] >= 0
+
+
+async def test_generate_tts_activity_records_error_status() -> None:
+    """generate_tts_activity records FINISHED_ERROR when synthesis fails."""
+    with patch(
+        "src.workers.activities.TTSService.generate_tts",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("backend down"),
+    ):
+        with pytest.raises(ApplicationError, match="TTS generation failed"):
+            await ActivityEnvironment().run(
+                generate_tts_activity,
+                {"digest": "# Top Stories", "run_id": "test-tts-error"},
+            )
+
+    job = await AudioJobsRepository().get_job("test-tts-error")
+    assert job is not None
+    assert job["status"] == "FINISHED_ERROR"
+    assert "backend down" in (job["error"] or "")
+    assert job["elapsed_seconds"] >= 0
 
 
 async def test_generate_tts_activity_falls_back_to_settings() -> None:

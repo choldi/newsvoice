@@ -193,6 +193,8 @@ class DigestPipelineWorkflow:
                         "digest": digest_markdown,
                         "language": config.language,
                         "voice": config.voice,
+                        "run_id": workflow.info().workflow_id,
+                        "collection": config.collection,
                     },
                     start_to_close_timeout=TTS_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,

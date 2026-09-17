@@ -543,3 +543,103 @@ class RunsRepository:
             async with db.execute(f"SELECT COUNT(*) FROM digest_runs {where}", params) as cursor:
                 row = await cursor.fetchone()
                 return int(row[0]) if row else 0
+
+
+class AudioJobsRepository:
+    """Repository for per-run TTS generation status (STARTING/GENERATING/FINISHED)."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def start_job(self, run_id: str, collection: str = "default") -> None:
+        """Insert or reset the audio job row for a run to STARTING.
+
+        Idempotent (upsert on run_id) so Temporal replays never create dupes.
+
+        Args:
+            run_id: Workflow id of the digest run the job belongs to.
+            collection: Collection name the run belongs to.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO audio_jobs (run_id, collection, status, started_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                collection = excluded.collection,
+                status = 'STARTING',
+                error = NULL,
+                audio_path = NULL,
+                started_at = excluded.started_at,
+                finished_at = NULL,
+                elapsed_seconds = NULL
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (run_id, collection, "STARTING", now_iso))
+            await db.commit()
+
+    async def set_generating(self, run_id: str) -> None:
+        """Mark the job as GENERATING (synthesis in progress).
+
+        Args:
+            run_id: Workflow id of the digest run.
+        """
+        query = "UPDATE audio_jobs SET status = ? WHERE run_id = ?"
+        async with get_db(self.db_path) as db:
+            await db.execute(query, ("GENERATING", run_id))
+            await db.commit()
+
+    async def finish_job(
+        self,
+        run_id: str,
+        status: str,
+        error: str | None = None,
+        audio_path: str | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Record the terminal TTS outcome for a run.
+
+        Args:
+            run_id: Workflow id of the digest run.
+            status: 'FINISHED_OK' or 'FINISHED_ERROR'.
+            error: Error message/observation for failed generation.
+            audio_path: Generated audio file path on success.
+            elapsed_seconds: Wall-clock seconds the TTS step took.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            UPDATE audio_jobs
+            SET status = ?, error = ?, audio_path = ?,
+                finished_at = ?, elapsed_seconds = ?
+            WHERE run_id = ?
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                query,
+                (status, error, audio_path, now_iso, elapsed_seconds, run_id),
+            )
+            await db.commit()
+
+    async def get_job(self, run_id: str) -> dict | None:
+        """Return the audio job row for a run, or None if not found.
+
+        Args:
+            run_id: Workflow id of the digest run.
+
+        Returns:
+            The audio job dict, or None.
+        """
+        query = """
+            SELECT id, run_id, collection, status, error, audio_path,
+                   started_at, finished_at, elapsed_seconds
+            FROM audio_jobs
+            WHERE run_id = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (run_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None

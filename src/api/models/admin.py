@@ -107,6 +107,13 @@ class RunOut(BaseModel):
     run: dict[str, Any] = Field(..., description="Run row from digest_runs")
 
 
+class AudioJobOut(BaseModel):
+    """Response carrying a run's TTS generation status."""
+
+    status: str = Field(default="ok", description="Execution status: ok or error")
+    job: dict[str, Any] = Field(..., description="Audio job row from audio_jobs")
+
+
 class RunsListOut(BaseModel):
     """Response carrying a filtered list of digest runs."""
 

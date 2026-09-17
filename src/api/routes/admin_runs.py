@@ -7,8 +7,8 @@ collection immediately.
 import structlog
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.api.db.database import RunsRepository
-from src.api.models.admin import RunOut, RunsListOut, TriggerRunOut
+from src.api.db.database import AudioJobsRepository, RunsRepository
+from src.api.models.admin import AudioJobOut, RunOut, RunsListOut, TriggerRunOut
 from src.api.services.collections_repo import CollectionsRepository
 from src.api.services.temporal_admin import TemporalAdminService
 
@@ -63,6 +63,37 @@ async def get_run(run_id: int) -> RunOut:
             detail=f"Run {run_id} not found",
         )
     return RunOut(run=run)
+
+
+@router.get("/admin/runs/{run_id}/audio", response_model=AudioJobOut)
+async def get_run_audio(run_id: int) -> AudioJobOut:
+    """Return the TTS generation status for a digest run.
+
+    Status is one of STARTING, GENERATING, FINISHED_OK, FINISHED_ERROR, with
+    error detail, audio_path, and elapsed_seconds when known.
+
+    Args:
+        run_id: Digest run row id.
+
+    Returns:
+        AudioJobOut with the audio_jobs row for the run.
+
+    Raises:
+        HTTPException: 404 if the run or its audio job does not exist.
+    """
+    run = await RunsRepository().get_run(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",
+        )
+    job = await AudioJobsRepository().get_job(run["workflow_id"])
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No audio job recorded for run {run_id}",
+        )
+    return AudioJobOut(job=job)
 
 
 @router.post("/admin/collections/{name}/run", response_model=TriggerRunOut)

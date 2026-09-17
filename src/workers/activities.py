@@ -1,6 +1,7 @@
 """Temporal activities wrapping the news-engine services."""
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from src.api.db.database import RunsRepository
+from src.api.db.database import AudioJobsRepository, RunsRepository
 from src.api.models.article import ArticleIn, DigestIn
 from src.api.models.cluster import ClusterIn
 from src.api.models.tts import TTSIn
@@ -216,9 +217,14 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
 async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     """Convert the digest markdown into MP3 audio.
 
+    Records the generation progress in the audio_jobs table so clients can
+    query STARTING/GENERATING/FINISHED_OK/FINISHED_ERROR status, the error
+    detail, and elapsed time.
+
     Args:
-        digest: Dict containing the digest text under the 'digest' key, and optional
-            'language'/'voice' overrides for this podcast.
+        digest: Dict containing the digest text under the 'digest' key, optional
+            'language'/'voice' overrides for this podcast, plus 'run_id' and
+            'collection' used to key the audio job status.
 
     Returns:
         Dict with audio_path, duration_estimate, cached, voice, and char_count.
@@ -230,14 +236,33 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     markdown = digest.get("digest") if isinstance(digest, dict) else None
     if not markdown:
         raise ApplicationError("Digest text missing for TTS", non_retryable=True)
+    run_id = str(digest.get("run_id") or activity.info().activity_id)
+    collection = str(digest.get("collection") or "default")
+
+    audio_repo = AudioJobsRepository()
+    await audio_repo.start_job(run_id, collection)
+    started = time.monotonic()
     try:
         settings = get_settings()
         language = digest.get("language") or settings.tts_language
         voice = digest.get("voice") or settings.tts_voice
         tts_in = TTSIn(markdown=str(markdown), language=language, voice=voice)
+        await audio_repo.set_generating(run_id)
         result = await TTSService().generate_tts(tts_in)
     except Exception as exc:
+        await audio_repo.finish_job(
+            run_id,
+            status="FINISHED_ERROR",
+            error=str(exc),
+            elapsed_seconds=round(time.monotonic() - started, 2),
+        )
         raise ApplicationError(f"TTS generation failed: {exc}", non_retryable=True) from exc
+    await audio_repo.finish_job(
+        run_id,
+        status="FINISHED_OK",
+        audio_path=result.audio_path,
+        elapsed_seconds=round(time.monotonic() - started, 2),
+    )
     return result.model_dump()
 
 
