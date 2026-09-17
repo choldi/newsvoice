@@ -1,5 +1,6 @@
 """Unit tests for TTSService (OmniVoice API backend)."""
 
+import asyncio
 import io
 import wave
 from pathlib import Path
@@ -223,6 +224,41 @@ async def test_generate_tts_fragments_and_concatenates(
     assert result.audio_path.endswith(".wav")
     with wave.open(str(result.audio_path), "rb") as reader:
         assert reader.getnframes() == 22050 * len(calls)
+
+
+@pytest.mark.asyncio
+async def test_generate_tts_synthesizes_fragments_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """generate_tts synthesizes fragments with bounded concurrency (order kept)."""
+    service = TTSService(cache_dir=str(tmp_path))
+    fragments_seen: list[str] = []
+    active = 0
+    max_active = 0
+
+    async def fake_synthesize(text: str, voice: str, language: str) -> bytes:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.005)
+        fragments_seen.append(text)
+        active -= 1
+        return _fake_wav()
+
+    monkeypatch.setattr(service, "_synthesize", fake_synthesize)
+
+    async def fake_resolve(voice: str) -> str:
+        return voice
+
+    monkeypatch.setattr(service, "_resolve_voice_id", fake_resolve)
+
+    text = " ".join(f"Frase numero {i} para fragmentar." for i in range(60))
+    payload = TTSIn(markdown=text)
+    await service.generate_tts(payload)
+
+    assert max_active > 1
+    assert max_active <= 2
+    assert len(fragments_seen) == len(_fragment_text(text, 400))
 
 
 @pytest.mark.asyncio

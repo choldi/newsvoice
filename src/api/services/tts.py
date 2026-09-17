@@ -6,6 +6,7 @@ the TTS model, synthesized chunk by chunk via POST /tts, and the resulting WAV
 segments are concatenated into a single audio file.
 """
 
+import asyncio
 import hashlib
 import io
 import re
@@ -211,9 +212,7 @@ class TTSService:
         if not cached:
             resolved_voice = await self._resolve_voice_id(voice)
             fragments = _fragment_text(speech_text, self._chunk_max_chars)
-            chunk_wavs: list[bytes] = []
-            for fragment in fragments:
-                chunk_wavs.append(await self._synthesize(fragment, resolved_voice, language))
+            chunk_wavs = await self._synthesize_fragments(fragments, resolved_voice, language)
             audio_bytes = _concat_wav(chunk_wavs)
             audio_path.write_bytes(audio_bytes)
 
@@ -235,6 +234,33 @@ class TTSService:
             voice=voice,
             char_count=len(speech_text),
         )
+
+    async def _synthesize_fragments(
+        self, fragments: list[str], voice: str, language: str
+    ) -> list[bytes]:
+        """Synthesize fragments concurrently, preserving input order.
+
+        Long digests fragment into many small pieces; synthesizing them one at
+        a time can exceed the workflow's TTS activity timeout. A bounded number
+        of concurrent requests keeps wall time low while avoiding overloading
+        the (single-GPU) OmniVoice backend.
+
+        Args:
+            fragments: Text fragments to synthesize.
+            voice: Resolved OmniVoice voice id.
+            language: ISO 639-1 language code.
+
+        Returns:
+            List of WAV bytes, ordered like ``fragments``.
+        """
+        settings = get_settings()
+        semaphore = asyncio.Semaphore(settings.tts_synthesis_concurrency)
+
+        async def synthesize(fragment: str) -> bytes:
+            async with semaphore:
+                return await self._synthesize(fragment, voice, language)
+
+        return list(await asyncio.gather(*(synthesize(f) for f in fragments)))
 
     async def _synthesize(self, text: str, voice: str, language: str) -> bytes:
         """Call OmniVoice POST /tts and return the raw WAV bytes.
