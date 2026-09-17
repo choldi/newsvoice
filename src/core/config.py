@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     tts_voice: str = "es-mx-male"
     tts_max_chars: int = Field(default=5000, gt=0)
     tts_chunk_max_chars: int = Field(default=400, gt=0)
-    tts_synthesis_concurrency: int = Field(default=2, ge=1)
+    tts_synthesis_concurrency: int = Field(default=1, ge=1)
     tts_podcast_behavior: str = ""
     tts_podcast_name: str = ""
     admin_api_token: str = ""

@@ -17,6 +17,7 @@ from src.api.services.tts import (
     _markdown_to_speech_text,
     _truncate_for_tts,
 )
+from src.core.config import Settings
 
 
 def _fake_wav(rate: int = 22050) -> bytes:
@@ -231,6 +232,10 @@ async def test_generate_tts_synthesizes_fragments_concurrently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """generate_tts synthesizes fragments with bounded concurrency (order kept)."""
+    monkeypatch.setattr(
+        "src.api.services.tts.get_settings",
+        lambda: Settings(tts_synthesis_concurrency=2, _env_file=None),
+    )
     service = TTSService(cache_dir=str(tmp_path))
     fragments_seen: list[str] = []
     active = 0
