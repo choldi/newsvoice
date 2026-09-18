@@ -64,7 +64,8 @@ class TemporalAdminService:
         client = await self.client()
         ids: list[str] = []
         try:
-            async for handle in client.list_schedules():
+            schedules = await client.list_schedules()
+            async for handle in schedules:
                 if handle.id.startswith(SCHEDULE_PREFIX):
                     ids.append(handle.id)
         except RPCError as exc:

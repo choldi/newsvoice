@@ -93,8 +93,13 @@ class FakeClient:
         self.workflow_handles: dict[str, FakeWorkflowHandle] = {}
 
     async def list_schedules(self):  # type: ignore[override]
-        for handle in list(self.schedules.values()):
-            yield handle
+        # Mirrors the real SDK: list_schedules() is a coroutine that must be
+        # awaited and then yields handles via an async iterator.
+        async def _iter():
+            for handle in list(self.schedules.values()):
+                yield handle
+
+        return _iter()
 
     async def get_schedule_handle(self, schedule_id: str) -> FakeHandle:
         if schedule_id not in self.schedules:
