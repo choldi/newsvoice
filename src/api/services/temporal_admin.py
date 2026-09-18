@@ -88,7 +88,7 @@ class TemporalAdminService:
         schedule_id = await self.schedule_id_for(collection)
         config = pipeline_config_for(collection, tts_flag=None)
         schedule = build_schedule(collection, config)
-        handle: ScheduleHandle = await client.get_schedule_handle(schedule_id)
+        handle: ScheduleHandle = client.get_schedule_handle(schedule_id)
         try:
             await handle.describe()
             await handle.update(schedule)
@@ -128,7 +128,7 @@ class TemporalAdminService:
             if schedule_id.startswith(SCHEDULE_PREFIX):
                 try:
                     client = await self.client()
-                    handle: ScheduleHandle = await client.get_schedule_handle(schedule_id)
+                    handle: ScheduleHandle = client.get_schedule_handle(schedule_id)
                     await handle.delete()
                     result["removed"].append(schedule_id)
                 except RPCError as exc:

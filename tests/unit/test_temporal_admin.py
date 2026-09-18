@@ -101,7 +101,7 @@ class FakeClient:
 
         return _iter()
 
-    async def get_schedule_handle(self, schedule_id: str) -> FakeHandle:
+    def get_schedule_handle(self, schedule_id: str) -> FakeHandle:
         if schedule_id not in self.schedules:
             return FakeHandle(schedule_id, not_found=True)
         return self.schedules[schedule_id]
