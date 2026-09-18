@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 
 import structlog
-from temporalio.client import Client, RPCError, ScheduleHandle
+from temporalio.client import Client, RPCError, ScheduleHandle, ScheduleUpdate
 
 from src.core.collections import CollectionConfig
 from src.workers.run_worker import build_client
@@ -91,7 +91,7 @@ class TemporalAdminService:
         handle: ScheduleHandle = client.get_schedule_handle(schedule_id)
         try:
             await handle.describe()
-            await handle.update(schedule)
+            await handle.update(lambda _: ScheduleUpdate(schedule=schedule))
             logger.info("schedule_updated", schedule_id=schedule_id)
         except RPCError as exc:
             if exc.status.value != 5:  # grpc STATUS_NOT_FOUND
