@@ -4,7 +4,11 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from src.workers.workflows import DigestPipelineWorkflow, PipelineConfig
+from src.workers.workflows import (
+    CollectionsMonitorWorkflow,
+    DigestPipelineWorkflow,
+    PipelineConfig,
+)
 
 ARTICLE_A = {
     "title": "OpenAI releases GPT-5",
@@ -876,3 +880,124 @@ async def test_telegram_default_skips_email() -> None:
             )
 
     assert invites == []
+
+
+COLLECTIONS_SIGNATURE = "deadbeefcafe1234"
+
+
+async def test_monitor_workflow_syncs_when_collections_change() -> None:
+    """A signature different from the stored one triggers a schedule resync."""
+    synced: list[str] = []
+
+    @activity.defn(name="read_collections_signature_activity")
+    async def stub_read_signature() -> str:
+        return COLLECTIONS_SIGNATURE
+
+    @activity.defn(name="get_synced_signature_activity")
+    async def stub_get_synced() -> str | None:
+        return "previous-signature"
+
+    @activity.defn(name="sync_collections_schedules_activity")
+    async def stub_sync(signature: str) -> None:
+        synced.append(signature)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[CollectionsMonitorWorkflow],
+            activities=[
+                stub_read_signature,
+                stub_get_synced,
+                stub_sync,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                CollectionsMonitorWorkflow.run,
+                None,
+                id="monitor-changed",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "synced"
+    assert result["changed"] is True
+    assert result["signature"] == COLLECTIONS_SIGNATURE[:12]
+    assert synced == [COLLECTIONS_SIGNATURE]
+
+
+async def test_monitor_workflow_skips_when_unchanged() -> None:
+    """An identical signature short-circuits without calling the sync activity."""
+    synced: list[str] = []
+
+    @activity.defn(name="read_collections_signature_activity")
+    async def stub_read_signature() -> str:
+        return COLLECTIONS_SIGNATURE
+
+    @activity.defn(name="get_synced_signature_activity")
+    async def stub_get_synced() -> str | None:
+        return COLLECTIONS_SIGNATURE
+
+    @activity.defn(name="sync_collections_schedules_activity")
+    async def stub_sync(signature: str) -> None:
+        synced.append(signature)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[CollectionsMonitorWorkflow],
+            activities=[
+                stub_read_signature,
+                stub_get_synced,
+                stub_sync,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                CollectionsMonitorWorkflow.run,
+                None,
+                id="monitor-unchanged",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "unchanged"
+    assert result["changed"] is False
+    assert synced == []
+
+
+async def test_monitor_workflow_skips_when_file_unavailable() -> None:
+    """A missing/unparsable collections file leaves schedules untouched."""
+    synced: list[str] = []
+
+    @activity.defn(name="read_collections_signature_activity")
+    async def stub_read_signature() -> str | None:
+        return None
+
+    @activity.defn(name="get_synced_signature_activity")
+    async def stub_get_synced() -> str | None:
+        return COLLECTIONS_SIGNATURE
+
+    @activity.defn(name="sync_collections_schedules_activity")
+    async def stub_sync(signature: str) -> None:
+        synced.append(signature)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[CollectionsMonitorWorkflow],
+            activities=[
+                stub_read_signature,
+                stub_get_synced,
+                stub_sync,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                CollectionsMonitorWorkflow.run,
+                None,
+                id="monitor-skipped",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "skipped"
+    assert result["changed"] is False
+    assert synced == []

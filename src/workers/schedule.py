@@ -13,13 +13,16 @@ Examples:
 
 import argparse
 import asyncio
+from datetime import timedelta
 
 from temporalio.client import (
+    Client,
     RPCError,
     Schedule,
     ScheduleActionStartWorkflow,
     ScheduleAlreadyRunningError,
     ScheduleCalendarSpec,
+    ScheduleIntervalSpec,
     ScheduleRange,
     ScheduleSpec,
     ScheduleUpdate,
@@ -28,7 +31,14 @@ from temporalio.client import (
 from src.core.collections import CollectionConfig, get_collections
 from src.core.config import settings
 from src.workers.run_worker import build_client
-from src.workers.workflows import DigestPipelineWorkflow, PipelineConfig
+from src.workers.workflows import (
+    CollectionsMonitorWorkflow,
+    DigestPipelineWorkflow,
+    PipelineConfig,
+)
+
+# Schedule id of the recurring collections-config monitor workflow.
+MONITOR_SCHEDULE_ID = "collections-config-monitor"
 
 
 def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> PipelineConfig:
@@ -87,6 +97,60 @@ def build_schedule(collection: CollectionConfig, config: PipelineConfig) -> Sche
     )
 
 
+def monitor_schedule() -> Schedule:
+    """Create the recurring collections-config monitor Schedule object.
+
+    Wakes the ``CollectionsMonitorWorkflow`` every configured number of minutes
+    so it can re-register the digest schedules when ``collections.toml`` changes.
+
+    Returns:
+        A Schedule starting CollectionsMonitorWorkflow on a fixed interval.
+    """
+    interval_minutes = settings.collections_monitor_interval_minutes
+    return Schedule(
+        action=ScheduleActionStartWorkflow(
+            CollectionsMonitorWorkflow.run,
+            None,
+            id="collections-monitor",
+            task_queue=settings.temporal_task_queue,
+        ),
+        spec=ScheduleSpec(
+            intervals=[
+                ScheduleIntervalSpec(every=timedelta(minutes=interval_minutes)),
+            ]
+        ),
+    )
+
+
+async def create_monitor_schedule(client: Client) -> str:
+    """Create (or update) the recurring collections-config monitor schedule.
+
+    Args:
+        client: Connected Temporal client.
+
+    Returns:
+        The schedule id.
+
+    Raises:
+        RPCError: If the create/update call fails.
+    """
+    schedule = monitor_schedule()
+    schedule_id = MONITOR_SCHEDULE_ID
+    interval_minutes = settings.collections_monitor_interval_minutes
+    try:
+        await client.create_schedule(schedule_id, schedule)
+        print(f"Created schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except ScheduleAlreadyRunningError:
+        handle = client.get_schedule_handle(schedule_id)
+        await handle.update(lambda _: ScheduleUpdate(schedule=schedule))
+        print(f"Updated schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except RPCError as exc:
+        print(f"Could not create schedule '{schedule_id}': {exc}")
+        print("It may already exist; update handle instead.")
+        raise
+    return schedule_id
+
+
 async def create_schedules(
     collections: list[CollectionConfig] | None = None,
     tts_flag: bool | None = None,
@@ -129,6 +193,7 @@ async def create_schedules(
             print("It may already exist; update handle instead.")
             raise
         created.append(schedule_id)
+    created.append(await create_monitor_schedule(client))
     return created
 
 

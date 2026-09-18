@@ -1,6 +1,7 @@
 """Temporal activities wrapping the news-engine services."""
 
 import asyncio
+import hashlib
 import time
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from pydantic import ValidationError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from src.api.db.database import AudioJobsRepository, RunsRepository
+from src.api.db.database import AudioJobsRepository, RunsRepository, SyncStateRepository
 from src.api.models.article import ArticleIn, DigestIn
 from src.api.models.cluster import ClusterIn
 from src.api.models.tts import TTSIn
@@ -27,6 +28,8 @@ TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
 # Telegram hard limit is 4096 chars per sendMessage; keep a safety margin.
 TELEGRAM_MESSAGE_MAX_CHARS = 4000
 FEED_FETCH_TIMEOUT_SECONDS = 60
+# Key under which SyncStateRepository remembers the last registered signature.
+COLLECTIONS_SIGNATURE_KEY = "collections_signature"
 
 
 def split_message_chunks(text: str, max_chars: int = TELEGRAM_MESSAGE_MAX_CHARS) -> list[str]:
@@ -494,3 +497,83 @@ async def deliver_email_activity(
     except Exception as exc:
         raise ApplicationError(f"Email delivery failed: {exc}", non_retryable=True) from exc
     return result
+
+
+@activity.defn
+async def read_collections_signature_activity() -> str | None:
+    """Compute the sha256 signature of the current collections file.
+
+    The file must parse cleanly; a missing, unreadable, or malformed file
+    yields None so the monitor skips syncing until it is fixed.
+
+    Returns:
+        sha256 hex digest of the raw file contents, or None if it cannot
+        be read or parsed as valid collections.toml.
+    """
+    from src.core.collections import CollectionsLoader
+
+    settings = get_settings()
+    loader = CollectionsLoader(path=settings.collections_file)
+    try:
+        loader.load()
+    except Exception as exc:
+        activity.logger.error(f"collections_signature_parse_failed: {exc}")
+        return None
+
+    path = Path(settings.collections_file)
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        activity.logger.error(f"collections_signature_read_failed: {exc}")
+        return None
+    activity.logger.info(f"collections_signature_computed: {digest[:12]}")
+    return digest
+
+
+@activity.defn
+async def get_synced_signature_activity() -> str | None:
+    """Return the signature of the last successfully registered state.
+
+    Returns:
+        The stored signature, or None if nothing has been registered yet.
+    """
+    return await SyncStateRepository().get(COLLECTIONS_SIGNATURE_KEY)
+
+
+@activity.defn
+async def sync_collections_schedules_activity(signature: str) -> None:
+    """Re-register the Temporal schedules from the current collections file.
+
+    Reconciles every `daily-digest-*` schedule with the collections currently
+    enabled in collections.toml (updating/removing as needed), guarantees the
+    `collections-config-monitor` schedule exists, then stores the signature that
+    was just registered so the monitor can detect the next change.
+
+    Args:
+        signature: sha256 of the collections file just registered.
+
+    Raises:
+        ActivityError: If schedule reconciliation or registration fails; the
+            signature is only stored after a successful run.
+    """
+    from src.api.services.temporal_admin import TemporalAdminService
+    from src.core.collections import CollectionsLoader, default_collection
+    from src.workers.run_worker import build_client
+    from src.workers.schedule import create_monitor_schedule
+
+    settings = get_settings()
+    loader = CollectionsLoader(path=settings.collections_file)
+    collections = [c for c in loader.enabled()] or [default_collection()]
+
+    activity.logger.info(
+        f"Syncing schedules for {len(collections)} collections (signature {signature[:12]})"
+    )
+
+    await TemporalAdminService().resync_schedules(collections)
+
+    client = await build_client()
+    await create_monitor_schedule(client)
+    activity.logger.info("monitor_schedule_ensured")
+
+    await SyncStateRepository().set(COLLECTIONS_SIGNATURE_KEY, signature)
+    activity.logger.info("collections_signature_stored")

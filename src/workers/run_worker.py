@@ -19,7 +19,7 @@ from temporalio.worker import Worker
 from src.api.db.database import run_migrations
 from src.core.config import settings
 from src.workers import activities
-from src.workers.workflows import DigestPipelineWorkflow
+from src.workers.workflows import CollectionsMonitorWorkflow, DigestPipelineWorkflow
 
 
 def configure_logging() -> None:
@@ -72,7 +72,7 @@ async def run_worker(
         worker = Worker(
             client,
             task_queue=queue,
-            workflows=[DigestPipelineWorkflow],
+            workflows=[DigestPipelineWorkflow, CollectionsMonitorWorkflow],
             activities=[
                 activities.fetch_rss_activity,
                 activities.filter_new_activity,
@@ -83,6 +83,9 @@ async def run_worker(
                 activities.deliver_telegram_audio_activity,
                 activities.deliver_email_activity,
                 activities.record_run_activity,
+                activities.read_collections_signature_activity,
+                activities.get_synced_signature_activity,
+                activities.sync_collections_schedules_activity,
             ],
             activity_executor=activity_executor,
         )

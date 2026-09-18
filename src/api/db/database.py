@@ -643,3 +643,49 @@ class AudioJobsRepository:
             async with db.execute(query, (run_id,)) as cursor:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
+
+
+class SyncStateRepository:
+    """Small KV store used by the collections-config monitor."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def get(self, key: str) -> str | None:
+        """Return the stored value for a key, or None.
+
+        Args:
+            key: State key to look up (e.g. 'collections_signature').
+
+        Returns:
+            The stored value, or None if the key is absent.
+        """
+        query = "SELECT value FROM kv_state WHERE key = ?"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (key,)) as cursor:
+                row = await cursor.fetchone()
+                return str(row[0]) if row else None
+
+    async def set(self, key: str, value: str) -> None:
+        """Upsert a state value, replacing any previous value for the key.
+
+        Args:
+            key: State key to write.
+            value: Value to store for the key.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO kv_state (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (key, value, now_iso))
+            await db.commit()

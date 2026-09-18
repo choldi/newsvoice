@@ -1,7 +1,15 @@
 """Unit tests for schedule helpers (per-collection Temporal schedules)."""
 
+from datetime import timedelta
+
 from src.core.collections import CollectionConfig
-from src.workers.schedule import build_schedule, pipeline_config_for
+from src.core.config import settings
+from src.workers.schedule import (
+    MONITOR_SCHEDULE_ID,
+    build_schedule,
+    monitor_schedule,
+    pipeline_config_for,
+)
 
 
 def _collection(**overrides: object) -> CollectionConfig:
@@ -69,3 +77,20 @@ def test_build_schedule_has_per_collection_ids() -> None:
     calendar = schedule.spec.calendars[0]
     assert calendar.hour[0].start == 17
     assert calendar.minute[0].start == 15
+
+
+def test_monitor_schedule_id_and_action() -> None:
+    """The monitor schedule starts CollectionsMonitorWorkflow."""
+    schedule = monitor_schedule()
+
+    assert schedule.action.id == "collections-monitor"
+    assert MONITOR_SCHEDULE_ID == "collections-config-monitor"
+
+
+def test_monitor_schedule_uses_configured_interval() -> None:
+    """The monitor wakes every COLLECTIONS_MONITOR_INTERVAL_MINUTES minutes."""
+    schedule = monitor_schedule()
+    expected = timedelta(minutes=settings.collections_monitor_interval_minutes)
+
+    assert schedule.spec.intervals is not None
+    assert schedule.spec.intervals[0].every == expected

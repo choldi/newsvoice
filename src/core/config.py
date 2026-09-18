@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     temporal_task_queue: str = "news-engine-task-queue"
     rss_feed_urls: list[str] = []
     collections_file: str = "collections.toml"
+    # How often (minutes) the collections-config monitor workflow wakes to check
+    # whether collections.toml changed and re-register the Temporal schedules.
+    collections_monitor_interval_minutes: int = Field(default=5, ge=1)
     tts_cache_dir: str = "data/tts_cache"
     tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
     tts_api_key: str = ""

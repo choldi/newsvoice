@@ -23,7 +23,10 @@ with workflow.unsafe.imports_passed_through():
         filter_new_activity,
         generate_digest_activity,
         generate_tts_activity,
+        get_synced_signature_activity,
+        read_collections_signature_activity,
         record_run_activity,
+        sync_collections_schedules_activity,
     )
 
 # Reasonable per-step timeouts for activity execution.
@@ -31,6 +34,10 @@ RSS_FETCH_TIMEOUT = timedelta(seconds=120)
 FILTER_TIMEOUT = timedelta(seconds=30)
 CLUSTER_TIMEOUT = timedelta(seconds=1800)
 DIGEST_TIMEOUT = timedelta(seconds=1800)
+# Timeouts for the collections-config monitor activities: reading the file and
+# the KV lookups are local, while re-registering schedules talks to Temporal.
+COLLECTIONS_SIGNATURE_TIMEOUT = timedelta(seconds=30)
+COLLECTIONS_SYNC_TIMEOUT = timedelta(seconds=120)
 # Timeout for a single TTS activity. The OmniVoice cloned-voice backend runs at
 # ~0.9 s/char (a 400-char chunk took ~345s); a 5000-char digest = ~13 chunks x
 # up to tts_request_timeout(600s) = ~130 min worst case, so keep this above
@@ -351,3 +358,50 @@ class DigestPipelineWorkflow:
                 non_retryable=True,
             )
         return int(digest["article_count"])
+
+
+@workflow.defn
+class CollectionsMonitorWorkflow:
+    """Keep the Temporal schedules in sync with collections.toml.
+
+    Runs on a fixed schedule (see ``schedule.monitor_schedule``). Each run
+    compares the sha256 of the current collections file against the signature
+    stored after the last registration; when they differ, it re-registers the
+    per-collection schedules so a feed/time/voice change in the TOML takes
+    effect without a manual ``python -m src.workers.schedule`` call.
+    """
+
+    @workflow.run
+    async def run(self, unused: None = None) -> dict[str, Any]:
+        """Check for and apply schedule drift on each schedule tick.
+
+        Args:
+            unused: No input expected from the schedule action.
+
+        Returns:
+            Dict describing the run outcome ('synced', 'unchanged', or 'skipped').
+        """
+        signature = await workflow.execute_activity(
+            read_collections_signature_activity,
+            start_to_close_timeout=COLLECTIONS_SIGNATURE_TIMEOUT,
+        )
+        if not isinstance(signature, str):
+            workflow.logger.info("collections_file_unavailable; skipping sync")
+            return {"status": "skipped", "changed": False}
+
+        last_signature = await workflow.execute_activity(
+            get_synced_signature_activity,
+            start_to_close_timeout=COLLECTIONS_SIGNATURE_TIMEOUT,
+        )
+        if last_signature == signature:
+            workflow.logger.info("collections_config_unchanged")
+            return {"status": "unchanged", "changed": False}
+
+        workflow.logger.info("collections_config_changed; re-registering schedules")
+        await workflow.execute_activity(
+            sync_collections_schedules_activity,
+            args=[signature],
+            start_to_close_timeout=COLLECTIONS_SYNC_TIMEOUT,
+            retry_policy=NETWORK_RETRY_POLICY,
+        )
+        return {"status": "synced", "changed": True, "signature": signature[:12]}
