@@ -1,26 +1,51 @@
-"""Text-to-Speech service using the OmniVoice API (stock voice synthesis).
+"""Text-to-Speech service using Microsoft Edge neural voices (edge-tts).
 
-The digest markdown is converted to speech-friendly plain text, fragmented into
-small paragraphs (<= tts_chunk_max_chars) to avoid long-input hallucinations in
-the TTS model, synthesized chunk by chunk via POST /tts, and the resulting WAV
-segments are concatenated into a single audio file.
+The digest markdown is converted to speech-friendly plain text and synthesized
+with ``edge_tts`` into a single MP3 file. Edge neural voices read the text
+verbatim, eliminating the hallucination/repetition artifacts seen with the
+previous LLM-based OmniVoice backend. The MP3 is later transcoded to M4A (AAC)
+before delivery (see ``AudioCompressService``).
 """
 
 import asyncio
 import hashlib
-import io
 import re
-import wave
 from pathlib import Path
 
-import httpx
+import edge_tts
 import structlog
 
 from src.api.models.tts import TTSIn, TTSOut
-from src.api.services.voices import VoicesService
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
+
+# Legacy OmniVoice voice names are transparently mapped to Edge neural voices so
+# existing collections.toml files keep working after the migration.
+LEGACY_VOICE_ALIASES = {
+    "es-mx-male": "es-MX-JorgeNeural",
+    "es-mx-female": "es-MX-DaliaNeural",
+    "es-mx": "es-MX-JorgeNeural",
+    "en-us-female": "en-US-AriaNeural",
+    "en-us-male": "en-US-GuyNeural",
+    "en-gb-female": "en-GB-SoniaNeural",
+    "en-gb-male": "en-GB-RyanNeural",
+}
+
+# Fallback neural voice per ISO 639-1 language when the configured voice cannot
+# be matched against the Edge catalogue or the network is unavailable.
+DEFAULT_VOICE_BY_LANGUAGE = {
+    "es": "es-MX-JorgeNeural",
+    "en": "en-US-GuyNeural",
+    "pt": "pt-BR-AntonioNeural",
+    "it": "it-IT-DiegoNeural",
+    "fr": "fr-FR-HenriNeural",
+    "de": "de-DE-ConradNeural",
+}
+
+# Lazily-loaded catalogue of available Edge voices ({ShortName}). Kept at module
+# level so a workflow run (many activity calls) only fetches it once.
+_EDGE_VOICES: list[dict] | None = None
 
 
 def _content_hash(markdown: str, voice: str, language: str = "") -> str:
@@ -61,137 +86,77 @@ def _markdown_to_speech_text(text: str) -> str:
     lines: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        stripped = re.sub(r"^#{1,6}\s+", "", stripped)
+        stripped = re.sub(r"^#+(?:\s.*)?$", lambda m: m.group(0).lstrip("#").strip(), stripped)
         stripped = re.sub(r"^\s*[-*+]\s+", "", stripped)
         stripped = re.sub(r"^\s*\d+\.\s*", "", stripped)
         lines.append(stripped)
     return "\n".join(line for line in lines if line)
 
 
-def _split_sentences(paragraph: str) -> list[str]:
-    """Split a paragraph into sentences, keeping punctuation with each one.
-
-    Args:
-        paragraph: Text to split.
-
-    Returns:
-        List of sentence strings.
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", paragraph.strip())
-    result: list[str] = []
-    for sentence in sentences:
-        # Avoid emitting a trailing empty chunk.
-        if sentence:
-            result.append(sentence)
-    return result
-
-
-def _fragment_text(text: str, max_chars: int = 400) -> list[str]:
-    """Split text into small paragraph-sized fragments for TTS synthesis.
-
-    Paragraphs are kept intact when short enough; longer paragraphs are split at
-    sentence boundaries. Emotion tags stay at the start of their own fragment.
-
-    Args:
-        text: Plain text (emotion tags allowed).
-        max_chars: Maximum length of each fragment.
-
-    Returns:
-        List of text fragments.
-    """
-    paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
-    fragments: list[str] = []
-    for paragraph in paragraphs:
-        if len(paragraph) <= max_chars:
-            fragments.append(paragraph)
-            continue
-        current = ""
-        for sentence in _split_sentences(paragraph):
-            candidate = f"{current} {sentence}".strip() if current else sentence
-            if len(candidate) <= max_chars:
-                current = candidate
-            else:
-                if current:
-                    fragments.append(current)
-                current = sentence
-        if current:
-            fragments.append(current)
-    return fragments
-
-
-def _concat_wav(chunks: list[bytes]) -> bytes:
-    """Concatenate WAV payloads into a single WAV file.
-
-    Args:
-        chunks: List of WAV file bytes.
-
-    Returns:
-        A single merged WAV file's bytes.
-
-    Raises:
-        ValueError: If chunks is empty.
-    """
-    if not chunks:
-        raise ValueError("No audio chunks to concatenate")
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as writer:
-        for index, chunk in enumerate(chunks):
-            with wave.open(io.BytesIO(chunk), "rb") as reader:
-                if index == 0:
-                    writer.setnchannels(reader.getnchannels())
-                    writer.setsampwidth(reader.getsampwidth())
-                    writer.setframerate(reader.getframerate())
-                writer.writeframes(reader.readframes(reader.getnframes()))
-    return buffer.getvalue()
-
-
 class TTSService:
-    """Service to convert digest markdown into WAV audio via the OmniVoice API."""
+    """Service to convert digest markdown into MP3 audio via Edge neural TTS."""
 
     def __init__(self, cache_dir: str | None = None) -> None:
-        """Initializes the TTSService with an optional cache directory.
+        """Initialize the TTSService with an optional cache directory.
 
         Args:
             cache_dir: Optional path to the TTS cache directory. Defaults to settings.tts_cache_dir.
         """
         settings = get_settings()
         self._cache_dir = Path(cache_dir or settings.tts_cache_dir)
-        self._api_base_url = settings.tts_api_base_url
-        self._api_key = settings.tts_api_key
-        self._default_voice = settings.tts_voice
+        self._default_voice = settings.tts_voice or DEFAULT_VOICE_BY_LANGUAGE.get(
+            settings.tts_language, "es-MX-JorgeNeural"
+        )
         self._default_language = settings.tts_language
         self._max_chars = settings.tts_max_chars
-        self._chunk_max_chars = settings.tts_chunk_max_chars
+        self._request_timeout = settings.tts_request_timeout
 
-    async def _resolve_voice_id(self, voice: str) -> str:
-        """Resolve a voice name or stock ID to the OmniVoice voice_id.
-
-        Stock voices are returned unchanged.  For cloned voices the friendly
-        name stored in ``collections.toml`` is looked up via
-        ``GET /voices/cloned`` and resolved to the UUID ``id`` that OmniVoice
-        expects in ``POST /tts``.
-
-        Args:
-            voice: Configured voice name or stock voice id.
+    async def _available_voice_names(self) -> set[str]:
+        """Return the set of Edge voice ShortNames (cached across instances).
 
         Returns:
-            The ``voice_id`` to send to OmniVoice.
+            Lowercased ShortName set. Empty when the catalogue cannot be fetched.
         """
-        voices_svc = VoicesService(self._api_base_url, self._api_key)
-        stock = await voices_svc.list_stock(force=True)
-        stock_ids = {v.get("voice_id") for v in stock}
-        if voice in stock_ids:
-            return voice
-        cloned = await voices_svc.list_cloned(force=True)
-        for entry in cloned:
-            if entry.get("name") == voice:
-                clone_id = entry.get("id")
-                if clone_id:
-                    return clone_id
-        return voice
+        global _EDGE_VOICES
+        if _EDGE_VOICES is None:
+            try:
+                _EDGE_VOICES = await edge_tts.list_voices()
+            except Exception as exc:
+                logger.warning("edge_voices_unavailable", error=str(exc))
+                _EDGE_VOICES = []
+        return {v.get("ShortName", "").lower() for v in _EDGE_VOICES}
+
+    async def _resolve_voice(self, voice: str, language: str) -> str:
+        """Map a configured voice name to a valid Edge neural ShortName.
+
+        Tries an exact Edge catalogue match first, then legacy OmniVoice
+        aliases, and finally a language-based default. The lookup does not
+        require the network when an alias or the language default applies.
+
+        Args:
+            voice: Configured voice name (Edge ShortName, legacy alias, or free text).
+            language: ISO 639-1 language code driving the fallback default.
+
+        Returns:
+            A valid Edge voice ShortName.
+        """
+        requested = voice.strip().lower()
+        if not requested:
+            return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
+
+        known = await self._available_voice_names()
+        if requested in known:
+            return voice.strip()
+
+        alias = LEGACY_VOICE_ALIASES.get(requested)
+        if alias:
+            return alias
+
+        logger.info("tts_voice_not_matched_falling_back", voice=voice, language=language)
+        return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
 
     async def generate_tts(self, payload: TTSIn) -> TTSOut:
-        """Generate (or fetch from cache) a WAV for the given markdown.
+        """Generate (or fetch from cache) an MP3 for the given markdown.
 
         Args:
             payload: TTSIn model containing the markdown text and optional voice/language.
@@ -204,16 +169,14 @@ class TTSService:
         text = _truncate_for_tts(payload.markdown, self._max_chars)
         speech_text = _markdown_to_speech_text(text)
         content_hash = _content_hash(text, voice, language)
-        audio_path = self._cache_dir / f"{content_hash}.wav"
+        audio_path = self._cache_dir / f"{content_hash}.mp3"
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         cached = audio_path.exists()
         if not cached:
-            resolved_voice = await self._resolve_voice_id(voice)
-            fragments = _fragment_text(speech_text, self._chunk_max_chars)
-            chunk_wavs = await self._synthesize_fragments(fragments, resolved_voice, language)
-            audio_bytes = _concat_wav(chunk_wavs)
+            resolved_voice = await self._resolve_voice(voice, language)
+            audio_bytes = await self._synthesize(speech_text, resolved_voice)
             audio_path.write_bytes(audio_bytes)
 
         duration = _estimate_duration(len(speech_text))
@@ -235,57 +198,39 @@ class TTSService:
             char_count=len(speech_text),
         )
 
-    async def _synthesize_fragments(
-        self, fragments: list[str], voice: str, language: str
-    ) -> list[bytes]:
-        """Synthesize fragments concurrently, preserving input order.
-
-        Long digests fragment into many small pieces; synthesizing them one at
-        a time can exceed the workflow's TTS activity timeout. A bounded number
-        of concurrent requests keeps wall time low while avoiding overloading
-        the (single-GPU) OmniVoice backend.
+    async def _synthesize(self, text: str, voice: str) -> bytes:
+        """Synthesize text with the Edge neural voice, returning the MP3 bytes.
 
         Args:
-            fragments: Text fragments to synthesize.
-            voice: Resolved OmniVoice voice id.
-            language: ISO 639-1 language code.
+            text: Speech-friendly plain text to synthesize.
+            voice: Valid Edge voice ShortName.
 
         Returns:
-            List of WAV bytes, ordered like ``fragments``.
-        """
-        settings = get_settings()
-        semaphore = asyncio.Semaphore(settings.tts_synthesis_concurrency)
-
-        async def synthesize(fragment: str) -> bytes:
-            async with semaphore:
-                return await self._synthesize(fragment, voice, language)
-
-        return list(await asyncio.gather(*(synthesize(f) for f in fragments)))
-
-    async def _synthesize(self, text: str, voice: str, language: str) -> bytes:
-        """Call OmniVoice POST /tts and return the raw WAV bytes.
-
-        Args:
-            text: Text fragment to synthesize.
-            voice: OmniVoice stock voice identifier.
-            language: ISO 639-1 language code.
-
-        Returns:
-            Audio/wav response bytes.
+            Raw MP3 audio bytes.
 
         Raises:
-            httpx.HTTPStatusError: If the API returns a non-2xx status.
+            RuntimeError: If synthesis yields no audio or times out.
         """
-        settings = get_settings()
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
-        payload = {"text": text, "voice_id": voice, "language": language}
-        url = self._api_base_url.rstrip("/") + "/tts"
-        async with httpx.AsyncClient(timeout=settings.tts_request_timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.content
+        if not text.strip():
+            raise RuntimeError("No text to synthesize")
+        communicate = edge_tts.Communicate(text, voice)
+        chunks: list[bytes] = []
+
+        async def _collect() -> None:
+            async for item in communicate.stream():
+                if item["type"] == "audio":
+                    chunks.append(item["data"])
+
+        try:
+            await asyncio.wait_for(_collect(), timeout=self._request_timeout)
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Edge TTS synthesis timed out after {self._request_timeout}s"
+            ) from exc
+        if not chunks:
+            raise RuntimeError(f"Edge TTS produced no audio for voice {voice}")
+
+        return b"".join(chunks)
 
 
 async def list_cached_audios(cache_dir: str | None = None) -> list[str]:
@@ -295,10 +240,10 @@ async def list_cached_audios(cache_dir: str | None = None) -> list[str]:
         cache_dir: Optional cache directory path. Defaults to settings.tts_cache_dir.
 
     Returns:
-        Sorted list of cached WAV filenames.
+        Sorted list of cached MP3 filenames.
     """
     settings = get_settings()
     base = Path(cache_dir or settings.tts_cache_dir)
     if not base.exists():
         return []
-    return sorted(p.name for p in base.glob("*.wav"))
+    return sorted(p.name for p in base.glob("*.mp3"))

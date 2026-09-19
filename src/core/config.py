@@ -40,13 +40,9 @@ class Settings(BaseSettings):
     tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
     tts_api_key: str = ""
     tts_language: str = "es"
-    tts_voice: str = "es-mx-male"
+    tts_voice: str = "es-MX-JorgeNeural"
     tts_max_chars: int = Field(default=5000, gt=0)
-    tts_chunk_max_chars: int = Field(default=400, gt=0)
-    tts_synthesis_concurrency: int = Field(default=1, ge=1)
-    # Per-request timeout for a single TTS synthesis call. The cloned-voice
-    # backend takes ~0.9 s/char, so a full 400-char chunk can take ~6 min;
-    # keep this comfortably above the slowest chunk.
+    # Per-request timeout for a single Edge TTS synthesis call.
     tts_request_timeout: int = Field(default=600, ge=1)
     tts_podcast_behavior: str = ""
     tts_podcast_name: str = ""

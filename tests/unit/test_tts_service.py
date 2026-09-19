@@ -1,40 +1,42 @@
-"""Unit tests for TTSService (OmniVoice API backend)."""
+"""Unit tests for TTSService (Edge neural voices via edge-tts)."""
 
-import asyncio
-import io
-import wave
 from pathlib import Path
 
 import pytest
 
+import src.api.services.tts as tts_module
 from src.api.models.tts import TTSIn
 from src.api.services.tts import (
     TTSService,
-    _concat_wav,
     _content_hash,
     _estimate_duration,
-    _fragment_text,
     _markdown_to_speech_text,
     _truncate_for_tts,
 )
-from src.core.config import Settings
+
+_FAKE_MP3 = b"\xff\xfb\x90\x64" * 64
 
 
-def _fake_wav(rate: int = 22050) -> bytes:
-    """Return a valid 1-second silent WAV payload for tests."""
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as writer:
-        writer.setnchannels(1)
-        writer.setsampwidth(2)
-        writer.setframerate(rate)
-        writer.writeframes(b"\x00\x00" * rate)
-    return buffer.getvalue()
+class _FakeCommunicate:
+    """Fake edge_tts.Communicate returning MP3-ish audio bytes."""
+
+    def __init__(self, text: str, voice: str, **kwargs: object) -> None:
+        self.text = text
+        self.voice = voice
+
+    async def stream(self):
+        yield {"type": "audio", "data": _FAKE_MP3}
+
+
+def _reset_voices_cache(monkeypatch: pytest.MonkeyPatch, voices: list[dict] | None = None) -> None:
+    """Point the module voice cache at a fixed catalogue."""
+    monkeypatch.setattr(tts_module, "_EDGE_VOICES", voices or [])
 
 
 def test_content_hash_is_stable() -> None:
     """_content_hash is deterministic for the same input."""
-    h1 = _content_hash("hello", "es-mx-male", "es")
-    h2 = _content_hash("hello", "es-mx-male", "es")
+    h1 = _content_hash("hello", "es-MX-JorgeNeural", "es")
+    h2 = _content_hash("hello", "es-MX-JorgeNeural", "es")
     assert h1 == h2
 
 
@@ -47,8 +49,8 @@ def test_content_hash_changes_with_voice() -> None:
 
 def test_content_hash_changes_with_language() -> None:
     """_content_hash differs when language changes."""
-    h1 = _content_hash("hello", "es-mx-male", "es")
-    h2 = _content_hash("hello", "es-mx-male", "en")
+    h1 = _content_hash("hello", "es-MX-JorgeNeural", "es")
+    h2 = _content_hash("hello", "es-MX-JorgeNeural", "en")
     assert h1 != h2
 
 
@@ -83,306 +85,131 @@ def test_markdown_to_speech_text_strips_markdown_keeps_emotion() -> None:
     assert "https://x.com" not in speech
 
 
-def test_fragment_text_keeps_short_paragraphs() -> None:
-    """_fragment_text keeps paragraphs under the limit intact."""
-    text = "Primera historia.\nSegunda historia."
-    fragments = _fragment_text(text, max_chars=400)
-    assert fragments == ["Primera historia.", "Segunda historia."]
-
-
-def test_fragment_text_splits_long_paragraphs_by_sentences() -> None:
-    """_fragment_text splits long paragraphs at sentence boundaries."""
-    text = "Frase muy larga sobre un tema importante. " * 20
-    fragments = _fragment_text(text, max_chars=100)
-    assert len(fragments) > 1
-    assert all(len(f) <= 100 for f in fragments)
-
-
-def test_fragment_text_keeps_emotion_tag_with_fragment() -> None:
-    """_fragment_text keeps [emotion] tags at the start of their fragment."""
-    text = "[excited] Gran noticia hoy. Mejora tecnologica."
-    fragments = _fragment_text(text, max_chars=400)
-    assert fragments[0].startswith("[excited]")
-
-
-def test_concat_wav_merges_chunks() -> None:
-    """_concat_wav produces a single WAV with summed frame counts."""
-    first = _fake_wav(rate=8000)
-    second = _fake_wav(rate=8000)
-    merged = _concat_wav([first, second])
-    with wave.open(io.BytesIO(merged), "rb") as reader:
-        assert reader.getframerate() == 8000
-        assert reader.getnframes() == 8000 * 2
-
-
-def test_concat_wav_rejects_empty() -> None:
-    """_concat_wav raises ValueError on an empty list."""
-    with pytest.raises(ValueError):
-        _concat_wav([])
-
-
-@pytest.mark.asyncio
-async def test_generate_tts_uses_cache(tmp_path: Path) -> None:
+async def test_generate_tts_uses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """generate_tts returns cached=True when the audio file already exists."""
+    _reset_voices_cache(monkeypatch)
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
     service = TTSService(cache_dir=str(tmp_path))
-    payload = TTSIn(markdown="hola mundo", voice="es-mx-male", language="es")
+    payload = TTSIn(markdown="hola mundo", voice="es-MX-JorgeNeural", language="es")
 
-    expected_hash = _content_hash("hola mundo", "es-mx-male", "es")
-    cached_file = tmp_path / f"{expected_hash}.wav"
-    cached_file.write_bytes(_fake_wav())
+    expected_hash = _content_hash("hola mundo", "es-MX-JorgeNeural", "es")
+    cached_file = tmp_path / f"{expected_hash}.mp3"
+    cached_file.write_bytes(_FAKE_MP3)
 
     result = await service.generate_tts(payload)
     assert result.cached is True
     assert result.audio_path == str(cached_file)
-    assert result.voice == "es-mx-male"
+    assert result.voice == "es-MX-JorgeNeural"
 
 
-@pytest.mark.asyncio
-async def test_generate_tts_calls_omni_voice_api(
+async def test_generate_tts_synthesizes_with_edge_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """generate_tts posts to the OmniVoice API and writes the WAV."""
+    """generate_tts writes an MP3 synthesized by the resolved Edge voice."""
+    _reset_voices_cache(monkeypatch)
+    synthesis: list[tuple[str, str]] = []
+
+    class RecordingCommunicate(_FakeCommunicate):
+        async def stream(self):
+            synthesis.append((self.text, self.voice))
+            yield {"type": "audio", "data": _FAKE_MP3}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
     service = TTSService(cache_dir=str(tmp_path))
-
-    captured: dict[str, object] = {}
-
-    class FakeResponse:
-        def __init__(self, content: bytes) -> None:
-            self.content = content
-
-        def raise_for_status(self) -> None:
-            pass
-
-    class FakeAsyncClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> "FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
-        async def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
-            captured["url"] = url
-            captured["json"] = json
-            captured["headers"] = headers
-            return FakeResponse(_fake_wav())
-
-    class FakeVoicesService:
-        def __init__(self, base: object = None, key: object = None) -> None:
-            pass
-
-        async def list_stock(self, force: bool = False) -> list[dict]:
-            return [{"voice_id": "es-mx-male", "language": "es", "gender": "male"}]
-
-        async def list_cloned(self, force: bool = False) -> list[dict]:
-            return []
-
-    monkeypatch.setattr("src.api.services.tts.httpx.AsyncClient", FakeAsyncClient)
-    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
 
     payload = TTSIn(markdown="contenido de prueba", voice="es-mx-male", language="es")
     result = await service.generate_tts(payload)
 
     assert result.cached is False
-    assert result.audio_path.endswith(".wav")
-    assert captured["url"].endswith("/api/v1/tts")
-    body = captured["json"]
-    assert isinstance(body, dict)
-    assert body["text"] == "contenido de prueba"
-    assert body["voice_id"] == "es-mx-male"
-    assert body["language"] == "es"
+    assert result.audio_path.endswith(".mp3")
+    assert Path(result.audio_path).exists()
+    assert len(synthesis) == 1
+    synthesized_text, used_voice = synthesis[0]
+    assert synthesized_text == "contenido de prueba"
+    assert used_voice == "es-MX-JorgeNeural"
 
 
-@pytest.mark.asyncio
-async def test_generate_tts_fragments_and_concatenates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """generate_tts synthesizes each fragment and concatenates the WAVs."""
-    service = TTSService(cache_dir=str(tmp_path))
-    calls: list[str] = []
-
-    async def fake_synthesize(text: str, voice: str, language: str) -> bytes:
-        calls.append(text)
-        return _fake_wav()
-
-    monkeypatch.setattr(service, "_synthesize", fake_synthesize)
-
-    async def fake_resolve(voice: str) -> str:
-        return voice
-
-    monkeypatch.setattr(service, "_resolve_voice_id", fake_resolve)
-
-    long_text = "[calm] Historia uno. Detalles relevantes aqui. " + (
-        "Frase extra larga para relleno y fragmentacion. " * 15
-    )
-    payload = TTSIn(markdown=long_text)
-    result = await service.generate_tts(payload)
-
-    assert result.cached is False
-    assert len(calls) > 1
-    assert result.audio_path.endswith(".wav")
-    with wave.open(str(result.audio_path), "rb") as reader:
-        assert reader.getnframes() == 22050 * len(calls)
-
-
-@pytest.mark.asyncio
-async def test_generate_tts_synthesizes_fragments_concurrently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """generate_tts synthesizes fragments with bounded concurrency (order kept)."""
-    monkeypatch.setattr(
-        "src.api.services.tts.get_settings",
-        lambda: Settings(tts_synthesis_concurrency=2, _env_file=None),
-    )
-    service = TTSService(cache_dir=str(tmp_path))
-    fragments_seen: list[str] = []
-    active = 0
-    max_active = 0
-
-    async def fake_synthesize(text: str, voice: str, language: str) -> bytes:
-        nonlocal active, max_active
-        active += 1
-        max_active = max(max_active, active)
-        await asyncio.sleep(0.005)
-        fragments_seen.append(text)
-        active -= 1
-        return _fake_wav()
-
-    monkeypatch.setattr(service, "_synthesize", fake_synthesize)
-
-    async def fake_resolve(voice: str) -> str:
-        return voice
-
-    monkeypatch.setattr(service, "_resolve_voice_id", fake_resolve)
-
-    text = " ".join(f"Frase numero {i} para fragmentar." for i in range(60))
-    payload = TTSIn(markdown=text)
-    await service.generate_tts(payload)
-
-    assert max_active > 1
-    assert max_active <= 2
-    assert len(fragments_seen) == len(_fragment_text(text, 400))
-
-
-@pytest.mark.asyncio
-async def test_resolve_voice_id_stock_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_resolve_voice_id returns stock voice IDs unchanged."""
+async def test_resolve_voice_legacy_alias_maps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy OmniVoice names are mapped to Edge neural voices."""
+    _reset_voices_cache(monkeypatch)
     service = TTSService()
-
-    class FakeVoicesService:
-        def __init__(self, base: object = None, key: object = None) -> None:
-            pass
-
-        async def list_stock(self, force: bool = False) -> list[dict]:
-            return [
-                {"voice_id": "en-us-male", "language": "en", "gender": "male"},
-                {"voice_id": "es-mx-female", "language": "es", "gender": "female"},
-            ]
-
-        async def list_cloned(self, force: bool = False) -> list[dict]:
-            return []
-
-    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
-    assert await service._resolve_voice_id("en-us-male") == "en-us-male"
+    assert await service._resolve_voice("es-mx-male", "es") == "es-MX-JorgeNeural"
+    assert await service._resolve_voice("en-gb-female", "en") == "en-GB-SoniaNeural"
 
 
-@pytest.mark.asyncio
-async def test_resolve_voice_id_cloned_maps_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_resolve_voice_id maps a cloned voice name to its OmniVoice UUID."""
+async def test_resolve_voice_edge_shortname_matched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An exact Edge ShortName passes through unchanged."""
+    _reset_voices_cache(monkeypatch, [{"ShortName": "es-ES-ElviraNeural"}])
     service = TTSService()
-
-    class FakeVoicesService:
-        def __init__(self, base: object = None, key: object = None) -> None:
-            pass
-
-        async def list_stock(self, force: bool = False) -> list[dict]:
-            return [
-                {"voice_id": "en-us-male", "language": "en", "gender": "male"},
-                {"voice_id": "es-mx-female", "language": "es", "gender": "female"},
-            ]
-
-        async def list_cloned(self, force: bool = False) -> list[dict]:
-            return [
-                {
-                    "id": "fb47cfd4-4c8f-4c20-9974-e2de03e3903a",
-                    "name": "DaveMaleVoiceUS",
-                },
-                {"id": "2acee590-ad88-4c00-9200-968ec538793c", "name": "MelFemVoiceUK"},
-            ]
-
-    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
-    assert (
-        await service._resolve_voice_id("DaveMaleVoiceUS") == "fb47cfd4-4c8f-4c20-9974-e2de03e3903a"
-    )
+    assert await service._resolve_voice("es-ES-ElviraNeural", "es") == "es-ES-ElviraNeural"
 
 
-@pytest.mark.asyncio
-async def test_resolve_voice_id_unknown_returns_unchanged(
+async def test_resolve_voice_unknown_falls_back_to_language_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_resolve_voice_id falls back to the configured name when not found."""
+    """Unknown voice names fall back to the language default, no network needed."""
+    _reset_voices_cache(monkeypatch, [{"ShortName": "en-US-AriaNeural"}])
     service = TTSService()
+    assert await service._resolve_voice("nueva-voz", "es") == "es-MX-JorgeNeural"
 
-    class FakeVoicesService:
-        def __init__(self, base: object = None, key: object = None) -> None:
+
+async def test_resolve_voice_empty_returns_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty voice falls back to the language default."""
+    _reset_voices_cache(monkeypatch)
+    service = TTSService()
+    assert await service._resolve_voice("", "en") == "en-US-GuyNeural"
+
+
+async def test_synthesize_streams_mp3_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_synthesize collects the audio chunks into MP3 bytes."""
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    service = TTSService()
+    data = await service._synthesize("hola", "es-MX-JorgeNeural")
+    assert data == _FAKE_MP3
+
+
+async def test_synthesize_empty_audio_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_synthesize raises when no audio chunks arrive."""
+
+    class EmptyCommunicate:
+        def __init__(self, text: str, voice: str, **kwargs: object) -> None:
             pass
 
-        async def list_stock(self, force: bool = False) -> list[dict]:
-            return []
+        async def stream(self):
+            if False:
+                yield {"type": "audio", "data": _FAKE_MP3}
 
-        async def list_cloned(self, force: bool = False) -> list[dict]:
-            return []
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", EmptyCommunicate)
+    service = TTSService()
+    with pytest.raises(RuntimeError, match="produced no audio"):
+        await service._synthesize("hola", "es-MX-JorgeNeural")
 
-    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
-    assert await service._resolve_voice_id("nueva-voz") == "nueva-voz"
+
+async def test_synthesize_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_synthesize raises a RuntimeError when the stream exceeds the timeout."""
+
+    class SlowCommunicate:
+        def __init__(self, text: str, voice: str, **kwargs: object) -> None:
+            pass
+
+        async def stream(self):
+            import asyncio
+
+            await asyncio.sleep(0.2)
+            yield {"type": "audio", "data": _FAKE_MP3}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", SlowCommunicate)
+    service = TTSService()
+    service._request_timeout = 0.05
+    with pytest.raises(RuntimeError, match="timed out"):
+        await service._synthesize("hola", "es-MX-JorgeNeural")
 
 
-@pytest.mark.asyncio
-async def test_generate_tts_cloned_voice_uses_uuid(
+async def test_generate_tts_empty_markdown_after_cleanup_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """generate_tts sends the cloned voice UUID when a cloned name is configured."""
+    """A markdown that reduces to nothing raises instead of calling Edge."""
+    _reset_voices_cache(monkeypatch)
     service = TTSService(cache_dir=str(tmp_path))
-    captured: dict[str, dict] = {}
-
-    class FakeResponse:
-        content = _fake_wav()
-
-        def raise_for_status(self) -> None:
-            pass
-
-    class FakeAsyncClient:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> "FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            pass
-
-        async def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
-            captured["json"] = json
-            return FakeResponse()
-
-    class FakeVoicesService:
-        def __init__(self, base: object = None, key: object = None) -> None:
-            pass
-
-        async def list_stock(self, force: bool = False) -> list[dict]:
-            return [{"voice_id": "es-mx-male", "language": "es", "gender": "male"}]
-
-        async def list_cloned(self, force: bool = False) -> list[dict]:
-            return [{"id": "fb47cfd4-uuid", "name": "DaveMaleVoiceUS"}]
-
-    monkeypatch.setattr("src.api.services.tts.httpx.AsyncClient", FakeAsyncClient)
-    monkeypatch.setattr("src.api.services.tts.VoicesService", FakeVoicesService)
-
-    payload = TTSIn(markdown="hola desde voz clonada", voice="DaveMaleVoiceUS", language="en")
-    result = await service.generate_tts(payload)
-
-    assert result.cached is False
-    assert captured["json"]["voice_id"] == "fb47cfd4-uuid"
-    assert result.voice == "DaveMaleVoiceUS"
+    with pytest.raises(RuntimeError, match="No text to synthesize"):
+        await service.generate_tts(TTSIn(markdown="####   \n"))

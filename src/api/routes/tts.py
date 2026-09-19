@@ -1,4 +1,4 @@
-"""Text-to-Speech route for generating WAV audio from digest markdown."""
+"""Text-to-Speech route for generating MP3 audio from digest markdown."""
 
 import asyncio
 
@@ -18,10 +18,10 @@ router = APIRouter(tags=["tts"])
     "/generate_tts",
     response_model=TTSOut,
     status_code=status.HTTP_200_OK,
-    summary="Generate WAV audio from digest markdown",
+    summary="Generate MP3 audio from digest markdown",
     description=(
-        "Converts the digest markdown to a WAV file using the OmniVoice API. "
-        "Caches the result by content hash in data/tts_cache/. "
+        "Converts the digest markdown to an MP3 file using Edge neural voices "
+        "(edge-tts). Caches the result by content hash in data/tts_cache/. "
         "Returns JSON with audio_path (not binary)."
     ),
 )
