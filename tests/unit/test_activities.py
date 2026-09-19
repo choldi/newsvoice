@@ -13,6 +13,7 @@ from src.api.models.cluster import ClusterItem
 from src.api.models.tts import TTSOut
 from src.workers.activities import (
     cluster_activity,
+    compress_audio_activity,
     deliver_telegram_audio_activity,
     deliver_telegram_message_activity,
     fetch_rss_activity,
@@ -169,6 +170,30 @@ async def test_generate_tts_activity_falls_back_to_settings() -> None:
     tts_in = mock_tts.call_args.args[0]
     assert tts_in.language == "es"
     assert tts_in.voice == "es-mx-male"
+
+
+async def test_compress_audio_activity_returns_m4a_path() -> None:
+    """compress_audio_activity returns the transcoded M4A path."""
+    with patch(
+        "src.workers.activities.AudioCompressService.compress",
+        new_callable=AsyncMock,
+        return_value="data/tts_cache/abc.m4a",
+    ) as mock_compress:
+        result = await ActivityEnvironment().run(compress_audio_activity, "data/tts_cache/abc.wav")
+
+    assert result["audio_path"] == "data/tts_cache/abc.m4a"
+    mock_compress.assert_awaited_once_with("data/tts_cache/abc.wav")
+
+
+async def test_compress_audio_activity_raises_on_failure() -> None:
+    """compress_audio_activity surfaces compression errors as non-retryable."""
+    with patch(
+        "src.workers.activities.AudioCompressService.compress",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("ffmpeg not found"),
+    ):
+        with pytest.raises(ApplicationError, match="Audio compression failed"):
+            await ActivityEnvironment().run(compress_audio_activity, "data/tts_cache/abc.wav")
 
 
 async def test_fetch_rss_activity_skips_failed_feed_without_crashing() -> None:

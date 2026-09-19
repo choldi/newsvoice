@@ -10,6 +10,12 @@ RUN pip install --no-cache-dir .
 # Stage 2: runtime
 FROM python:3.11-slim
 
+# ffmpeg transcodes the synthesized WAV to M4A (AAC) before delivery so audio
+# stays under Telegram's 50 MB limit and plays on Telegram/WhatsApp/Android/iOS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages

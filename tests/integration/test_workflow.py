@@ -73,6 +73,14 @@ async def stub_generate_tts(digest: dict) -> dict:
     return AUDIO
 
 
+COMPRESSED_AUDIO = AUDIO["audio_path"].rsplit(".", 1)[0] + ".m4a"
+
+
+@activity.defn(name="compress_audio_activity")
+async def stub_compress_audio(audio_path: str) -> dict:
+    return {"audio_path": audio_path.rsplit(".", 1)[0] + ".m4a"}
+
+
 @activity.defn(name="deliver_telegram_message_activity")
 async def stub_deliver_message(text: str, chat_id: str | None = None) -> dict:
     return DELIVERY
@@ -113,6 +121,7 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_cluster,
                 stub_generate_digest,
                 stub_generate_tts,
+                stub_compress_audio,
                 stub_deliver_message,
                 stub_deliver_audio,
                 stub_deliver_email,
@@ -139,6 +148,97 @@ async def test_full_pipeline_happy_path() -> None:
     assert result["cluster_count"] == 1
     assert result["digest"] == DIGEST["digest"]
     assert len(result["delivery_status"]) == 2
+
+
+async def test_audio_delivered_uses_compressed_m4a() -> None:
+    """The compressed M4A path (not the raw WAV) reaches the audio delivery."""
+    seen: dict[str, str] = {}
+
+    @activity.defn(name="deliver_telegram_audio_activity")
+    async def audio_recorder(
+        audio_path: str, caption: str | None = None, chat_id: str | None = None
+    ) -> dict:
+        seen["path"] = audio_path
+        return DELIVERY
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_compress_audio,
+                stub_deliver_message,
+                audio_recorder,
+                stub_record_run,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=True,
+                ),
+                id="workflow-test-compressed",
+                task_queue="tq",
+            )
+
+    assert seen["path"] == COMPRESSED_AUDIO
+
+
+async def test_compression_failure_falls_back_to_wav() -> None:
+    """When ffmpeg fails, the workflow still delivers the original WAV."""
+    seen: dict[str, str] = {}
+
+    @activity.defn(name="compress_audio_activity")
+    async def failing_compress(audio_path: str) -> dict:
+        from temporalio.exceptions import ApplicationError as TemporalError
+
+        raise TemporalError("ffmpeg not found", non_retryable=True)
+
+    @activity.defn(name="deliver_telegram_audio_activity")
+    async def audio_recorder(
+        audio_path: str, caption: str | None = None, chat_id: str | None = None
+    ) -> dict:
+        seen["path"] = audio_path
+        return DELIVERY
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                failing_compress,
+                stub_deliver_message,
+                audio_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=True,
+                ),
+                id="workflow-test-compress-fallback",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert seen["path"] == AUDIO["audio_path"]
 
 
 async def test_podcast_behavior_passed_to_digest_activity() -> None:
@@ -552,6 +652,7 @@ async def test_chat_id_passed_to_delivery() -> None:
                 stub_cluster,
                 stub_generate_digest,
                 stub_generate_tts,
+                stub_compress_audio,
                 message_recorder,
                 audio_recorder,
                 stub_record_run,
@@ -601,6 +702,7 @@ async def test_email_recipients_passed_to_delivery() -> None:
                 stub_cluster,
                 stub_generate_digest,
                 stub_generate_tts,
+                stub_compress_audio,
                 stub_deliver_message,
                 stub_deliver_audio,
                 email_recorder,
@@ -624,7 +726,7 @@ async def test_email_recipients_passed_to_delivery() -> None:
     assert seen["recipients"] == ["a@example.com", "b@example.com"]
     assert seen["text"] == DIGEST["digest"]
     assert seen["collection"] == "tech"
-    assert seen["audio"] == AUDIO["audio_path"]
+    assert seen["audio"] == COMPRESSED_AUDIO
     assert any(d.get("recipients") == 2 for d in result["delivery_status"])
 
 
@@ -764,6 +866,7 @@ async def test_email_channel_only_skips_telegram() -> None:
                 stub_cluster,
                 stub_generate_digest,
                 stub_generate_tts,
+                stub_compress_audio,
                 message_recorder,
                 audio_recorder,
                 email_recorder,
@@ -785,7 +888,7 @@ async def test_email_channel_only_skips_telegram() -> None:
             )
 
     assert telegram_calls == 0
-    assert seen["audio"] == AUDIO["audio_path"]
+    assert seen["audio"] == COMPRESSED_AUDIO
 
 
 async def test_email_without_deliver_audio_has_no_attachment() -> None:

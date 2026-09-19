@@ -16,6 +16,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 with workflow.unsafe.imports_passed_through():
     from src.workers.activities import (
         cluster_activity,
+        compress_audio_activity,
         deliver_email_activity,
         deliver_telegram_audio_activity,
         deliver_telegram_message_activity,
@@ -43,6 +44,8 @@ COLLECTIONS_SYNC_TIMEOUT = timedelta(seconds=120)
 # up to tts_request_timeout(600s) = ~130 min worst case, so keep this above
 # 13 x 600s while the real expected duration is ~75 min.
 TTS_TIMEOUT = timedelta(seconds=8100)
+# Local ffmpeg transcode of the synthesized WAV; fast even for long digests.
+COMPRESS_TIMEOUT = timedelta(seconds=600)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
 EMAIL_TIMEOUT = timedelta(seconds=90)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
@@ -190,6 +193,9 @@ class DigestPipelineWorkflow:
         # Generate TTS audio BEFORE the email step so the audio file (when
         # produced) can be attached to the email. A failure here must not fail
         # the pipeline: the text digest already went out and the run continues.
+        # When delivery is requested, the WAV is transcoded to a smaller M4A
+        # (AAC) file; if ffmpeg fails the original WAV is used as a fallback so
+        # audio delivery is never blocked by the compression step.
         audio: dict[str, Any] | None = None
         if config.tts_enabled:
             workflow.logger.info("Generating TTS audio")
@@ -206,7 +212,21 @@ class DigestPipelineWorkflow:
                     start_to_close_timeout=TTS_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
                 )
-                if config.deliver_audio and not audio.get("audio_path"):
+                if config.deliver_audio and audio.get("audio_path"):
+                    try:
+                        compressed = await workflow.execute_activity(
+                            compress_audio_activity,
+                            audio["audio_path"],
+                            start_to_close_timeout=COMPRESS_TIMEOUT,
+                            retry_policy=RetryPolicy(maximum_attempts=1),
+                        )
+                        audio["audio_path"] = compressed["audio_path"]
+                    except (ActivityError, ApplicationError) as exc:
+                        detail = getattr(exc, "cause", None) or exc
+                        workflow.logger.warning(
+                            f"Audio compression failed; delivering WAV instead: {detail}"
+                        )
+                elif config.deliver_audio and not audio.get("audio_path"):
                     delivery_status.append({"status": "error", "error": "no audio generated"})
             except (ActivityError, ApplicationError) as exc:
                 detail = getattr(exc, "cause", None) or exc

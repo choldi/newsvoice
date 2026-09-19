@@ -67,6 +67,8 @@ def _audio_mime_subtype(audio_path: str) -> str:
         return "ogg"
     if suffix == ".wav":
         return "wav"
+    if suffix == ".m4a":
+        return "mp4"
     return "mpeg"
 
 

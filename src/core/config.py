@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     tts_request_timeout: int = Field(default=600, ge=1)
     tts_podcast_behavior: str = ""
     tts_podcast_name: str = ""
+    # Transcode the synthesized WAV to M4A (AAC) before delivery so the file is
+    # small enough for Telegram's 50 MB limit and plays on Telegram, WhatsApp,
+    # Android, and iPhone. ffmpeg is installed in the Docker image.
+    ffmpeg_path: str = "ffmpeg"
+    tts_audio_bitrate_kbps: int = Field(default=48, ge=16, le=320)
     admin_api_token: str = ""
 
     @property

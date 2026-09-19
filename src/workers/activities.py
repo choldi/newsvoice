@@ -16,6 +16,7 @@ from src.api.db.database import AudioJobsRepository, RunsRepository, SyncStateRe
 from src.api.models.article import ArticleIn, DigestIn
 from src.api.models.cluster import ClusterIn
 from src.api.models.tts import TTSIn
+from src.api.services.audio_compress import AudioCompressService
 from src.api.services.cluster import ClusterService
 from src.api.services.dedup import DedupService
 from src.api.services.digest import DigestService
@@ -269,6 +270,31 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     return result.model_dump()
 
 
+@activity.defn
+async def compress_audio_activity(audio_path: str) -> dict[str, Any]:
+    """Transcode the synthesized WAV to a delivery-ready M4A (AAC) file.
+
+    Telegram caps uploads at 50 MB and email inboxes struggle with multi-hundred
+    MB WAV files; this step compresses the audio before any delivery activity
+    sends it. A mono AAC M4A plays on Telegram, WhatsApp, Android, and iPhone.
+
+    Args:
+        audio_path: Path to the WAV file produced by generate_tts_activity.
+
+    Returns:
+        Dict with the compressed audio_path and a cached flag.
+
+    Raises:
+        ApplicationError: If the source is missing or transcoding fails.
+    """
+    activity.logger.info(f"Compressing audio: {audio_path}")
+    try:
+        compressed_path = await AudioCompressService().compress(audio_path)
+    except Exception as exc:
+        raise ApplicationError(f"Audio compression failed: {exc}", non_retryable=True) from exc
+    return {"audio_path": compressed_path, "cached": Path(compressed_path).exists()}
+
+
 async def _telegram_request(
     method: str,
     payload: dict[str, Any],
@@ -397,6 +423,8 @@ def _audio_mime_type(audio_path: str) -> str:
         return "audio/wav"
     if suffix == ".ogg":
         return "audio/ogg"
+    if suffix == ".m4a":
+        return "audio/mp4"
     return "audio/mpeg"
 
 
