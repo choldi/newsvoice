@@ -1,8 +1,9 @@
 """WhatsApp delivery service for the daily news digest.
 
 Sends the digest text and compressed M4A audio to one or more E.164 recipients
-(and/or a group) through a self-hosted ``there``/Baileys sidecar HTTP API
-(``POST /send`` for text, ``POST /sendaudio`` for base64 audio).
+(and/or a group) through a self-hosted Baileys gateway container
+(``blakegt/whatsapp-web-api-rest``): ``POST /message`` for text/media and
+``POST /simulate`` for the composing typing indicator.
 
 The service mirrors ``EmailService``: it is driven exclusively from the Temporal
 activities and is fail-closed — without a configured API token the channel is
@@ -31,7 +32,6 @@ logger = structlog.get_logger()
 
 # Error messages longer than this are hard for recipients to consume in one
 # bubble; the digest is chunked before sending (see split_message_chunks).
-# there's /send endpoint is validated at deploy time against the sidecar.
 WHATSAPP_MESSAGE_MAX_CHARS = 4000
 # Uploads are base64-embedded in the JSON body; guard against multi-GB files.
 WHATSAPP_AUDIO_MAX_BYTES = 16 * 1024 * 1024
@@ -39,7 +39,7 @@ WHATSAPP_AUDIO_MAX_BYTES = 16 * 1024 * 1024
 _NATURAL_DELAY_MIN = 0.8
 _NATURAL_DELAY_MAX = 2.5
 _GROUP_SUFFIX = "@g.us"
-_PRIVATE_SUFFIX = "@s.whatsapp.net"
+_PRIVATE_SUFFIX = "@c.us"
 
 
 class WhatsAppError(Exception):
@@ -47,7 +47,7 @@ class WhatsAppError(Exception):
 
 
 class WhatsAppConfigError(WhatsAppError):
-    """Raised when the there sidecar is not configured (fail-closed)."""
+    """Raised when the Baileys gateway is not configured (fail-closed)."""
 
 
 class WhatsAppNotAllowedError(WhatsAppError):
@@ -55,11 +55,11 @@ class WhatsAppNotAllowedError(WhatsAppError):
 
 
 class WhatsAppDeliveryError(WhatsAppError):
-    """Raised when the there sidecar rejects a send (network/API)."""
+    """Raised when the Baileys gateway rejects a send (network/API)."""
 
 
 class WhatsAppService:
-    """Send the digest text/audio to WhatsApp recipients via a there sidecar.
+    """Send the digest text/audio to WhatsApp recipients via a Baileys gateway.
 
     Args:
         whatsapp_settings: Optional settings override. Defaults to the global
@@ -78,7 +78,7 @@ class WhatsAppService:
 
     @property
     def _configured(self) -> bool:
-        """Return whether the there sidecar is configured.
+        """Return whether the Baileys gateway is configured.
 
         Returns:
             True when both whatsapp_api_token and whatsapp_api_url are set.
@@ -120,14 +120,14 @@ class WhatsAppService:
 
     @staticmethod
     def _jid_for(number: str) -> str:
-        """Convert an E.164 or group id into a WhatsApp JID.
+        """Convert an E.164 or already-suffixed JID into a private JID.
 
         Args:
-            number: E.164 number, group id, or an already-suffixed JID.
+            number: E.164 number or a JID with a known suffix.
 
         Returns:
-            The JID used by the there API. Groups become ``<id>@g.us`` and
-            phone numbers become ``<digits>@s.whatsapp.net``.
+            The JID used by the gateway: groups stay ``<id>@g.us`` and phone
+            numbers become ``<digits>@c.us``.
         """
         if number.endswith(_GROUP_SUFFIX) or number.endswith(_PRIVATE_SUFFIX):
             return number
@@ -142,7 +142,7 @@ class WhatsAppService:
             group_id: Group id (with or without the @g.us suffix).
 
         Returns:
-            The JID used by the there API.
+            The JID used by the gateway.
         """
         gid = group_id.strip()
         return gid if gid.endswith(_GROUP_SUFFIX) else f"{gid}{_GROUP_SUFFIX}"
@@ -222,16 +222,16 @@ class WhatsAppService:
         self._last_sent[jid] = time.monotonic()
 
     async def _request(self, path: str, payload: dict[str, Any], timeout: float = 60.0) -> None:
-        """POST a JSON payload to the there sidecar.
+        """POST a JSON payload to the Baileys gateway.
 
         Args:
-            path: API path (e.g. /send, /sendaudio).
+            path: API path (e.g. /message, /simulate).
             payload: JSON body.
             timeout: HTTP client timeout in seconds.
 
         Raises:
-            WhatsAppConfigError: If the sidecar is not configured.
-            WhatsAppDeliveryError: If the sidecar rejects the request.
+            WhatsAppConfigError: If the gateway is not configured.
+            WhatsAppDeliveryError: If the gateway rejects the request.
         """
         if not self._configured:
             raise WhatsAppConfigError(
@@ -244,7 +244,7 @@ class WhatsAppService:
             response = await client.post(url, json=payload, headers=headers)
         if not response.is_success:
             raise WhatsAppDeliveryError(
-                f"there API error for {path}: {response.status_code} {response.text[:200]}"
+                f"Baileys gateway error for {path}: {response.status_code} {response.text[:200]}"
             )
 
     async def send_text(
@@ -266,7 +266,7 @@ class WhatsAppService:
         Raises:
             ValueError: If the message is empty or no targets resolve.
             WhatsAppNotAllowedError: If a recipient is not allowlisted.
-            WhatsAppDeliveryError: On sidecar failure.
+            WhatsAppDeliveryError: On gateway failure.
         """
         from src.workers.activities import split_message_chunks
 
@@ -278,9 +278,13 @@ class WhatsAppService:
             raise ValueError("No WhatsApp recipients configured")
         typing = self._typing_indicator
         for jid in targets:
+            if typing:
+                await self._request("/simulate", {"chatId": jid, "action": "composing"})
             for chunk in chunks:
                 await self._pace(jid)
-                await self._request("/send", {"message": chunk, "phone": jid, "typing": typing})
+                await self._request("/message", {"chatId": jid, "text": chunk})
+            if typing:
+                await self._request("/simulate", {"chatId": jid, "action": "paused"})
         logger.info("whatsapp_text_sent", recipients=len(targets))
         return {"status": "ok", "recipients": len(targets)}
 
@@ -306,7 +310,7 @@ class WhatsAppService:
             FileNotFoundError: If the audio file is missing.
             ValueError: If the file exceeds the base64 size gate or no targets.
             WhatsAppNotAllowedError: If a recipient is not allowlisted.
-            WhatsAppDeliveryError: On sidecar failure.
+            WhatsAppDeliveryError: On gateway failure.
         """
         audio_file = Path(audio_path)
         if not audio_file.is_file():
@@ -321,14 +325,20 @@ class WhatsAppService:
         typing = self._typing_indicator
         clean_caption = strip_emotion_tags(caption) if caption else None
         for jid in targets:
+            if typing:
+                await self._request("/simulate", {"chatId": jid, "action": "composing"})
             await self._pace(jid)
-            payload: dict[str, Any] = {
-                "audio": b64,
-                "phone": jid,
-                "typing": typing,
+            media: dict[str, Any] = {
+                "type": "audio",
+                "filename": audio_file.name,
+                "mimetype": "audio/mp4",
+                "data": b64,
+                "ptt": False,
             }
             if clean_caption:
-                payload["caption"] = clean_caption
-            await self._request("/sendaudio", payload, timeout=120.0)
+                media["caption"] = clean_caption
+            await self._request("/message", {"chatId": jid, "media": media}, timeout=120.0)
+            if typing:
+                await self._request("/simulate", {"chatId": jid, "action": "paused"})
         logger.info("whatsapp_audio_sent", recipients=len(targets))
         return {"status": "ok", "recipients": len(targets)}

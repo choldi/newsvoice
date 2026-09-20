@@ -276,7 +276,7 @@ class DigestPipelineWorkflow:
 
         # Deliver the digest via WhatsApp when the collection enables the channel
         # and configures recipients or a group. Fail-closed: an unconfigured
-        # sidecar or a number outside the allowlist is recorded and the rest of
+        # gateway or a number outside the allowlist is recorded and the rest of
         # the channels continue.
         if use_whatsapp:
             workflow.logger.info("Delivering WhatsApp digest")

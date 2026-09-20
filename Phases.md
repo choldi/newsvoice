@@ -107,28 +107,31 @@ historical notes describing the migration itself.
 
 ---
 
-## PHASE 5.1 - WhatsApp Delivery Channel (there/Baileys)
+## PHASE 5.1 - WhatsApp Delivery Channel (BlakePro Baileys gateway)
 
 **Goal:** Deliver digests (text + audio M4A) on WhatsApp to multiple recipients
-and/or a group, self-hosted via a `there`/Baileys sidecar in docker-compose.
+and/or a group, self-hosted via `blakegt/whatsapp-web-api-rest` (Baileys) in
+docker-compose under the service name `there`.
 
 **Scope:**
-- [ ] `there` sidecar service in `docker-compose.yml` (internal network, session
-      persisted in `data/there`, one-time QR pairing)
+- [ ] `there` gateway service in `docker-compose.yml` (internal network only, no
+      published ports, session persisted in `data/there`, one-time QR pairing via
+      SSH tunnel to `:8085`)
 - [ ] `WHATSAPP_*` config: API URL/token, E.164 `WHATSAPP_ALLOWLIST`
       (fail-closed closed address book), delay mode (off|natural|custom),
       typing indicator, per-recipient cool-down
 - [ ] `CollectionConfig.whatsapp_recipients` (E.164) + `whatsapp_group_id`
       (→ `<id>@g.us`, exempt from allowlist); channel whitelist gains "whatsapp"
-- [ ] `WhatsAppService` (fail-closed, JID conversion, chunking, base64 audio gate,
-      OpenClaw-style humanDelay + per-recipient cool-down, typing indicator)
+- [ ] `WhatsAppService` (fail-closed, JID `@c.us`/`@g.us` conversion, chunking,
+      base64 audio gate, OpenClaw-style humanDelay + per-recipient cool-down,
+      typing indicator via `/simulate`)
 - [ ] `deliver_whatsapp_message_activity` / `deliver_whatsapp_audio_activity`
       (non-retryable on unconfigured/not-allowlisted, network retryable)
 - [ ] `DigestPipelineWorkflow` WhatsApp delivery blocks (text after email, audio
       after Telegram audio; a failure never aborts the run)
 - [ ] Unit tests (service + activities) and workflow stub tests
-- [ ] Validate `there` image + `/send` + `/sendaudio` contract against the running
-      sidecar during deploy; pair once via QR
+- [ ] Deploy: validate gateway image + `POST /message` + `POST /simulate` contract
+      against the running container, pair once via QR (GET / shows the QR)
 
 **Success criteria:** A digest configured with `delivery_channels = ["whatsapp"]`
 reaches every allowlisted recipient (and the group) as text + audio with human-like

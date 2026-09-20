@@ -538,9 +538,9 @@ async def deliver_whatsapp_message_activity(
     recipients: list[str] | None = None,
     group_id: str | None = None,
 ) -> dict[str, Any]:
-    """Send the digest text via WhatsApp (there/Baileys sidecar).
+    """Send the digest text via WhatsApp (Baileys gateway).
 
-    Fail-closed: unconfigured sidecar or a recipient missing from the allowlist
+    Fail-closed: unconfigured gateway or a recipient missing from the allowlist
     raises a non-retryable error; the workflow records it and continues with the
     other channels.
 
@@ -553,7 +553,7 @@ async def deliver_whatsapp_message_activity(
         Dict with status and recipient count.
 
     Raises:
-        ApplicationError: If the sidecar is unconfigured, a recipient is not
+        ApplicationError: If the gateway is unconfigured, a recipient is not
             allowlisted, or a send fails.
     """
     activity.logger.info("Sending WhatsApp message")
@@ -573,7 +573,7 @@ async def deliver_whatsapp_audio_activity(
     recipients: list[str] | None = None,
     group_id: str | None = None,
 ) -> dict[str, Any]:
-    """Send a generated audio file via WhatsApp (there/Baileys sidecar).
+    """Send a generated audio file via WhatsApp (Baileys gateway).
 
     Args:
         audio_path: Path to the compressed M4A file on disk.
@@ -585,7 +585,7 @@ async def deliver_whatsapp_audio_activity(
         Dict with status and recipient count.
 
     Raises:
-        ApplicationError: If the sidecar is unconfigured, a recipient is not
+        ApplicationError: If the gateway is unconfigured, a recipient is not
             allowlisted, the file is missing or oversized, or a send fails.
     """
     activity.logger.info(f"Sending WhatsApp audio: {audio_path}")

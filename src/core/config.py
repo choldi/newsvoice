@@ -24,11 +24,12 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     mail_from: str = ""
     mail_from_name: str = "News Engine"
-    # WhatsApp delivery via a self-hosted there/Baileys sidecar (docker-compose
-    # service named "there"). Fail-closed: with no api_token configured the
-    # channel is disabled and a digest never blocks on it; numbers must be in
-    # the allowlist (groups are always allowed).
-    whatsapp_api_url: str = "http://there:3000"
+    # WhatsApp delivery via a self-hosted Baileys gateway (docker-compose
+    # service named "there"; blakegt/whatsapp-web-api-rest listening on :8085).
+    # Fail-closed: with no api_token configured the channel is disabled and a
+    # digest never blocks on it; numbers must be in the allowlist (groups are
+    # always allowed).
+    whatsapp_api_url: str = "http://there:8085"
     whatsapp_api_token: str = ""
     whatsapp_allowlist: list[str] = Field(
         default_factory=list,

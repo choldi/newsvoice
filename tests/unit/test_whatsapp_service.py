@@ -1,4 +1,4 @@
-"""Unit tests for the WhatsAppService (there/Baileys sidecar delivery).
+"""Unit tests for the WhatsAppService (Baileys gateway delivery).
 
 Covers fail-closed behavior (unconfigured / non-allowlisted), JID conversion,
 human delay + per-recipient cool-down pacing, typing indicator, and audio
@@ -20,7 +20,7 @@ from src.api.services.whatsapp import (
 )
 
 wa_config = SimpleNamespace(
-    whatsapp_api_url="http://there:3000",
+    whatsapp_api_url="http://there:8085",
     whatsapp_api_token="secret-token",
     whatsapp_allowlist=["+34600000001", "+34600000002"],
     whatsapp_delay_mode="off",
@@ -58,6 +58,16 @@ def _service(config: object = wa_config) -> WhatsAppService:
     return WhatsAppService(whatsapp_settings=config)  # type: ignore[arg-type]
 
 
+def _message_posts(client: FakeAsyncClient) -> list[dict]:
+    """Return only the /message posts (excludes /simulate typing calls)."""
+    return [p for p in client.posts if p["args"][0].endswith("/message")]
+
+
+def _simulate_posts(client: FakeAsyncClient) -> list[dict]:
+    """Return the /simulate typing-indicator posts."""
+    return [p for p in client.posts if p["args"][0].endswith("/simulate")]
+
+
 async def test_send_text_fail_closed_when_unconfigured() -> None:
     """Without an API token the channel raises a config error (fail-closed)."""
     service = _service(SimpleNamespace(**{**wa_config.__dict__, "whatsapp_api_token": ""}))
@@ -76,7 +86,7 @@ async def test_send_text_rejects_non_allowlisted_recipient() -> None:
 
 
 async def test_send_text_allows_allowlisted_numbers_and_converts_jid() -> None:
-    """Allowlisted E.164 numbers are sent as <digits>@s.whatsapp.net."""
+    """Allowlisted E.164 numbers are sent as <digits>@c.us on the /message API."""
     service = _service()
     client = FakeAsyncClient()
     with patch("src.api.services.whatsapp.httpx.AsyncClient", return_value=client):
@@ -84,12 +94,13 @@ async def test_send_text_allows_allowlisted_numbers_and_converts_jid() -> None:
     assert result["status"] == "ok"
     assert result["recipients"] == 1
 
-    sent = client.posts[0]["kwargs"]
-    assert sent["json"]["phone"] == "34600000001@s.whatsapp.net"
-    assert sent["json"]["message"] == "Hola"
-    assert sent["json"]["typing"] is True
+    sent = _message_posts(client)[0]["kwargs"]
+    assert sent["json"]["chatId"] == "34600000001@c.us"
+    assert sent["json"]["text"] == "Hola"
     assert sent["headers"]["Authorization"] == "Bearer secret-token"
-    assert client.posts[0]["args"][0] == "http://there:3000/send"
+    assert _message_posts(client)[0]["args"][0] == "http://there:8085/message"
+    simulate_actions = [p["kwargs"]["json"]["action"] for p in _simulate_posts(client)]
+    assert simulate_actions == ["composing", "paused"]
 
 
 async def test_send_text_group_exempt_from_allowlist() -> None:
@@ -99,7 +110,7 @@ async def test_send_text_group_exempt_from_allowlist() -> None:
     with patch("src.api.services.whatsapp.httpx.AsyncClient", return_value=client):
         result = await service.send_text("Hola", [], group_id="1234567890")
     assert result["recipients"] == 1
-    assert client.posts[0]["kwargs"]["json"]["phone"] == "1234567890@g.us"
+    assert _message_posts(client)[0]["kwargs"]["json"]["chatId"] == "1234567890@g.us"
 
 
 async def test_send_text_deduplicates_recipients() -> None:
@@ -108,7 +119,7 @@ async def test_send_text_deduplicates_recipients() -> None:
     client = FakeAsyncClient()
     with patch("src.api.services.whatsapp.httpx.AsyncClient", return_value=client):
         await service.send_text("Hola", ["+34600000001", "+34600000001"])
-    assert len(client.posts) == 1
+    assert len(_message_posts(client)) == 1
 
 
 async def test_send_text_custom_delay_uses_configured_interval() -> None:
@@ -130,7 +141,7 @@ async def test_send_text_custom_delay_uses_configured_interval() -> None:
 
     sleep_args = [call.args[0] for call in mock_sleep.await_args_list]
     assert sleep_args and all(2.0 <= duration <= 8.0 for duration in sleep_args)
-    assert client.posts[0]["kwargs"]["json"]["typing"] is False
+    assert _simulate_posts(client) == []
 
 
 async def test_send_text_delay_off_skips_sleep() -> None:
@@ -143,7 +154,7 @@ async def test_send_text_delay_off_skips_sleep() -> None:
     ):
         await service.send_text("Hola", ["+34600000001"])
     assert mock_sleep.await_count == 0
-    assert len(client.posts) == 1
+    assert len(_message_posts(client)) == 1
 
 
 async def test_send_text_long_message_paces_per_recipient() -> None:
@@ -164,7 +175,7 @@ async def test_send_text_long_message_paces_per_recipient() -> None:
     ):
         result = await service.send_text(long_message, ["+34600000001"])
     assert mock_sleep.await_count > 0
-    assert len(client.posts) > 1
+    assert len(_message_posts(client)) > 1
     assert result["recipients"] == 1
 
 
@@ -179,10 +190,13 @@ async def test_send_audio_posts_base64_and_caption(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["recipients"] == 1
 
-    payload = client.posts[0]["kwargs"]["json"]
-    assert base64.b64decode(payload["audio"]) == b"\x00fake-m4a\xff"
-    assert payload["caption"] == "Top"
-    assert payload["phone"] == "34600000001@s.whatsapp.net"
+    payload = _message_posts(client)[0]["kwargs"]["json"]
+    media = payload["media"]
+    assert base64.b64decode(media["data"]) == b"\x00fake-m4a\xff"
+    assert media["caption"] == "Top"
+    assert media["ptt"] is False
+    assert media["type"] == "audio"
+    assert payload["chatId"] == "34600000001@c.us"
 
 
 async def test_send_audio_missing_file_raises() -> None:
@@ -206,7 +220,7 @@ async def test_send_audio_oversized_raises(tmp_path: Path) -> None:
 
 
 async def test_request_raises_delivery_error_on_http_failure() -> None:
-    """A non-2xx sidecar response raises WhatsAppDeliveryError."""
+    """A non-2xx gateway response raises WhatsAppDeliveryError."""
     service = _service()
     client = FakeAsyncClient(response=FakeResponse(ok=False))
     with patch("src.api.services.whatsapp.httpx.AsyncClient", return_value=client):

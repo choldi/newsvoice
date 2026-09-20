@@ -420,7 +420,7 @@ async def test_deliver_whatsapp_message_activity_calls_service() -> None:
 
 
 async def test_deliver_whatsapp_message_activity_config_error_non_retryable() -> None:
-    """An unconfigured sidecar surfaces as a non-retryable ApplicationError."""
+    """An unconfigured gateway surfaces as a non-retryable ApplicationError."""
     from temporalio.exceptions import ApplicationError as TemporalError
 
     from src.api.services.whatsapp import WhatsAppConfigError
