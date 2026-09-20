@@ -43,13 +43,15 @@ services:
   # WhatsApp delivery gateway (Baileys, blakegt/whatsapp-web-api-rest). Not
   # reachable from outside the compose network; the worker talks to it as
   # http://there:8085. The gateway exposes NO auth, so it must stay internal.
-  # Pairing is done manually once (GET / returns the QR; see Deploy.md). Session
-  # state is mounted under ./data/there so the pairing survives restarts.
+  # Pairing is done manually once (GET / returns the QR; see Deploy.md). The
+  # Baileys session lives in /app/auth_info (resolved against cwd=/app), which
+  # is mounted from ./data/there so the pairing survives restarts. The container
+  # user is uid 1001, so the host dir must be owned by 1001.
   there:
     image: blakegt/whatsapp-web-api-rest:latest
     container_name: news_engine_there
     volumes:
-      - ./data/there:/app/session
+      - ./data/there:/app/auth_info
     restart: unless-stopped
 
   temporal-postgres:
