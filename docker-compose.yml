@@ -40,6 +40,20 @@ services:
     command: ["python", "-m", "src.workers.run_worker"]
     restart: unless-stopped
 
+  # WhatsApp delivery sidecar (Baileys/'there' daemon). Not reachable from
+  # outside the compose network; the worker talks to it as http://there:3000.
+  # The image and its env contract MUST be validated at deploy time against the
+  # running container (pair via QR once from its logs). Session state persists in
+  # ./data/there so the pairing survives restarts.
+  there:
+    image: "${THERE_IMAGE:-ghcr.io/there-1/there:latest}"
+    container_name: news_engine_there
+    environment:
+      - API_TOKEN=${WHATSAPP_API_TOKEN}
+    volumes:
+      - ./data/there:/data
+    restart: unless-stopped
+
   temporal-postgres:
     image: postgres:13
     container_name: news_engine_temporal_postgres

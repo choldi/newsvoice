@@ -10,6 +10,7 @@ individual `[[collections]]` entries override them.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -64,10 +65,19 @@ class CollectionConfig(BaseModel):
         default_factory=list,
         description="Email recipients addressed per delivery; empty disables email",
     )
+    whatsapp_recipients: list[str] = Field(
+        default_factory=list,
+        description=("WhatsApp recipients (E.164) addressed per delivery; empty disables WhatsApp"),
+    )
+    whatsapp_group_id: str | None = Field(
+        default=None,
+        description=("WhatsApp group id delivered as <id>@g.us, always exempt from the allowlist"),
+    )
     delivery_channels: list[str] = Field(
         default_factory=lambda: ["telegram"],
         description=(
-            "Delivery channels ('telegram', 'email'); empty or unset defaults to telegram"
+            "Delivery channels ('telegram', 'email', 'whatsapp'); empty or unset"
+            " defaults to telegram"
         ),
     )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
@@ -109,9 +119,19 @@ class CollectionConfig(BaseModel):
         Returns:
             Ordered, de-duplicated channels; ['telegram'] when nothing valid.
         """
-        known = ("telegram", "email")
+        known = ("telegram", "email", "whatsapp")
         channels = [channel for channel in known if channel in value]
         return channels or ["telegram"]
+
+    @field_validator("whatsapp_recipients")
+    @classmethod
+    def _whatsapp_recipients(cls, value: list[str]) -> list[str]:
+        """Reject non-E.164 numbers; an empty list still disables the channel."""
+        clean = [num.strip() for num in value if num.strip()]
+        invalid = [num for num in clean if not re.fullmatch(r"\+[1-9]\d{1,14}", num)]
+        if invalid:
+            raise ValueError(f"whatsapp_recipients must be E.164 numbers: {invalid}")
+        return clean
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

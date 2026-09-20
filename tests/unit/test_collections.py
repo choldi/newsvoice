@@ -148,6 +148,41 @@ def test_empty_delivery_channels_falls_back_to_telegram(tmp_path: Path) -> None:
     assert collection.delivery_channels == ["telegram"]
 
 
+def test_delivery_channels_accept_whatsapp(tmp_path: Path) -> None:
+    """The whatsapp channel is a recognized delivery channel."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'delivery_channels = ["whatsapp", "unknown"]\n',
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.delivery_channels == ["whatsapp"]
+
+
+def test_whatsapp_recipients_must_be_e164(tmp_path: Path) -> None:
+    """Non-E.164 whatsapp_recipients values fail validation."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'whatsapp_recipients = ["34612345678", "+3X"]\n',
+    )
+    loader = CollectionsLoader(str(path))
+    with pytest.raises(ValidationError):
+        loader.load()
+
+
+def test_whatsapp_fields_parsed(tmp_path: Path) -> None:
+    """Valid E.164 recipients and a group id are parsed."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'whatsapp_recipients = ["+34612345678"]\nwhatsapp_group_id = "1234567890"\n',
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.whatsapp_recipients == ["+34612345678"]
+    assert collection.whatsapp_group_id == "1234567890"
+
+
 def test_get_collection_lookup(tmp_path: Path) -> None:
     """get_collection finds a collection by name."""
     path = _write_collections(tmp_path, SAMPLE_TOML)

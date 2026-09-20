@@ -22,6 +22,11 @@ from src.api.services.dedup import DedupService
 from src.api.services.digest import DigestService
 from src.api.services.email import EmailService
 from src.api.services.tts import TTSService
+from src.api.services.whatsapp import (
+    WhatsAppConfigError,
+    WhatsAppNotAllowedError,
+    WhatsAppService,
+)
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
 
@@ -524,6 +529,77 @@ async def deliver_email_activity(
         )
     except Exception as exc:
         raise ApplicationError(f"Email delivery failed: {exc}", non_retryable=True) from exc
+    return result
+
+
+@activity.defn
+async def deliver_whatsapp_message_activity(
+    text: str,
+    recipients: list[str] | None = None,
+    group_id: str | None = None,
+) -> dict[str, Any]:
+    """Send the digest text via WhatsApp (there/Baileys sidecar).
+
+    Fail-closed: unconfigured sidecar or a recipient missing from the allowlist
+    raises a non-retryable error; the workflow records it and continues with the
+    other channels.
+
+    Args:
+        text: The digest markdown text to send.
+        recipients: Optional E.164 numbers (fall back to none).
+        group_id: Optional WhatsApp group id.
+
+    Returns:
+        Dict with status and recipient count.
+
+    Raises:
+        ApplicationError: If the sidecar is unconfigured, a recipient is not
+            allowlisted, or a send fails.
+    """
+    activity.logger.info("Sending WhatsApp message")
+    try:
+        result = await WhatsAppService().send_text(text, recipients or [], group_id=group_id)
+    except (WhatsAppConfigError, WhatsAppNotAllowedError) as exc:
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    except Exception as exc:
+        raise ApplicationError(f"WhatsApp delivery failed: {exc}") from exc
+    return result
+
+
+@activity.defn
+async def deliver_whatsapp_audio_activity(
+    audio_path: str,
+    caption: str | None = None,
+    recipients: list[str] | None = None,
+    group_id: str | None = None,
+) -> dict[str, Any]:
+    """Send a generated audio file via WhatsApp (there/Baileys sidecar).
+
+    Args:
+        audio_path: Path to the compressed M4A file on disk.
+        caption: Optional caption text for the audio message.
+        recipients: Optional E.164 numbers (fall back to none).
+        group_id: Optional WhatsApp group id.
+
+    Returns:
+        Dict with status and recipient count.
+
+    Raises:
+        ApplicationError: If the sidecar is unconfigured, a recipient is not
+            allowlisted, the file is missing or oversized, or a send fails.
+    """
+    activity.logger.info(f"Sending WhatsApp audio: {audio_path}")
+    try:
+        result = await WhatsAppService().send_audio(
+            audio_path,
+            recipients or [],
+            group_id=group_id,
+            caption=caption,
+        )
+    except (WhatsAppConfigError, WhatsAppNotAllowedError) as exc:
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    except Exception as exc:
+        raise ApplicationError(f"WhatsApp audio delivery failed: {exc}") from exc
     return result
 
 

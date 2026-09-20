@@ -107,6 +107,37 @@ historical notes describing the migration itself.
 
 ---
 
+## PHASE 5.1 - WhatsApp Delivery Channel (there/Baileys)
+
+**Goal:** Deliver digests (text + audio M4A) on WhatsApp to multiple recipients
+and/or a group, self-hosted via a `there`/Baileys sidecar in docker-compose.
+
+**Scope:**
+- [ ] `there` sidecar service in `docker-compose.yml` (internal network, session
+      persisted in `data/there`, one-time QR pairing)
+- [ ] `WHATSAPP_*` config: API URL/token, E.164 `WHATSAPP_ALLOWLIST`
+      (fail-closed closed address book), delay mode (off|natural|custom),
+      typing indicator, per-recipient cool-down
+- [ ] `CollectionConfig.whatsapp_recipients` (E.164) + `whatsapp_group_id`
+      (→ `<id>@g.us`, exempt from allowlist); channel whitelist gains "whatsapp"
+- [ ] `WhatsAppService` (fail-closed, JID conversion, chunking, base64 audio gate,
+      OpenClaw-style humanDelay + per-recipient cool-down, typing indicator)
+- [ ] `deliver_whatsapp_message_activity` / `deliver_whatsapp_audio_activity`
+      (non-retryable on unconfigured/not-allowlisted, network retryable)
+- [ ] `DigestPipelineWorkflow` WhatsApp delivery blocks (text after email, audio
+      after Telegram audio; a failure never aborts the run)
+- [ ] Unit tests (service + activities) and workflow stub tests
+- [ ] Validate `there` image + `/send` + `/sendaudio` contract against the running
+      sidecar during deploy; pair once via QR
+
+**Success criteria:** A digest configured with `delivery_channels = ["whatsapp"]`
+reaches every allowlisted recipient (and the group) as text + audio with human-like
+pacing; numbers outside the allowlist are never contacted.
+
+**Effort:** 6-8 hours.
+
+---
+
 ## PHASE 6 (Optional) - Web UI and Multi-user
 
 **Goal:** Manage sources and view history from a browser.

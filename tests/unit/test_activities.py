@@ -395,3 +395,66 @@ async def test_record_run_activity_persists_run() -> None:
     mock_record.assert_awaited_once_with(**run)
     assert result["status"] == "ok"
     assert result["run_id"] == 17
+
+
+async def test_deliver_whatsapp_message_activity_calls_service() -> None:
+    """deliver_whatsapp_message_activity delegates to WhatsAppService.send_text."""
+    from src.workers.activities import deliver_whatsapp_message_activity
+
+    with patch(
+        "src.workers.activities.WhatsAppService.send_text",
+        new_callable=AsyncMock,
+        return_value={"status": "ok", "recipients": 2},
+    ) as mock_send:
+        result = await ActivityEnvironment().run(
+            deliver_whatsapp_message_activity,
+            "# digest",
+            ["+34600000001"],
+            "1234567890@g.us",
+        )
+
+    assert result["status"] == "ok"
+    assert mock_send.await_count == 1
+    assert mock_send.await_args.args[1] == ["+34600000001"]
+    assert mock_send.await_args.kwargs["group_id"] == "1234567890@g.us"
+
+
+async def test_deliver_whatsapp_message_activity_config_error_non_retryable() -> None:
+    """An unconfigured sidecar surfaces as a non-retryable ApplicationError."""
+    from temporalio.exceptions import ApplicationError as TemporalError
+
+    from src.api.services.whatsapp import WhatsAppConfigError
+    from src.workers.activities import deliver_whatsapp_message_activity
+
+    with patch(
+        "src.workers.activities.WhatsAppService.send_text",
+        new_callable=AsyncMock,
+        side_effect=WhatsAppConfigError("WhatsApp is not configured"),
+    ):
+        with pytest.raises(TemporalError) as excinfo:
+            await ActivityEnvironment().run(deliver_whatsapp_message_activity, "# digest")
+        assert excinfo.value.non_retryable is True
+
+
+async def test_deliver_whatsapp_audio_activity_calls_service() -> None:
+    """deliver_whatsapp_audio_activity delegates to WhatsAppService.send_audio."""
+    from src.workers.activities import deliver_whatsapp_audio_activity
+
+    with patch(
+        "src.workers.activities.WhatsAppService.send_audio",
+        new_callable=AsyncMock,
+        return_value={"status": "ok", "recipients": 1},
+    ) as mock_send:
+        result = await ActivityEnvironment().run(
+            deliver_whatsapp_audio_activity,
+            "/tmp/digest.m4a",
+            "Top",
+            ["+34600000001"],
+            None,
+        )
+
+    assert result["status"] == "ok"
+    assert mock_send.await_count == 1
+    assert mock_send.await_args.args[0] == "/tmp/digest.m4a"
+    assert mock_send.await_args.args[1] == ["+34600000001"]
+    assert mock_send.await_args.kwargs["caption"] == "Top"

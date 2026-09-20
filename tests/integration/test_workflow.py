@@ -103,6 +103,23 @@ async def stub_deliver_email(
     return {"status": "ok", "recipients": len(recipients)}
 
 
+@activity.defn(name="deliver_whatsapp_message_activity")
+async def stub_deliver_whatsapp_message(
+    text: str, recipients: list[str] | None = None, group_id: str | None = None
+) -> dict:
+    return {"status": "ok", "recipients": len(recipients or [])}
+
+
+@activity.defn(name="deliver_whatsapp_audio_activity")
+async def stub_deliver_whatsapp_audio(
+    audio_path: str,
+    caption: str | None = None,
+    recipients: list[str] | None = None,
+    group_id: str | None = None,
+) -> dict:
+    return {"status": "ok", "recipients": len(recipients or [])}
+
+
 @activity.defn(name="record_run_activity")
 async def stub_record_run(run: dict) -> dict:
     return {"status": "ok", "run_id": 1}
@@ -125,6 +142,8 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_deliver_message,
                 stub_deliver_audio,
                 stub_deliver_email,
+                stub_deliver_whatsapp_message,
+                stub_deliver_whatsapp_audio,
                 stub_record_run,
             ],
         ):
@@ -979,6 +998,114 @@ async def test_telegram_default_skips_email() -> None:
                     email_recipients=["a@example.com"],
                 ),
                 id="workflow-test-default-channels",
+                task_queue="tq",
+            )
+
+    assert invites == []
+
+
+async def test_whatsapp_channel_delivers_text_and_audio() -> None:
+    """With the whatsapp channel enabled, text and audio activities run."""
+    seen: dict[str, object] = {}
+
+    @activity.defn(name="deliver_whatsapp_message_activity")
+    async def message_recorder(
+        text: str, recipients: list[str] | None = None, group_id: str | None = None
+    ) -> dict:
+        seen["text"] = text
+        seen["recipients"] = list(recipients or [])
+        seen["group_id"] = group_id
+        return {"status": "ok", "recipients": len(recipients or [])}
+
+    @activity.defn(name="deliver_whatsapp_audio_activity")
+    async def audio_recorder(
+        audio_path: str,
+        caption: str | None = None,
+        recipients: list[str] | None = None,
+        group_id: str | None = None,
+    ) -> dict:
+        seen["audio"] = audio_path
+        return {"status": "ok", "recipients": len(recipients or [])}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_compress_audio,
+                stub_deliver_message,
+                stub_deliver_audio,
+                message_recorder,
+                audio_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=True,
+                    collection="tech",
+                    whatsapp_recipients=["+34600000001"],
+                    whatsapp_group_id="1234567890",
+                    delivery_channels=["telegram", "whatsapp"],
+                ),
+                id="workflow-test-whatsapp",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert seen["recipients"] == ["+34600000001"]
+    assert seen["group_id"] == "1234567890"
+    assert seen["text"] == DIGEST["digest"]
+    assert seen["audio"] == COMPRESSED_AUDIO
+    assert any(d.get("recipients") == 1 for d in result["delivery_status"])
+
+
+async def test_whatsapp_skipped_without_recipients() -> None:
+    """Without whatsapp_recipients, the whatsapp activities are not invoked."""
+    invites: list[str] = []
+
+    @activity.defn(name="deliver_whatsapp_message_activity")
+    async def message_recorder(
+        text: str, recipients: list[str] | None = None, group_id: str | None = None
+    ) -> dict:
+        invites.append("message")
+        return {"status": "ok", "recipients": 0}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_deliver_message,
+                stub_deliver_audio,
+                message_recorder,
+                stub_record_run,
+            ],
+        ):
+            await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="tech",
+                    delivery_channels=["telegram", "whatsapp"],
+                ),
+                id="workflow-test-no-whatsapp",
                 task_queue="tq",
             )
 

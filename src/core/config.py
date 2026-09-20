@@ -24,6 +24,25 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     mail_from: str = ""
     mail_from_name: str = "News Engine"
+    # WhatsApp delivery via a self-hosted there/Baileys sidecar (docker-compose
+    # service named "there"). Fail-closed: with no api_token configured the
+    # channel is disabled and a digest never blocks on it; numbers must be in
+    # the allowlist (groups are always allowed).
+    whatsapp_api_url: str = "http://there:3000"
+    whatsapp_api_token: str = ""
+    whatsapp_allowlist: list[str] = Field(
+        default_factory=list,
+        description="E.164 numbers allowed to receive digests (groups exempt)",
+    )
+    # OpenClaw-style human typing delay between sends:
+    # "off"=none, "natural"=800-2500ms, "custom"=[custom_min, custom_max].
+    whatsapp_delay_mode: str = "natural"
+    whatsapp_delay_custom_min_ms: int = Field(default=2000, ge=0)
+    whatsapp_delay_custom_max_ms: int = Field(default=8000, ge=0)
+    # Typing indicator while 'writing': "composing" or "none".
+    whatsapp_typing_indicator: str = "composing"
+    # Minimum cool-down per recipient between consecutive sends (milliseconds).
+    whatsapp_recipient_cooldown_ms: int = Field(default=300, ge=0)
     api_port: int = Field(default=8000, ge=1, lt=65536)
     api_request_timeout: int = Field(default=120, ge=1)
     log_level: str = "INFO"

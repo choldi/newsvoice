@@ -20,6 +20,8 @@ with workflow.unsafe.imports_passed_through():
         deliver_email_activity,
         deliver_telegram_audio_activity,
         deliver_telegram_message_activity,
+        deliver_whatsapp_audio_activity,
+        deliver_whatsapp_message_activity,
         fetch_rss_activity,
         filter_new_activity,
         generate_digest_activity,
@@ -48,6 +50,9 @@ TTS_TIMEOUT = timedelta(seconds=8100)
 COMPRESS_TIMEOUT = timedelta(seconds=600)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
 EMAIL_TIMEOUT = timedelta(seconds=90)
+# WhatsApp pacing (human delay + per-recipient cool-down) per message multiplied
+# across recipients/chunks; give it head-room over the Telegram timeout.
+WHATSAPP_TIMEOUT = timedelta(seconds=120)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 
 # Bounded retries for network-dependent activities so a transient failure does
@@ -72,6 +77,8 @@ class PipelineConfig:
     custom_prompt: str = ""
     chat_id: str | None = None
     email_recipients: list[str] = field(default_factory=list)
+    whatsapp_recipients: list[str] = field(default_factory=list)
+    whatsapp_group_id: str | None = None
     delivery_channels: list[str] = field(default_factory=lambda: ["telegram"])
 
 
@@ -169,6 +176,9 @@ class DigestPipelineWorkflow:
         channels = config.delivery_channels or ["telegram"]
         use_telegram = "telegram" in channels
         use_email = "email" in channels
+        use_whatsapp = bool(config.whatsapp_recipients or config.whatsapp_group_id) and (
+            "whatsapp" in channels
+        )
         delivery_status: list[dict[str, Any]] = []
 
         # Deliver the text digest FIRST; it is the primary deliverable and must
@@ -264,6 +274,31 @@ class DigestPipelineWorkflow:
                 )
                 delivery_status.append({"status": "error", "error": str(detail)})
 
+        # Deliver the digest via WhatsApp when the collection enables the channel
+        # and configures recipients or a group. Fail-closed: an unconfigured
+        # sidecar or a number outside the allowlist is recorded and the rest of
+        # the channels continue.
+        if use_whatsapp:
+            workflow.logger.info("Delivering WhatsApp digest")
+            try:
+                whatsapp_delivery = await workflow.execute_activity(
+                    deliver_whatsapp_message_activity,
+                    args=[
+                        digest_markdown,
+                        config.whatsapp_recipients,
+                        config.whatsapp_group_id,
+                    ],
+                    start_to_close_timeout=WHATSAPP_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append(whatsapp_delivery)
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(
+                    f"WhatsApp step failed; text digest already delivered: {detail}"
+                )
+                delivery_status.append({"status": "error", "error": str(detail)})
+
         # Deliver audio to Telegram when the channel is selected, delivery is
         # requested, and the TTS step produced an audio file.
         if use_telegram and config.tts_enabled and config.deliver_audio:
@@ -280,6 +315,30 @@ class DigestPipelineWorkflow:
                     detail = getattr(exc, "cause", None) or exc
                     workflow.logger.warning(
                         f"Telegram audio step failed; text digest already delivered: {detail}"
+                    )
+                    delivery_status.append({"status": "error", "error": str(detail)})
+
+        # Deliver audio to WhatsApp when the channel is selected, delivery is
+        # requested, and the TTS step produced an audio file.
+        if use_whatsapp and config.tts_enabled and config.deliver_audio:
+            if audio and audio.get("audio_path"):
+                try:
+                    whatsapp_audio = await workflow.execute_activity(
+                        deliver_whatsapp_audio_activity,
+                        args=[
+                            audio["audio_path"],
+                            digest_markdown[:1000],
+                            config.whatsapp_recipients,
+                            config.whatsapp_group_id,
+                        ],
+                        start_to_close_timeout=WHATSAPP_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                    delivery_status.append(whatsapp_audio)
+                except (ActivityError, ApplicationError) as exc:
+                    detail = getattr(exc, "cause", None) or exc
+                    workflow.logger.warning(
+                        f"WhatsApp audio step failed; text digest already delivered: {detail}"
                     )
                     delivery_status.append({"status": "error", "error": str(detail)})
 
