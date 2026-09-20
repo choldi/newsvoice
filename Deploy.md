@@ -111,9 +111,60 @@ To run a one-off digest manually (useful for debugging):
 docker compose exec worker python -m src.workers.trigger --collection tech
 ```
 
+> Note: `--tts` forces TTS/audio generation for the manual run; without it the
+> flag defaults to `false` regardless of `tts_enabled` in `collections.toml`.
+> Scheduled runs always honor the collection's own `tts_enabled`.
+
 With no `collections.toml`, the legacy single-schedule behavior applies:
 `python -m src.workers.schedule --hour 8 --minute 0` creates one daily digest
 from `RSS_FEED_URLS`.
+
+---
+
+## 4.1 WhatsApp Delivery
+
+WhatsApp delivery uses a self-hosted Baileys gateway
+(`blakegt/whatsapp-web-api-rest`, compose service `there`) that translates a
+JSON HTTP API into WhatsApp via the linked phone's session. The gateway:
+
+- listens internally on `:8085` (`POST /message` for text/media,
+  `POST /simulate` for the typing indicator) and is **not** exposed to the LAN
+  — it has no auth, so it must only be reachable by the worker.
+- persists its Baileys session in `data/there` (mounted at `/app/auth_info`,
+  container user is uid 1001).
+
+Enable it in `.env`:
+
+```bash
+WHATSAPP_API_URL=http://there:8085
+WHATSAPP_API_TOKEN=<any non-empty value>   # fail-closed kill switch; gateway has no auth
+WHATSAPP_ALLOWLIST=["+34612345678"]        # E.164 numbers allowed to receive digests
+```
+
+Then in `collections.toml`, per collection:
+
+```toml
+whatsapp_recipients = ["+34612345678"]   # must be in WHATSAPP_ALLOWLIST
+delivery_channels = ["telegram", "email", "whatsapp"]
+```
+
+Groups are always allowed: `whatsapp_group_id = "1234567890@g.us"`.
+
+**First-time pairing (QR):** the gateway acts as a WhatsApp Web client, so it
+must be linked to a phone once. From your machine, tunnel the internal port and
+open the gate way's page to scan the QR:
+
+```bash
+docker run -d --rm --name gw_pair_proxy -p 127.0.0.1:8085:8085 \
+  --network news-summary_default alpine/socat TCP-LISTEN:8085,fork TCP:there:8085
+ssh -L 8085:localhost:8085 user@server   # from your laptop, keep open
+# open http://localhost:8085 in a browser, then in WhatsApp:
+#   Settings -> Linked devices -> Link a device  (scan the QR)
+docker rm -f gw_pair_proxy               # remove the temporary proxy after pairing
+```
+
+Session state persists in `data/there`, so the pairing survives container
+restarts. Re-pair at any time by repeating the tunnel+scan steps.
 
 ---
 ## 5. Health Checks
