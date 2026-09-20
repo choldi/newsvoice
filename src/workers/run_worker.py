@@ -54,6 +54,34 @@ async def build_client() -> Client:
     )
 
 
+def worker_activities() -> list[object]:
+    """Return every Temporal activity the worker must register.
+
+    Each activity added in ``src.workers.activities`` must be registered here,
+    otherwise the matching workflow step fails at runtime with a NotFoundError
+    when a scheduled digest tries to run it.
+
+    Returns:
+        Ordered list of activity functions for the Temporal Worker.
+    """
+    return [
+        activities.fetch_rss_activity,
+        activities.filter_new_activity,
+        activities.cluster_activity,
+        activities.generate_digest_activity,
+        activities.generate_tts_activity,
+        activities.deliver_telegram_message_activity,
+        activities.deliver_telegram_audio_activity,
+        activities.deliver_email_activity,
+        activities.deliver_whatsapp_message_activity,
+        activities.deliver_whatsapp_audio_activity,
+        activities.record_run_activity,
+        activities.read_collections_signature_activity,
+        activities.get_synced_signature_activity,
+        activities.sync_collections_schedules_activity,
+    ]
+
+
 @asynccontextmanager
 async def run_worker(
     client: Client, task_queue: str = "news-engine-task-queue"
@@ -61,7 +89,7 @@ async def run_worker(
     """Context manager that creates and starts a Temporal Worker.
 
     Args:
-        client: Connected Temporal Client.
+        client: Connected Temporal client.
         task_queue: Task queue name to poll for tasks. Defaults to configured queue.
 
     Yields:
@@ -73,20 +101,7 @@ async def run_worker(
             client,
             task_queue=queue,
             workflows=[DigestPipelineWorkflow, CollectionsMonitorWorkflow],
-            activities=[
-                activities.fetch_rss_activity,
-                activities.filter_new_activity,
-                activities.cluster_activity,
-                activities.generate_digest_activity,
-                activities.generate_tts_activity,
-                activities.deliver_telegram_message_activity,
-                activities.deliver_telegram_audio_activity,
-                activities.deliver_email_activity,
-                activities.record_run_activity,
-                activities.read_collections_signature_activity,
-                activities.get_synced_signature_activity,
-                activities.sync_collections_schedules_activity,
-            ],
+            activities=worker_activities(),
             activity_executor=activity_executor,
         )
         logger.info("starting_worker", task_queue=queue)
