@@ -255,7 +255,9 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
         settings = get_settings()
         language = digest.get("language") or settings.tts_language
         voice = digest.get("voice") or settings.tts_voice
-        tts_in = TTSIn(markdown=str(markdown), language=language, voice=voice)
+        tts_in = TTSIn(
+            markdown=str(markdown), language=language, voice=voice, collection=collection
+        )
         await audio_repo.set_generating(run_id)
         result = await TTSService().generate_tts(tts_in)
     except Exception as exc:

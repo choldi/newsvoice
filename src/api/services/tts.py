@@ -8,8 +8,8 @@ before delivery (see ``AudioCompressService``).
 """
 
 import asyncio
-import hashlib
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import edge_tts
@@ -48,10 +48,23 @@ DEFAULT_VOICE_BY_LANGUAGE = {
 _EDGE_VOICES: list[dict] | None = None
 
 
-def _content_hash(markdown: str, voice: str, language: str = "") -> str:
-    """Stable SHA256 hash of the (markdown, voice, language) triple."""
-    payload = f"{voice}::{language}::{markdown}".encode()
-    return hashlib.sha256(payload).hexdigest()[:16]
+def _audio_filename(collection: str, day: datetime | None = None) -> str:
+    """Build the delivery filename news_<collection>_<yymmdd>.mp3.
+
+    The collection is sanitized to [a-z0-9_-] (falling back to 'default') so
+    arbitrary collection names never leak into filesystem paths. The date is
+    the UTC day of the run, formatted as yymmdd.
+
+    Args:
+        collection: Collection name owning this digest audio.
+        day: Optional datetime driving the date stamp. Defaults to now (UTC).
+
+    Returns:
+        Filename like 'news_health_260921.mp3'.
+    """
+    name = re.sub(r"[^a-z0-9_-]+", "_", collection.strip().lower()).strip("_-") or "default"
+    stamp = (day or datetime.now(UTC)).strftime("%y%m%d")
+    return f"news_{name}_{stamp}.mp3"
 
 
 def _estimate_duration(char_count: int) -> float:
@@ -168,8 +181,7 @@ class TTSService:
         language = payload.language or self._default_language
         text = _truncate_for_tts(payload.markdown, self._max_chars)
         speech_text = _markdown_to_speech_text(text)
-        content_hash = _content_hash(text, voice, language)
-        audio_path = self._cache_dir / f"{content_hash}.mp3"
+        audio_path = self._cache_dir / _audio_filename(payload.collection)
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 

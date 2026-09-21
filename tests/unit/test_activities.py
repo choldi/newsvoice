@@ -110,6 +110,7 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
                 "language": "en",
                 "voice": "en-gb-female",
                 "run_id": "test-tts-run",
+                "collection": "health",
             },
         )
 
@@ -118,6 +119,7 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
     tts_in = mock_tts.call_args.args[0]
     assert tts_in.language == "en"
     assert tts_in.voice == "en-gb-female"
+    assert tts_in.collection == "health"
 
     job = await AudioJobsRepository().get_job("test-tts-run")
     assert job is not None

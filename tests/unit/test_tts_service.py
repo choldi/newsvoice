@@ -1,5 +1,6 @@
 """Unit tests for TTSService (Edge neural voices via edge-tts)."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import src.api.services.tts as tts_module
 from src.api.models.tts import TTSIn
 from src.api.services.tts import (
     TTSService,
-    _content_hash,
+    _audio_filename,
     _estimate_duration,
     _markdown_to_speech_text,
     _truncate_for_tts,
@@ -33,25 +34,25 @@ def _reset_voices_cache(monkeypatch: pytest.MonkeyPatch, voices: list[dict] | No
     monkeypatch.setattr(tts_module, "_EDGE_VOICES", voices or [])
 
 
-def test_content_hash_is_stable() -> None:
-    """_content_hash is deterministic for the same input."""
-    h1 = _content_hash("hello", "es-MX-JorgeNeural", "es")
-    h2 = _content_hash("hello", "es-MX-JorgeNeural", "es")
-    assert h1 == h2
+def test_audio_filename_pattern() -> None:
+    """_audio_filename follows news_<collection>_<yymmdd>.mp3."""
+    day = datetime(2026, 9, 21, tzinfo=UTC)
+    assert _audio_filename("health", day) == "news_health_260921.mp3"
 
 
-def test_content_hash_changes_with_voice() -> None:
-    """_content_hash differs when voice changes."""
-    h1 = _content_hash("hello", "voice-a", "es")
-    h2 = _content_hash("hello", "voice-b", "es")
-    assert h1 != h2
+def test_audio_filename_sanitizes_collection() -> None:
+    """Unsafe collection characters are replaced; empty falls back to default."""
+    day = datetime(2026, 9, 21, tzinfo=UTC)
+    assert _audio_filename(" Health Final ", day) == "news_health_final_260921.mp3"
+    assert _audio_filename("!!", day) == "news_default_260921.mp3"
 
 
-def test_content_hash_changes_with_language() -> None:
-    """_content_hash differs when language changes."""
-    h1 = _content_hash("hello", "es-MX-JorgeNeural", "es")
-    h2 = _content_hash("hello", "es-MX-JorgeNeural", "en")
-    assert h1 != h2
+def test_audio_filename_defaults_to_now() -> None:
+    """_audio_filename uses the current UTC day when no date is given."""
+    filename = _audio_filename("tech", None)
+    assert filename.startswith("news_tech_")
+    assert filename.endswith(".mp3")
+    assert len(filename) == len("news_tech_") + 6 + len(".mp3")
 
 
 def test_estimate_duration_scales_with_chars() -> None:
@@ -90,10 +91,14 @@ async def test_generate_tts_uses_cache(tmp_path: Path, monkeypatch: pytest.Monke
     _reset_voices_cache(monkeypatch)
     monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
     service = TTSService(cache_dir=str(tmp_path))
-    payload = TTSIn(markdown="hola mundo", voice="es-MX-JorgeNeural", language="es")
+    payload = TTSIn(
+        markdown="hola mundo",
+        voice="es-MX-JorgeNeural",
+        language="es",
+        collection="health",
+    )
 
-    expected_hash = _content_hash("hola mundo", "es-MX-JorgeNeural", "es")
-    cached_file = tmp_path / f"{expected_hash}.mp3"
+    cached_file = tmp_path / _audio_filename("health")
     cached_file.write_bytes(_FAKE_MP3)
 
     result = await service.generate_tts(payload)
@@ -105,7 +110,7 @@ async def test_generate_tts_uses_cache(tmp_path: Path, monkeypatch: pytest.Monke
 async def test_generate_tts_synthesizes_with_edge_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """generate_tts writes an MP3 synthesized by the resolved Edge voice."""
+    """generate_tts writes an MP3 named news_<collection>_<yymmdd>.mp3."""
     _reset_voices_cache(monkeypatch)
     synthesis: list[tuple[str, str]] = []
 
@@ -117,11 +122,18 @@ async def test_generate_tts_synthesizes_with_edge_voice(
     monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
     service = TTSService(cache_dir=str(tmp_path))
 
-    payload = TTSIn(markdown="contenido de prueba", voice="es-mx-male", language="es")
+    payload = TTSIn(
+        markdown="contenido de prueba",
+        voice="es-mx-male",
+        language="es",
+        collection="health",
+    )
     result = await service.generate_tts(payload)
 
     assert result.cached is False
     assert result.audio_path.endswith(".mp3")
+    assert Path(result.audio_path).name.startswith("news_health_")
+    assert len(Path(result.audio_path).name) == len("news_health_") + 6 + len(".mp3")
     assert Path(result.audio_path).exists()
     assert len(synthesis) == 1
     synthesized_text, used_voice = synthesis[0]

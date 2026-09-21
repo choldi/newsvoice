@@ -17,6 +17,11 @@ class TTSIn(BaseModel):
     language: str | None = Field(
         default=None, description="ISO 639-1 language code (e.g. 'es'). Defaults to settings."
     )
+    collection: str = Field(
+        default="default",
+        description="Collection name used to name the output file "
+        "news_<collection>_<yymmdd>.<ext>.",
+    )
 
 
 class TTSOut(BaseModel):

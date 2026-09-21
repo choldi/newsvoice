@@ -141,6 +141,31 @@ pacing; numbers outside the allowlist are never contacted.
 
 ---
 
+## PHASE 5.2 - Audio file naming + News-selection logic (admin)
+
+**Goal:** (1) name the generated audio `news_<collection>_<yymmdd>.<ext>` and
+(2) send the LLM's news-selection rationale to an optional admin destination,
+separate from the digest message.
+
+**Scope (paso 1 - nombre de audio):**
+- [x] `TTSIn.collection`; `TTSService` genera `news_<collection>_<yymmdd>.mp3`
+      en `data/tts_cache/` (colección saneada `[a-z0-9_-]`, fecha UTC `%y%m%d`)
+- [x] `generate_tts_activity` propaga `collection`; compresión conserva la base
+      (`.m4a`)
+- [x] Tests de naming/cache/actividad actualizados (patrón `news_<col>_<yymmdd>`)
+
+**Scope (paso 2 - lógica de selección, pendiente):**
+- [ ] `CollectionConfig.logic_delivery` (opcional; ausente => el LLM NO la genera)
+- [ ] Generación LLM en llamada separada (`generate_logic_activity`)
+- [ ] `deliver_logic_activity` (telegram/email/whatsapp, mensaje aparte)
+- [ ] Wiring en `PipelineConfig` + `pipeline_config_for` + monitor de schedules
+- [ ] Roundtrip admin API (`CollectionIn`, serializador TOML)
+- [ ] Tests unit/integración + deploy
+
+**Effort:** 4-6 hours.
+
+---
+
 ## PHASE 6 (Optional) - Web UI and Multi-user
 
 **Goal:** Manage sources and view history from a browser.
