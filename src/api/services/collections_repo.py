@@ -81,7 +81,12 @@ def _toml_value(value: Any) -> str:
         items = ", ".join(_toml_string(item) for item in value if isinstance(item, str))
         return f"[{items}]"
     if isinstance(value, dict):
-        pairs = ", ".join(f"{k} = {_toml_value(v)}" for k, v in value.items() if v is not None)
+        _empty_values = ("", [], {})
+        pairs = ", ".join(
+            f"{k} = {_toml_value(v)}"
+            for k, v in value.items()
+            if v is not None and v not in _empty_values
+        )
         return f"{{ {pairs} }}"
     return _toml_string(str(value))
 
@@ -267,6 +272,7 @@ class CollectionsRepository:
                 "chat_id",
                 "email_recipients",
                 "delivery_channels",
+                "logic_delivery",
                 "enabled",
             ):
                 value = data.get(key)

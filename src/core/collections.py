@@ -26,6 +26,58 @@ DEFAULT_COLLECTION_TIME = "08:00"
 DEFAULT_PROMPT_TEMPLATE = "default"
 
 
+class LogicDeliveryConfig(BaseModel):
+    """Optional admin destination for the LLM news-selection logic.
+
+    When present on a collection, the pipeline asks the LLM (in a separate
+    call) to explain the news-selection logic used for the digest and sends it
+    to these destinations as a message apart from the digest. When absent, the
+    LLM does not generate any logic text.
+    """
+
+    channels: list[str] = Field(
+        default_factory=lambda: ["telegram"],
+        description=(
+            "Delivery channels ('telegram', 'email', 'whatsapp'); empty or unset"
+            " defaults to telegram"
+        ),
+    )
+    chat_id: str | None = Field(
+        default=None,
+        description="Telegram chat id override; global TELEGRAM_CHAT_ID if empty",
+    )
+    email_recipients: list[str] = Field(
+        default_factory=list,
+        description="Email recipients addressed per logic delivery; empty disables email",
+    )
+    whatsapp_recipients: list[str] = Field(
+        default_factory=list,
+        description="WhatsApp recipients (E.164) addressed per logic delivery",
+    )
+    whatsapp_group_id: str | None = Field(
+        default=None,
+        description="WhatsApp group id delivered as <id>@g.us, exempt from the allowlist",
+    )
+
+    @field_validator("channels")
+    @classmethod
+    def _channels(cls, value: list[str]) -> list[str]:
+        """Keep only known channels, de-duplicated, falling back to telegram."""
+        known = ("telegram", "email", "whatsapp")
+        channels = [channel for channel in known if channel in value]
+        return channels or ["telegram"]
+
+    @field_validator("whatsapp_recipients")
+    @classmethod
+    def _whatsapp_recipients(cls, value: list[str]) -> list[str]:
+        """Reject non-E.164 numbers; an empty list still disables the channel."""
+        clean = [num.strip() for num in value if num.strip()]
+        invalid = [num for num in clean if not re.fullmatch(r"\+[1-9]\d{1,14}", num)]
+        if invalid:
+            raise ValueError(f"whatsapp_recipients must be E.164 numbers: {invalid}")
+        return clean
+
+
 class CollectionConfig(BaseModel):
     """Configuration for a single news digest collection."""
 
@@ -78,6 +130,13 @@ class CollectionConfig(BaseModel):
         description=(
             "Delivery channels ('telegram', 'email', 'whatsapp'); empty or unset"
             " defaults to telegram"
+        ),
+    )
+    logic_delivery: LogicDeliveryConfig | None = Field(
+        default=None,
+        description=(
+            "Optional admin destination for the LLM news-selection logic; when"
+            " absent the pipeline does not generate any logic text"
         ),
     )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")

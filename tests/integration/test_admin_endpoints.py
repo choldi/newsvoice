@@ -65,6 +65,25 @@ def test_create_then_list_and_get() -> None:
     assert fetched.json()["collection"]["time"] == "08:00"
 
 
+def test_logic_delivery_round_trip_via_api() -> None:
+    """logic_delivery persists through create/list/get with the admin API."""
+    payload = _collection_payload(
+        logic_delivery={
+            "channels": ["email"],
+            "email_recipients": ["jordias@msn.com"],
+        }
+    )
+    created = client.post("/api/admin/collections", json=payload)
+    assert created.status_code == 201
+    logic = created.json()["collection"]["logic_delivery"]
+    assert logic["channels"] == ["email"]
+    assert logic["email_recipients"] == ["jordias@msn.com"]
+
+    fetched = client.get("/api/admin/collections/tech")
+    assert fetched.status_code == 200
+    assert fetched.json()["collection"]["logic_delivery"]["channels"] == ["email"]
+
+
 def test_create_duplicate_conflicts() -> None:
     """Creating a duplicate collection returns 409."""
     client.post("/api/admin/collections", json=_collection_payload())

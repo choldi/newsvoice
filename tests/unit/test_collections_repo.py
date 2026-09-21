@@ -194,6 +194,35 @@ def test_delivery_channels_round_trip(tmp_path: Path) -> None:
     load_collections.cache_clear()
 
 
+def test_logic_delivery_round_trip(tmp_path: Path) -> None:
+    """logic_delivery persists through the TOML round trip as an inline table."""
+    from src.core.collections import LogicDeliveryConfig
+
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    repo = CollectionsRepository(str(path))
+    tech = _tech().model_copy(
+        update={
+            "logic_delivery": LogicDeliveryConfig(
+                channels=["email"], email_recipients=["admin@example.com"]
+            )
+        }
+    )
+    repo.save_all([tech])
+
+    raw = path.read_text(encoding="utf-8")
+    expected_pairs = (
+        "logic_delivery = { channels = ['email'], email_recipients = ['admin@example.com'] }"
+    )
+    assert expected_pairs in raw
+
+    reloaded = CollectionsRepository(str(path)).list()[0]
+    assert reloaded.logic_delivery is not None
+    assert reloaded.logic_delivery.channels == ["email"]
+    assert reloaded.logic_delivery.email_recipients == ["admin@example.com"]
+    load_collections.cache_clear()
+
+
 def test_save_all_multiline_custom_prompt(tmp_path: Path) -> None:
     """A multi-line custom_prompt survives the TOML round trip as valid TOML."""
     path = _file(tmp_path)

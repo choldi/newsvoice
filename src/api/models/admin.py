@@ -10,7 +10,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from src.core.collections import DEFAULT_COLLECTION_TIME, DEFAULT_PROMPT_TEMPLATE, CollectionConfig
+from src.core.collections import (
+    DEFAULT_COLLECTION_TIME,
+    DEFAULT_PROMPT_TEMPLATE,
+    CollectionConfig,
+    LogicDeliveryConfig,
+)
 
 
 class CollectionIn(BaseModel):
@@ -51,6 +56,13 @@ class CollectionIn(BaseModel):
     delivery_channels: list[str] = Field(
         default_factory=lambda: ["telegram"],
         description="Delivery channels ('telegram', 'email'); empty defaults to telegram",
+    )
+    logic_delivery: LogicDeliveryConfig | None = Field(
+        default=None,
+        description=(
+            "Optional admin destination for the LLM news-selection logic; when"
+            " absent the pipeline does not generate any logic text"
+        ),
     )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 

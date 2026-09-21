@@ -159,6 +159,54 @@ def test_delivery_channels_accept_whatsapp(tmp_path: Path) -> None:
     assert collection.delivery_channels == ["whatsapp"]
 
 
+def test_logic_delivery_defaults_to_none(tmp_path: Path) -> None:
+    """Collections without logic_delivery do not generate any logic text."""
+    path = _write_collections(
+        tmp_path, '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.logic_delivery is None
+
+
+def test_logic_delivery_parsed_from_inline_table(tmp_path: Path) -> None:
+    """An inline logic_delivery table is parsed into a LogicDeliveryConfig."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "health"\nfeed_urls = ["https://x.com/rss"]\n'
+        'logic_delivery = { channels = ["email"], '
+        'email_recipients = ["admin@example.com"] }\n',
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.logic_delivery is not None
+    assert collection.logic_delivery.channels == ["email"]
+    assert collection.logic_delivery.email_recipients == ["admin@example.com"]
+    assert collection.logic_delivery.whatsapp_recipients == []
+
+
+def test_logic_delivery_channels_fall_back_to_telegram(tmp_path: Path) -> None:
+    """Empty or unknown logic_delivery channels default to telegram."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'logic_delivery = { channels = ["sms", "unknown"] }\n',
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.logic_delivery is not None
+    assert collection.logic_delivery.channels == ["telegram"]
+
+
+def test_logic_delivery_rejects_invalid_whatsapp(tmp_path: Path) -> None:
+    """Non-E.164 logic_delivery whatsapp recipients are rejected at parse time."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'logic_delivery = { channels = ["whatsapp"], '
+        'whatsapp_recipients = ["123"] }\n',
+    )
+    with pytest.raises(ValidationError):
+        CollectionsLoader(str(path)).load()
+
+
 def test_whatsapp_recipients_must_be_e164(tmp_path: Path) -> None:
     """Non-E.164 whatsapp_recipients values fail validation."""
     path = _write_collections(
