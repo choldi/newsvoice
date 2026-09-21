@@ -161,7 +161,7 @@ separate from the digest message.
 - [x] Wiring en `PipelineConfig` + `pipeline_config_for` + monitor de schedules
 - [x] Roundtrip admin API (`CollectionIn`, serializador TOML)
 - [x] Tests unit/integración (284 passing, ruff limpio)
-- [ ] Deploy + configuración de `logic_delivery` de health (email a jordias@msn.com)
+- [x] Deploy + configuración de `logic_delivery` de health (email a jordias@msn.com)
 
 **Effort:** 4-6 hours.
 
