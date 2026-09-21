@@ -19,7 +19,11 @@ from temporalio.worker import Worker
 from src.api.db.database import run_migrations
 from src.core.config import settings
 from src.workers import activities
-from src.workers.workflows import CollectionsMonitorWorkflow, DigestPipelineWorkflow
+from src.workers.workflows import (
+    CollectionsMonitorWorkflow,
+    DigestPipelineWorkflow,
+    SystemMonitorWorkflow,
+)
 
 
 def configure_logging() -> None:
@@ -82,6 +86,11 @@ def worker_activities() -> list[object]:
         activities.read_collections_signature_activity,
         activities.get_synced_signature_activity,
         activities.sync_collections_schedules_activity,
+        activities.collections_changes_activity,
+        activities.get_monitor_state_activity,
+        activities.set_monitor_state_activity,
+        activities.run_monitor_checks_activity,
+        activities.send_monitor_alert_activity,
     ]
 
 
@@ -103,7 +112,11 @@ async def run_worker(
         worker = Worker(
             client,
             task_queue=queue,
-            workflows=[DigestPipelineWorkflow, CollectionsMonitorWorkflow],
+            workflows=[
+                DigestPipelineWorkflow,
+                CollectionsMonitorWorkflow,
+                SystemMonitorWorkflow,
+            ],
             activities=worker_activities(),
             activity_executor=activity_executor,
         )

@@ -689,3 +689,79 @@ class SyncStateRepository:
         async with get_db(self.db_path) as db:
             await db.execute(query, (key, value, now_iso))
             await db.commit()
+
+
+class MonitorRepository:
+    """Repository for the system-monitor event log (SQLite retention)."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def record_event(self, check_name: str, status: str, detail: str | None) -> None:
+        """Persist one check outcome.
+
+        Args:
+            check_name: Name of the check (e.g. 'edge_tts').
+            status: Outcome ('ok', 'warning', 'error').
+            detail: Optional human-readable detail.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO monitor_events (ts, check_name, status, detail)
+            VALUES (?, ?, ?, ?)
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (now_iso, check_name, status, detail))
+            await db.commit()
+
+    async def list_recent(self, limit: int = 100) -> list[dict]:
+        """Return the latest monitor events, newest first.
+
+        Args:
+            limit: Maximum number of rows to return.
+
+        Returns:
+            List of event dicts with ts, check_name, status, detail.
+        """
+        query = """
+            SELECT id, ts, check_name, status, detail
+            FROM monitor_events
+            ORDER BY ts DESC
+            LIMIT ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (limit,)) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def purge_before(self, retention_days: int) -> int:
+        """Delete monitor events older than retention_days.
+
+        Args:
+            retention_days: Keep events newer than this many days.
+
+        Returns:
+            Number of deleted rows.
+        """
+        cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+        query = "DELETE FROM monitor_events WHERE ts < ?"
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(query, (cutoff,))
+            await db.commit()
+            return cursor.rowcount
+
+    async def count(self) -> int:
+        """Return the total number of stored monitor events.
+
+        Returns:
+            Row count of the monitor_events table.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM monitor_events") as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0

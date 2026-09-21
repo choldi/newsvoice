@@ -28,6 +28,7 @@ from temporalio.client import (
     ScheduleUpdate,
 )
 
+from src.api.models.monitoring import MonitorRunConfig
 from src.core.collections import CollectionConfig, get_collections
 from src.core.config import settings
 from src.workers.run_worker import build_client
@@ -35,10 +36,13 @@ from src.workers.workflows import (
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
     PipelineConfig,
+    SystemMonitorWorkflow,
 )
 
 # Schedule id of the recurring collections-config monitor workflow.
 MONITOR_SCHEDULE_ID = "collections-config-monitor"
+# Schedule id of the recurring system-monitor workflow (health checks).
+SYSTEM_MONITOR_SCHEDULE_ID = "system-monitor"
 
 
 def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> PipelineConfig:
@@ -127,6 +131,81 @@ def monitor_schedule() -> Schedule:
     )
 
 
+def system_monitor_schedule() -> Schedule:
+    """Create the recurring system-monitor Schedule object.
+
+    Wakes the ``SystemMonitorWorkflow`` every configured number of minutes so it
+    can run the health checks, persist their outcomes, and alert when needed.
+
+    Returns:
+        A Schedule starting SystemMonitorWorkflow on a fixed interval.
+    """
+    config = MonitorRunConfig(
+        daily_summary=settings.monitor_daily_summary,
+        alert_on_run=settings.monitor_alert_on_run,
+    )
+    return Schedule(
+        action=ScheduleActionStartWorkflow(
+            SystemMonitorWorkflow.run,
+            config,
+            id="system-monitor",
+            task_queue=settings.temporal_task_queue,
+        ),
+        spec=ScheduleSpec(
+            intervals=[
+                ScheduleIntervalSpec(every=timedelta(minutes=settings.monitor_interval_minutes)),
+            ]
+        ),
+    )
+
+
+async def ensure_monitor_schedules(client: Client) -> list[str]:
+    """Create or update both recurring monitor schedules.
+
+    Ensures the collections-config monitor and the system-monitor schedules
+    exist so a fresh deploy always gets them without a manual call.
+
+    Args:
+        client: Connected Temporal client.
+
+    Returns:
+        The list of ensured schedule ids.
+    """
+    return [
+        await create_monitor_schedule(client),
+        await create_system_monitor_schedule(client),
+    ]
+
+
+async def create_system_monitor_schedule(client: Client) -> str:
+    """Create (or update) the recurring system-monitor schedule.
+
+    Args:
+        client: Connected Temporal client.
+
+    Returns:
+        The schedule id.
+
+    Raises:
+        RPCError: If the create/update call fails.
+    """
+    schedule = system_monitor_schedule()
+    schedule_id = SYSTEM_MONITOR_SCHEDULE_ID
+    interval_minutes = settings.monitor_interval_minutes
+    try:
+        await client.create_schedule(schedule_id, schedule)
+        print(f"Created schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except ScheduleAlreadyRunningError:
+        handle = client.get_schedule_handle(schedule_id)
+        await handle.update(lambda _: ScheduleUpdate(schedule=schedule))
+        print(f"Updated schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except RPCError as exc:
+        print(f"Could not create schedule '{schedule_id}': {exc}")
+        print("It may already exist; update handle instead.")
+        raise
+    return schedule_id
+
+
 async def create_monitor_schedule(client: Client) -> str:
     """Create (or update) the recurring collections-config monitor schedule.
 
@@ -198,7 +277,7 @@ async def create_schedules(
             print("It may already exist; update handle instead.")
             raise
         created.append(schedule_id)
-    created.append(await create_monitor_schedule(client))
+    created.extend(await ensure_monitor_schedules(client))
     return created
 
 

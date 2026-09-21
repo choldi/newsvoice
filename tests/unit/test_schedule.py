@@ -2,13 +2,19 @@
 
 from datetime import timedelta
 
+import pytest
+
+from src.api.models.monitoring import MonitorRunConfig
 from src.core.collections import CollectionConfig
 from src.core.config import settings
 from src.workers.schedule import (
     MONITOR_SCHEDULE_ID,
+    SYSTEM_MONITOR_SCHEDULE_ID,
     build_schedule,
+    ensure_monitor_schedules,
     monitor_schedule,
     pipeline_config_for,
+    system_monitor_schedule,
 )
 
 
@@ -94,3 +100,32 @@ def test_monitor_schedule_uses_configured_interval() -> None:
 
     assert schedule.spec.intervals is not None
     assert schedule.spec.intervals[0].every == expected
+
+
+def test_system_monitor_schedule_id_and_config() -> None:
+    """The system-monitor schedule starts SystemMonitorWorkflow with config."""
+    schedule = system_monitor_schedule()
+
+    assert schedule.action.id == "system-monitor"
+    assert SYSTEM_MONITOR_SCHEDULE_ID == "system-monitor"
+    interval = schedule.spec.intervals[0].every
+    assert interval == timedelta(minutes=settings.monitor_interval_minutes)
+    assert schedule.action.args == [MonitorRunConfig(daily_summary=True, alert_on_run=False)]
+
+
+async def test_ensure_monitor_schedules_creates_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_monitor_schedules returns both monitor schedule ids."""
+    import src.workers.schedule as schedule_pkg
+
+    async def fake_create_monitor(client: object) -> str:
+        return MONITOR_SCHEDULE_ID
+
+    async def fake_create_system(client: object) -> str:
+        return SYSTEM_MONITOR_SCHEDULE_ID
+
+    monkeypatch.setattr(schedule_pkg, "create_monitor_schedule", fake_create_monitor)
+    monkeypatch.setattr(schedule_pkg, "create_system_monitor_schedule", fake_create_system)
+
+    ids = await ensure_monitor_schedules(object())  # type: ignore[arg-type]
+
+    assert ids == [MONITOR_SCHEDULE_ID, SYSTEM_MONITOR_SCHEDULE_ID]

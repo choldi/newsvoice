@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,6 +38,9 @@ TELEGRAM_MESSAGE_MAX_CHARS = 4000
 FEED_FETCH_TIMEOUT_SECONDS = 60
 # Key under which SyncStateRepository remembers the last registered signature.
 COLLECTIONS_SIGNATURE_KEY = "collections_signature"
+# Key under which SyncStateRepository remembers the enabled collection names so
+# the collections-config monitor can report added/removed collections.
+COLLECTIONS_NAMES_KEY = "collections_names"
 
 
 def split_message_chunks(text: str, max_chars: int = TELEGRAM_MESSAGE_MAX_CHARS) -> list[str]:
@@ -767,8 +771,8 @@ async def sync_collections_schedules_activity(signature: str) -> None:
 
     Reconciles every `daily-digest-*` schedule with the collections currently
     enabled in collections.toml (updating/removing as needed), guarantees the
-    `collections-config-monitor` schedule exists, then stores the signature that
-    was just registered so the monitor can detect the next change.
+    monitor schedules exist, then stores the signature and the enabled
+    collection names so the monitors can detect the next change.
 
     Args:
         signature: sha256 of the collections file just registered.
@@ -780,7 +784,7 @@ async def sync_collections_schedules_activity(signature: str) -> None:
     from src.api.services.temporal_admin import TemporalAdminService
     from src.core.collections import CollectionsLoader, default_collection
     from src.workers.run_worker import build_client
-    from src.workers.schedule import create_monitor_schedule
+    from src.workers.schedule import ensure_monitor_schedules
 
     settings = get_settings()
     loader = CollectionsLoader(path=settings.collections_file)
@@ -793,8 +797,176 @@ async def sync_collections_schedules_activity(signature: str) -> None:
     await TemporalAdminService().resync_schedules(collections)
 
     client = await build_client()
-    await create_monitor_schedule(client)
-    activity.logger.info("monitor_schedule_ensured")
+    await ensure_monitor_schedules(client)
+    activity.logger.info("monitor_schedules_ensured")
 
-    await SyncStateRepository().set(COLLECTIONS_SIGNATURE_KEY, signature)
+    repo = SyncStateRepository()
+    await repo.set(COLLECTIONS_SIGNATURE_KEY, signature)
+    await repo.set(
+        COLLECTIONS_NAMES_KEY,
+        json.dumps(sorted(c.name for c in collections)),
+    )
     activity.logger.info("collections_signature_stored")
+
+
+@activity.defn
+async def collections_changes_activity() -> dict[str, list[str]]:
+    """Diff the current enabled collection names against the stored snapshot.
+
+    Runs BEFORE ``sync_collections_schedules_activity`` so the stored names
+    still describe the previous registration. On the very first sync (no
+    snapshot) both lists are empty to avoid a bootstrap alert.
+
+    Returns:
+        Dict with 'added' and 'removed' collection name lists.
+    """
+    from src.core.collections import CollectionsLoader, default_collection
+
+    settings = get_settings()
+    loader = CollectionsLoader(path=settings.collections_file)
+    try:
+        loader.load()
+    except Exception as exc:
+        activity.logger.error(f"collections_diff_parse_failed: {exc}")
+        return {"added": [], "removed": []}
+
+    current = sorted(c.name for c in loader.enabled()) or [default_collection().name]
+    snapshot = await SyncStateRepository().get(COLLECTIONS_NAMES_KEY)
+    if snapshot is None:
+        return {"added": [], "removed": []}
+    try:
+        previous = set(json.loads(snapshot))
+    except (TypeError, ValueError):
+        previous = set()
+    current_set = set(current)
+    return {
+        "added": sorted(current_set - previous),
+        "removed": sorted(previous - current_set),
+    }
+
+
+@activity.defn
+async def get_monitor_state_activity(key: str) -> str | None:
+    """Read a monitor state key from the KV store.
+
+    Args:
+        key: KV key (e.g. 'monitor:last_summary_day').
+
+    Returns:
+        The stored value, or None.
+    """
+    return await SyncStateRepository().get(key)
+
+
+@activity.defn
+async def set_monitor_state_activity(key: str, value: str) -> None:
+    """Write a monitor state key to the KV store.
+
+    Args:
+        key: KV key to write.
+        value: Value to store.
+    """
+    await SyncStateRepository().set(key, value)
+
+
+@activity.defn
+async def run_monitor_checks_activity(config: dict[str, Any]) -> dict[str, Any]:
+    """Run every registered system check and produce a MonitorReport.
+
+    Persists each outcome to SQLite and the rotated JSONL log, prunes events
+    beyond their retention window, and decides which checks need an alert
+    (status transitions to error/warning). When ``alert_on_run`` is enabled it
+    also appends an 'info' notification per newly completed digest run.
+
+    Args:
+        config: MonitorRunConfig fields (daily_summary, alert_on_run).
+
+    Returns:
+        The MonitorReport dict with ts, checks, and alert lists.
+    """
+    from src.api.models.monitoring import CheckResult, MonitorReport, MonitorRunConfig
+    from src.api.services.monitoring.checks import run_all_checks
+    from src.api.services.monitoring.reporter import MonitorReporter
+
+    run_config = MonitorRunConfig(**config)
+    settings = get_settings()
+
+    checks = await run_all_checks()
+    ts = datetime.now(UTC).isoformat()
+    report = MonitorReport(ts=ts, checks=checks)
+
+    reporter = MonitorReporter()
+    await reporter.monitor_repo.purge_before(settings.monitor_retention_days)
+    await reporter.persist(report)
+    alerts = await reporter.decide_alerts(report)
+    await reporter.record_last_statuses(report)
+
+    if run_config.alert_on_run:
+        for line in await reporter.new_completed_runs():
+            alerts.append(
+                CheckResult(check="digest_runs", status="info", detail=f"run completed: {line}")
+            )
+    report.alert = alerts
+    activity.logger.info(
+        f"monitor_run_finished checks={len(report.checks)} alerts={len(report.alert)}"
+    )
+    return report.model_dump()
+
+
+@activity.defn
+async def send_monitor_alert_activity(text: str) -> dict[str, Any]:
+    """Deliver an alert through the configured monitor channels.
+
+    Channels come from ``monitor_notify_channels`` (telegram, email, whatsapp).
+    Each channel is attempted independently; a failure on one never aborts the
+    others. An unconfigured channel is recorded, not raised.
+
+    Args:
+        text: The alert message body.
+
+    Returns:
+        Dict with status and per-channel results.
+    """
+    settings = get_settings()
+    channels = settings.monitor_notify_channels or []
+    results: list[dict[str, Any]] = []
+    for channel in channels:
+        if channel not in ("telegram", "email", "whatsapp"):
+            results.append({"channel": channel, "status": "skipped", "reason": "unknown channel"})
+            continue
+        try:
+            if channel == "telegram":
+                chat_id = settings.monitor_telegram_chat_id or settings.telegram_chat_id
+                outcome = await deliver_telegram_message_activity(text, chat_id)
+                results.append({"channel": "telegram", "status": "ok", **outcome})
+            elif channel == "email":
+                recipients = settings.monitor_email_recipients
+                if not recipients:
+                    results.append(
+                        {"channel": "email", "status": "skipped", "reason": "no recipients"}
+                    )
+                    continue
+                outcome = await EmailService().send_digest_email(
+                    recipients,
+                    text,
+                    "system-monitor",
+                    subject="News-engine system alert",
+                )
+                results.append({"channel": "email", "status": "ok", **outcome})
+            else:
+                outcome = await WhatsAppService().send_text(
+                    text,
+                    settings.monitor_whatsapp_recipients,
+                    group_id=settings.monitor_whatsapp_group_id,
+                )
+                results.append({"channel": "whatsapp", "status": "ok", **outcome})
+        except Exception as exc:
+            results.append({"channel": channel, "status": "error", "error": str(exc)})
+
+    if not results:
+        return {"status": "skipped", "reason": "no channels configured"}
+    failed = [r for r in results if r.get("status") == "error"]
+    return {
+        "status": "error" if failed else "ok",
+        "results": results,
+    }

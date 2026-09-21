@@ -14,8 +14,11 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
+    from src.api.models.monitoring import MonitorReport, MonitorRunConfig
+    from src.api.services.monitoring.reporter import format_alert_message
     from src.workers.activities import (
         cluster_activity,
+        collections_changes_activity,
         compress_audio_activity,
         deliver_email_activity,
         deliver_logic_activity,
@@ -28,9 +31,13 @@ with workflow.unsafe.imports_passed_through():
         generate_digest_activity,
         generate_logic_activity,
         generate_tts_activity,
+        get_monitor_state_activity,
         get_synced_signature_activity,
         read_collections_signature_activity,
         record_run_activity,
+        run_monitor_checks_activity,
+        send_monitor_alert_activity,
+        set_monitor_state_activity,
         sync_collections_schedules_activity,
     )
 
@@ -60,6 +67,14 @@ EMAIL_TIMEOUT = timedelta(seconds=90)
 # across recipients/chunks; give it head-room over the Telegram timeout.
 WHATSAPP_TIMEOUT = timedelta(seconds=120)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
+
+# Timeouts for the system-monitor workflow activities: probing every check is
+# bounded, delivering alerts spans the telegram/email/whatsapp channels, and the
+# KV lookups are local.
+MONITOR_RUN_TIMEOUT = timedelta(seconds=120)
+MONITOR_ALERT_TIMEOUT = timedelta(seconds=120)
+MONITOR_STATE_TIMEOUT = timedelta(seconds=30)
+COLLECTIONS_DIFF_TIMEOUT = timedelta(seconds=30)
 
 # Bounded retries for network-dependent activities so a transient failure does
 # not replay forever. Deterministic errors (validation etc.) should be raised as
@@ -493,7 +508,9 @@ class CollectionsMonitorWorkflow:
     compares the sha256 of the current collections file against the signature
     stored after the last registration; when they differ, it re-registers the
     per-collection schedules so a feed/time/voice change in the TOML takes
-    effect without a manual ``python -m src.workers.schedule`` call.
+    effect without a manual ``python -m src.workers.schedule`` call. When the
+    change added or removed collections, an alert is delivered through the
+    monitor channels.
     """
 
     @workflow.run
@@ -522,6 +539,14 @@ class CollectionsMonitorWorkflow:
             workflow.logger.info("collections_config_unchanged")
             return {"status": "unchanged", "changed": False}
 
+        workflow.logger.info("collections_config_changed; computing diff")
+        changes = await workflow.execute_activity(
+            collections_changes_activity,
+            start_to_close_timeout=COLLECTIONS_DIFF_TIMEOUT,
+        )
+        added = tuple(changes.get("added", [])) if isinstance(changes, dict) else ()
+        removed = tuple(changes.get("removed", [])) if isinstance(changes, dict) else ()
+
         workflow.logger.info("collections_config_changed; re-registering schedules")
         await workflow.execute_activity(
             sync_collections_schedules_activity,
@@ -529,4 +554,110 @@ class CollectionsMonitorWorkflow:
             start_to_close_timeout=COLLECTIONS_SYNC_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
+
+        if added or removed:
+            lines = ["Collections configuration updated", ""]
+            if added:
+                lines.append(f"Added: {', '.join(added)}")
+            if removed:
+                lines.append(f"Removed: {', '.join(removed)}")
+            await self._send_alert("\n".join(lines))
+
         return {"status": "synced", "changed": True, "signature": signature[:12]}
+
+    async def _send_alert(self, text: str) -> None:
+        """Deliver a message through the monitor channels without failing.
+
+        Args:
+            text: The message body to send.
+        """
+        try:
+            await workflow.execute_activity(
+                send_monitor_alert_activity,
+                args=[text],
+                start_to_close_timeout=MONITOR_ALERT_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+        except (ActivityError, ApplicationError) as exc:
+            detail = getattr(exc, "cause", None) or exc
+            workflow.logger.warning(f"Monitor alert delivery failed; continuing: {detail}")
+
+
+@workflow.defn
+class SystemMonitorWorkflow:
+    """Run the system-health checks on the configured interval.
+
+    Each tick runs every registered check (TTS, collections, processes, disk,
+    digest runs), persists the outcomes to SQLite + JSONL logs, alerts when a
+    check transitions to error/warning, and optionally sends a once-per-UTC-day
+    full health summary.
+    """
+
+    @workflow.run
+    async def run(self, config: MonitorRunConfig) -> dict[str, Any]:
+        """Collect, persist, and deliver the monitoring report.
+
+        Args:
+            config: MonitorRunConfig with daily_summary / alert_on_run flags.
+
+        Returns:
+            Dict summarizing the run (status, check and alert counts).
+        """
+        workflow.logger.info("monitor_run_started")
+        report = await workflow.execute_activity(
+            run_monitor_checks_activity,
+            args=[config.model_dump()],
+            start_to_close_timeout=MONITOR_RUN_TIMEOUT,
+            retry_policy=NETWORK_RETRY_POLICY,
+        )
+        if not isinstance(report, dict):
+            workflow.logger.info("monitor_run_unexpected_shape")
+            return {"status": "error", "error": "unexpected report shape"}
+
+        summary_sent = False
+        if report.get("alert"):
+            await self._send(format_alert_message(MonitorReport(**report)))
+
+        if config.daily_summary:
+            today = workflow.now().strftime("%Y-%m-%d")
+            last_day = await workflow.execute_activity(
+                get_monitor_state_activity,
+                args=["monitor:last_summary_day"],
+                start_to_close_timeout=MONITOR_STATE_TIMEOUT,
+            )
+            if last_day != today:
+                await self._send(format_alert_message(MonitorReport(**report), is_summary=True))
+                await workflow.execute_activity(
+                    set_monitor_state_activity,
+                    args=["monitor:last_summary_day", today],
+                    start_to_close_timeout=MONITOR_STATE_TIMEOUT,
+                )
+                summary_sent = True
+
+        workflow.logger.info(
+            f"monitor_run_finished checks={len(report.get('checks', []))} "
+            f"alerts={len(report.get('alert', []))}"
+        )
+        return {
+            "status": "ok",
+            "checks": len(report.get("checks", [])),
+            "alerts": len(report.get("alert", [])),
+            "summary_sent": summary_sent,
+        }
+
+    async def _send(self, text: str) -> None:
+        """Deliver a message through the monitor channels without failing.
+
+        Args:
+            text: The message body to send.
+        """
+        try:
+            await workflow.execute_activity(
+                send_monitor_alert_activity,
+                args=[text],
+                start_to_close_timeout=MONITOR_ALERT_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+        except (ActivityError, ApplicationError) as exc:
+            detail = getattr(exc, "cause", None) or exc
+            workflow.logger.warning(f"Monitor alert delivery failed; continuing: {detail}")

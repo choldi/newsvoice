@@ -56,6 +56,33 @@ class Settings(BaseSettings):
     # How often (minutes) the collections-config monitor workflow wakes to check
     # whether collections.toml changed and re-register the Temporal schedules.
     collections_monitor_interval_minutes: int = Field(default=5, ge=1)
+    # How often (minutes) the system-monitor workflow wakes to run the checks.
+    monitor_interval_minutes: int = Field(default=15, ge=1)
+    # Retention window (days) for monitor events in SQLite and JSONL log files.
+    monitor_retention_days: int = Field(default=3, ge=1)
+    monitor_log_retention_days: int = Field(default=3, ge=1)
+    # Directory where the daily-rotated JSONL monitor logs are written.
+    monitor_log_dir: str = "data/logs"
+    # Alert delivery for the system monitor. Defaults to Telegram using
+    # monitor_telegram_chat_id (or the global telegram_chat_id). Supported
+    # channels: telegram, email, whatsapp. Empty list disables alerts.
+    monitor_notify_channels: list[str] = Field(default_factory=lambda: ["telegram"])
+    monitor_telegram_chat_id: str = ""
+    monitor_email_recipients: list[str] = Field(default_factory=list)
+    monitor_whatsapp_recipients: list[str] = Field(default_factory=list)
+    monitor_whatsapp_group_id: str | None = None
+    # Emit an alert when free disk space drops below this percentage.
+    monitor_disk_threshold_percent: int = Field(default=85, ge=1, le=99)
+    # Send a daily system health summary (default) plus a per-run confirmation
+    # when monitor_alert_on_run is enabled.
+    monitor_daily_summary: bool = True
+    monitor_alert_on_run: bool = False
+    # TTS server disk probe: <tts_api_base_url>/<monitor_tts_disk_path> must
+    # return {"total": int, "free": int, "used": int} in bytes.
+    monitor_tts_disk_path: str = "disk"
+    # Path to the Docker Engine UNIX socket used to probe container health.
+    # Empty disables the docker_containers check.
+    monitor_docker_socket: str = "/var/run/docker.sock"
     tts_cache_dir: str = "data/tts_cache"
     tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
     tts_api_key: str = ""

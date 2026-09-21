@@ -37,6 +37,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./collections.toml:/app/collections.toml:ro
+      # Read-only Docker socket so the system monitor can inspect the container
+      # health of every news-engine service. Root-equivalent on the host: only
+      # mount in trusted/self-hosted deploys.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["python", "-m", "src.workers.run_worker"]
     restart: unless-stopped
 

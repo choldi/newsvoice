@@ -1148,6 +1148,10 @@ async def test_monitor_workflow_syncs_when_collections_change() -> None:
     async def stub_get_synced() -> str | None:
         return "previous-signature"
 
+    @activity.defn(name="collections_changes_activity")
+    async def stub_changes() -> dict:
+        return {"added": [], "removed": []}
+
     @activity.defn(name="sync_collections_schedules_activity")
     async def stub_sync(signature: str) -> None:
         synced.append(signature)
@@ -1160,6 +1164,7 @@ async def test_monitor_workflow_syncs_when_collections_change() -> None:
             activities=[
                 stub_read_signature,
                 stub_get_synced,
+                stub_changes,
                 stub_sync,
             ],
         ):
