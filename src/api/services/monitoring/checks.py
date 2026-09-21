@@ -234,8 +234,9 @@ def parse_service_probe(url: str, payload: dict) -> str | None:
 async def check_services(ctx: CheckContext) -> CheckResult:
     """Probe the internal compose services over HTTP.
 
-    Checks the api (/health) and Temporal server (/health) always, plus the
-    WhatsApp gateway (there) when configured.
+    Checks the api (/health) always, plus the WhatsApp gateway (there) when
+    configured. Temporal itself is gRPC-only (no HTTP health endpoint), so its
+    liveness comes from the ``docker_containers`` check.
 
     Args:
         ctx: Shared check dependencies.
@@ -245,7 +246,6 @@ async def check_services(ctx: CheckContext) -> CheckResult:
     """
     probes: dict[str, Callable[[], Awaitable[str | None]]] = {
         "api": lambda: _probe("http://api:8000/health"),
-        "temporal": lambda: _probe("http://temporal:7233/health"),
     }
     settings = ctx.settings
     if settings.whatsapp_api_token:
@@ -259,7 +259,7 @@ async def check_services(ctx: CheckContext) -> CheckResult:
 
     if problems:
         return CheckResult(check="services", status="warning", detail="; ".join(problems))
-    return CheckResult(check="services", status="ok", detail="api, temporal, gateway reachable")
+    return CheckResult(check="services", status="ok", detail="api, gateway reachable")
 
 
 async def check_collections(ctx: CheckContext) -> CheckResult:

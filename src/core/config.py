@@ -71,8 +71,9 @@ class Settings(BaseSettings):
     monitor_email_recipients: list[str] = Field(default_factory=list)
     monitor_whatsapp_recipients: list[str] = Field(default_factory=list)
     monitor_whatsapp_group_id: str | None = None
-    # Emit an alert when free disk space drops below this percentage.
-    monitor_disk_threshold_percent: int = Field(default=85, ge=1, le=99)
+    # Emit an alert when free disk space drops below this percentage
+    # (e.g. 20 = warn when the volume is over 80% full).
+    monitor_disk_threshold_percent: int = Field(default=20, ge=1, le=99)
     # Send a daily system health summary (default) plus a per-run confirmation
     # when monitor_alert_on_run is enabled.
     monitor_daily_summary: bool = True

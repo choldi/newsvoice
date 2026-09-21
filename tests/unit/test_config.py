@@ -21,6 +21,6 @@ def test_monitor_settings_defaults() -> None:
     assert settings.monitor_notify_channels == ["telegram"]
     assert settings.monitor_daily_summary is True
     assert settings.monitor_alert_on_run is False
-    assert settings.monitor_disk_threshold_percent == 85
+    assert settings.monitor_disk_threshold_percent == 20
     assert settings.monitor_docker_socket == "/var/run/docker.sock"
     assert settings.monitor_tts_disk_path == "disk"

@@ -9,7 +9,7 @@ bound to the socket; no new dependency is required.
 from __future__ import annotations
 
 import structlog
-from httpx import AsyncClient, HTTPTransport
+from httpx import AsyncClient, AsyncHTTPTransport
 
 from src.core.config import get_settings
 
@@ -56,7 +56,7 @@ class DockerService:
         """
         if not self.enabled:
             raise DockerNotAvailableError("Docker socket is not configured")
-        transport = HTTPTransport(uds=self._socket)
+        transport = AsyncHTTPTransport(uds=self._socket)
         try:
             async with AsyncClient(transport=transport, timeout=5.0) as client:
                 response = await client.get(_CONTAINERS_ENDPOINT)
