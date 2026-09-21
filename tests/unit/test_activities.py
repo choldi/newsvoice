@@ -14,11 +14,13 @@ from src.api.models.tts import TTSOut
 from src.workers.activities import (
     cluster_activity,
     compress_audio_activity,
+    deliver_logic_activity,
     deliver_telegram_audio_activity,
     deliver_telegram_message_activity,
     fetch_rss_activity,
     filter_new_activity,
     generate_digest_activity,
+    generate_logic_activity,
     generate_tts_activity,
     record_run_activity,
     split_message_chunks,
@@ -460,3 +462,131 @@ async def test_deliver_whatsapp_audio_activity_calls_service() -> None:
     assert mock_send.await_args.args[0] == "/tmp/digest.m4a"
     assert mock_send.await_args.args[1] == ["+34600000001"]
     assert mock_send.await_args.kwargs["caption"] == "Top"
+
+
+async def test_generate_logic_activity_generates_logic() -> None:
+    """generate_logic_activity delegates to the service and returns the text."""
+    cluster = ClusterItem(
+        cluster_id=1,
+        fingerprint={"entity": "OpenAI", "action": "releases GPT-5", "title_hash": "abc1"},
+        articles=[ArticleIn.model_validate(SAMPLE_ARTICLE)],
+    )
+    with patch(
+        "src.workers.activities.DigestService.generate_selection_logic",
+        new_callable=AsyncMock,
+        return_value="Se eligio OpenAI por impacto y novedad.",
+    ) as mock_logic:
+        result = await ActivityEnvironment().run(
+            generate_logic_activity,
+            {
+                "clusters": [cluster.model_dump()],
+                "digest": "# Daily Digest",
+                "prompt_template": "health",
+                "language": "es",
+            },
+        )
+
+    assert result["status"] == "ok"
+    assert result["logic"] == "Se eligio OpenAI por impacto y novedad."
+    call_kwargs = mock_logic.call_args.kwargs
+    assert call_kwargs["prompt_template"] == "health"
+    assert call_kwargs["language"] == "es"
+    assert len(call_kwargs["clusters"]) == 1
+
+
+async def test_generate_logic_activity_missing_digest_raises() -> None:
+    """generate_logic_activity fails fast when the digest text is missing."""
+    with pytest.raises(ApplicationError, match="[Dd]igest text missing"):
+        await ActivityEnvironment().run(generate_logic_activity, {"clusters": []})
+
+
+async def test_generate_logic_activity_surfaces_llm_error() -> None:
+    """LLM failures are wrapped in a non-retryable ApplicationError."""
+    with patch(
+        "src.workers.activities.DigestService.generate_selection_logic",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("llm down"),
+    ):
+        with pytest.raises(ApplicationError, match="logic generation failed"):
+            await ActivityEnvironment().run(
+                generate_logic_activity, {"clusters": [], "digest": "# D"}
+            )
+
+
+async def test_deliver_logic_activity_telegram_only() -> None:
+    """deliver_logic_activity sends the logic text through telegram only."""
+    delivery = {"channels": ["telegram"], "chat_id": "chat-override"}
+    with patch(
+        "src.workers.activities.deliver_telegram_message_activity",
+        new_callable=AsyncMock,
+        return_value={"status": "ok", "message_id": 99},
+    ) as mock_telegram:
+        result = await ActivityEnvironment().run(
+            deliver_logic_activity, "Logic text", delivery, "health"
+        )
+
+    assert result["status"] == "ok"
+    assert result["deliveries"] == [{"channel": "telegram", "status": "ok", "message_id": 99}]
+    mock_telegram.assert_awaited_once_with("Logic text", "chat-override")
+
+
+async def test_deliver_logic_activity_email_channel() -> None:
+    """deliver_logic_activity emails the logic text with a dedicated subject."""
+    delivery = {
+        "channels": ["telegram", "email"],
+        "email_recipients": ["admin@example.com"],
+    }
+    with (
+        patch(
+            "src.workers.activities.deliver_telegram_message_activity",
+            new_callable=AsyncMock,
+            return_value={"status": "ok", "message_id": 1},
+        ),
+        patch(
+            "src.workers.activities.EmailService.send_digest_email",
+            new_callable=AsyncMock,
+            return_value={"status": "ok", "recipients": 1},
+        ) as mock_email,
+    ):
+        result = await ActivityEnvironment().run(
+            deliver_logic_activity, "Logic text", delivery, "health"
+        )
+
+    email_call = mock_email.call_args
+    assert email_call.args[:3] == (["admin@example.com"], "Logic text", "health")
+    assert "News Selection Logic" in email_call.kwargs["subject"]
+    channels = {entry["channel"] for entry in result["deliveries"]}
+    assert channels == {"telegram", "email"}
+
+
+async def test_deliver_logic_activity_records_channel_failure() -> None:
+    """A failing channel is recorded without aborting the other channels."""
+    from temporalio.exceptions import ApplicationError as TemporalError
+
+    delivery = {
+        "channels": ["telegram", "whatsapp"],
+        "whatsapp_recipients": ["+34600000001"],
+    }
+    with (
+        patch(
+            "src.workers.activities.deliver_telegram_message_activity",
+            new_callable=AsyncMock,
+            side_effect=TemporalError("Telegram API error", non_retryable=True),
+        ),
+        patch(
+            "src.workers.activities.deliver_whatsapp_message_activity",
+            new_callable=AsyncMock,
+            return_value={"status": "ok", "recipients": 1},
+        ),
+    ):
+        result = await ActivityEnvironment().run(
+            deliver_logic_activity, "Logic text", delivery, "health"
+        )
+
+    assert result["status"] == "ok"
+    telegram_entry = next(entry for entry in result["deliveries"] if entry["channel"] == "telegram")
+    assert telegram_entry["status"] == "error"
+    assert "Telegram API error" in telegram_entry["error"]
+    assert any(
+        entry["channel"] == "whatsapp" and entry["status"] == "ok" for entry in result["deliveries"]
+    )

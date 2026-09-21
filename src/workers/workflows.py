@@ -18,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
         cluster_activity,
         compress_audio_activity,
         deliver_email_activity,
+        deliver_logic_activity,
         deliver_telegram_audio_activity,
         deliver_telegram_message_activity,
         deliver_whatsapp_audio_activity,
@@ -25,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
         fetch_rss_activity,
         filter_new_activity,
         generate_digest_activity,
+        generate_logic_activity,
         generate_tts_activity,
         get_synced_signature_activity,
         read_collections_signature_activity,
@@ -37,6 +39,10 @@ RSS_FETCH_TIMEOUT = timedelta(seconds=120)
 FILTER_TIMEOUT = timedelta(seconds=30)
 CLUSTER_TIMEOUT = timedelta(seconds=1800)
 DIGEST_TIMEOUT = timedelta(seconds=1800)
+# The separate selection-logic LLM call can take as long as the digest itself;
+# the follow-up delivery spans the telegram/email/whatsapp channels.
+LOGIC_TIMEOUT = DIGEST_TIMEOUT
+LOGIC_DELIVERY_TIMEOUT = timedelta(seconds=360)
 # Timeouts for the collections-config monitor activities: reading the file and
 # the KV lookups are local, while re-registering schedules talks to Temporal.
 COLLECTIONS_SIGNATURE_TIMEOUT = timedelta(seconds=30)
@@ -80,6 +86,7 @@ class PipelineConfig:
     whatsapp_recipients: list[str] = field(default_factory=list)
     whatsapp_group_id: str | None = None
     delivery_channels: list[str] = field(default_factory=lambda: ["telegram"])
+    logic_delivery: dict[str, Any] | None = None
 
 
 @workflow.defn
@@ -297,6 +304,45 @@ class DigestPipelineWorkflow:
                 workflow.logger.warning(
                     f"WhatsApp step failed; text digest already delivered: {detail}"
                 )
+                delivery_status.append({"status": "error", "error": str(detail)})
+
+        # Deliver the admin selection-logic text when the collection defines
+        # a logic_delivery destination. The LLM explains, in a separate call,
+        # the news-selection logic behind the digest, anchored on the clusters
+        # and the final digest. A failure here is recorded and does not abort
+        # the run nor its other deliveries.
+        if config.logic_delivery:
+            workflow.logger.info("Generating and delivering selection logic")
+            try:
+                logic_result = await workflow.execute_activity(
+                    generate_logic_activity,
+                    {
+                        "clusters": clusters,
+                        "digest": digest_markdown,
+                        "collection": config.collection,
+                        "prompt_template": config.prompt_template,
+                        "custom_prompt": config.custom_prompt or None,
+                        "language": config.language,
+                    },
+                    start_to_close_timeout=LOGIC_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                if not isinstance(logic_result, dict) or not logic_result.get("logic"):
+                    raise activity.ApplicationError(
+                        "generate_logic_activity returned no logic text",
+                        non_retryable=True,
+                    )
+                logic_delivery = await workflow.execute_activity(
+                    deliver_logic_activity,
+                    args=[logic_result["logic"], config.logic_delivery, config.collection],
+                    start_to_close_timeout=LOGIC_DELIVERY_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                if isinstance(logic_delivery, dict) and logic_delivery.get("deliveries"):
+                    delivery_status.extend(logic_delivery["deliveries"])
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(f"Selection logic step failed; continuing: {detail}")
                 delivery_status.append({"status": "error", "error": str(detail)})
 
         # Deliver audio to Telegram when the channel is selected, delivery is

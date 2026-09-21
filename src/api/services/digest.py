@@ -9,7 +9,10 @@ from src.api.services.dedup import normalize_url
 from src.core.config import settings
 from src.core.llm import generate_completion
 from src.core.prompts import (
+    GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT,
+    GENERATE_SELECTION_LOGIC_USER_PROMPT_TEMPLATE,
     SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE,
+    TEMPLATE_PRIORITY_RULES,
     build_digest_system_prompt,
 )
 
@@ -176,3 +179,51 @@ class DigestService:
             digest=digest_markdown,
             article_count=len(articles),
         )
+
+    async def generate_selection_logic(
+        self,
+        *,
+        clusters: list[ClusterItem],
+        digest: str,
+        prompt_template: str = "default",
+        custom_prompt: str = "",
+        language: str = "",
+    ) -> str:
+        """Explain the news-selection logic behind an already generated digest.
+
+        Uses the story clusters and the final digest as context so the LLM can
+        reference which stories were chosen and why, without re-summarizing the
+        articles themselves.
+
+        Args:
+            clusters: The story clusters that were considered.
+            digest: The final digest markdown text.
+            prompt_template: Template name to phrase the active selection rules.
+            custom_prompt: Optional custom prompt overriding template rules.
+            language: Optional ISO 639-1 language for the explanation.
+
+        Returns:
+            The LLM-generated selection-logic text.
+        """
+        rules = TEMPLATE_PRIORITY_RULES.get(prompt_template) or TEMPLATE_PRIORITY_RULES["default"]
+        if custom_prompt:
+            rules = (
+                "A custom collection prompt is in effect; rely on it for the selection criteria."
+            )
+
+        user_prompt = GENERATE_SELECTION_LOGIC_USER_PROMPT_TEMPLATE.format(
+            template=custom_prompt or prompt_template,
+            template_rules=rules,
+            cluster_count=len(clusters),
+            clusters_text=self._format_clusters(clusters),
+            digest=digest,
+        )
+        if language:
+            user_prompt += f"\n\nLanguage: {language}"
+        messages = [
+            {"role": "system", "content": GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        logic_text = await generate_completion(messages=messages, temperature=0.3)
+        logger.info("selection_logic_generated", length=len(logic_text))
+        return logic_text

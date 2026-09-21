@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from temporalio.exceptions import ApplicationError
 
 from src.api.db.database import AudioJobsRepository, RunsRepository, SyncStateRepository
 from src.api.models.article import ArticleIn, DigestIn
-from src.api.models.cluster import ClusterIn
+from src.api.models.cluster import ClusterIn, ClusterItem
 from src.api.models.tts import TTSIn
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.cluster import ClusterService
@@ -220,6 +221,120 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         raise ApplicationError(f"Digest generation failed: {exc}", non_retryable=True) from exc
     return result.model_dump()
+
+
+@activity.defn
+async def generate_logic_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Ask the LLM to explain the news-selection logic behind a digest.
+
+    Runs a separate LLM call (temperature 0.3) anchored on the story clusters
+    and the final digest. Only called by the workflow when a collection defines
+    a ``logic_delivery`` destination.
+
+    Args:
+        payload: Dict with 'clusters' (list of ClusterItem dicts), 'digest'
+            (markdown), 'collection', 'prompt_template', 'custom_prompt', and
+            'language'.
+
+    Returns:
+        Dict with status and the generated 'logic' text.
+
+    Raises:
+        ApplicationError: If the digest text is missing or generation fails.
+    """
+    activity.logger.info("Generating selection logic")
+    digest = payload.get("digest")
+    if not digest:
+        raise ApplicationError("Digest text missing for logic generation", non_retryable=True)
+    clusters: list[ClusterItem] = []
+    for item in payload.get("clusters") or []:
+        try:
+            clusters.append(ClusterItem.model_validate(item))
+        except ValidationError as exc:
+            activity.logger.warning(f"logic_cluster_validation_failed: {exc}")
+    try:
+        logic = await DigestService().generate_selection_logic(
+            clusters=clusters,
+            digest=str(digest),
+            prompt_template=payload.get("prompt_template") or "default",
+            custom_prompt=payload.get("custom_prompt") or "",
+            language=payload.get("language") or "",
+        )
+    except Exception as exc:
+        raise ApplicationError(
+            f"Selection logic generation failed: {exc}", non_retryable=True
+        ) from exc
+    return {"status": "ok", "logic": logic}
+
+
+@activity.defn
+async def deliver_logic_activity(
+    logic: str, delivery: dict[str, Any], collection: str
+) -> dict[str, Any]:
+    """Send the LLM selection-logic text to the configured admin destinations.
+
+    Each configured channel is attempted independently: a failure on one
+    channel is recorded in that channel's entry without aborting the others.
+
+    Args:
+        logic: The LLM-generated selection-logic text.
+        delivery: Dict matching LogicDeliveryConfig (channels, chat_id,
+            email_recipients, whatsapp_recipients, whatsapp_group_id).
+        collection: Collection name (used in the email subject).
+
+    Returns:
+        Dict with status ok and a 'deliveries' list, one entry per channel.
+    """
+    activity.logger.info(f"Delivering selection logic: collection={collection}")
+    channels = delivery.get("channels") or ["telegram"]
+    deliveries: list[dict[str, Any]] = []
+
+    if "telegram" in channels:
+        try:
+            deliveries.append(
+                {
+                    "channel": "telegram",
+                    **await deliver_telegram_message_activity(logic, delivery.get("chat_id")),
+                }
+            )
+        except Exception as exc:
+            deliveries.append({"channel": "telegram", "status": "error", "error": str(exc)})
+
+    if "email" in channels and delivery.get("email_recipients"):
+        subject = (
+            f"News Selection Logic \u00b7 {collection} \u00b7 "
+            f"{datetime.now(UTC).strftime('%Y-%m-%d')}"
+        )
+        try:
+            deliveries.append(
+                {
+                    "channel": "email",
+                    **await EmailService().send_digest_email(
+                        delivery["email_recipients"], logic, collection, subject=subject
+                    ),
+                }
+            )
+        except Exception as exc:
+            deliveries.append({"channel": "email", "status": "error", "error": str(exc)})
+
+    if "whatsapp" in channels and (
+        delivery.get("whatsapp_recipients") or delivery.get("whatsapp_group_id")
+    ):
+        try:
+            deliveries.append(
+                {
+                    "channel": "whatsapp",
+                    **await deliver_whatsapp_message_activity(
+                        logic,
+                        delivery.get("whatsapp_recipients"),
+                        delivery.get("whatsapp_group_id"),
+                    ),
+                }
+            )
+        except Exception as exc:
+            deliveries.append({"channel": "whatsapp", "status": "error", "error": str(exc)})
+
+    return {"status": "ok", "deliveries": deliveries}
 
 
 @activity.defn

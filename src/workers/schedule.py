@@ -67,6 +67,9 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         whatsapp_recipients=collection.whatsapp_recipients,
         whatsapp_group_id=collection.whatsapp_group_id,
         delivery_channels=collection.delivery_channels,
+        logic_delivery=(
+            collection.logic_delivery.model_dump() if collection.logic_delivery else None
+        ),
     )
 
 

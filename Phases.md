@@ -154,13 +154,14 @@ separate from the digest message.
       (`.m4a`)
 - [x] Tests de naming/cache/actividad actualizados (patrón `news_<col>_<yymmdd>`)
 
-**Scope (paso 2 - lógica de selección, pendiente):**
-- [ ] `CollectionConfig.logic_delivery` (opcional; ausente => el LLM NO la genera)
-- [ ] Generación LLM en llamada separada (`generate_logic_activity`)
-- [ ] `deliver_logic_activity` (telegram/email/whatsapp, mensaje aparte)
-- [ ] Wiring en `PipelineConfig` + `pipeline_config_for` + monitor de schedules
-- [ ] Roundtrip admin API (`CollectionIn`, serializador TOML)
-- [ ] Tests unit/integración + deploy
+**Scope (paso 2 - lógica de selección):**
+- [x] `CollectionConfig.logic_delivery` (opcional; ausente => el LLM NO la genera)
+- [x] Generación LLM en llamada separada (`generate_logic_activity`)
+- [x] `deliver_logic_activity` (telegram/email/whatsapp, mensaje aparte)
+- [x] Wiring en `PipelineConfig` + `pipeline_config_for` + monitor de schedules
+- [x] Roundtrip admin API (`CollectionIn`, serializador TOML)
+- [x] Tests unit/integración (284 passing, ruff limpio)
+- [ ] Deploy + configuración de `logic_delivery` de health (email a jordias@msn.com)
 
 **Effort:** 4-6 hours.
 

@@ -125,6 +125,25 @@ async def stub_record_run(run: dict) -> dict:
     return {"status": "ok", "run_id": 1}
 
 
+LOGIC = {
+    "status": "ok",
+    "logic": "Se seleccionaron 5 historias por su impacto publico y novedad.",
+}
+
+
+@activity.defn(name="generate_logic_activity")
+async def stub_generate_logic(payload: dict) -> dict:
+    return LOGIC
+
+
+@activity.defn(name="deliver_logic_activity")
+async def stub_deliver_logic(logic: str, delivery: dict, collection: str) -> dict:
+    return {
+        "status": "ok",
+        "deliveries": [{"channel": "telegram", "status": "ok", "message_id": 5}],
+    }
+
+
 async def _run_workflow(config: PipelineConfig) -> dict:
     """Run DigestPipelineWorkflow once against the time-skipping server."""
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -144,6 +163,8 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_deliver_email,
                 stub_deliver_whatsapp_message,
                 stub_deliver_whatsapp_audio,
+                stub_generate_logic,
+                stub_deliver_logic,
                 stub_record_run,
             ],
         ):
@@ -1153,6 +1174,157 @@ async def test_monitor_workflow_syncs_when_collections_change() -> None:
     assert result["changed"] is True
     assert result["signature"] == COLLECTIONS_SIGNATURE[:12]
     assert synced == [COLLECTIONS_SIGNATURE]
+
+
+async def test_logic_delivery_generates_and_delivers() -> None:
+    """logic_delivery triggers the LLM logic call and delivers it separately."""
+    seen: dict[str, object] = {}
+
+    @activity.defn(name="generate_logic_activity")
+    async def logic_recorder(payload: dict) -> dict:
+        seen["payload"] = payload
+        return LOGIC
+
+    @activity.defn(name="deliver_logic_activity")
+    async def deliver_recorder(logic: str, delivery: dict, collection: str) -> dict:
+        seen["logic"] = logic
+        seen["delivery"] = delivery
+        seen["collection"] = collection
+        return {
+            "status": "ok",
+            "deliveries": [{"channel": "email", "status": "ok", "recipients": 1}],
+        }
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_deliver_message,
+                logic_recorder,
+                deliver_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="health",
+                    logic_delivery={
+                        "channels": ["email"],
+                        "email_recipients": ["admin@example.com"],
+                    },
+                ),
+                id="workflow-test-logic",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert seen["payload"]["digest"] == DIGEST["digest"]
+    assert seen["payload"]["collection"] == "health"
+    assert seen["payload"]["prompt_template"] == "default"
+    assert seen["logic"] == LOGIC["logic"]
+    assert seen["collection"] == "health"
+    assert seen["delivery"]["email_recipients"] == ["admin@example.com"]
+    assert result["delivery_status"][-1] == {
+        "channel": "email",
+        "status": "ok",
+        "recipients": 1,
+    }
+
+
+async def test_logic_failure_recorded_not_fatal() -> None:
+    """A failing selection-logic step is recorded without failing the run."""
+    from temporalio.exceptions import ApplicationError as TemporalError
+
+    @activity.defn(name="generate_logic_activity")
+    async def failing_logic(payload: dict) -> dict:
+        raise TemporalError("logic generation failed: llm down", non_retryable=True)
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_deliver_message,
+                failing_logic,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="health",
+                    logic_delivery={"channels": ["telegram"]},
+                ),
+                id="workflow-test-logic-fail",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert any(
+        d.get("status") == "error" and "llm down" in d.get("error", "")
+        for d in result["delivery_status"]
+    )
+
+
+async def test_logic_skipped_without_logic_delivery() -> None:
+    """Without logic_delivery, the selection-logic activities never run."""
+    calls: list[str] = []
+
+    @activity.defn(name="generate_logic_activity")
+    async def logic_recorder(payload: dict) -> dict:
+        calls.append("generate")
+        return LOGIC
+
+    @activity.defn(name="deliver_logic_activity")
+    async def deliver_recorder(logic: str, delivery: dict, collection: str) -> dict:
+        calls.append("deliver")
+        return {"status": "ok", "deliveries": []}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_deliver_message,
+                logic_recorder,
+                deliver_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=False,
+                    collection="health",
+                ),
+                id="workflow-test-no-logic",
+                task_queue="tq",
+            )
+
+    assert result["status"] == "ok"
+    assert calls == []
 
 
 async def test_monitor_workflow_skips_when_unchanged() -> None:

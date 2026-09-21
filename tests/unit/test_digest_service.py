@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from src.api.models.article import ArticleIn, DigestIn
+from src.api.models.cluster import ClusterItem, Fingerprint
 from src.api.services.digest import DigestService
 
 
@@ -153,3 +154,60 @@ async def test_digest_service_injects_podcast_name() -> None:
     system_content = sent_messages[0]["content"]
     assert "Podcast identity" in system_content
     assert "This is ByteCast" in system_content
+
+
+@pytest.mark.asyncio
+async def test_generate_selection_logic_uses_dedicated_prompt() -> None:
+    """The logic call uses its own system prompt and returns the LLM text."""
+    service = DigestService()
+    cluster = ClusterItem(
+        fingerprint=Fingerprint(entity="ACME", action="Layoffs", title_hash="abc"),
+        articles=[ArticleIn(title="ACME Layoffs", link="https://example.com/1")],
+    )
+    digest = "# Daily Digest\n\n## Section 1: Top 5 Main Stories"
+
+    with patch(
+        "src.api.services.digest.generate_completion", return_value="Se eligio ACME por impacto."
+    ) as mock_llm:
+        logic = await service.generate_selection_logic(
+            clusters=[cluster], digest=digest, prompt_template="default", language="es"
+        )
+
+    assert logic == "Se eligio ACME por impacto."
+    messages = mock_llm.call_args.kwargs["messages"]
+    assert "news selection logic" in messages[0]["content"]
+    user_prompt = messages[1]["content"]
+    assert "Story Cluster" in user_prompt
+    assert "ACME Layoffs" in user_prompt
+    assert digest in user_prompt
+    assert "Language: es" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_selection_logic_uses_template_priority_rules() -> None:
+    """Health/Finance templates inject their specific selection rules."""
+    service = DigestService()
+    cluster = ClusterItem(
+        fingerprint=Fingerprint(entity="FDA", action="Approves drug", title_hash="def"),
+        articles=[ArticleIn(title="FDA approvals", link="https://example.com/2")],
+    )
+
+    with patch("src.api.services.digest.generate_completion", return_value="Logic") as mock_llm:
+        await service.generate_selection_logic(
+            clusters=[cluster], digest="# D", prompt_template="health"
+        )
+
+    user_prompt = mock_llm.call_args.kwargs["messages"][1]["content"]
+    assert "Public health impact" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_selection_logic_empty_clusters() -> None:
+    """An empty cluster list still yields a valid logic call."""
+    service = DigestService()
+
+    with patch("src.api.services.digest.generate_completion", return_value="Logic") as mock_llm:
+        logic = await service.generate_selection_logic(clusters=[], digest="# D")
+
+    assert logic == "Logic"
+    mock_llm.assert_called_once()

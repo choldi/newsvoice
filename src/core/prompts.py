@@ -237,3 +237,52 @@ New Incoming Article:
 Title: {new_title}
 Content: {new_content}
 """
+
+GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT = """\
+You are a news editor in charge of explaining the selection logic
+behind a daily AI-curated news digest.
+
+You are given the story clusters the digest was built from and the final digest
+(5 Main Stories + 5 Headlines). Explain, precisely and in a few paragraphs, the
+news selection logic used to pick the main stories and headlines: which clusters
+were chosen, in what order, and why — referencing the selection rules, priority
+criteria, and editorial goals defined by the active collection.
+
+Do NOT re-summarize the articles in detail and do NOT fabricate statistics,
+sources, or reasons that are not present in the input. Write the explanation in
+the requested language.
+"""
+
+GENERATE_SELECTION_LOGIC_USER_PROMPT_TEMPLATE = """Collection prompt/template: {template}
+Selection rules in effect:
+{template_rules}
+
+Story clusters considered (n={cluster_count}):
+{clusters_text}
+
+Final digest generated:
+{digest}
+
+Explain the news selection logic used to produce the digest above.
+"""
+
+# Short human-readable priority rules for the logic call when a custom
+# template is not set. Mirrors the priorities embedded in DIGEST_TEMPLATES.
+TEMPLATE_PRIORITY_RULES: dict[str, str] = {
+    "default": (
+        "General impact on daily life, significance, and scale; the most relevant"
+        " and original events come first, followed by brief headlines."
+    ),
+    "finance": (
+        "Market-moving developments (central banks, earnings, M&A, macro data)"
+        " take priority; order tracks immediate investor impact."
+    ),
+    "health": (
+        "Public health impact and clinical significance; breakthroughs, drug"
+        " approvals, outbreaks, and risks to populations come first."
+    ),
+    "investigative": (
+        "Original reporting, accountability and corruption; depth of investigation"
+        " and novelty of findings drive the ordering."
+    ),
+}
