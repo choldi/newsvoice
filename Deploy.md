@@ -119,6 +119,64 @@ With no `collections.toml`, the legacy single-schedule behavior applies:
 `python -m src.workers.schedule --hour 8 --minute 0` creates one daily digest
 from `RSS_FEED_URLS`.
 
+`python -m src.workers.schedule` also registers (or updates) the two **monitor
+schedules** automatically:
+
+- `collections-config-monitor` — wakes `CollectionsMonitorWorkflow` every
+  `COLLECTIONS_MONITOR_INTERVAL_MINUTES` to re-register digest schedules when
+  `collections.toml` changes (and alerts when a collection is added/removed).
+- `system-monitor` — wakes `SystemMonitorWorkflow` every `MONITOR_INTERVAL_MINUTES`
+  to run the health checks and alert on problems.
+
+---
+
+## 4.0 System Monitoring
+
+The worker mounts the **Docker socket read-only** so the monitor can inspect the
+containers (see `docker-compose.yml`, `worker` service):
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+Required `.env` entries (all optional except telegram/email when those channels
+are enabled):
+
+```bash
+MONITOR_INTERVAL_MINUTES=15            # ticks of SystemMonitorWorkflow
+MONITOR_RETENTION_DAYS=3               # SQLite monitor_events retention
+MONITOR_LOG_RETENTION_DAYS=3           # JSONL logs in data/logs/
+MONITOR_NOTIFY_CHANNELS=["telegram"]   # telegram | email | whatsapp
+MONITOR_TELEGRAM_CHAT_ID=              # overrides TELEGRAM_CHAT_ID for alerts
+MONITOR_EMAIL_RECIPIENTS=["you@x.com"] # for the email channel
+MONITOR_WHATSAPP_RECIPIENTS=[]         # phone numbers for the whatsapp channel
+MONITOR_WHATSAPP_GROUP_ID=
+MONITOR_DISK_THRESHOLD_PERCENT=85      # min % free before warning
+MONITOR_DAILY_SUMMARY=true             # once-per-UTC-day full summary
+MONITOR_ALERT_ON_RUN=false             # notify each completed digest run
+MONITOR_TTS_DISK_PATH=disk             # GET <tts_api_base_url>/disk
+MONITOR_DOCKER_SOCKET=/var/run/docker.sock  # "" disables the docker check
+```
+
+The `tts_server_disk` check expects `GET <tts_api_base_url>/disk` to return
+`{"total": int, "free": int, "used": int}` (bytes); until the TTS server exposes
+it, the check reports `skipped`. Alerts with no channels configured are recorded
+in the DB/log only.
+
+Verify a manual monitor run:
+
+```bash
+docker compose exec worker python -c "
+import asyncio
+from src.api.services.monitoring.checks import run_all_checks
+async def main():
+    for r in await run_all_checks():
+        print(r.status, r.check, r.detail)
+asyncio.run(main())
+"
+```
+
 ---
 
 ## 4.1 WhatsApp Delivery

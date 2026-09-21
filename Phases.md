@@ -167,6 +167,36 @@ separate from the digest message.
 
 ---
 
+## PHASE 5.3 - System Monitoring (SystemMonitorWorkflow)
+
+**Goal:** un monitor de salud del sistema: TTS vivo, colecciones validadas,
+aviso al actualizar una colección, procesos/servicios, disco del servidor y del
+servidor TTS, e indicar runs lanzados/terminados. Monitorizaciones fáciles de
+añadir (registro declarativo).
+
+**Scope:**
+- [x] `CheckResult`/`MonitorReport`/`MonitorRunConfig` (Pydantic v2)
+- [x] Registro declarativo `MONITOR_CHECKS` (añadir check = función + registro)
+- [x] Checks: docker_containers (socket ro), edge_tts, tts_server_disk,
+      services (api/temporal/there), collections (file+feeds+schedules),
+      digest_runs (36h cutoff), disk_local (disco host + tamaño de tts_cache)
+- [x] `DockerService` vía UNIX socket (`/var/run/docker.sock` ro en el worker)
+- [x] `MonitorReporter`: persistencia SQLite + JSONL, transiciones
+      (alerta solo al pasar a error/warning), resumen diario UTC 1×,
+      avisos de runs completados (`monitor:last_run_ts`)
+- [x] Migración `007_monitor.sql` (tabla `monitor_events` + retención)
+- [x] `SystemMonitorWorkflow` + schedule `system-monitor` (intervalo configurable)
+- [x] Alerta de colecciones añadidas/removidas en `CollectionsMonitorWorkflow`
+      (diff antes del resync, via `collections_changes_activity`)
+- [x] Config `MONITOR_*` en `.env.example` + `.env`
+- [x] Tests unit/integración (348 passing, ruff limpio)
+- [ ] Deploy: montar socket docker en el worker, resync de schedules
+- [ ] Endpoint `GET /disk` en el servidor TTS (acceso pendiente; check ya listo)
+
+**Effort:** 6-8 hours.
+
+---
+
 ## PHASE 6 (Optional) - Web UI and Multi-user
 
 **Goal:** Manage sources and view history from a browser.

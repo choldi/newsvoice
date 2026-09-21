@@ -93,6 +93,30 @@ The built-in **Temporal Web UI** (docker-compose `temporal-ui`, `http://localhos
 primary debugging surface: worklist, Compact view, and the Timeline view render each workflow's
 event history (activities, timers, retries) without extra tooling.
 
+**System monitoring (PHASE 5.3):** the `SystemMonitorWorkflow` (schedule `system-monitor`,
+`MONITOR_INTERVAL_MINUTES`) runs on the worker at fixed intervals and reports the health of the
+whole stack:
+
+- Every check is an async function in `src/api/services/monitoring/checks.py` registered in
+  `MONITOR_CHECKS`; adding a monitor = one function + one registry row (no workflow/activity
+  changes). Checks cover Docker containers (read-only UNIX socket, section below), the edge-tts
+  backend, the TTS server disk endpoint, the internal services (api / Temporal / whatsapp
+  gateway), `collections.toml` + its feeds + Temporal schedules, the latest digest runs per
+  collection, and the host disc (plus `data/tts_cache/` size).
+- Checks run inside **one activity** (`run_monitor_checks_activity`) so all I/O stays out of the
+  deterministic workflow. Outcomes land in both SQLite (`monitor_events`, retention
+  `MONITOR_RETENTION_DAYS`) and daily-rotated JSONL logs (`data/logs/monitor_YYYY-MM-DD.jsonl`).
+- Alerts are **transition-based**: a check alerts only when it moves to `error`/`warning`
+  (previous status stored in the KV store), so a persistent problem does not spam. A once-per-UTC-
+  day full summary and per-done-run notifications are optional (`MONITOR_DAILY_SUMMARY`,
+  `MONITOR_ALERT_ON_RUN`). Delivery channels are `MONITOR_NOTIFY_CHANNELS` (telegram, email,
+  whatsapp).
+- Reading Docker state uses the Engine REST API over the **Docker UNIX socket** mounted
+  read-only on the worker (`/var/run/docker.sock:/var/run/docker.sock:ro`); no docker-in-docker,
+  no new HTTP endpoint.
+- `CollectionsMonitorWorkflow` computes a diff (`collections_changes_activity`) before each
+  schedule resync and alerts when a collection is added or removed.
+
 **Temporal Flow** (`github.com/itaisoudry/temporal-flow-web`, community-contributed, MIT server
 component / proprietary desktop app) is an optional interactive graph overlay for exploring parent
 and child workflows. It is **not** a container or a docker-compose overlay: it is a desktop

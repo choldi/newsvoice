@@ -48,6 +48,21 @@
 - Workflow integration tests use `WorkflowEnvironment.start_time_skipping()`
   with stub activities registered under the SAME names as the real ones
 
+## System Monitoring
+- Checks live in `src/api/services/monitoring/checks.py` as async functions
+  `(CheckContext) -> CheckResult`; register them in `MONITOR_CHECKS` to include
+  them in every monitor run (no workflow/activity changes needed)
+- Checks run inside one activity (`run_monitor_checks_activity`); the workflow
+  (`SystemMonitorWorkflow`) never does I/O or check imports itself
+- Alerts are **transition-based**: alert only when a check moves to
+  `error`/`warning` (see `MonitorReporter.decide_alerts`); decide alerts **before**
+  `record_last_statuses`
+- `CheckResult.detail` is a `str` (never `None`) so results survive Pydantic round-trips
+- Status vocabulary: `ok` | `warning` | `error` | `skipped` | `info`
+- Tests never hit the network: inject fake `httpx.AsyncClient` responses per URL,
+  stub `temporal_admin`, `runs_repo`, and `docker` on `CheckContext`
+- Docker state is read over the UNIX socket (`DockerService`), read-only; no extra HTTP service
+
 ## Database (SQLite)
 - Single file: `data/news.db`
 - Use `aiosqlite` for async access
