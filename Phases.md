@@ -190,8 +190,11 @@ añadir (registro declarativo).
       (diff antes del resync, via `collections_changes_activity`)
 - [x] Config `MONITOR_*` en `.env.example` + `.env`
 - [x] Tests unit/integración (348 passing, ruff limpio)
-- [ ] Deploy: montar socket docker en el worker, resync de schedules
-- [ ] Endpoint `GET /disk` en el servidor TTS (acceso pendiente; check ya listo)
+- [x] Deploy: montar socket docker en el worker, resync de schedules
+      (validado: `docker_containers` ok, monitor_events 56 filas, marcar
+      schedules vía `python -m src.workers.schedule`)
+- [x] Endpoint `GET /disk` en el servidor TTS (`tts_server_disk` ok,
+      44.7% free via `debwk.elver-exponential.ts.net:8000/api/v1/disk`)
 
 **Effort:** 6-8 hours.
 
