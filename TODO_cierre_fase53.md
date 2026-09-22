@@ -1,8 +1,9 @@
-# TODO - Cierre Fase 5.3 (System Monitor) — PENDIENTE
+# TODO - Cierre Fase 5.3 (System Monitor) — COMPLETADO
 
 > Estado: Fase 5.3 **funcional y desplegada en prod** (deb-orch 192.168.5.7,
 > repo `~/news-summary` @ `8582820`). Solo restan pasos administrativos para
-> marcar los checkboxes de `Phases.md`. Verificado el 2026-09-21.
+> marcar los checkboxes de `Phases.md`. Verificado el 2026-09-21; pasado
+> **2026-09-22** completo.
 
 ## Contexto verificado en prod
 - Código actual + montaje docker.sock en worker (compose L43) presentes.
@@ -25,17 +26,22 @@
 4. Commit: `docs(phases): close PHASE 5.3 deploy` (via auto_commit.sh)
 5. Push si hace falta.
 
-## Paso 2 (opcional) — Default TTS base URL muerto
-- `src/core/config.py:88` y `scripts/status.sh:53` usan
+## Paso 2 (opcional) — Default TTS base URL muerto ✅
+- `src/core/config.py:88` y `scripts/status.sh:53` usaban
   `http://192.168.5.4:8000/api/v1` → **no responde**.
 - Prod ya lo sobrescribe en `.env` con
   `http://debwk.elver-exponential.ts.net:8000/api/v1` (Tailscale).
-- Propuesta: cambiar el default en ambos ficheros a la URL de debwk.
+- Hecho: cambiado el default en `config.py`, `status.sh` y las refs doc de
+  `STATUS_CHECKS.md` (L28 y L198) a la URL de debwk.
 - Commit: `fix(monitor): default tts_api_base_url apunta a debwk (Tailscale)`
 
-## Paso 3 (opcional/aviso) — Feed con timeout
-- `collections` avisa cada run: `medicalxpress.com/rss-feed/breaking/` da timeout.
-- No bloquea el pipeline; decidir si se quita el feed o se aumenta el timeout.
+## Paso 3 (opcional/aviso) — Feed con timeout ✅
+- `collections` avisaba cada run: `medicalxpress.com/rss-feed/breaking/` → `400 Bad request`.
+- Causa: el feed rechaza el UA por defecto de httpx (`python-httpx/*`); con
+  `User-Agent: news-engine-monitor/1.0` responde 200 (no es un fallo de la red).
+- Hecho: `_probe` de `checks.py` envía ahora un UA descriptivo
+  (`_MONITOR_USER_AGENT`); añadido test
+  `test_probe_sends_monitor_user_agent`. El pipeline no se bloqueaba.
 
 ## Verificación final
 - `docker compose exec worker python -c "

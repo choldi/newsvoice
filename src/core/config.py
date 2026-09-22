@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # Empty disables the docker_containers check.
     monitor_docker_socket: str = "/var/run/docker.sock"
     tts_cache_dir: str = "data/tts_cache"
-    tts_api_base_url: str = "http://192.168.5.4:8000/api/v1"
+    tts_api_base_url: str = "http://debwk.elver-exponential.ts.net:8000/api/v1"
     tts_api_key: str = ""
     tts_language: str = "es"
     tts_voice: str = "es-MX-JorgeNeural"

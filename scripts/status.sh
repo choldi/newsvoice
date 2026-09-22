@@ -50,7 +50,7 @@ fi
 
 export API_PORT="${API_PORT:-$(_get API_PORT 8000)}"
 export LLM_API_BASE="${LLM_API_BASE:-$(_get LLM_API_BASE http://192.168.5.4:9000/)}"
-export TTS_API_BASE_URL="${TTS_API_BASE_URL:-$(_get TTS_API_BASE_URL http://192.168.5.4:8000/api/v1)}"
+export TTS_API_BASE_URL="${TTS_API_BASE_URL:-$(_get TTS_API_BASE_URL http://debwk.elver-exponential.ts.net:8000/api/v1)}"
 export TEMPORAL_UI_URL="${TEMPORAL_UI_URL:-http://localhost:8080}"
 export DATABASE_PATH="${DATABASE_PATH:-$(_get DATABASE_PATH data/news.db)}"
 export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(_get TELEGRAM_BOT_TOKEN '')}"

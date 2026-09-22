@@ -25,7 +25,7 @@ starts a real digest pipeline run.
 |---|---|---|
 | `API_PORT` | `.env` | Host port of the FastAPI app (deployed: `8800`) |
 | `LLM_API_BASE` | `.env` | llama.cpp/LiteLLM base URL (deployed: `http://192.168.5.4:9000/`) |
-| `TTS_API_BASE_URL` | `.env` | OmniVoice base URL (deployed: `http://192.168.5.4:8000/api/v1`) |
+| `TTS_API_BASE_URL` | `.env` | OmniVoice base URL (deployed: `http://debwk.elver-exponential.ts.net:8000/api/v1`) |
 | `TEMPORAL_HOST` | `.env` | Composes to `temporal:7233` (UI runs on host port `8080`) |
 | `ADMIN_API_TOKEN` | `.env` | Token protecting `/ui/*` (cookie) and `/api/admin/*` (header) |
 | `DATABASE_PATH` | `.env` | SQLite file resolved inside the containers |
@@ -195,7 +195,7 @@ Failures show up in the worker logs as `llm_call_failed`
 ## 7. External TTS backend (OmniVoice)
 
 ```bash
-curl -sf "http://192.168.5.4:8000/api/v1/health" | python3 -m json.tool
+curl -sf "http://debwk.elver-exponential.ts.net:8000/api/v1/health" | python3 -m json.tool
 ```
 
 Expect the OmniVoice health JSON. The TTS step is **optional** per pipeline
