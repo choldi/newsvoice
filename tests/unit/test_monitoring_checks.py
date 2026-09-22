@@ -241,6 +241,29 @@ async def test_check_services_warns_on_unreachable(monkeypatch: pytest.MonkeyPat
     assert "api" in result.detail
 
 
+async def test_probe_sends_monitor_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared probe sends a descriptive UA so UA-hostile feeds pass (400 otherwise)."""
+    captured: dict = {}
+
+    class _CapturingClient(_FakeAsyncClient):
+        def __init__(
+            self,
+            resolver: object | None = None,
+            timeout: float | None = None,
+            headers: dict | None = None,
+            follow_redirects: bool = True,
+        ) -> None:
+            super().__init__(resolver or _Resolver(), timeout)
+            captured["headers"] = headers
+
+    monkeypatch.setattr("src.api.services.monitoring.checks.httpx.AsyncClient", _CapturingClient)
+    from src.api.services.monitoring.checks import _probe
+
+    result = await _probe("https://feeds.example.com/rss", timeout=10.0)
+    assert result is None
+    assert captured["headers"] == {"User-Agent": "news-engine-monitor/1.0"}
+
+
 async def test_check_collections_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_collections(tmp_path)
     monkeypatch.setattr("src.api.services.monitoring.checks._probe", AsyncMock(return_value=None))

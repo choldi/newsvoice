@@ -34,6 +34,10 @@ logger = structlog.get_logger(__name__)
 FEED_PROBE_TIMEOUT = 10.0
 SERVICE_PROBE_TIMEOUT = 5.0
 _RUNS_MISSED_CUTOFF_HOURS = 36
+# Algunos feeds (p.ej. medicalxpress.com) rechazan el UA por defecto de
+# httpx (`python-httpx/*`) con 400; un UA descriptivo propio evita falsos
+# positivos en el check de colecciones.
+_MONITOR_USER_AGENT = "news-engine-monitor/1.0"
 
 
 def _default_temporal_admin() -> TemporalAdminService:
@@ -195,7 +199,9 @@ async def _probe(url: str, timeout: float = SERVICE_PROBE_TIMEOUT) -> str | None
         None if the probe succeeded, else an error description.
     """
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True, headers={"User-Agent": _MONITOR_USER_AGENT}
+        ) as client:
             response = await client.get(url)
             response.raise_for_status()
             if response.headers.get("content-type", "").startswith("application/json"):
