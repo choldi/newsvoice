@@ -84,6 +84,60 @@ def test_logic_delivery_round_trip_via_api() -> None:
     assert fetched.json()["collection"]["logic_delivery"]["channels"] == ["email"]
 
 
+def test_whatsapp_round_trip_via_api() -> None:
+    """WhatsApp fields persist through create/get/put with the admin API."""
+    payload = _collection_payload(
+        delivery_channels=["telegram", "whatsapp"],
+        whatsapp_recipients=["+34600111222", "+34600333444"],
+        whatsapp_group_id="1234567890",
+        logic_delivery={
+            "channels": ["whatsapp"],
+            "whatsapp_recipients": ["+34600555555"],
+            "whatsapp_group_id": "9876543210",
+        },
+    )
+    created = client.post("/api/admin/collections", json=payload)
+    assert created.status_code == 201
+    collection = created.json()["collection"]
+    assert collection["whatsapp_recipients"] == ["+34600111222", "+34600333444"]
+    assert collection["whatsapp_group_id"] == "1234567890"
+    assert collection["delivery_channels"] == ["telegram", "whatsapp"]
+    assert collection["logic_delivery"]["whatsapp_recipients"] == ["+34600555555"]
+    assert collection["logic_delivery"]["whatsapp_group_id"] == "9876543210"
+
+    fetched = client.get("/api/admin/collections/tech").json()["collection"]
+    assert fetched["whatsapp_recipients"] == ["+34600111222", "+34600333444"]
+    assert fetched["whatsapp_group_id"] == "1234567890"
+    assert fetched["logic_delivery"]["whatsapp_recipients"] == ["+34600555555"]
+
+    updated = client.put(
+        "/api/admin/collections/tech",
+        json={**payload, "podcast_name": "Otro nombre"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["collection"]["whatsapp_recipients"] == [
+        "+34600111222",
+        "+34600333444",
+    ]
+    assert updated.json()["collection"]["logic_delivery"]["whatsapp_group_id"] == "9876543210"
+
+
+def test_create_with_invalid_whatsapp_number_returns_422() -> None:
+    """A non-E.164 WhatsApp number is rejected with 422."""
+    payload = _collection_payload(whatsapp_recipients=["600111222"])
+    response = client.post("/api/admin/collections", json=payload)
+    assert response.status_code == 422
+
+
+def test_create_with_unknown_field_returns_422() -> None:
+    """Unknown fields are rejected instead of being silently dropped."""
+    response = client.post(
+        "/api/admin/collections",
+        json=_collection_payload(whatsapp_sender="+34600000000"),
+    )
+    assert response.status_code == 422
+
+
 def test_create_duplicate_conflicts() -> None:
     """Creating a duplicate collection returns 409."""
     client.post("/api/admin/collections", json=_collection_payload())

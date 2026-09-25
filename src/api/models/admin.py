@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.collections import (
     DEFAULT_COLLECTION_TIME,
@@ -19,7 +19,15 @@ from src.core.collections import (
 
 
 class CollectionIn(BaseModel):
-    """Input payload to create or update a collection."""
+    """Input payload to create or update a collection.
+
+    Mirrors every `CollectionConfig` field so the admin GUI and REST API can
+    round-trip a collection without dropping configuration. Unknown fields are
+    rejected (422) instead of being silently ignored, so a new canonical field
+    cannot disappear on the next GUI save.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Unique collection identifier (e.g. 'tech')")
     feed_urls: list[str] = Field(
@@ -53,9 +61,21 @@ class CollectionIn(BaseModel):
         default_factory=list,
         description="Email recipients for HTML email delivery (empty = off)",
     )
+    whatsapp_recipients: list[str] = Field(
+        default_factory=list,
+        description=(
+            "WhatsApp recipients (E.164) for audio/text delivery; empty disables WhatsApp"
+        ),
+    )
+    whatsapp_group_id: str | None = Field(
+        default=None,
+        description="WhatsApp group id delivered as <id>@g.us, exempt from the allowlist",
+    )
     delivery_channels: list[str] = Field(
         default_factory=lambda: ["telegram"],
-        description="Delivery channels ('telegram', 'email'); empty defaults to telegram",
+        description=(
+            "Delivery channels ('telegram', 'email', 'whatsapp'); empty defaults to telegram"
+        ),
     )
     logic_delivery: LogicDeliveryConfig | None = Field(
         default=None,

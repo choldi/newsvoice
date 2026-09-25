@@ -26,6 +26,30 @@ from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
+# Fields written for every `[[collections]]` block, in canonical field order.
+# It must cover every `CollectionConfig` field: `tests/unit/test_collections_repo.py`
+# guards that, because a missing key silently drops configuration on any rewrite.
+_COLLECTION_KEYS = (
+    "name",
+    "time",
+    "feed_urls",
+    "tts_enabled",
+    "deliver_audio",
+    "podcast_name",
+    "podcast_behavior",
+    "language",
+    "voice",
+    "prompt_template",
+    "custom_prompt",
+    "chat_id",
+    "email_recipients",
+    "whatsapp_recipients",
+    "whatsapp_group_id",
+    "delivery_channels",
+    "logic_delivery",
+    "enabled",
+)
+
 
 def _toml_string(value: str) -> str:
     """Quote a string as TOML, keeping it on a single line.
@@ -257,24 +281,7 @@ class CollectionsRepository:
         for config in collections:
             lines.append("[[collections]]")
             data = config.model_dump()
-            for key in (
-                "name",
-                "time",
-                "feed_urls",
-                "tts_enabled",
-                "deliver_audio",
-                "podcast_name",
-                "podcast_behavior",
-                "language",
-                "voice",
-                "prompt_template",
-                "custom_prompt",
-                "chat_id",
-                "email_recipients",
-                "delivery_channels",
-                "logic_delivery",
-                "enabled",
-            ):
+            for key in _COLLECTION_KEYS:
                 value = data.get(key)
                 if value is None:
                     continue
