@@ -7,6 +7,7 @@ playable on Telegram, WhatsApp, Android, and iPhone.
 """
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -38,8 +39,10 @@ class AudioCompressService:
     async def compress(self, source_path: str) -> str:
         """Transcode a WAV file to a mono AAC M4A placed next to the source.
 
-        If the target M4A already exists it is reused, so re-runs of the same
-        digest content do not re-encode.
+        The target M4A is reused only when it is not older than its source, so a
+        regenerated MP3 is never delivered with the previous audio. The
+        transcode writes to a temporary file and is renamed into place, so a
+        failed run cannot leave a truncated M4A behind.
 
         Args:
             source_path: Path to the WAV file to compress.
@@ -56,10 +59,11 @@ class AudioCompressService:
             raise CompressAudioError(f"Audio file not found: {source_path}")
 
         target = source.with_suffix(".m4a")
-        if target.exists():
+        if target.exists() and target.stat().st_mtime_ns >= source.stat().st_mtime_ns:
             logger.info("audio_compress_cached", source=str(source), target=str(target))
             return str(target)
 
+        tmp_target = source.with_name(f"{source.stem}.tmp.m4a")
         command = [
             self._ffmpeg,
             "-hide_banner",
@@ -77,7 +81,7 @@ class AudioCompressService:
             f"{self._bitrate}k",
             "-movflags",
             "+faststart",
-            str(target),
+            str(tmp_target),
         ]
         try:
             result = await asyncio.to_thread(
@@ -88,10 +92,12 @@ class AudioCompressService:
         except subprocess.TimeoutExpired as exc:
             raise CompressAudioError(f"ffmpeg timed out for {source_path}") from exc
         if result.returncode != 0:
+            tmp_target.unlink(missing_ok=True)
             detail = result.stderr.strip() or "ffmpeg failed"
             raise CompressAudioError(f"ffmpeg error: {detail}")
-        if not target.exists():
+        if not tmp_target.exists():
             raise CompressAudioError("ffmpeg did not produce the expected M4A file")
 
+        os.replace(tmp_target, target)
         logger.info("audio_compressed", source=str(source), target=str(target))
         return str(target)
