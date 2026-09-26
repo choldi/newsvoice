@@ -17,6 +17,7 @@ from pathlib import Path
 import structlog
 from pydantic import BaseModel, Field, field_validator
 
+from src.api.models.narration import NarrationSpec
 from src.core.config import get_settings
 
 logger = structlog.get_logger()
@@ -139,6 +140,15 @@ class CollectionConfig(BaseModel):
             " absent the pipeline does not generate any logic text"
         ),
     )
+    narration_enabled: bool = Field(
+        default=False, description="Generate narration audio for this collection"
+    )
+    narration_spec: NarrationSpec | None = Field(
+        default=None, description="Narration spec (cast, music, defaults)"
+    )
+    narration_strategy: str = Field(
+        default="turns", description="Render strategy: 'turns' or 'conversations'"
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     @field_validator("name")
@@ -191,6 +201,16 @@ class CollectionConfig(BaseModel):
         if invalid:
             raise ValueError(f"whatsapp_recipients must be E.164 numbers: {invalid}")
         return clean
+
+    @field_validator("narration_strategy")
+    @classmethod
+    def _narration_strategy(cls, value: str) -> str:
+        """Enforce allowed render strategies."""
+        allowed = ("turns", "conversations")
+        val = value.strip().lower()
+        if val not in allowed:
+            raise ValueError(f"narration_strategy must be one of {allowed}: {value!r}")
+        return val
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

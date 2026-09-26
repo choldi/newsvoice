@@ -24,12 +24,21 @@
 #   recipients / group).
 # - `deliver_audio = true` attaches the generated audio to Telegram AND to the
 #   email and WhatsApp deliveries (when those channels are active).
+# - Narration (Phase 7): `narration_enabled = true` generates a multi-speaker
+#   audio piece from the same digest. Requires `narration_spec` with the cast,
+#   music bed, and defaults. `narration_strategy` selects the render mode:
+#   "turns" (default, one request per segment) or "conversations" (single
+#   request, requires homogeneous cast). The global kill switch is
+#   `NARRATION_ENABLED` in .env.
 
 [collection_defaults]
 tts_enabled = false
 deliver_audio = false
 language = "es"
 voice = "es-mx-male"
+narration_enabled = false
+narration_strategy = "turns"
+# narration_spec = { title = "Briefing", language = "es", roles = [{name="anchor",voice_id="es-mx-male"}], pause_ms = 400, music = null }
 
 [[collections]]
 name = "tech"
@@ -44,6 +53,9 @@ prompt_template = "default"
 # whatsapp_recipients = ["+34612345678"]
 # whatsapp_group_id = "1234567890@g.us"
 # delivery_channels = ["telegram", "email", "whatsapp"]
+# narration_enabled = true
+# narration_strategy = "turns"
+# narration_spec = { title = "Tech Brief", language = "es", roles = [{name="anchor",voice_id="es-mx-male"},{name="expert",voice_id="es-mx-female"}], pause_ms = 400, music = {track="bed.mp3",volume_db=-18,fade_in_ms=2000,fade_out_ms=3000} }
 
 [[collections]]
 name = "health"

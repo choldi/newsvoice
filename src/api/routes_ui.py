@@ -20,7 +20,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from src.api.db.database import RunsRepository
+from src.api.db.database import AudioJobsRepository, RunsRepository
+from src.api.models.narration import NarrationSpec
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.temporal_admin import TemporalAdminService
 from src.api.services.voices import VoicesService
@@ -522,11 +523,19 @@ async def ui_fragment_run_detail(
         "digest_preview": None,
         "article_count": None,
         "cluster_count": None,
+        "narration_path": None,
+        "narration_job": None,
     }
     if run_id:
         row = await RunsRepository().get_run(run_id)
         if row:
             detail = {**detail, **row}
+            if row.get("narration_path"):
+                detail["narration_path"] = row["narration_path"]
+            # Fetch narration audio job
+            job = await AudioJobsRepository().get_job(workflow_id, kind="narration")
+            if job:
+                detail["narration_job"] = job
     if not detail.get("error"):
         try:
             detail["error"] = await TemporalAdminService().execution_error(workflow_id)
@@ -611,6 +620,26 @@ async def ui_fragment_calendar(request: Request) -> HTMLResponse:
     )
 
 
+def _narration_spec_from_form(fields: dict[str, str]) -> NarrationSpec | None:
+    """Parse narration_spec from form data.
+
+    The form sends it as a JSON string in a textarea. Empty or invalid JSON returns None.
+
+    Args:
+        fields: Form field dict.
+
+    Returns:
+        Parsed NarrationSpec or None.
+    """
+    raw = fields.get("narration_spec", "").strip()
+    if not raw:
+        return None
+    try:
+        return NarrationSpec.model_validate_json(raw)
+    except Exception:
+        return None
+
+
 @router.post("/ui/collections", include_in_schema=False)
 async def ui_create_collection(request: Request) -> RedirectResponse:
     """Create a collection from the GUI form.
@@ -651,6 +680,9 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             logic_delivery=_logic_delivery_from_form(
                 fields, await _checked_values(request, "logic_channels", LOGIC_CHANNELS), None
             ),
+            narration_enabled=fields.get("narration_enabled") == "on",
+            narration_spec=_narration_spec_from_form(fields),
+            narration_strategy=fields.get("narration_strategy", "turns"),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -705,6 +737,9 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
                 await _checked_values(request, "logic_channels", LOGIC_CHANNELS),
                 current.logic_delivery,
             ),
+            narration_enabled=fields.get("narration_enabled") == "on",
+            narration_spec=_narration_spec_from_form(fields),
+            narration_strategy=fields.get("narration_strategy", "turns"),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

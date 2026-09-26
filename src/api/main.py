@@ -13,6 +13,7 @@ from src.api.auth import admin_middleware
 from src.api.db.database import run_migrations
 from src.api.routes import (
     admin_collections_router,
+    admin_narration_router,
     admin_runs_router,
     admin_schedules_router,
     admin_voices_router,
@@ -71,6 +72,7 @@ app.include_router(admin_collections_router, prefix="/api")
 app.include_router(admin_voices_router, prefix="/api")
 app.include_router(admin_runs_router, prefix="/api")
 app.include_router(admin_schedules_router, prefix="/api")
+app.include_router(admin_narration_router, prefix="/api")
 app.include_router(ui_router)
 
 

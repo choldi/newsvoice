@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.models.narration import NarrationSpec
 from src.core.collections import (
     DEFAULT_COLLECTION_TIME,
     DEFAULT_PROMPT_TEMPLATE,
@@ -83,6 +84,15 @@ class CollectionIn(BaseModel):
             "Optional admin destination for the LLM news-selection logic; when"
             " absent the pipeline does not generate any logic text"
         ),
+    )
+    narration_enabled: bool = Field(
+        default=False, description="Generate narration audio for this collection"
+    )
+    narration_spec: NarrationSpec | None = Field(
+        default=None, description="Narration spec (cast, music, defaults)"
+    )
+    narration_strategy: str = Field(
+        default="turns", description="Render strategy: 'turns' or 'conversations'"
     )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 

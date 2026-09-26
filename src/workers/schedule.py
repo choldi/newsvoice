@@ -55,6 +55,14 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
     Returns:
         A PipelineConfig wired from the collection's settings.
     """
+    narration_payload = None
+    if collection.narration_enabled and collection.narration_spec:
+        narration_payload = {
+            "task_queue": settings.narration_task_queue,
+            "spec": collection.narration_spec.model_dump(),
+            "strategy": collection.narration_strategy,
+        }
+
     return PipelineConfig(
         feed_urls=collection.feed_urls,
         tts_enabled=collection.tts_enabled if tts_flag is None else tts_flag,
@@ -74,6 +82,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         logic_delivery=(
             collection.logic_delivery.model_dump() if collection.logic_delivery else None
         ),
+        narration=narration_payload,
     )
 
 

@@ -47,6 +47,9 @@ _COLLECTION_KEYS = (
     "whatsapp_group_id",
     "delivery_channels",
     "logic_delivery",
+    "narration_enabled",
+    "narration_spec",
+    "narration_strategy",
     "enabled",
 )
 

@@ -144,6 +144,27 @@
           <button type="submit" class="primary">Guardar</button>
         </div>
       </div>
+
+      <details class="card" style="margin-top:16px">
+        <summary><strong>🎙 Narración multi-hablante (Fase 7)</strong></summary>
+        <div class="inner">
+          <div class="row">
+            <div class="col">
+              <div class="check"><input type="checkbox" name="narration_enabled" {{ 'checked' if c.narration_enabled else '' }}><label>Narración habilitada para esta colección</label></div>
+            </div>
+            <div class="col">
+              <label>Estrategia de render</label>
+              <select name="narration_strategy">
+                <option value="turns" {{ 'selected' if c.narration_strategy == 'turns' else '' }}>Por turnos (TURNS)</option>
+                <option value="conversations" {{ 'selected' if c.narration_strategy == 'conversations' else '' }}>Conversaciones (CONVERSATIONS)</option>
+              </select>
+            </div>
+          </div>
+          <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
+          <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px">{{ c.narration_spec|tojson(indent=2) if c.narration_spec else '' }}</textarea>
+          <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+        </div>
+      </details>
     </form>
   </div>
 </details>
@@ -258,6 +279,27 @@
         <button type="submit" class="primary">Crear</button>
       </div>
     </div>
+
+    <details class="card" style="margin-top:16px">
+      <summary><strong>🎙 Narración multi-hablante (Fase 7)</strong></summary>
+      <div class="inner">
+        <div class="row">
+          <div class="col">
+            <div class="check"><input type="checkbox" name="narration_enabled"><label>Narración habilitada para esta colección</label></div>
+          </div>
+          <div class="col">
+            <label>Estrategia de render</label>
+            <select name="narration_strategy">
+              <option value="turns" selected>Por turnos (TURNS)</option>
+              <option value="conversations">Conversaciones (CONVERSATIONS)</option>
+            </select>
+          </div>
+        </div>
+        <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
+        <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px"></textarea>
+        <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+      </div>
+    </details>
   </form>
 </div>
 {% endblock %}

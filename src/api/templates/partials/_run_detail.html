@@ -18,7 +18,34 @@
     {% if completed_at %} · Fin: <strong>{{ completed_at[:19].replace('T', ' ') }} UTC</strong>{% endif %}
   </div>
   {% endif %}
-  {% if not error and not digest_preview and article_count is none and cluster_count is none %}
+
+  {% if narration_path or narration_job %}
+  <hr style="margin:12px 0;border-color:var(--border)">
+  <div class="muted" style="margin-bottom:6px">🎙 Narración multi-hablante</div>
+  {% if narration_job %}
+    <div class="muted" style="margin-bottom:6px">
+      Estado: <strong>{{ narration_job.status }}</strong>
+      {% if narration_job.elapsed_seconds is not none %} · {{ narration_job.elapsed_seconds }}s{% endif %}
+      {% if narration_job.error %} · Error: {{ narration_job.error }}{% endif %}
+    </div>
+  {% endif %}
+  {% if narration_path %}
+    <div style="margin-top:8px">
+      <audio controls preload="metadata" style="width:100%;max-width:480px">
+        <source src="/static/{{ narration_path }}" type="audio/mp4">
+        Tu navegador no soporta el elemento de audio.
+      </audio>
+      <div class="muted" style="font-size:12px;margin-top:4px">
+        <a href="/static/{{ narration_path }}" target="_blank">Descargar M4A</a>
+        · Guardado en <code>{{ narration_path }}</code>
+      </div>
+    </div>
+  {% else %}
+    <div class="muted">Narración pendiente o sin archivo generado.</div>
+  {% endif %}
+  {% endif %}
+
+  {% if not error and not digest_preview and article_count is none and cluster_count is none and not narration_path and not narration_job %}
   <span class="muted">Sin detalles adicionales.</span>
   {% endif %}
 </div>

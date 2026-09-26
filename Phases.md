@@ -301,7 +301,7 @@ noticias", es "narración multi-hablante de un documento".
       `DigestPipelineWorkflow` con `ActivityOptions(task_queue=...)` y actividad
       resuelta **por nombre**, `trigger_narration.py` para renders
       manuales, y `RunsRepository.set_narration_path`
-- [ ] **7.4 API y GUI** — `POST /api/admin/narration`,
+- [x] **7.4 API y GUI** — `POST /api/admin/narration`,
       `GET /api/admin/narration/voices`, opt-in por colección en
       `collections.toml` + GUI, player de narración en el detalle de run
 - [ ] **7.5 Guion LLM + ops** — prompts, activity de guion, servicio
