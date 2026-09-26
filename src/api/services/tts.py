@@ -10,9 +10,7 @@ before delivery (see ``AudioCompressService``).
 import asyncio
 import hashlib
 import json
-import os
 import re
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +18,7 @@ import edge_tts
 import structlog
 
 from src.api.models.tts import TTSIn, TTSOut
+from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -68,58 +67,6 @@ def _content_hash(speech_text: str, voice: str, language: str) -> str:
         Hex SHA-256 digest.
     """
     return hashlib.sha256("\x1f".join((voice, language, speech_text)).encode()).hexdigest()
-
-
-def _sidecar_path(audio_path: Path) -> Path:
-    """Return the metadata sidecar path for an audio file.
-
-    Args:
-        audio_path: Path of the cached audio file.
-
-    Returns:
-        Path of the sibling ``.meta.json`` file.
-    """
-    return audio_path.with_suffix(".meta.json")
-
-
-def _read_sidecar(path: Path) -> dict | None:
-    """Read a cache sidecar, tolerating a missing or corrupted file.
-
-    Args:
-        path: Sidecar path.
-
-    Returns:
-        Parsed mapping, or None when absent, unreadable or malformed.
-    """
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _atomic_write(path: Path, data: bytes) -> None:
-    """Write bytes to a path atomically (temp file in the same dir + replace).
-
-    A partially written MP3 would otherwise be served as a valid cache hit on
-    the next run.
-
-    Args:
-        path: Destination path.
-        data: Bytes to write.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(handle, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 def _audio_filename(collection: str, day: datetime | None = None) -> str:
@@ -261,19 +208,19 @@ class TTSService:
         text = _truncate_for_tts(payload.markdown, self._max_chars)
         speech_text = _markdown_to_speech_text(text)
         audio_path = self._cache_dir / _audio_filename(payload.collection)
-        sidecar = _sidecar_path(audio_path)
+        sidecar = sidecar_path(audio_path)
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         resolved_voice = await self._resolve_voice(voice, language)
         digest = _content_hash(speech_text, resolved_voice, language)
         existed = audio_path.exists()
-        cached = existed and (_read_sidecar(sidecar) or {}).get("sha256") == digest
+        cached = existed and (read_sidecar(sidecar) or {}).get("sha256") == digest
 
         if not cached:
             audio_bytes = await self._synthesize(speech_text, resolved_voice)
-            _atomic_write(audio_path, audio_bytes)
-            _atomic_write(
+            atomic_write(audio_path, audio_bytes)
+            atomic_write(
                 sidecar,
                 json.dumps(
                     {
