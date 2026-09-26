@@ -109,14 +109,31 @@
   `.meta.json` sidecars cannot collide with the digest TTS cache. The hash covers
   the spec, the script, the render strategy and the music bed, so two different
   renders of the same piece never overwrite each other
-- `digest_runs.narration_path` is written by the narration worker and preserved
-  by `record_run` via `COALESCE`; `audio_path` stays reserved for the digest TTS
-- Narration runs on its own task queue served by `narration-worker`. Cross-queue
-  calls from a workflow use `ActivityOptions(task_queue=...)` and address the
-  activity **by name**, because a worker only registers its own module
+- `digest_runs.narration_path` is written by the narration worker with
+  `RunsRepository.set_narration_path` (a targeted UPDATE, never a full
+  `record_run`, which would reset the digest counters) and preserved by
+  `record_run` via `COALESCE`; `audio_path` stays reserved for the digest TTS.
+  Because of this, `DigestPipelineWorkflow` records the run **before**
+  dispatching the narration: annotating a row that does not exist yet loses the
+  path silently
+- Narration runs on its own task queue served by `narration-worker`
+  (`src/workers/run_narration_worker.py`, entry point
+  `python -m src.workers.run_narration_worker`). Cross-queue calls from a
+  workflow use `ActivityOptions(task_queue=...)` and address the activity **by
+  name**, because a worker only registers its own module
+- `PipelineConfig.narration` is the opt-in: a dict with at least `task_queue`
+  and `spec` (plus `script`/`script_id`/`strategy`). The kill switch
+  (`narration_enabled`) and the per-collection choice are resolved **outside**
+  the workflow, because a workflow cannot read settings. `None` means the
+  collection does not narrate
+- A narration failure is recorded in `delivery_status` with
+  `channel: "narration"` and never fails the digest: the text digest and the
+  TTS audio are already delivered by then
 - Narration activities live in `src/workers/narration_activities.py`, not in
   `activities.py`: the digest worker must keep registering exactly the digest
-  activity set
+  activity set. `tests/unit/test_run_worker.py` and
+  `tests/unit/test_run_narration_worker.py` mirror each other to keep both
+  registrations in sync
 - The render strategy is explicit, never inferred: `RenderStrategy.TURNS`
   (default) synthesizes every turn, honors per-turn `speed`/`emotion` and the
   configured pauses; `RenderStrategy.CONVERSATIONS` uses a single

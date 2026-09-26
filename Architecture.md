@@ -78,17 +78,27 @@ same digest. It is generic multi-speaker narration, not a news-only podcast.
 ```
 [generate_tts_activity]  -->  [digest_runs.audio_path]        (single voice, Edge)
      |
-     v  (opt-in per collection, narration_enabled global kill switch)
-[NarrationWorkflow]        (src/workers/narration_workflows.py)
-     |  dispatched with ActivityOptions(task_queue=<narration_task_queue>)
+     v  (PipelineConfig.narration, filled outside the workflow: per-collection
+     |   opt-in + narration_enabled kill switch + the narration task queue)
+[record_run_activity]   -->  [digest_runs]                   (row must exist first)
+     |
+     v  dispatched by NAME with ActivityOptions(task_queue=<narration_task_queue>)
+[render_narration_activity]   (src/workers/narration_activities.py)
+     |
      v
-[narration-worker]         (same image, own queue, own activity module)
-     |--> [script activity]  --> LLM (optional) + manual/API editing
-     |--> [render activity]   --> TTS gateway /conversations  (multi-speaker)
-     |                          + ffmpeg music bed + M4A encode
+[narration-worker]      (src/workers/run_narration_worker.py: same image, own
+     |                  queue, only NarrationWorkflow + narration activities)
+     |--> [resolve_narration_script_activity]  inline script or narration_scripts row
+     |--> [render_narration_activity]  --> TTS gateway /tts | /conversations
+     |                                    + ffmpeg music bed + M4A encode
      v
 [digest_runs.narration_path]  +  audio_jobs row with kind='narration'
 ```
+
+`NarrationWorkflow` (`src/workers/narration_workflows.py`) is the same pair of
+activities as a standalone, first-class workflow, started manually with
+`python -m src.workers.trigger_narration`, so a cast can be rendered and
+debugged without waiting for a scheduled digest.
 
 Both audio paths coexist on the same run: `audio_jobs` is keyed by
 `(run_id, kind)`, `digest_runs.audio_path` stays reserved for the digest TTS and
@@ -194,8 +204,12 @@ news-engine/
 │       ├── workflows.py        # DigestPipelineWorkflow + PipelineConfig
 │       ├── activities.py       # RSS, filter, cluster, digest, TTS, Telegram,
 │       │                       # record_run (run history)
-│       ├── run_worker.py       # worker entry point
+│       ├── run_worker.py       # digest worker entry point
+│       ├── narration_workflows.py  # NarrationWorkflow + NarrationConfig
+│       ├── narration_activities.py # resolve script + render narration
+│       ├── run_narration_worker.py # narration worker (own task queue)
 │       ├── trigger.py          # manual one-shot run (--collection)
+│       ├── trigger_narration.py # manual one-shot narration render
 │       └── schedule.py         # one Temporal schedule per collection
 ├── data/                       # SQLite DB + tts_cache/ + narration/ (gitignored)
 ├── tests/

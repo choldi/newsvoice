@@ -68,6 +68,16 @@ EMAIL_TIMEOUT = timedelta(seconds=90)
 WHATSAPP_TIMEOUT = timedelta(seconds=120)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 
+# Phase 7 narration. The digest worker does not register the narration
+# activities, so they are addressed BY NAME and dispatched to the narration
+# task queue via task_queue=...; the name resolves on the narration worker only.
+NARRATION_RENDER_ACTIVITY = "render_narration_activity"
+# Longest plausible render: the gateway is called once per turn (each bounded by
+# narration_request_timeout, default 300s) before the local mix/encode.
+NARRATION_RENDER_TIMEOUT = timedelta(seconds=7200)
+# A narration failure must never fail the digest: the text already went out.
+NARRATION_RETRY_POLICY = RetryPolicy(maximum_attempts=2)
+
 # Timeouts for the system-monitor workflow activities: probing every check is
 # bounded, delivering alerts spans the telegram/email/whatsapp channels, and the
 # KV lookups are local.
@@ -102,6 +112,11 @@ class PipelineConfig:
     whatsapp_group_id: str | None = None
     delivery_channels: list[str] = field(default_factory=lambda: ["telegram"])
     logic_delivery: dict[str, Any] | None = None
+    # Phase 7 narration opt-in. The kill switch and the per-collection choice are
+    # resolved **outside** the workflow (a workflow cannot read settings), so the
+    # dispatcher fills this dict with the payload plus the narration task queue.
+    # None means "this collection does not narrate".
+    narration: dict[str, Any] | None = None
 
 
 @workflow.defn
@@ -414,12 +429,86 @@ class DigestPipelineWorkflow:
             audio_path=audio_path,
             error=None,
         )
+
+        # Phase 7 narration: a second, independent audio spoke rendered by the
+        # narration worker on its own task queue. The activity is addressed by
+        # name because the digest worker does not register the narration module,
+        # and task_queue comes from the workflow input (a workflow cannot read
+        # settings). Any failure is recorded and never fails the digest: the
+        # text digest, the TTS audio and the deliveries are already done. It
+        # runs AFTER the run row is recorded because the narration worker writes
+        # digest_runs.narration_path, and annotating a row that does not exist
+        # yet would silently lose the path.
+        if config.narration:
+            narration_request = self._narration_payload(config, workflow.info().workflow_id)
+            workflow.logger.info(f"Dispatching narration to '{narration_request['task_queue']}'")
+            try:
+                narration = await workflow.execute_activity(
+                    NARRATION_RENDER_ACTIVITY,
+                    args=[narration_request["payload"]],
+                    task_queue=narration_request["task_queue"],
+                    start_to_close_timeout=NARRATION_RENDER_TIMEOUT,
+                    retry_policy=NARRATION_RETRY_POLICY,
+                )
+                delivery_status.append(
+                    {
+                        "channel": "narration",
+                        "status": "ok",
+                        "audio_path": narration.get("audio_path")
+                        if isinstance(narration, dict)
+                        else None,
+                    }
+                )
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(f"Narration step failed; digest continues: {detail}")
+                delivery_status.append(
+                    {"channel": "narration", "status": "error", "error": str(detail)}
+                )
+
         return {
             "status": "ok",
             "article_count": article_count,
             "cluster_count": len(clusters),
             "digest": digest_markdown,
             "delivery_status": delivery_status,
+        }
+
+    @staticmethod
+    def _narration_payload(config: PipelineConfig, run_id: str) -> dict[str, Any]:
+        """Build the narration request and its target queue.
+
+        Args:
+            config: PipelineConfig carrying the ``narration`` opt-in dict.
+            run_id: Id of this digest run, used to key the narration audio job
+                and the ``digest_runs.narration_path`` column.
+
+        Returns:
+            Dict with the ``task_queue`` to dispatch to and the activity
+            ``payload``.
+
+        Raises:
+            ApplicationError: If the opt-in dict lacks a task queue or the
+                spec, which would fail on the narration worker anyway.
+        """
+        request = config.narration or {}
+        task_queue = request.get("task_queue")
+        spec = request.get("spec")
+        if not task_queue or not isinstance(spec, dict):
+            raise ApplicationError(
+                "PipelineConfig.narration needs a 'task_queue' and a 'spec'",
+                non_retryable=True,
+            )
+        return {
+            "task_queue": str(task_queue),
+            "payload": {
+                "run_id": request.get("run_id") or run_id,
+                "collection": config.collection,
+                "spec": spec,
+                "script": request.get("script"),
+                "script_id": request.get("script_id"),
+                "strategy": request.get("strategy") or "turns",
+            },
         }
 
     async def _record_run(

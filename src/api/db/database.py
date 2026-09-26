@@ -532,6 +532,28 @@ class RunsRepository:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
+    async def set_narration_path(self, workflow_id: str, narration_path: str) -> int:
+        """Attach a generated narration file to an existing run.
+
+        The narration worker runs as a separate workflow, so it must not rewrite
+        the whole run row (which would reset the digest counters and status);
+        only the narration column is touched.
+
+        Args:
+            workflow_id: Temporal workflow id of the run that was narrated.
+            narration_path: Path of the generated narration audio file.
+
+        Returns:
+            Number of rows updated (0 when no run matches the workflow id).
+        """
+        query = "UPDATE digest_runs SET narration_path = ? WHERE workflow_id = ?"
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (narration_path, workflow_id))
+            await db.commit()
+            async with db.execute("SELECT changes()") as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+
     async def count(self, collection: str | None = None, status_filter: str | None = None) -> int:
         """Count runs matching the optional filters.
 

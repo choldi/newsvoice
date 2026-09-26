@@ -116,3 +116,39 @@ async def test_run_without_narration_reports_null_path() -> None:
     run = await runs.get_run(run_id)
     assert run is not None
     assert run["narration_path"] is None
+
+
+async def test_set_narration_path_updates_only_that_column() -> None:
+    """The narration worker annotates a run without rewriting the digest row."""
+    runs = RunsRepository()
+    run_id = await runs.record_run(
+        "run-6",
+        collection="tech",
+        status="ok",
+        article_count=40,
+        cluster_count=5,
+        digest_preview="preview",
+        audio_path="data/tts_cache/digest.m4a",
+    )
+
+    updated = await runs.set_narration_path(
+        "run-6", "data/narration/narrate_tech_20260926_abcd1234.m4a"
+    )
+
+    assert updated == 1
+    run = await runs.get_run(run_id)
+    assert run is not None
+    assert run["narration_path"] == "data/narration/narrate_tech_20260926_abcd1234.m4a"
+    # The digest columns are untouched by the narration worker.
+    assert run["status"] == "ok"
+    assert run["article_count"] == 40
+    assert run["cluster_count"] == 5
+    assert run["digest_preview"] == "preview"
+    assert run["audio_path"] == "data/tts_cache/digest.m4a"
+
+
+async def test_set_narration_path_is_a_no_op_for_an_unknown_run() -> None:
+    """A standalone narration run has no digest row; that is not an error."""
+    runs = RunsRepository()
+
+    assert await runs.set_narration_path("does-not-exist", "data/narration/x.m4a") == 0

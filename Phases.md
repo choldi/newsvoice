@@ -294,10 +294,13 @@ noticias", es "narración multi-hablante de un documento".
       normalización a WAV canónico (mono 24 kHz); música local con ffmpeg
       (loop, fades, ducking); encode M4A; caché con sidecar; tests unitarios y
       tests de integración con ffmpeg real
-- [ ] **7.3 Workflow y cola propias** — `narration_activities.py`,
-      `NarrationWorkflow`, `narration-worker` en su task queue, despacho desde
-      `DigestPipelineWorkflow` con `ActivityOptions(task_queue=...)` y actividades
-      por nombre
+- [x] **7.3 Workflow y cola propias** — `narration_activities.py` (resolve script +
+      render con `audio_jobs.kind='narration'` y `digest_runs.narration_path`),
+      `NarrationWorkflow` en `narration_workflows.py`, `run_narration_worker.py`
+      en `NARRATION_TASK_QUEUE` con sus propias activities, disparo desde
+      `DigestPipelineWorkflow` con `ActivityOptions(task_queue=...)` y actividad
+      resuelta **por nombre**, `trigger_narration.py` para renders
+      manuales, y `RunsRepository.set_narration_path`
 - [ ] **7.4 API y GUI** — `POST /api/admin/narration`,
       `GET /api/admin/narration/voices`, opt-in por colección en
       `collections.toml` + GUI, player de narración en el detalle de run
