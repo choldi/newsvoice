@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
-from temporalio import activity, workflow
+from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
@@ -130,7 +130,7 @@ class DigestPipelineWorkflow:
             retry_policy=NETWORK_RETRY_POLICY,
         )
         if not isinstance(articles, list):
-            raise activity.ApplicationError(
+            raise ApplicationError(
                 "fetch_rss_activity returned an unexpected shape",
                 non_retryable=True,
             )
@@ -143,7 +143,7 @@ class DigestPipelineWorkflow:
             retry_policy=NETWORK_RETRY_POLICY,
         )
         if not isinstance(new_articles, list):
-            raise activity.ApplicationError(
+            raise ApplicationError(
                 "filter_new_activity returned an unexpected shape",
                 non_retryable=True,
             )
@@ -169,7 +169,7 @@ class DigestPipelineWorkflow:
             retry_policy=NETWORK_RETRY_POLICY,
         )
         if not isinstance(clusters, list):
-            raise activity.ApplicationError(
+            raise ApplicationError(
                 "cluster_activity returned an unexpected shape",
                 non_retryable=True,
             )
@@ -343,7 +343,7 @@ class DigestPipelineWorkflow:
                     retry_policy=NETWORK_RETRY_POLICY,
                 )
                 if not isinstance(logic_result, dict) or not logic_result.get("logic"):
-                    raise activity.ApplicationError(
+                    raise ApplicationError(
                         "generate_logic_activity returned no logic text",
                         non_retryable=True,
                     )
@@ -473,7 +473,7 @@ class DigestPipelineWorkflow:
             ApplicationError: If the result is missing the digest text.
         """
         if not isinstance(digest, dict) or not digest.get("digest"):
-            raise activity.ApplicationError(
+            raise ApplicationError(
                 "generate_digest_activity returned no digest text",
                 non_retryable=True,
             )
@@ -493,7 +493,7 @@ class DigestPipelineWorkflow:
             ApplicationError: If the result has no article count.
         """
         if not isinstance(digest, dict) or "article_count" not in digest:
-            raise activity.ApplicationError(
+            raise ApplicationError(
                 "generate_digest_activity returned no article_count",
                 non_retryable=True,
             )

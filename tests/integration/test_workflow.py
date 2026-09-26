@@ -1,9 +1,15 @@
 """Integration tests for the DigestPipelineWorkflow using the Temporal test env."""
 
+import inspect
+
+import pytest
 from temporalio import activity
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from src.workers import workflows as workflows_module
 from src.workers.workflows import (
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
@@ -1408,3 +1414,66 @@ async def test_monitor_workflow_skips_when_file_unavailable() -> None:
     assert result["status"] == "skipped"
     assert result["changed"] is False
     assert synced == []
+
+
+@activity.defn(name="generate_digest_activity")
+async def stub_generate_digest_no_text(payload: dict) -> dict:
+    """Return a digest result with no 'digest' key."""
+    return {"status": "ok", "article_count": 1}
+
+
+@activity.defn(name="generate_digest_activity")
+async def stub_generate_digest_no_count(payload: dict) -> dict:
+    """Return a digest result with no 'article_count' key."""
+    return {"status": "ok", "digest": DIGEST["digest"]}
+
+
+async def test_digest_result_validation_raises_application_errors() -> None:
+    """An incomplete digest result must fail the workflow with a clear message.
+
+    These checks used ``activity.ApplicationError``, a symbol that does not
+    exist on ``temporalio.activity``, so an incomplete result crashed the
+    workflow task with an ``AttributeError`` (retried forever) instead of
+    failing non-retryably with the intended message.
+    """
+    config = PipelineConfig(feed_urls=["https://feed.example/rss"], tts_enabled=False)
+
+    async def _run(bad_digest: object, expected: str) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue="tq-bad-digest",
+                workflows=[DigestPipelineWorkflow],
+                activities=[
+                    stub_fetch_rss,
+                    stub_filter_new,
+                    stub_cluster,
+                    bad_digest,
+                    stub_record_run,
+                ],
+            ):
+                with pytest.raises(WorkflowFailureError) as excinfo:
+                    await env.client.execute_workflow(
+                        DigestPipelineWorkflow.run,
+                        config,
+                        id="bad-digest",
+                        task_queue="tq-bad-digest",
+                    )
+        assert expected in str(excinfo.value.cause), excinfo.value.cause
+
+    await _run(stub_generate_digest_no_text, "generate_digest_activity returned no digest text")
+    await _run(stub_generate_digest_no_count, "generate_digest_activity returned no article_count")
+
+
+def test_workflow_never_references_a_missing_application_error_symbol() -> None:
+    """Guard the other validation branches, which are unreachable by design.
+
+    ``isinstance(articles, list)`` style checks can never fail while the
+    activity declares ``result_type=list[...]``, because the payload converter
+    rejects the wrong shape first (and the workflow task then retries). They are
+    kept as defence in depth, but they cannot be covered end to end.
+    """
+    source = inspect.getsource(workflows_module)
+
+    assert "activity.ApplicationError" not in source
+    assert workflows_module.ApplicationError is ApplicationError
