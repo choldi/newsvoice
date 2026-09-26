@@ -86,3 +86,62 @@ async def test_finish_job_error_records_message() -> None:
 async def test_get_job_returns_none_for_unknown_run() -> None:
     job = await AudioJobsRepository().get_job("missing-run")
     assert job is None
+
+
+async def test_start_job_defaults_to_tts_kind() -> None:
+    await AudioJobsRepository().start_job("run-5", collection="tech")
+
+    job = await AudioJobsRepository().get_job("run-5")
+    assert job is not None
+    assert job["kind"] == "tts"
+
+
+async def test_narration_and_tts_jobs_coexist_for_the_same_run() -> None:
+    repo = AudioJobsRepository()
+    await repo.start_job("run-6", collection="tech")
+    await repo.start_job("run-6", collection="tech", kind="narration")
+
+    await repo.finish_job(
+        "run-6",
+        status="FINISHED_OK",
+        audio_path="data/tts_cache/digest.m4a",
+        elapsed_seconds=20.0,
+    )
+    await repo.finish_job(
+        "run-6",
+        status="FINISHED_OK",
+        audio_path="data/narration/narrate_tech_20260926.m4a",
+        elapsed_seconds=140.0,
+        kind="narration",
+    )
+
+    tts_job = await repo.get_job("run-6")
+    narration_job = await repo.get_job("run-6", kind="narration")
+    assert tts_job is not None
+    assert narration_job is not None
+    assert tts_job["kind"] == "tts"
+    assert tts_job["audio_path"] == "data/tts_cache/digest.m4a"
+    assert narration_job["kind"] == "narration"
+    assert narration_job["audio_path"] == "data/narration/narrate_tech_20260926.m4a"
+
+
+async def test_status_updates_are_scoped_to_the_job_kind() -> None:
+    repo = AudioJobsRepository()
+    await repo.start_job("run-7")
+    await repo.start_job("run-7", kind="narration")
+
+    await repo.set_generating("run-7", kind="narration")
+
+    tts_job = await repo.get_job("run-7")
+    assert tts_job is not None
+    assert tts_job["status"] == "STARTING"
+
+
+async def test_list_jobs_filters_by_kind() -> None:
+    repo = AudioJobsRepository()
+    await repo.start_job("run-8", collection="tech")
+    await repo.start_job("run-8", collection="tech", kind="narration")
+    await repo.start_job("run-9", collection="sport")
+
+    assert [job["kind"] for job in await repo.list_jobs(collection="tech")] == ["narration", "tts"]
+    assert [job["run_id"] for job in await repo.list_jobs(kind="tts")] == ["run-9", "run-8"]

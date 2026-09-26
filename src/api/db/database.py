@@ -9,6 +9,7 @@ from pathlib import Path
 import aiosqlite
 import structlog
 
+from src.api.models.narration import NarrationScript
 from src.core.config import settings
 
 logger = structlog.get_logger()
@@ -404,6 +405,7 @@ class RunsRepository:
         digest_preview: str | None = None,
         audio_path: str | None = None,
         error: str | None = None,
+        narration_path: str | None = None,
     ) -> int:
         """Upsert a digest pipeline run row keyed by workflow_id.
 
@@ -414,8 +416,11 @@ class RunsRepository:
             article_count: Number of articles summarized (0 for no-new-articles).
             cluster_count: Number of clusters summarized.
             digest_preview: First chars of the generated digest.
-            audio_path: Generated audio file path, if any.
+            audio_path: Generated digest TTS audio file path, if any.
             error: Error message for failed runs.
+            narration_path: Generated narration audio file path, if any. Kept
+                when omitted, so the digest workflow does not erase a path
+                already written by the narration worker.
 
         Returns:
             The row id of the recorded run.
@@ -424,8 +429,9 @@ class RunsRepository:
         query = """
             INSERT INTO digest_runs (
                 workflow_id, collection, status, article_count, cluster_count,
-                digest_preview, audio_path, error, started_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                digest_preview, audio_path, narration_path, error, started_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(workflow_id) DO UPDATE SET
                 collection = excluded.collection,
                 status = excluded.status,
@@ -433,6 +439,9 @@ class RunsRepository:
                 cluster_count = excluded.cluster_count,
                 digest_preview = excluded.digest_preview,
                 audio_path = excluded.audio_path,
+                narration_path = COALESCE(
+                    excluded.narration_path, digest_runs.narration_path
+                ),
                 error = excluded.error,
                 completed_at = excluded.completed_at
         """
@@ -447,6 +456,7 @@ class RunsRepository:
                     int(cluster_count or 0),
                     digest_preview,
                     audio_path,
+                    narration_path,
                     error,
                     now_iso,
                     now_iso,
@@ -489,7 +499,8 @@ class RunsRepository:
 
         query = f"""
             SELECT id, workflow_id, collection, status, article_count, cluster_count,
-                   digest_preview, audio_path, error, started_at, completed_at
+                   digest_preview, audio_path, narration_path, error, started_at,
+                   completed_at
             FROM digest_runs
             {where}
             ORDER BY completed_at DESC
@@ -511,7 +522,8 @@ class RunsRepository:
         """
         query = """
             SELECT id, workflow_id, collection, status, article_count, cluster_count,
-                   digest_preview, audio_path, error, started_at, completed_at
+                   digest_preview, audio_path, narration_path, error, started_at,
+                   completed_at
             FROM digest_runs
             WHERE id = ?
         """
@@ -546,7 +558,11 @@ class RunsRepository:
 
 
 class AudioJobsRepository:
-    """Repository for per-run TTS generation status (STARTING/GENERATING/FINISHED)."""
+    """Repository for per-run TTS generation status (STARTING/GENERATING/FINISHED).
+
+    Rows are keyed by (run_id, kind): 'tts' is the digest single-voice job and
+    'narration' the Phase 7 multi-speaker job, which must not overwrite it.
+    """
 
     def __init__(self, db_path: str | None = None) -> None:
         """Initialize with an optional database path.
@@ -556,20 +572,21 @@ class AudioJobsRepository:
         """
         self.db_path = db_path
 
-    async def start_job(self, run_id: str, collection: str = "default") -> None:
+    async def start_job(self, run_id: str, collection: str = "default", kind: str = "tts") -> None:
         """Insert or reset the audio job row for a run to STARTING.
 
-        Idempotent (upsert on run_id) so Temporal replays never create dupes.
+        Idempotent (upsert on run_id + kind) so Temporal replays never create dupes.
 
         Args:
             run_id: Workflow id of the digest run the job belongs to.
             collection: Collection name the run belongs to.
+            kind: Audio job kind ('tts' or 'narration').
         """
         now_iso = datetime.now(UTC).isoformat()
         query = """
-            INSERT INTO audio_jobs (run_id, collection, status, started_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(run_id) DO UPDATE SET
+            INSERT INTO audio_jobs (run_id, collection, kind, status, started_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, kind) DO UPDATE SET
                 collection = excluded.collection,
                 status = 'STARTING',
                 error = NULL,
@@ -579,18 +596,19 @@ class AudioJobsRepository:
                 elapsed_seconds = NULL
         """
         async with get_db(self.db_path) as db:
-            await db.execute(query, (run_id, collection, "STARTING", now_iso))
+            await db.execute(query, (run_id, collection, kind, "STARTING", now_iso))
             await db.commit()
 
-    async def set_generating(self, run_id: str) -> None:
+    async def set_generating(self, run_id: str, kind: str = "tts") -> None:
         """Mark the job as GENERATING (synthesis in progress).
 
         Args:
             run_id: Workflow id of the digest run.
+            kind: Audio job kind ('tts' or 'narration').
         """
-        query = "UPDATE audio_jobs SET status = ? WHERE run_id = ?"
+        query = "UPDATE audio_jobs SET status = ? WHERE run_id = ? AND kind = ?"
         async with get_db(self.db_path) as db:
-            await db.execute(query, ("GENERATING", run_id))
+            await db.execute(query, ("GENERATING", run_id, kind))
             await db.commit()
 
     async def finish_job(
@@ -600,6 +618,7 @@ class AudioJobsRepository:
         error: str | None = None,
         audio_path: str | None = None,
         elapsed_seconds: float | None = None,
+        kind: str = "tts",
     ) -> None:
         """Record the terminal TTS outcome for a run.
 
@@ -609,40 +628,175 @@ class AudioJobsRepository:
             error: Error message/observation for failed generation.
             audio_path: Generated audio file path on success.
             elapsed_seconds: Wall-clock seconds the TTS step took.
+            kind: Audio job kind ('tts' or 'narration').
         """
         now_iso = datetime.now(UTC).isoformat()
         query = """
             UPDATE audio_jobs
             SET status = ?, error = ?, audio_path = ?,
                 finished_at = ?, elapsed_seconds = ?
-            WHERE run_id = ?
+            WHERE run_id = ? AND kind = ?
         """
         async with get_db(self.db_path) as db:
             await db.execute(
                 query,
-                (status, error, audio_path, now_iso, elapsed_seconds, run_id),
+                (status, error, audio_path, now_iso, elapsed_seconds, run_id, kind),
             )
             await db.commit()
 
-    async def get_job(self, run_id: str) -> dict | None:
+    async def get_job(self, run_id: str, kind: str = "tts") -> dict | None:
         """Return the audio job row for a run, or None if not found.
 
         Args:
             run_id: Workflow id of the digest run.
+            kind: Audio job kind ('tts' or 'narration').
 
         Returns:
             The audio job dict, or None.
         """
         query = """
-            SELECT id, run_id, collection, status, error, audio_path,
+            SELECT id, run_id, collection, kind, status, error, audio_path,
                    started_at, finished_at, elapsed_seconds
             FROM audio_jobs
+            WHERE run_id = ? AND kind = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (run_id, kind)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def list_jobs(self, collection: str | None = None, kind: str | None = None) -> list[dict]:
+        """List audio jobs filtered by collection and/or kind, newest first.
+
+        Args:
+            collection: Optional collection filter.
+            kind: Optional audio job kind filter.
+
+        Returns:
+            List of audio job dicts.
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+        if collection:
+            conditions.append("collection = ?")
+            params.append(collection)
+        if kind:
+            conditions.append("kind = ?")
+            params.append(kind)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"""
+            SELECT id, run_id, collection, kind, status, error, audio_path,
+                   started_at, finished_at, elapsed_seconds
+            FROM audio_jobs
+            {where}
+            ORDER BY started_at DESC
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+
+class NarrationRepository:
+    """Repository for narration scripts (Phase 7).
+
+    Stores the authored script that the narration renderer turns into audio.
+    Scripts are kept as JSON so the renderer can evolve without migrations.
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def save_script(
+        self,
+        run_id: str,
+        script: NarrationScript,
+        collection: str = "default",
+    ) -> int:
+        """Insert a narration script row for a run.
+
+        Args:
+            run_id: Workflow id (or narration id) of the run the script belongs to.
+            script: Validated script model to persist.
+            collection: Collection name the run belongs to.
+
+        Returns:
+            The row id of the saved script.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+            INSERT INTO narration_scripts
+                (run_id, collection, source, language, title, script_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                query,
+                (
+                    run_id,
+                    collection,
+                    script.source,
+                    script.language,
+                    script.title,
+                    script.model_dump_json(),
+                    now_iso,
+                ),
+            )
+            await db.commit()
+            async with db.execute(
+                "SELECT id FROM narration_scripts WHERE id = last_insert_rowid()"
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row["id"]) if row else 0
+
+    async def get_script(self, script_id: int) -> NarrationScript | None:
+        """Return a narration script by its database id.
+
+        Args:
+            script_id: Id of the narration_scripts row.
+
+        Returns:
+            The parsed NarrationScript, or None if not found.
+        """
+        query = """
+            SELECT id, run_id, collection, source, language, title, script_json, created_at
+            FROM narration_scripts
+            WHERE id = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (script_id,)) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return None
+                return NarrationScript.model_validate_json(row["script_json"])
+
+    async def latest_script_for_run(self, run_id: str) -> NarrationScript | None:
+        """Return the most recent script saved for a run.
+
+        Args:
+            run_id: Workflow id of the run.
+
+        Returns:
+            The parsed NarrationScript, or None if the run has no script.
+        """
+        query = """
+            SELECT id, run_id, collection, source, language, title, script_json, created_at
+            FROM narration_scripts
             WHERE run_id = ?
+            ORDER BY id DESC
+            LIMIT 1
         """
         async with get_db(self.db_path) as db:
             async with db.execute(query, (run_id,)) as cursor:
                 row = await cursor.fetchone()
-                return dict(row) if row else None
+                if not row:
+                    return None
+                return NarrationScript.model_validate_json(row["script_json"])
 
 
 class SyncStateRepository:

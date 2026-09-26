@@ -92,6 +92,29 @@
   `TELEGRAM_BOT_TOKEN`, `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`,
   `TEMPORAL_TASK_QUEUE`, `RSS_FEED_URLS`
 - No hardcoded secrets; no default prod values
+- `tts_*` is Edge-specific and owned by the digest TTS service; the Phase 7
+  narration pipeline uses its own `narration_*` namespace (separate gateway URL,
+  cache dir, task queue) and never repoints `tts_api_base_url`, which
+  `VoicesService` still uses for the GUI voice catalog
+
+## Narration (Phase 7)
+- Domain models live in `src/api/models/narration.py`; they carry no I/O and
+  mirror the TTS gateway bounds (`speed` [0.5, 2.0], `pause_ms` [0, 5000],
+  two-letter ISO 639-1 languages, `EMOTION_TAGS` from `src/core/prompts.py`)
+- Audio jobs are discriminated by `audio_jobs.kind`: `'tts'` for the digest
+  single-voice job, `'narration'` for the multi-speaker one. Every
+  `AudioJobsRepository` call takes an explicit `kind` (default `'tts'`)
+- Narration audio goes to `narration_cache_dir` (never `tts_cache_dir`) with a
+  `narrate_<collection>_<yymmdd>` stem, so WAV/M4A files and their
+  `.meta.json` sidecars cannot collide with the digest TTS cache
+- `digest_runs.narration_path` is written by the narration worker and preserved
+  by `record_run` via `COALESCE`; `audio_path` stays reserved for the digest TTS
+- Narration runs on its own task queue served by `narration-worker`. Cross-queue
+  calls from a workflow use `ActivityOptions(task_queue=...)` and address the
+  activity **by name**, because a worker only registers its own module
+- Narration activities live in `src/workers/narration_activities.py`, not in
+  `activities.py`: the digest worker must keep registering exactly the digest
+  activity set
 
 ## Collections (Phase 5)
 - Collections live in `collections.toml` (see `collections.toml.example`),

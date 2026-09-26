@@ -106,10 +106,49 @@ class Settings(BaseSettings):
     tts_audio_bitrate_kbps: int = Field(default=48, ge=16, le=320)
     admin_api_token: str = ""
 
+    # --- Narration (Phase 7) ------------------------------------------------
+    # Master switch for the multi-speaker narration pipeline. Collections opt in
+    # individually from Phase 7.3; this flag is the global kill switch.
+    narration_enabled: bool = False
+    # TTS gateway that serves the narration cast. Kept separate from
+    # tts_api_base_url on purpose: the tts_* namespace talks to Edge directly
+    # (except VoicesService) and repointing it would silently move the voices
+    # GUI to another server. Empty means "reuse tts_api_base_url at read time".
+    narration_api_base_url: str = ""
+    narration_api_key: str = ""
+    # Task queue served by the dedicated narration worker.
+    narration_task_queue: str = "news-engine-narration-task-queue"
+    # Narration audio lives outside tts_cache so WAV/M4A files and their
+    # .meta.json sidecars cannot collide with the digest TTS cache.
+    narration_cache_dir: str = "data/narration"
+    narration_music_dir: str = "data/narration/music"
+    narration_language: str = "es"
+    narration_speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    narration_pause_ms: int = Field(default=400, ge=0, le=5000)
+    # The gateway does not chunk long text and enforces a concurrency limit, so
+    # requests are split client-side and the cap must be respected.
+    narration_max_chars_per_request: int = Field(default=1500, ge=100, le=10_000)
+    narration_max_concurrency: int = Field(default=2, ge=1, le=8)
+    # Generous timeout: the gateway has no server-side timeout, and a long
+    # multi-turn conversation can take minutes on CPU.
+    narration_request_timeout: int = Field(default=300, ge=1)
+    # Fall back to a direct Edge TTS call when the gateway fails.
+    narration_fallback_to_edge: bool = True
+    narration_audio_bitrate_kbps: int = Field(default=64, ge=16, le=320)
+
     @property
     def data_dir(self) -> Path:
         """Return the data directory (parent of database file)."""
         return Path(self.database_path).parent
+
+    @property
+    def narration_base_url(self) -> str:
+        """Return the narration gateway base URL, falling back to the TTS one.
+
+        Returns:
+            `narration_api_base_url` when set, otherwise `tts_api_base_url`.
+        """
+        return self.narration_api_base_url or self.tts_api_base_url
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -70,6 +70,32 @@ emotion tags such as `[happy]`), fragments it into small paragraphs (default
 400 chars) to avoid long-input hallucinations, synthesizes each chunk via the
 OmniVoice `POST /api/v1/tts` endpoint, and concatenates the resulting WAV files.
 
+### Narration branch (Phase 7, in progress)
+
+The narration pipeline is a second, independent audio spoke that hangs off the
+same digest. It is generic multi-speaker narration, not a news-only podcast.
+
+```
+[generate_tts_activity]  -->  [digest_runs.audio_path]        (single voice, Edge)
+     |
+     v  (opt-in per collection, narration_enabled global kill switch)
+[NarrationWorkflow]        (src/workers/narration_workflows.py)
+     |  dispatched with ActivityOptions(task_queue=<narration_task_queue>)
+     v
+[narration-worker]         (same image, own queue, own activity module)
+     |--> [script activity]  --> LLM (optional) + manual/API editing
+     |--> [render activity]   --> TTS gateway /conversations  (multi-speaker)
+     |                          + ffmpeg music bed + M4A encode
+     v
+[digest_runs.narration_path]  +  audio_jobs row with kind='narration'
+```
+
+Both audio paths coexist on the same run: `audio_jobs` is keyed by
+`(run_id, kind)`, `digest_runs.audio_path` stays reserved for the digest TTS and
+`narration_path` for the narration, and narration files live in
+`data/narration/` so their `.meta.json` sidecars cannot collide with
+`data/tts_cache/`. See Phases.md → Phase 7 and CONVENTIONS.md → Narration.
+
 ---
 
 ## Key Decisions
@@ -157,10 +183,10 @@ news-engine/
 │   │   │                       # 410 Gone alias kept for one release.
 │   │   ├── services/           # Business logic (called by routes AND activities)
 │   │   │                       # incl. collections_repo, voices, temporal_admin
-│   │   ├── models/             # Pydantic schemas
+│   │   ├── models/             # Pydantic schemas (incl. narration, Phase 7)
 │   │   └── db/                 # SQLite layer + migrations
 │   ├── core/
-│   │   ├── config.py           # pydantic-settings
+│   │   ├── config.py           # pydantic-settings (tts_* + narration_*)
 │   │   ├── collections.py      # collections.toml loader (CollectionConfig)
 │   │   ├── prompts.py          # LLM prompt templates + DIGEST_TEMPLATES registry
 │   │   └── llm.py              # LiteLLM wrapper
@@ -171,7 +197,7 @@ news-engine/
 │       ├── run_worker.py       # worker entry point
 │       ├── trigger.py          # manual one-shot run (--collection)
 │       └── schedule.py         # one Temporal schedule per collection
-├── data/                       # SQLite DB + TTS cache (gitignored)
+├── data/                       # SQLite DB + tts_cache/ + narration/ (gitignored)
 ├── tests/
 │   ├── unit/
 │   └── integration/

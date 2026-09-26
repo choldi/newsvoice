@@ -251,6 +251,63 @@ Observability.
 
 ---
 
+## PHASE 7 - Natural Narration (audio multi-speaker)
+
+**Goal:** generar, desde el mismo digest, un piece de audio guionizado con varios
+roles (presentador + invitados), con cama musical local, y entregarlo por los
+mismos canales que el TTS actual. El dominio es genérico: no es "un podcast de
+noticias", es "narración multi-hablante de un documento".
+
+> **Nota de proceso:** la regla de cabecera (no empezar la fase N+1 hasta 3 días
+> estables de la N) se salta aquí por indicación explícita del usuario. La Fase
+> 5.4 (hardening) está mergeada y con la suite en verde como base.
+
+**Decisiones de arquitectura (aprobadas):**
+- Voces vía gateway TTS externo (`ov_api`) con Edge / PocketTTS / OmniVoice y
+  fallback directo a Edge; nunca se llama al SDK de TTS desde routes o workflows
+- Solo audio: "títulos por debajo" son titulares hablados, no rótulos visuales
+- Biblioteca musical **local** (nada de descargas en runtime)
+- Guion generado por LLM + edición/API opcional
+- Activación por colección, con kill switch global
+- Worker y task queue propios (`narration-worker`), misma imagen Docker
+
+**Colisiones resueltas en 7.1 (migración 008):**
+- `audio_jobs` gana `kind` (`tts` | `narration`): el `UNIQUE(run_id)` impedía que
+  el TTS del digest y la narración coexistieran en la misma run
+- `digest_runs` gana `narration_path` (`audio_path` queda reservado al TTS del
+  digest); `record_run` usa `COALESCE` para que el digest no borre la ruta que
+  escribió el worker de narración
+- `narration_scripts` guarda el guion authored (JSON) por run
+- `narration_*` es un namespace de config **propio**: `tts_api_base_url` no se
+  reapunta (lo consume `VoicesService`)
+
+**Scope:**
+- [x] **7.1 Cimientos** — `src/api/models/narration.py` (`SpeakerRole`,
+      `MusicBed`, `NarrationSpec`, `NarrationSegment`, `NarrationScript`) con
+      bounds del contrato del gateway; settings `narration_*`; migración 008;
+      `AudioJobsRepository.kind`; `RunsRepository.narration_path`;
+      `NarrationRepository`; tests
+- [ ] **7.2 Cliente del gateway + render** — health, catálogo de voces,
+      `/tts`, `/conversations`; troceado cliente (el gateway no hace chunking);
+      ensamblado WAV; música con ffmpeg; encode M4A; caché con sidecar
+- [ ] **7.3 Workflow y cola propias** — `narration_activities.py`,
+      `NarrationWorkflow`, `narration-worker` en su task queue, despacho desde
+      `DigestPipelineWorkflow` con `ActivityOptions(task_queue=...)` y actividades
+      por nombre
+- [ ] **7.4 API y GUI** — `POST /api/admin/narration`,
+      `GET /api/admin/narration/voices`, opt-in por colección en
+      `collections.toml` + GUI, player de narración en el detalle de run
+- [ ] **7.5 Guion LLM + ops** — prompts, activity de guion, servicio
+      `narration-worker` en compose, `status.sh`, Deploy.md y Architecture.md
+
+**Success criteria:** una colección opt-in produce un M4A de N minutos con ≥2
+voces distintas, música de fondo, cacheado por hash y entregado por el canal
+configurado, sin tocar el pipeline de audio actual.
+
+**Effort:** 12-16 hours.
+
+---
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable
