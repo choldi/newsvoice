@@ -355,3 +355,59 @@ class NarrationScript(BaseModel):
             Sum of the segment text lengths.
         """
         return sum(len(segment.text) for segment in self.segments)
+
+
+class GatewayHealthOut(BaseModel):
+    """Health of the TTS gateway that serves the narration cast.
+
+    Attributes:
+        reachable: False when the gateway could not be contacted at all.
+        status: Gateway status ('ok', 'degraded', 'not_initialized').
+        engine: Active engine name (e.g. 'routed(edgetts, pocket_tts)').
+        device: Inference device reported by the engine.
+        mode: Engine mode (e.g. 'ROUTED', 'OMNIVOICE', 'MOCK').
+        stock_voices_count: Number of stock voices the engine offers.
+        gpu_available: Whether a GPU is in use.
+        error: Populated when the gateway answered with an error status.
+    """
+
+    reachable: bool = Field(default=True, description="False when the gateway is unreachable")
+    status: str = Field(default="unknown", description="Gateway status")
+    engine: str = Field(default="", description="Active engine name")
+    device: str = Field(default="", description="Inference device")
+    mode: str = Field(default="", description="Engine mode")
+    stock_voices_count: int = Field(default=0, ge=0, description="Stock voices offered")
+    gpu_available: bool = Field(default=False, description="Whether a GPU is in use")
+    error: str | None = Field(default=None, description="Error detail when degraded or down")
+
+
+class NarrationOut(BaseModel):
+    """Result of rendering a narration script to audio.
+
+    Attributes:
+        audio_path: Final deliverable (M4A), ready for the delivery channels.
+        wav_path: Canonical mono 24 kHz WAV master kept in the narration cache.
+        duration_seconds: Measured duration of the master.
+        cached: True when a previous render with identical inputs was reused.
+        segments: Number of script segments rendered.
+        char_count: Number of characters synthesized.
+        voices: Voice ids actually used, in order of first appearance.
+        used_conversations_api: Whether the multi-turn gateway endpoint was used.
+        edge_fallbacks: Number of turns that fell back to a direct Edge call.
+        music: Music track mixed in, if any.
+        title: Program title of the rendered piece.
+    """
+
+    audio_path: str = Field(..., description="Final M4A path for delivery")
+    wav_path: str = Field(..., description="Canonical WAV master path")
+    duration_seconds: float = Field(default=0.0, ge=0.0, description="Measured duration")
+    cached: bool = Field(default=False, description="True when served from cache")
+    segments: int = Field(default=0, ge=0, description="Script segments rendered")
+    char_count: int = Field(default=0, ge=0, description="Characters synthesized")
+    voices: list[str] = Field(default_factory=list, description="Voice ids used")
+    used_conversations_api: bool = Field(
+        default=False, description="True when /conversations was used"
+    )
+    edge_fallbacks: int = Field(default=0, ge=0, description="Turns served by direct Edge")
+    music: str | None = Field(default=None, description="Music track mixed in")
+    title: str = Field(default="", description="Program title")

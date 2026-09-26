@@ -287,9 +287,13 @@ noticias", es "narración multi-hablante de un documento".
       bounds del contrato del gateway; settings `narration_*`; migración 008;
       `AudioJobsRepository.kind`; `RunsRepository.narration_path`;
       `NarrationRepository`; tests
-- [ ] **7.2 Cliente del gateway + render** — health, catálogo de voces,
-      `/tts`, `/conversations`; troceado cliente (el gateway no hace chunking);
-      ensamblado WAV; música con ffmpeg; encode M4A; caché con sidecar
+- [x] **7.2 Cliente del gateway + render** — `NarrationTTSService` con health,
+      catálogo de voces, `/tts` y `/conversations` (estrategia explícita
+      `RenderStrategy.TURNS` por defecto, `CONVERSATIONS` solo con cast
+      homogéneo); troceado cliente (el gateway no hace chunking); ensamblado y
+      normalización a WAV canónico (mono 24 kHz); música local con ffmpeg
+      (loop, fades, ducking); encode M4A; caché con sidecar; tests unitarios y
+      tests de integración con ffmpeg real
 - [ ] **7.3 Workflow y cola propias** — `narration_activities.py`,
       `NarrationWorkflow`, `narration-worker` en su task queue, despacho desde
       `DigestPipelineWorkflow` con `ActivityOptions(task_queue=...)` y actividades

@@ -105,8 +105,10 @@
   single-voice job, `'narration'` for the multi-speaker one. Every
   `AudioJobsRepository` call takes an explicit `kind` (default `'tts'`)
 - Narration audio goes to `narration_cache_dir` (never `tts_cache_dir`) with a
-  `narrate_<collection>_<yymmdd>` stem, so WAV/M4A files and their
-  `.meta.json` sidecars cannot collide with the digest TTS cache
+  `narrate_<collection>_<yymmdd>_<hash8>` stem, so WAV/M4A files and their
+  `.meta.json` sidecars cannot collide with the digest TTS cache. The hash covers
+  the spec, the script, the render strategy and the music bed, so two different
+  renders of the same piece never overwrite each other
 - `digest_runs.narration_path` is written by the narration worker and preserved
   by `record_run` via `COALESCE`; `audio_path` stays reserved for the digest TTS
 - Narration runs on its own task queue served by `narration-worker`. Cross-queue
@@ -115,6 +117,20 @@
 - Narration activities live in `src/workers/narration_activities.py`, not in
   `activities.py`: the digest worker must keep registering exactly the digest
   activity set
+- The render strategy is explicit, never inferred: `RenderStrategy.TURNS`
+  (default) synthesizes every turn, honors per-turn `speed`/`emotion` and the
+  configured pauses; `RenderStrategy.CONVERSATIONS` uses a single
+  `/conversations` request and therefore rejects scripts with per-role speeds or
+  emotions instead of silently ignoring them
+- Narration output is always canonical WAV (mono, 24 kHz, PCM s16le) before it
+  is mixed, compressed or cached. ffmpeg must write to a **temporary file**, not
+  a pipe: on a non-seekable output ffmpeg cannot patch the RIFF sizes and leaves
+  `0xFFFFFFFF` placeholders, which makes the audio look hours long. WAV helpers
+  therefore read the real payload length (`_data_span`) instead of the declared
+  frame count
+- The music bed is cosmetic: if ffmpeg fails, `NarrationTTSService._mix_music`
+  logs a warning and returns the narration unmuted rather than losing the render.
+  A missing or escaping track is an error, not a silent fallback
 
 ## Collections (Phase 5)
 - Collections live in `collections.toml` (see `collections.toml.example`),
