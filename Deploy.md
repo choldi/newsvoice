@@ -36,6 +36,9 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
    - `ADMIN_API_TOKEN` — token for the admin web GUI (`/ui`) and the admin REST
      API (`/api/admin/*`). Leave empty to keep the GUI locked (secure default).
      Generate one with `openssl rand -hex 24`.
+   - **Preferred**: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt). The login
+     form will use username/password instead of the token. Generate the hash
+     with: `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"`
 4. Copy `collections.toml.example` to `collections.toml` and define your
    collections (names, feed URLs, per-collection schedule `time`, TTS flags,
    prompt templates, optional per-collection `chat_id`)
@@ -52,7 +55,9 @@ docker compose up -d --build
 This starts:
 - `api` — FastAPI on `:8000` (serves the REST API, `/api/admin/*`, and the
   admin GUI at `/ui`)
-- `worker` — Temporal worker polling the dev task queue
+- `worker` — Temporal worker polling the digest task queue
+- `narration-worker` — Temporal worker polling the narration task queue
+  (multi-speaker audio; Phase 7)
 - `temporal` — Temporal server on `:7233`
 - `temporal-ui` — Temporal web UI on `:8080`
 - `temporal-postgres` — Postgres backing the Temporal server
@@ -102,6 +107,60 @@ docker compose exec worker python -m src.workers.schedule
 
 This registers `daily-digest-<name>` schedules for every enabled collection.
 Target a single collection with `--collection <name>`.
+
+### Narration (Phase 7)
+
+From 7.3+, the same digest can also produce a **multi-speaker narration**
+audio piece (M4A with music bed). The narration runs on its own task queue
+and has its own worker (`narration-worker`).
+
+Enable it per-collection in `collections.toml`:
+
+```toml
+[[collections]]
+name = "tech"
+# ... other fields ...
+narration_enabled = true
+narration_strategy = "turns"          # "turns" (default) or "conversations"
+narration_spec = { title = "Tech Brief", language = "es", roles = [
+    {name="anchor", voice_id="es-mx-male"},
+    {name="expert", voice_id="es-mx-female"}
+], pause_ms = 400, music = {track="bed.mp3", volume_db=-18, fade_in_ms=2000, fade_out_ms=3000} }
+```
+
+Global kill switch: `NARRATION_ENABLED=false` in `.env` disables narration
+for all collections.
+
+The narration spec fields:
+- `roles`: array of 1-8 roles with `name`, `voice_id`, optional `speed`,
+  `emotion`, `language`
+- `music`: optional local file in `NARRATION_MUSIC_DIR` with fades and ducking
+- `pause_ms`: silence between turns (0-5000 ms)
+- `narration_strategy`: "turns" (one request per segment) or "conversations"
+  (single request; requires homogeneous cast — no per-role speed/emotion)
+
+The narration worker uses the same TTS gateway as the digest TTS
+(`NARRATION_API_BASE_URL` or `TTS_API_BASE_URL` as fallback) and writes
+audio to `NARRATION_CACHE_DIR` (`data/narration/`), separate from the digest
+TTS cache.
+
+### Manual narration render (admin API / CLI)
+
+Trigger a one-off narration from the GUI (`POST /api/admin/narration`) or
+CLI:
+
+```bash
+# With inline script (JSON files)
+docker compose exec worker python -m src.workers.trigger_narration \
+  --collection tech --spec spec.json --script script.json
+
+# With stored script
+docker compose exec worker python -m src.workers.trigger_narration \
+  --collection tech --spec spec.json --script-id 12
+```
+
+The narration worker is started automatically by `docker compose up` (see
+service `narration-worker` in `docker-compose.yml`).
 
 Optional: force-enable TTS audio in all scheduled runs with `--tts`.
 

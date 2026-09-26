@@ -858,37 +858,51 @@ async def ui_login_page(request: Request) -> HTMLResponse:
     Returns:
         HTMLResponse for the login page.
     """
-    return _render(request, "login.html", {})
+    from src.core.config import settings
+
+    use_legacy_token = bool(settings.admin_api_token) and not settings.admin_username
+    return _render(request, "login.html", {"use_legacy_token": use_legacy_token})
 
 
 @router.post("/ui/login", include_in_schema=False)
 async def ui_login(request: Request) -> RedirectResponse:
-    """Validate the admin token and set the session cookie.
+    """Validate admin credentials and set the session cookie.
 
     Args:
-        request: Incoming request with the token form field.
+        request: Incoming request with form fields.
 
     Returns:
         Redirect to /ui/collections on success, back to login on failure.
     """
-    from src.api.auth import ADMIN_COOKIE_NAME
+    from src.api.auth import ADMIN_COOKIE_NAME, _password_ok, _token_ok
     from src.core.config import settings
 
     fields = await _form(request)
-    token = fields.get("token", "").strip()
-    expected = (settings.admin_api_token or "").strip()
-    if not expected:
-        return _flash(
-            "/ui/login",
-            "ADMIN_API_TOKEN no configurado. Añádelo al .env y reinicia.",
-            "error",
-        )
-    if token != expected:
-        return _flash("/ui/login", "Token incorrecto", "error")
+
+    # Username/password flow (preferred when ADMIN_USERNAME is set)
+    if settings.admin_username:
+        username = fields.get("username", "").strip()
+        password = fields.get("password", "")
+        if username != settings.admin_username or not _password_ok(password):
+            return _flash("/ui/login", "Usuario o contraseña incorrectos", "error")
+    else:
+        # Legacy token flow
+        token = fields.get("token", "").strip()
+        expected = (settings.admin_api_token or "").strip()
+        if not expected:
+            return _flash(
+                "/ui/login",
+                "ADMIN_API_TOKEN no configurado. Añádelo al .env y reinicia.",
+                "error",
+            )
+        if not _token_ok(token):
+            return _flash("/ui/login", "Token incorrecto", "error")
+        password = token  # store token in cookie for middleware
+
     response = RedirectResponse("/ui/collections", status_code=302)
     response.set_cookie(
         ADMIN_COOKIE_NAME,
-        token,
+        password,
         httponly=True,
         samesite="lax",
         max_age=12 * 60 * 60,

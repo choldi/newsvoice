@@ -286,3 +286,86 @@ TEMPLATE_PRIORITY_RULES: dict[str, str] = {
         " and novelty of findings drive the ordering."
     ),
 }
+
+
+# =====================================================================
+# NARRATION SCRIPT GENERATION (Phase 7.5)
+# =====================================================================
+
+NARRATION_SCRIPT_SYSTEM_PROMPT = """You are an expert news narrator and scriptwriter.
+Your task is to turn a news digest (5 Main Stories + 5 Headlines) into a
+multi-speaker audio script for a narration cast.
+
+INPUT:
+- A markdown digest with "Top 5 Main Stories" and "Top 5 Quick Headlines".
+- A NarrationSpec defining the cast (roles), default language, pause timing,
+  music bed, and render strategy (TURNS or CONVERSATIONS).
+
+OUTPUT:
+A JSON object matching the NarrationScript schema with these fields:
+- source: "llm" (this is always LLM-generated)
+- language: ISO 639-1 code from the spec
+- title: Program title from the spec
+- segments: Array of segment objects, each with:
+    - role: Role name from the spec.roles (must match exactly)
+    - text: Spoken text for this segment (clean, no markdown, no emotion tags)
+    - emotion: Optional emotion tag from EMOTION_TAGS (only if the spec role
+      allows it and the content calls for it)
+    - pause_ms: Optional override of the default pause (ms)
+
+RULES:
+1. The script must cover ALL 5 Main Stories and ALL 5 Headlines, in order.
+2. Distribute speaking time across the available roles as naturally as possible.
+   If only 1 role exists, that role speaks everything.
+3. For TURNS strategy: each segment is one turn. Aim for ~2-4 turns per story.
+4. For CONVERSATIONS strategy: write as a continuous dialogue with role
+   transitions; the renderer will send the whole conversation in one request.
+5. Emotion tags are ONLY allowed when the spec role permits them (OmniVoice
+   backend). Use sparingly: happy, sad, angry, excited, calm, nervous, whisper,
+   singing. If the spec role has a fixed emotion default, you may omit it.
+6. Text must be spoken-form: no markdown, no bullet points, no URLs, no
+   bracketed source citations. Convert to natural speech.
+7. Keep each segment's text under the spec's max_chars_per_request limit.
+8. The total script should render to roughly 3-6 minutes of audio.
+9. Output ONLY the JSON object. No markdown, no explanation, no extra keys.
+"""
+
+NARRATION_SCRIPT_USER_PROMPT_TEMPLATE = """Digest to narrate (Markdown):
+{digest_markdown}
+
+Narration Spec (JSON):
+{spec_json}
+
+Generate the NarrationScript JSON now.
+"""
+
+# Registry of per-collection narration script prompts (extensible for Phase 7.5+)
+NARRATION_SCRIPT_TEMPLATES: dict[str, str] = {
+    "default": NARRATION_SCRIPT_SYSTEM_PROMPT,
+}
+
+
+def get_narration_script_template(name: str | None) -> str:
+    """Return the system prompt for a narration script template name.
+
+    Args:
+        name: Template name from the NARRATION_SCRIPT_TEMPLATES registry.
+
+    Returns:
+        The system prompt string to use for narration script generation.
+    """
+    if not name or name not in NARRATION_SCRIPT_TEMPLATES:
+        return NARRATION_SCRIPT_SYSTEM_PROMPT
+    return NARRATION_SCRIPT_TEMPLATES[name]
+
+
+def build_narration_script_system_prompt(template: str | None = None) -> str:
+    """Build the narration script system prompt.
+
+    Args:
+        template: Template name from NARRATION_SCRIPT_TEMPLATES. Empty/None = default.
+
+    Returns:
+        The system prompt for narration script generation.
+    """
+    return get_narration_script_template(template)

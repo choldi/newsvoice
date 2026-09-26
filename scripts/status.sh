@@ -91,7 +91,7 @@ fi
 # 1. Docker Compose services
 # ---------------------------------------------------------------------------
 section "1. Docker Compose services"
-SERVICES=(api worker temporal temporal-ui temporal-postgres)
+SERVICES=(api worker narration-worker temporal temporal-ui temporal-postgres)
 if ! command -v docker >/dev/null 2>&1; then
     fail "docker binary not found"
 else
@@ -142,7 +142,7 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Worker status (log-derived — no health endpoint exists)
 # ---------------------------------------------------------------------------
-section "4. Temporal worker"
+section "4. Temporal workers"
 WORKER_SIGS="$(docker compose logs worker --tail 200 2>/dev/null | grep -c 'worker_running')"
 if [[ "${WORKER_SIGS:-0}" -ge 1 ]]; then
     ok "worker reached 'worker_running' state"
@@ -154,6 +154,19 @@ if [[ "${WORKER_ERRS:-0}" -gt 0 ]]; then
     warn "${WORKER_ERRS} error/exception line(s) in worker logs (tail 200)"
 else
     ok "no error/exception lines in worker log tail"
+fi
+
+NARR_WORKER_SIGS="$(docker compose logs narration-worker --tail 200 2>/dev/null | grep -c 'worker_running')"
+if [[ "${NARR_WORKER_SIGS:-0}" -ge 1 ]]; then
+    ok "narration-worker reached 'worker_running' state"
+else
+    fail "narration-worker has not logged 'worker_running' in the last 200 lines"
+fi
+NARR_WORKER_ERRS="$(docker compose logs narration-worker --tail 200 2>/dev/null | grep -icE '\b(error|exception|traceback)\b')"
+if [[ "${NARR_WORKER_ERRS:-0}" -gt 0 ]]; then
+    warn "${NARR_WORKER_ERRS} error/exception line(s) in narration-worker logs (tail 200)"
+else
+    ok "no error/exception lines in narration-worker log tail"
 fi
 
 # ---------------------------------------------------------------------------

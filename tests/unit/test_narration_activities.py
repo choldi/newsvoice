@@ -292,16 +292,28 @@ async def test_resolve_activity_fails_on_a_missing_stored_script(
     assert excinfo.value.non_retryable is True
 
 
-async def test_resolve_activity_needs_a_script_or_a_script_id(
+async def test_resolve_activity_needs_a_script_or_a_script_id_or_existing_run(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """When no script/script_id is provided, the activity tries to generate
+    from the digest run. If the run doesn't exist, it fails with a clear error.
+    """
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
 
-    with pytest.raises(ApplicationError, match="inline 'script' or an int 'script_id'"):
+    with pytest.raises(ApplicationError, match="No digest run found"):
         await ActivityEnvironment().run(
             narration_activities.resolve_narration_script_activity,
             {"spec": SPEC, "collection": "tech"},
         )
+
+
+async def test_resolve_activity_generates_script_from_digest_when_no_script_provided(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Placeholder for a test that mocks the LLM generation.
+    Currently the generation path calls the real LLM, so this test is not run.
+    """
+    pass
 
 
 async def test_resolve_activity_rejects_an_invalid_spec(

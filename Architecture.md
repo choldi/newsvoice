@@ -25,7 +25,8 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 |-----------|------|------------|
 | **temporal** | Orchestration, scheduling, retries | Temporal.io server (`temporalio/auto-setup`) |
 | **temporal-ui** | Web UI for workflows / schedules | `temporalio/ui` |
-| **worker** | Runs the workflow + activities | Python `temporalio.worker.Worker` |
+| **worker** | Runs the digest workflow + activities | Python `temporalio.worker.Worker` |
+| **narration-worker** | Runs the narration workflow + activities | Python `temporalio.worker.Worker` |
 | **api** | Business logic via REST endpoints | FastAPI + Python 3.11+ |
 | **llm** | Local inference server | `llama.cpp` (`/v1/chat/completions`) via LiteLLM |
 | **db** | Delivery history, dedup state | SQLite (`news.db`) |

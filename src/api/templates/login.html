@@ -3,6 +3,7 @@
 {% block login %}
 <div class="card login-box">
   <h2>Acceso admin</h2>
+  {% if use_legacy_token %}
   <form method="post" action="/ui/login">
     <label>Token (ADMIN_API_TOKEN)</label>
     <input type="password" name="token" required autofocus>
@@ -10,5 +11,16 @@
       <button type="submit" class="primary" style="width:100%">Entrar</button>
     </div>
   </form>
+  {% else %}
+  <form method="post" action="/ui/login">
+    <label>Usuario</label>
+    <input type="text" name="username" required autofocus autocomplete="username">
+    <label style="margin-top:10px">Contraseña</label>
+    <input type="password" name="password" required autocomplete="current-password">
+    <div style="margin-top:14px">
+      <button type="submit" class="primary" style="width:100%">Entrar</button>
+    </div>
+  </form>
+  {% endif %}
 </div>
 {% endblock %}

@@ -36,6 +36,7 @@ LOCAL_RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 
 #: Activity names, kept as constants because they are resolved by string.
 RESOLVE_SCRIPT_ACTIVITY = "resolve_narration_script_activity"
+GENERATE_SCRIPT_ACTIVITY = "generate_narration_script_activity"
 RENDER_NARRATION_ACTIVITY = "render_narration_activity"
 
 

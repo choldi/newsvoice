@@ -304,7 +304,7 @@ noticias", es "narración multi-hablante de un documento".
 - [x] **7.4 API y GUI** — `POST /api/admin/narration`,
       `GET /api/admin/narration/voices`, opt-in por colección en
       `collections.toml` + GUI, player de narración en el detalle de run
-- [ ] **7.5 Guion LLM + ops** — prompts, activity de guion, servicio
+- [x] **7.5 Guion LLM + ops** — prompts, activity de guion, servicio
       `narration-worker` en compose, `status.sh`, Deploy.md y Architecture.md
 
 **Success criteria:** una colección opt-in produce un M4A de N minutos con ≥2

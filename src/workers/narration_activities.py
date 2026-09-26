@@ -76,13 +76,15 @@ def _run_id(payload: dict[str, Any]) -> str:
 async def resolve_narration_script_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Resolve the script a narration run will render.
 
-    The script is either carried inline by the caller or already stored by the
-    admin API and referenced by id. Validating it against the spec here means a
-    role typo fails fast, before the (expensive) render activity runs.
+    The script is either carried inline by the caller, already stored by the
+    admin API and referenced by id, or generated on-the-fly from the digest
+    using the LLM. Validating it against the spec here means a role typo fails
+    fast, before the (expensive) render activity runs.
 
     Args:
         payload: Dict with ``spec``, plus ``script`` (inline script) or
-            ``script_id`` (row id in ``narration_scripts``).
+            ``script_id`` (row id in ``narration_scripts``). If neither is
+            provided, the activity generates a script from the digest run.
 
     Returns:
         Dict with the validated ``script``, its ``source`` and ``title``.
@@ -103,14 +105,16 @@ async def resolve_narration_script_activity(payload: dict[str, Any]) -> dict[str
     stored: NarrationScript | None = None
     if not isinstance(inline, dict):
         script_id = payload.get("script_id")
-        if not isinstance(script_id, int):
-            raise ApplicationError(
-                "Narration needs an inline 'script' or an int 'script_id'",
-                non_retryable=True,
-            )
-        stored = await NarrationRepository().get_script(script_id)
-        if stored is None:
-            raise ApplicationError(f"Narration script {script_id} not found", non_retryable=True)
+        if isinstance(script_id, int):
+            stored = await NarrationRepository().get_script(script_id)
+            if stored is None:
+                raise ApplicationError(
+                    f"Narration script {script_id} not found", non_retryable=True
+                )
+        else:
+            # No inline script and no script_id: generate from the digest
+            generated = await generate_narration_script_activity(payload)
+            return generated
 
     try:
         script = NarrationScript.model_validate(inline or stored, context={"spec": spec})
@@ -207,3 +211,120 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     payload = result.model_dump()
     payload["run_attached"] = bool(updated)
     return payload
+
+
+@activity.defn
+async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate a narration script from a digest using the local LLM (LiteLLM).
+
+    This activity runs inside the narration worker and is called by the
+    NarrationWorkflow when the caller does not provide an inline script or a
+    stored script_id. It reads the digest from the run, builds the prompt with
+    the spec, calls the LLM, validates the returned JSON against the
+    NarrationScript model, and returns the script for the render activity.
+
+    Args:
+        payload: Dict with ``spec``, ``collection``, optional ``run_id`` and
+            ``prompt_template`` (defaults to "default").
+
+    Returns:
+        Dict with the validated ``script`` (NarrationScript dump) plus metadata.
+
+    Raises:
+        ApplicationError: If the LLM call fails, the response is not valid JSON,
+            or the script fails validation. Non-retryable for validation errors.
+    """
+    import json
+
+    from litellm import acompletion
+    from pydantic import ValidationError
+
+    from src.api.db.database import RunsRepository
+    from src.api.models.narration import NarrationScript, NarrationSpec
+    from src.core.config import settings
+    from src.core.prompts import (
+        NARRATION_SCRIPT_USER_PROMPT_TEMPLATE,
+        build_narration_script_system_prompt,
+    )
+
+    raw_spec = payload.get("spec")
+    if not isinstance(raw_spec, dict):
+        raise ApplicationError("Narration activity needs a 'spec' dict", non_retryable=True)
+    try:
+        spec = NarrationSpec.model_validate(raw_spec)
+    except ValidationError as exc:
+        raise ApplicationError(f"Invalid narration spec: {exc}", non_retryable=True) from exc
+
+    run_id = _run_id(payload)
+    collection = str(payload.get("collection") or "default")
+    prompt_template = str(payload.get("prompt_template") or "default")
+
+    # Fetch the digest text from the run
+    row = await RunsRepository().get_run_by_workflow_id(run_id)
+    if not row:
+        raise ApplicationError(f"No digest run found for workflow_id={run_id}", non_retryable=True)
+    digest_markdown = row.get("digest_preview") or row.get("digest") or ""
+    if not digest_markdown:
+        raise ApplicationError(f"Digest run {run_id} has no digest text", non_retryable=True)
+
+    system_prompt = build_narration_script_system_prompt(prompt_template)
+    user_prompt = NARRATION_SCRIPT_USER_PROMPT_TEMPLATE.format(
+        digest_markdown=digest_markdown,
+        spec_json=spec.model_dump_json(indent=2),
+    )
+
+    activity.logger.info(
+        "Generating narration script via LLM",
+        collection=collection,
+        run_id=run_id,
+        template=prompt_template,
+    )
+    try:
+        response = await acompletion(
+            model=settings.llm_model,
+            api_base=settings.llm_api_base,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=settings.llm_max_tokens,
+            timeout=settings.llm_timeout_seconds,
+        )
+    except Exception as exc:
+        raise ApplicationError(f"LLM call for narration script failed: {exc}") from exc
+
+    content = response.choices[0].message.content or ""
+    activity.logger.info("LLM narration script response length", length=len(content))
+
+    # Extract JSON from the response (LLM may wrap in markdown code fences)
+    import re
+
+    json_match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not json_match:
+        raise ApplicationError(
+            f"LLM did not return a JSON object for narration script: {content[:200]}",
+            non_retryable=True,
+        )
+    try:
+        script_data = json.loads(json_match.group(0))
+    except json.JSONDecodeError as exc:
+        raise ApplicationError(
+            f"LLM returned invalid JSON for narration script: {exc}", non_retryable=True
+        ) from exc
+
+    # Validate the script against the spec
+    try:
+        script = NarrationScript.model_validate(script_data, context={"spec": spec})
+    except ValidationError as exc:
+        raise ApplicationError(
+            f"Generated narration script failed validation: {exc}", non_retryable=True
+        ) from exc
+
+    return {
+        "script": script.model_dump(),
+        "source": "llm",
+        "title": script.title,
+        "segments": len(script.segments),
+        "char_count": script.total_chars(),
+    }

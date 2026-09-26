@@ -22,6 +22,7 @@ dependencies = [
     "temporalio>=1.32.0",
     "feedparser>=6.0.10",
     "markdown>=3.0.0",
+    "bcrypt>=4.1.0",
 ]
 
 [project.optional-dependencies]

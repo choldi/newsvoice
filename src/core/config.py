@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     tts_audio_bitrate_kbps: int = Field(default=48, ge=16, le=320)
     admin_api_token: str = ""
+    # --- Admin GUI authentication ---
+    # When admin_username is set, the login form uses username/password instead
+    # of the legacy ADMIN_API_TOKEN. Generate admin_password_hash with:
+    # python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"
+    admin_username: str = ""
+    admin_password_hash: str = ""
 
     # --- Narration (Phase 7) ------------------------------------------------
     # Master switch for the multi-speaker narration pipeline. Collections opt in

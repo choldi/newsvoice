@@ -532,6 +532,27 @@ class RunsRepository:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
+    async def get_run_by_workflow_id(self, workflow_id: str) -> dict | None:
+        """Return a single run by its Temporal workflow id.
+
+        Args:
+            workflow_id: Workflow id of the digest run.
+
+        Returns:
+            The run dict, or None if not found.
+        """
+        query = """
+            SELECT id, workflow_id, collection, status, article_count, cluster_count,
+                   digest_preview, audio_path, narration_path, error, started_at,
+                   completed_at
+            FROM digest_runs
+            WHERE workflow_id = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (workflow_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
     async def set_narration_path(self, workflow_id: str, narration_path: str) -> int:
         """Attach a generated narration file to an existing run.
 
