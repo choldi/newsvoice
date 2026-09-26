@@ -290,6 +290,155 @@ def test_delivery_channels_round_trip_via_gui() -> None:
     assert page.text.count(email_checkbox) == 1
 
 
+def test_whatsapp_round_trip_via_gui() -> None:
+    """Creating and updating a collection preserves its WhatsApp destinations."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "delivery_channels": ["telegram", "whatsapp"],
+            "whatsapp_recipients": "+34600111222, +34600333444",
+            "whatsapp_group_id": "1234567890",
+        },
+    )
+
+    page = client.get("/ui/collections")
+    assert "+34600111222" in page.text
+    assert "+34600333444" in page.text
+    assert 'name="whatsapp_group_id" value="1234567890"' in page.text
+    assert 'name="delivery_channels" value="whatsapp" checked' in page.text
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "08:00",
+            "feed_urls": "https://a/rss",
+            "delivery_channels": ["telegram", "whatsapp"],
+            "whatsapp_recipients": "+34600555555",
+            "whatsapp_group_id": "9876543210",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert "+34600555555" in page.text
+    assert 'name="whatsapp_group_id" value="9876543210"' in page.text
+    assert "+34600111222" not in page.text
+
+
+def test_logic_delivery_round_trip_via_gui() -> None:
+    """The logic delivery block survives a GUI create and a GUI update."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "logic_channels": ["telegram", "whatsapp"],
+            "logic_chat_id": "-100123456",
+            "logic_email_recipients": "logic@example.com",
+            "logic_whatsapp_recipients": "+34600777777",
+            "logic_whatsapp_group_id": "555000111",
+        },
+    )
+
+    page = client.get("/ui/collections")
+    assert 'name="logic_chat_id" value="-100123456"' in page.text
+    assert "logic@example.com" in page.text
+    assert "+34600777777" in page.text
+    assert 'name="logic_whatsapp_group_id" value="555000111"' in page.text
+    assert 'name="logic_channels" value="whatsapp" checked' in page.text
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "08:00",
+            "feed_urls": "https://a/rss",
+            "logic_channels": ["telegram", "whatsapp"],
+            "logic_chat_id": "-100999888",
+            "logic_whatsapp_recipients": "+34600888888",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert 'name="logic_chat_id" value="-100999888"' in page.text
+    assert "+34600888888" in page.text
+    assert "+34600777777" not in page.text
+
+
+def test_logic_delivery_preserved_when_form_omits_the_block() -> None:
+    """An update that does not send the logic block keeps the stored config."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "logic_channels": ["telegram"],
+            "logic_chat_id": "-100123456",
+        },
+    )
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "09:00",
+            "feed_urls": "https://a/rss",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert 'name="logic_chat_id" value="-100123456"' in page.text
+    assert 'name="logic_channels" value="telegram" checked' in page.text
+
+
+def test_logic_delivery_cleared_when_block_is_emptied() -> None:
+    """Sending the logic block with every field empty disables the destination."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "tech",
+            "feed_urls": "https://a/rss",
+            "logic_channels": ["telegram"],
+            "logic_chat_id": "-100123456",
+        },
+    )
+
+    updated = client.post(
+        "/ui/collections/tech/update",
+        data={
+            "new_name": "tech",
+            "time": "08:00",
+            "feed_urls": "https://a/rss",
+            "logic_chat_id": "",
+            "logic_email_recipients": "",
+            "logic_whatsapp_recipients": "",
+            "logic_whatsapp_group_id": "",
+        },
+        follow_redirects=False,
+    )
+    assert updated.status_code == 302
+
+    page = client.get("/ui/collections")
+    assert "-100123456" not in page.text
+    assert page.text.count('name="logic_channels" value="telegram" checked') == 0
+
+
 def test_delivery_channels_default_to_telegram_when_unset() -> None:
     """With no delivery_channels checkboxes, creation defaults to telegram."""
     client = _ui_client()

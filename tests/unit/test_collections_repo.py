@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.api.services.collections_repo import (
+    _COLLECTION_KEYS,
     CollectionConflictError,
     CollectionsRepository,
 )
@@ -220,6 +221,70 @@ def test_logic_delivery_round_trip(tmp_path: Path) -> None:
     assert reloaded.logic_delivery is not None
     assert reloaded.logic_delivery.channels == ["email"]
     assert reloaded.logic_delivery.email_recipients == ["admin@example.com"]
+    load_collections.cache_clear()
+
+
+def test_collection_keys_cover_every_model_field() -> None:
+    """Guard: a new CollectionConfig field must be added to _COLLECTION_KEYS.
+
+    Without this test a field missing from the serializer is silently dropped
+    from the file on the next rewrite.
+    """
+    assert set(_COLLECTION_KEYS) == set(CollectionConfig.model_fields)
+
+
+def test_whatsapp_round_trip(tmp_path: Path) -> None:
+    """whatsapp_recipients and whatsapp_group_id survive the TOML round trip."""
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    repo = CollectionsRepository(str(path))
+    tech = _tech().model_copy(
+        update={
+            "delivery_channels": ["telegram", "whatsapp"],
+            "whatsapp_recipients": ["+34600111222", "+34600333444"],
+            "whatsapp_group_id": "1234567890",
+        }
+    )
+    repo.save_all([tech])
+
+    raw = path.read_text(encoding="utf-8")
+    assert "whatsapp_recipients = ['+34600111222', '+34600333444']" in raw
+    assert "whatsapp_group_id = '1234567890'" in raw
+
+    reloaded = CollectionsRepository(str(path)).list()[0]
+    assert reloaded.whatsapp_recipients == ["+34600111222", "+34600333444"]
+    assert reloaded.whatsapp_group_id == "1234567890"
+    assert reloaded.delivery_channels == ["telegram", "whatsapp"]
+    load_collections.cache_clear()
+
+
+def test_logic_delivery_whatsapp_round_trip(tmp_path: Path) -> None:
+    """The WhatsApp destinations of logic_delivery survive the round trip."""
+    from src.core.collections import LogicDeliveryConfig
+
+    path = _file(tmp_path)
+    _write(path, VALID_HEADER + "[collection_defaults]\n")
+    repo = CollectionsRepository(str(path))
+    tech = _tech().model_copy(
+        update={
+            "logic_delivery": LogicDeliveryConfig(
+                channels=["telegram", "whatsapp"],
+                whatsapp_recipients=["+34600555555"],
+                whatsapp_group_id="9876543210",
+            )
+        }
+    )
+    repo.save_all([tech])
+
+    raw = path.read_text(encoding="utf-8")
+    assert "whatsapp_recipients = ['+34600555555']" in raw
+    assert "whatsapp_group_id = '9876543210'" in raw
+
+    reloaded = CollectionsRepository(str(path)).list()[0].logic_delivery
+    assert reloaded is not None
+    assert reloaded.channels == ["telegram", "whatsapp"]
+    assert reloaded.whatsapp_recipients == ["+34600555555"]
+    assert reloaded.whatsapp_group_id == "9876543210"
     load_collections.cache_clear()
 
 

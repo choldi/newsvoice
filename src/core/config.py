@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     tts_cache_dir: str = "data/tts_cache"
     tts_api_base_url: str = "http://debwk.elver-exponential.ts.net:8000/api/v1"
     tts_api_key: str = ""
+    # Kill switch for the admin TTS HTTP endpoint (POST /api/admin/tts). The
+    # Temporal activities call the service directly, so setting this to false
+    # only closes the HTTP surface. The former public POST /api/generate_tts
+    # always answers 410 Gone.
+    tts_api_enabled: bool = True
     tts_language: str = "es"
     tts_voice: str = "es-MX-JorgeNeural"
     tts_max_chars: int = Field(default=5000, gt=0)

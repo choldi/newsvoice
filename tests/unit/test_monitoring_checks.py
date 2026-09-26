@@ -1,5 +1,6 @@
 """Unit tests for the system-monitor checks."""
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -298,6 +299,21 @@ class _FakeRuns:
         return [r for r in self.runs if not collection or r.get("collection") == collection][:limit]
 
 
+def _ago(hours: int) -> str:
+    """Build an ISO timestamp relative to now.
+
+    Run freshness is compared against `now - 36h`, so fixtures must be relative
+    to the current time or they silently rot into 'stale' assertions.
+
+    Args:
+        hours: How many hours in the past the timestamp is.
+
+    Returns:
+        ISO 8601 timestamp in UTC.
+    """
+    return (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+
+
 async def test_check_digest_runs_ok(tmp_path: Path) -> None:
     _write_collections(tmp_path)
     runs = _FakeRuns(
@@ -307,20 +323,48 @@ async def test_check_digest_runs_ok(tmp_path: Path) -> None:
                 "status": "ok",
                 "article_count": 5,
                 "audio_path": "x.mp3",
-                "completed_at": "2026-09-21T09:00:00+00:00",
+                "completed_at": _ago(2),
             },
             {
                 "collection": "health",
                 "status": "no_new_articles",
                 "article_count": 0,
                 "audio_path": None,
-                "completed_at": "2026-09-21T09:30:00+00:00",
+                "completed_at": _ago(1),
             },
         ]
     )
     ctx = CheckContext(runs_repo=runs)  # type: ignore[arg-type]
     result = await check_digest_runs(ctx)
     assert result.status == "ok"
+
+
+async def test_check_digest_runs_stale_warns(tmp_path: Path) -> None:
+    """A last run older than the freshness cutoff warns for that collection."""
+    _write_collections(tmp_path)
+    runs = _FakeRuns(
+        [
+            {
+                "collection": "tech",
+                "status": "ok",
+                "article_count": 5,
+                "audio_path": "x.mp3",
+                "completed_at": _ago(48),
+            },
+            {
+                "collection": "health",
+                "status": "no_new_articles",
+                "article_count": 0,
+                "audio_path": None,
+                "completed_at": _ago(1),
+            },
+        ]
+    )
+    ctx = CheckContext(runs_repo=runs)  # type: ignore[arg-type]
+    result = await check_digest_runs(ctx)
+    assert result.status == "warning"
+    assert "tech: ok" in result.detail
+    assert "health: no_new_articles" in result.detail
 
 
 async def test_check_digest_runs_failed_warns(tmp_path: Path) -> None:
@@ -332,7 +376,7 @@ async def test_check_digest_runs_failed_warns(tmp_path: Path) -> None:
                 "status": "failed",
                 "article_count": 0,
                 "audio_path": None,
-                "completed_at": "2026-09-21T09:00:00+00:00",
+                "completed_at": _ago(1),
                 "error": "llm timeout",
             }
         ]

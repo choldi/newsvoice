@@ -1,5 +1,6 @@
 """Unit tests for TTSService (Edge neural voices via edge-tts)."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -87,9 +88,16 @@ def test_markdown_to_speech_text_strips_markdown_keeps_emotion() -> None:
 
 
 async def test_generate_tts_uses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_tts returns cached=True when the audio file already exists."""
+    """generate_tts returns cached=True when audio and sidecar match the content."""
     _reset_voices_cache(monkeypatch)
-    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    synthesis: list[str] = []
+
+    class RecordingCommunicate(_FakeCommunicate):
+        async def stream(self):
+            synthesis.append(self.text)
+            yield {"type": "audio", "data": _FAKE_MP3}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
     service = TTSService(cache_dir=str(tmp_path))
     payload = TTSIn(
         markdown="hola mundo",
@@ -98,13 +106,143 @@ async def test_generate_tts_uses_cache(tmp_path: Path, monkeypatch: pytest.Monke
         collection="health",
     )
 
-    cached_file = tmp_path / _audio_filename("health")
-    cached_file.write_bytes(_FAKE_MP3)
+    first = await service.generate_tts(payload)
+    assert first.cached is False
+    assert len(synthesis) == 1
 
-    result = await service.generate_tts(payload)
-    assert result.cached is True
-    assert result.audio_path == str(cached_file)
-    assert result.voice == "es-MX-JorgeNeural"
+    second = await service.generate_tts(payload)
+    assert second.cached is True
+    assert second.audio_path == first.audio_path
+    assert len(synthesis) == 1
+    assert Path(second.audio_path).read_bytes() == _FAKE_MP3
+
+
+async def test_generate_tts_regenerates_when_markdown_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing the digest invalidates the cached audio (the P1 bug)."""
+    _reset_voices_cache(monkeypatch)
+    synthesis: list[str] = []
+
+    class RecordingCommunicate(_FakeCommunicate):
+        async def stream(self):
+            synthesis.append(self.text)
+            yield {"type": "audio", "data": _FAKE_MP3 + b"new" * 10}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+    base = {"voice": "es-MX-JorgeNeural", "language": "es", "collection": "health"}
+
+    first = await service.generate_tts(TTSIn(markdown="**hola** mundo", **base))
+    assert first.cached is False
+
+    same = await service.generate_tts(TTSIn(markdown="hola mundo", **base))
+    assert same.cached is True
+    assert len(synthesis) == 1
+
+    changed = await service.generate_tts(TTSIn(markdown="hola mundo Again", **base))
+    assert changed.cached is False
+    assert changed.audio_path == first.audio_path
+    assert len(synthesis) == 2
+    assert Path(changed.audio_path).read_bytes() == _FAKE_MP3 + b"new" * 10
+
+
+async def test_generate_tts_regenerates_when_voice_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A different resolved voice for the same text invalidates the cache."""
+    _reset_voices_cache(monkeypatch)
+    synthesis: list[tuple[str, str]] = []
+
+    class RecordingCommunicate(_FakeCommunicate):
+        async def stream(self):
+            synthesis.append((self.text, self.voice))
+            yield {"type": "audio", "data": _FAKE_MP3}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+    first = await service.generate_tts(
+        TTSIn(markdown="hola", voice="es-MX-JorgeNeural", language="es", collection="tech")
+    )
+    assert first.cached is False
+
+    second = await service.generate_tts(
+        TTSIn(markdown="hola", voice="es-mx-female", language="es", collection="tech")
+    )
+    assert second.cached is False
+    assert synthesis[-1][1] == "es-MX-DaliaNeural"
+
+
+async def test_generate_tts_regenerates_when_sidecar_is_missing_or_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy or corrupted cache without a matching sidecar is regenerated."""
+    _reset_voices_cache(monkeypatch)
+    synthesis: list[str] = []
+
+    class RecordingCommunicate(_FakeCommunicate):
+        async def stream(self):
+            synthesis.append(self.text)
+            yield {"type": "audio", "data": _FAKE_MP3}
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+    payload = TTSIn(markdown="hola", voice="es-MX-JorgeNeural", language="es", collection="tech")
+
+    audio = tmp_path / _audio_filename("tech")
+    audio.write_bytes(_FAKE_MP3)
+    legacy = await service.generate_tts(payload)
+    assert legacy.cached is False
+    assert len(synthesis) == 1
+
+    sidecar = audio.with_suffix(".meta.json")
+    sidecar.write_text("{not json", encoding="utf-8")
+    corrupt = await service.generate_tts(payload)
+    assert corrupt.cached is False
+    assert len(synthesis) == 2
+
+    stale = await service.generate_tts(payload)
+    assert stale.cached is True
+    assert len(synthesis) == 2
+
+
+async def test_generate_tts_sidecar_records_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sidecar stores the resolved voice, language, chars and content hash."""
+    _reset_voices_cache(monkeypatch)
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+
+    result = await service.generate_tts(
+        TTSIn(markdown="hola mundo", voice="es-mx-male", language="es", collection="health")
+    )
+
+    meta = json.loads(Path(result.audio_path).with_suffix(".meta.json").read_text("utf-8"))
+    assert meta["version"] == tts_module.SIDECAR_VERSION
+    assert meta["voice"] == "es-MX-JorgeNeural"
+    assert meta["language"] == "es"
+    assert meta["char_count"] == len("hola mundo")
+    assert meta["sha256"] == tts_module._content_hash("hola mundo", "es-MX-JorgeNeural", "es")
+    assert meta["generated_at"]
+
+
+async def test_generate_tts_leaves_no_temp_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomic writes clean up their temporary files."""
+    _reset_voices_cache(monkeypatch)
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+
+    await service.generate_tts(
+        TTSIn(markdown="hola", voice="es-MX-JorgeNeural", language="es", collection="tech")
+    )
+
+    audio = tmp_path / _audio_filename("tech")
+    assert audio.exists()
+    assert audio.with_suffix(".meta.json").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 async def test_generate_tts_synthesizes_with_edge_voice(

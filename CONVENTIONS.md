@@ -33,6 +33,14 @@
 - Errors: raise `HTTPException` with meaningful detail
 - All responses include a top-level `status` field (`"ok"` / `"error"`)
 - TTS endpoint returns JSON with `audio_path` (not binary)
+- **Costly endpoints (TTS, LLM) live under `/api/admin/*`**, so
+  `admin_middleware` requires the admin token. Keep a cheap endpoint behind a
+  kill switch in `src/core/config.py` (`TTS_API_ENABLED`) and give removed
+  paths a `410 Gone` alias for one release before deleting them
+- Cached artifacts record the inputs that produced them in a JSON sidecar next
+  to the file (`news_<col>_<yymmdd>.meta.json` → `sha256` of text + voice +
+  language), and are written atomically (temp file + `os.replace`) so a partial
+  file is never served as a valid cache hit
 
 ## Temporal (Workflows & Activities)
 - Workflows live in `src/workers/workflows.py`, activities in `src/workers/activities.py`
@@ -91,7 +99,15 @@
 - Each `[[collections]]` entry = one independent digest on its own Temporal
   schedule, with fields: `name`, `time` (HH:MM UTC), `feed_urls`,
   `tts_enabled`, `deliver_audio`, `podcast_behavior`, `language`, `voice`,
-  `prompt_template`, `chat_id`, `enabled`
+  `prompt_template`, `chat_id`, `enabled`, plus the delivery fields
+  `email_recipients`, `whatsapp_recipients`, `whatsapp_group_id`,
+  `delivery_channels` and the optional `logic_delivery` block
+- **Round-trip rule:** a field of `CollectionConfig` must survive the admin GUI
+  *and* the REST API. When adding one, update all three in the same commit:
+  `CollectionIn` (with `extra="forbid"`, so a silent drop becomes a 422),
+  `_COLLECTION_KEYS` in `src/api/services/collections_repo.py` (guarded by
+  `tests/unit/test_collections_repo.py`), and `collections.html` +
+  `routes_ui.py` form fields
 - Shared defaults go under `[collection_defaults]`; entries override them
 - Collection names must be unique and non-empty; `enabled = false` pauses a
   collection without deleting the config

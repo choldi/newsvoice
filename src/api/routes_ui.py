@@ -24,6 +24,7 @@ from src.api.db.database import RunsRepository
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.temporal_admin import TemporalAdminService
 from src.api.services.voices import VoicesService
+from src.core.collections import LogicDeliveryConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -88,10 +89,29 @@ async def _omni_options() -> dict:
     return {"languages": languages, "voices": voices}
 
 
+def _split_list(raw: str) -> list[str]:
+    """Split a textarea value into a cleaned, de-duplicated list.
+
+    Accepts newline- or comma-separated values; blank entries are dropped and
+    the original order is preserved. Format validation (E.164, email shape) is
+    left to the Pydantic models.
+
+    Args:
+        raw: Raw textarea value.
+
+    Returns:
+        List of unique, non-empty trimmed values.
+    """
+    seen: list[str] = []
+    for item in raw.replace(",", "\n").splitlines():
+        item = item.strip()
+        if item and item not in seen:
+            seen.append(item)
+    return seen
+
+
 def _split_emails(raw: str) -> list[str]:
     """Split a form value into a cleaned list of email recipients.
-
-    Accepts newline- or comma-separated addresses; blank entries are dropped.
 
     Args:
         raw: Raw textarea value.
@@ -99,18 +119,56 @@ def _split_emails(raw: str) -> list[str]:
     Returns:
         List of unique, non-empty trimmed addresses.
     """
-    seen: list[str] = []
-    for addr in raw.replace(",", "\n").splitlines():
-        addr = addr.strip()
-        if addr and addr not in seen:
-            seen.append(addr)
-    return seen
+    return _split_list(raw)
+
+
+def _split_whatsapp(raw: str) -> list[str]:
+    """Split a form value into a cleaned list of WhatsApp numbers (E.164).
+
+    Args:
+        raw: Raw textarea value.
+
+    Returns:
+        List of unique, non-empty trimmed numbers. Format validation happens in
+        `CollectionConfig`.
+    """
+    return _split_list(raw)
+
+
+DELIVERY_CHANNELS = ("telegram", "email", "whatsapp")
+LOGIC_CHANNELS = ("telegram", "email", "whatsapp")
+LOGIC_FORM_KEYS = (
+    "logic_chat_id",
+    "logic_email_recipients",
+    "logic_whatsapp_recipients",
+    "logic_whatsapp_group_id",
+)
+
+
+async def _checked_values(request: Request, field: str, allowed: tuple[str, ...]) -> list[str]:
+    """Extract the selected checkboxes of a form body.
+
+    Args:
+        request: Incoming form request.
+        field: Checkbox input name.
+        allowed: Accepted values, in canonical order.
+
+    Returns:
+        Ordered, de-duplicated list of checked values.
+    """
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    values = [
+        value
+        for key, value in parse_qsl(raw, keep_blank_values=True)
+        if key == field and value in allowed
+    ]
+    return list(dict.fromkeys(values))
 
 
 async def _selected_channels(request: Request) -> list[str]:
     """Extract the delivery channel checkboxes from a form body.
 
-    Checkbox values are 'telegram' and 'email'; an empty selection (no
+    Values are 'telegram', 'email' and 'whatsapp'; an empty selection (no
     checkbox ticked) falls back to the default telegram-only delivery.
 
     Args:
@@ -119,13 +177,43 @@ async def _selected_channels(request: Request) -> list[str]:
     Returns:
         Ordered, validated list of selected delivery channels.
     """
-    raw = (await request.body()).decode("utf-8", errors="replace")
-    channels = [
-        value
-        for key, value in parse_qsl(raw, keep_blank_values=True)
-        if key == "delivery_channels" and value in ("telegram", "email")
-    ]
-    return list(dict.fromkeys(channels)) or ["telegram"]
+    return await _checked_values(request, "delivery_channels", DELIVERY_CHANNELS) or ["telegram"]
+
+
+def _logic_delivery_from_form(
+    fields: dict[str, str],
+    channels: list[str],
+    current: LogicDeliveryConfig | None,
+) -> LogicDeliveryConfig | None:
+    """Build the optional `logic_delivery` block from form fields.
+
+    When the block is absent from the body (legacy or programmatic clients) the
+    current value is preserved, so an update never erases the configuration. When
+    the block is present but completely empty the destination is disabled.
+
+    Args:
+        fields: Parsed form fields.
+        channels: Checked logic delivery channels.
+        current: Existing configuration to preserve when the block is absent.
+
+    Returns:
+        The logic delivery configuration, or None when disabled.
+    """
+    if not channels and not any(key in fields for key in LOGIC_FORM_KEYS):
+        return current
+    chat_id = fields.get("logic_chat_id", "").strip() or None
+    email_recipients = _split_emails(fields.get("logic_email_recipients", ""))
+    whatsapp_recipients = _split_whatsapp(fields.get("logic_whatsapp_recipients", ""))
+    group_id = fields.get("logic_whatsapp_group_id", "").strip() or None
+    if not (channels or chat_id or email_recipients or whatsapp_recipients or group_id):
+        return None
+    return LogicDeliveryConfig(
+        channels=channels,
+        chat_id=chat_id,
+        email_recipients=email_recipients,
+        whatsapp_recipients=whatsapp_recipients,
+        whatsapp_group_id=group_id,
+    )
 
 
 def _flash(redirect_url: str, message: str, level: str = "ok") -> RedirectResponse:
@@ -557,7 +645,12 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
+            whatsapp_recipients=_split_whatsapp(fields.get("whatsapp_recipients", "")),
+            whatsapp_group_id=fields.get("whatsapp_group_id", "").strip() or None,
             delivery_channels=await _selected_channels(request),
+            logic_delivery=_logic_delivery_from_form(
+                fields, await _checked_values(request, "logic_channels", LOGIC_CHANNELS), None
+            ),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -583,7 +676,8 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
     fields = await _form(request)
     new_name = fields.get("new_name", name).strip()
     repo = CollectionsRepository()
-    if repo.get(name) is None:
+    current = repo.get(name)
+    if current is None:
         return _flash("/ui/collections", f"Colección '{name}' no encontrada", "error")
     urls = [
         u.strip() for u in fields.get("feed_urls", "").replace(",", "\n").splitlines() if u.strip()
@@ -603,7 +697,14 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
             email_recipients=_split_emails(fields.get("email_recipients", "")),
+            whatsapp_recipients=_split_whatsapp(fields.get("whatsapp_recipients", "")),
+            whatsapp_group_id=fields.get("whatsapp_group_id", "").strip() or None,
             delivery_channels=await _selected_channels(request),
+            logic_delivery=_logic_delivery_from_form(
+                fields,
+                await _checked_values(request, "logic_channels", LOGIC_CHANNELS),
+                current.logic_delivery,
+            ),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

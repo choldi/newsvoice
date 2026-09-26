@@ -92,7 +92,46 @@
           <div style="display:flex;gap:14px">
             <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" {{ 'checked' if 'telegram' in c.delivery_channels else '' }}><label>Telegram</label></div>
             <div class="check"><input type="checkbox" name="delivery_channels" value="email" {{ 'checked' if 'email' in c.delivery_channels else '' }}><label>Email</label></div>
+            <div class="check"><input type="checkbox" name="delivery_channels" value="whatsapp" {{ 'checked' if 'whatsapp' in c.delivery_channels else '' }}><label>WhatsApp</label></div>
           </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>WhatsApp recipients (E.164, uno por línea, vacío = sin WhatsApp)</label>
+          <textarea name="whatsapp_recipients">{{ c.whatsapp_recipients|join('\n') }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp group id (opcional)</label>
+          <input type="text" name="whatsapp_group_id" value="{{ c.whatsapp_group_id or '' }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Canales de la lógica de selección (opcional)</label>
+          <div style="display:flex;gap:14px">
+            {% for ch in ['telegram', 'email', 'whatsapp'] %}
+            <div class="check"><input type="checkbox" name="logic_channels" value="{{ ch }}" {{ 'checked' if c.logic_delivery and ch in c.logic_delivery.channels else '' }}><label>{{ ch|capitalize }}</label></div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="col">
+          <label>Chat ID de la lógica</label>
+          <input type="text" name="logic_chat_id" value="{{ c.logic_delivery.chat_id if c.logic_delivery and c.logic_delivery.chat_id else '' }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Email recipients de la lógica</label>
+          <textarea name="logic_email_recipients">{{ c.logic_delivery.email_recipients|join('\n') if c.logic_delivery else '' }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp recipients de la lógica</label>
+          <textarea name="logic_whatsapp_recipients">{{ c.logic_delivery.whatsapp_recipients|join('\n') if c.logic_delivery else '' }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp group id de la lógica</label>
+          <input type="text" name="logic_whatsapp_group_id" value="{{ c.logic_delivery.whatsapp_group_id if c.logic_delivery and c.logic_delivery.whatsapp_group_id else '' }}">
         </div>
       </div>
       <div class="row">
@@ -167,7 +206,46 @@
         <div style="display:flex;gap:14px">
           <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" checked><label>Telegram</label></div>
           <div class="check"><input type="checkbox" name="delivery_channels" value="email"><label>Email</label></div>
+          <div class="check"><input type="checkbox" name="delivery_channels" value="whatsapp"><label>WhatsApp</label></div>
         </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>WhatsApp recipients (E.164, uno por línea, vacío = sin WhatsApp)</label>
+        <textarea name="whatsapp_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp group id (opcional)</label>
+        <input type="text" name="whatsapp_group_id">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Canales de la lógica de selección (opcional)</label>
+        <div style="display:flex;gap:14px">
+          {% for ch in ['telegram', 'email', 'whatsapp'] %}
+          <div class="check"><input type="checkbox" name="logic_channels" value="{{ ch }}"><label>{{ ch|capitalize }}</label></div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="col">
+        <label>Chat ID de la lógica</label>
+        <input type="text" name="logic_chat_id">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Email recipients de la lógica</label>
+        <textarea name="logic_email_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp recipients de la lógica</label>
+        <textarea name="logic_whatsapp_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp group id de la lógica</label>
+        <input type="text" name="logic_whatsapp_group_id">
       </div>
     </div>
     <div class="row">

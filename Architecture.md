@@ -152,8 +152,9 @@ news-engine/
 │   │   ├── templates/          # GUI templates (base + pages + HTMX partials)
 │   │   ├── static/             # vendored htmx.min.js
 │   │   ├── routes/             # /health, /mvp_digest, /filter_new, /cluster,
-│   │   │                       # /summarize, /generate_tts, /admin/* (collections,
-│   │   │                       # voices, runs, schedules)
+│   │   │                       # /summarize, /admin/* (collections, voices,
+│   │   │                       # runs, schedules, tts). /generate_tts is a
+│   │   │                       # 410 Gone alias kept for one release.
 │   │   ├── services/           # Business logic (called by routes AND activities)
 │   │   │                       # incl. collections_repo, voices, temporal_admin
 │   │   ├── models/             # Pydantic schemas
