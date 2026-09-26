@@ -6,7 +6,14 @@ from pydantic import BaseModel, Field
 class TTSIn(BaseModel):
     """Input payload to generate MP3 audio from markdown text."""
 
-    markdown: str = Field(..., min_length=1, description="Markdown text to synthesize")
+    markdown: str = Field(
+        ...,
+        min_length=1,
+        # Hard ceiling on the request body; longer digests are still truncated to
+        # TTS_MAX_CHARS by the service, so this only bounds abusive payloads.
+        max_length=20_000,
+        description="Markdown text to synthesize (truncated to TTS_MAX_CHARS)",
+    )
     voice: str | None = Field(
         default=None,
         description=(

@@ -200,6 +200,30 @@ añadir (registro declarativo).
 
 ---
 
+## PHASE 5.4 - Hardening (P1 review fixes)
+
+**Goal:** cerrar los defectos P1 detectados en la revisión previa a la Fase 7,
+sin cambios de arquitectura.
+
+**Scope:**
+- [x] Round-trip de colecciones: `CollectionIn` incluye `whatsapp_recipients`,
+      `whatsapp_group_id` y `logic_delivery` (con `extra="forbid"`), el
+      serializador TOML cubre todos los campos de `CollectionConfig` y el GUI
+      (crear/editar) expone WhatsApp + bloque de `logic_delivery`
+- [x] Caché TTS por hash de contenido: sidecar `news_<col>_<yymmdd>.meta.json`
+      con SHA-256 de (texto de habla, voz resuelta, idioma); escritura atómica
+      del MP3/sidecar y transcodificación M4A solo si el origen es más nuevo
+- [x] Endpoint TTS protegido: `POST /api/admin/tts` (admin token, kill switch
+      `TTS_API_ENABLED`) y `POST /api/generate_tts` → 410 Gone (se elimina en
+      la siguiente release); `TTSIn.markdown` con `max_length=20000`
+- [x] Test con timestamps fijos (`check_digest_runs`) parametrizado con fechas
+      relativas, para que no vuelva a pudrirse
+- [x] Tests unit/integración + ruff limpio
+
+**Effort:** 3-4 hours.
+
+---
+
 ## PHASE 6 (Optional) - Web UI and Multi-user
 
 **Goal:** Manage sources and view history from a browser.
