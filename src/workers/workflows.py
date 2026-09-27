@@ -72,9 +72,12 @@ RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 # activities, so they are addressed BY NAME and dispatched to the narration
 # task queue via task_queue=...; the name resolves on the narration worker only.
 NARRATION_RENDER_ACTIVITY = "render_narration_activity"
+RESOLVE_SCRIPT_ACTIVITY = "resolve_narration_script_activity"
 # Longest plausible render: the gateway is called once per turn (each bounded by
 # narration_request_timeout, default 300s) before the local mix/encode.
 NARRATION_RENDER_TIMEOUT = timedelta(seconds=7200)
+# Timeout for script resolution (LLM generation + validation).
+NARRATION_SCRIPT_TIMEOUT = timedelta(seconds=300)
 # A narration failure must never fail the digest: the text already went out.
 NARRATION_RETRY_POLICY = RetryPolicy(maximum_attempts=2)
 
@@ -452,9 +455,27 @@ class DigestPipelineWorkflow:
             narration_request = self._narration_payload(config, workflow.info().workflow_id)
             workflow.logger.info(f"Dispatching narration to '{narration_request['task_queue']}'")
             try:
+                # Step 1: Resolve the narration script (generates from digest if needed)
+                resolved = await workflow.execute_activity(
+                    RESOLVE_SCRIPT_ACTIVITY,
+                    args=[narration_request["payload"]],
+                    task_queue=narration_request["task_queue"],
+                    start_to_close_timeout=NARRATION_SCRIPT_TIMEOUT,
+                    retry_policy=NARRATION_RETRY_POLICY,
+                )
+                if not isinstance(resolved, dict) or not resolved.get("script"):
+                    raise ApplicationError(
+                        "resolve_narration_script_activity returned no script",
+                        non_retryable=True,
+                    )
+                # Step 2: Render the resolved script
+                render_payload = {
+                    **narration_request["payload"],
+                    "script": resolved["script"],
+                }
                 narration = await workflow.execute_activity(
                     NARRATION_RENDER_ACTIVITY,
-                    args=[narration_request["payload"]],
+                    args=[render_payload],
                     task_queue=narration_request["task_queue"],
                     start_to_close_timeout=NARRATION_RENDER_TIMEOUT,
                     retry_policy=NARRATION_RETRY_POLICY,
