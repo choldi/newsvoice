@@ -235,13 +235,13 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
             or the script fails validation. Non-retryable for validation errors.
     """
     import json
+    import re
 
-    from litellm import acompletion
     from pydantic import ValidationError
 
     from src.api.db.database import RunsRepository
     from src.api.models.narration import NarrationScript, NarrationSpec
-    from src.core.config import settings
+    from src.core.llm import generate_completion
     from src.core.prompts import (
         NARRATION_SCRIPT_USER_PROMPT_TEMPLATE,
         build_narration_script_system_prompt,
@@ -288,25 +288,19 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
         template=prompt_template,
     )
     try:
-        response = await acompletion(
-            model=settings.llm_model,
-            api_base=settings.llm_api_base,
+        content = await generate_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_tokens=settings.llm_max_tokens,
-            timeout=settings.llm_timeout_seconds,
         )
     except Exception as exc:
         raise ApplicationError(f"LLM call for narration script failed: {exc}") from exc
 
-    content = response.choices[0].message.content or ""
     activity.logger.info("LLM narration script response length", length=len(content))
 
     # Extract JSON from the response (LLM may wrap in markdown code fences)
-    import re
 
     json_match = re.search(r"\{.*\}", content, re.DOTALL)
     if not json_match:
