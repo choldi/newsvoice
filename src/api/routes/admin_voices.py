@@ -68,7 +68,11 @@ async def clone_voice(payload: VoiceCloneIn) -> VoiceCloneOut:
     try:
         service = VoicesService()
         voice = await service.clone_voice(
-            payload.name, payload.language, reference_audio, filename=payload.filename
+            payload.name,
+            payload.language,
+            reference_audio,
+            filename=payload.filename,
+            ref_text=payload.ref_text,
         )
     except Exception as exc:
         raise HTTPException(

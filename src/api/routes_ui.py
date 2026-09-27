@@ -842,6 +842,7 @@ async def ui_clone_voice(request: Request) -> RedirectResponse:
             fields.get("language", "es"),
             payload,
             filename=fields.get("filename", "reference.wav"),
+            ref_text=fields.get("ref_text", "").strip() or None,
         )
     except Exception as exc:
         return _flash("/ui/voices", f"Fallo al clonar voz: {exc}", "error")

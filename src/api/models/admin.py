@@ -133,6 +133,10 @@ class VoiceCloneIn(BaseModel):
     language: str = Field(..., description="ISO 639-1 language code")
     audio_base64: str = Field(..., description="Base64-encoded reference audio (WAV/FLAC, 5-30s)")
     filename: str = Field(default="reference.wav", description="Original audio filename")
+    ref_text: str | None = Field(
+        default=None,
+        description="Transcription of the reference audio (optional, improves cloning quality)",
+    )
 
 
 class VoiceCloneOut(BaseModel):

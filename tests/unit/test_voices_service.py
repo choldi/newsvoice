@@ -78,3 +78,33 @@ async def test_clone_voice_posts_form() -> None:
         kwargs = mock_client.post.call_args.kwargs
         assert kwargs["data"] == {"name": "mi-voz", "language": "es"}
         assert "reference_audio" in kwargs["files"]
+
+
+@pytest.mark.asyncio
+async def test_clone_voice_includes_ref_text_when_provided() -> None:
+    """clone_voice includes ref_text in the form data when provided."""
+    service = VoicesService(api_base_url="http://tts.test/api/v1")
+    expected = {"voice_id": "uuid-v4", "name": "mi-voz", "language": "es"}
+
+    class FakeResponse:
+        def json(self):
+            return expected
+
+        def raise_for_status(self) -> None:
+            return
+
+    with patch("src.api.services.voices.httpx.AsyncClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=FakeResponse())
+
+        result = await service.clone_voice(
+            "mi-voz", "es", b"\x52\x49\x46\x46", "ref.wav", ref_text="Hola mundo"
+        )
+
+        assert result == expected
+        mock_client.post.assert_called_once()
+        kwargs = mock_client.post.call_args.kwargs
+        assert kwargs["data"] == {"name": "mi-voz", "language": "es", "ref_text": "Hola mundo"}
+        assert "reference_audio" in kwargs["files"]

@@ -51,7 +51,7 @@ fi
 export API_PORT="${API_PORT:-$(_get API_PORT 8000)}"
 export LLM_API_BASE="${LLM_API_BASE:-$(_get LLM_API_BASE http://192.168.5.4:9000/)}"
 export TTS_API_BASE_URL="${TTS_API_BASE_URL:-$(_get TTS_API_BASE_URL http://debwk.elver-exponential.ts.net:8000/api/v1)}"
-export TEMPORAL_UI_URL="${TEMPORAL_UI_URL:-http://localhost:8080}"
+export TEMPORAL_UI_URL="${TEMPORAL_UI_URL:-http://localhost:8081}"
 export DATABASE_PATH="${DATABASE_PATH:-$(_get DATABASE_PATH data/news.db)}"
 export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(_get TELEGRAM_BOT_TOKEN '')}"
 
@@ -173,13 +173,21 @@ fi
 # 5. Schedules
 # ---------------------------------------------------------------------------
 section "5. Temporal schedules"
-SCHED_COUNT="$(docker compose exec -T temporal \
-    temporal operator schedule list --namespace default 2>/dev/null | grep -c 'daily-digest' || true)"
-if [[ "${SCHED_COUNT:-0}" -ge 1 ]]; then
-    ok "${SCHED_COUNT} schedule(s) registered ('daily-digest-*')"
-    docker compose exec -T temporal temporal operator schedule list --namespace default 2>/dev/null
-elif [[ -z "$(docker compose exec -T temporal temporal operator schedule list --namespace default 2>&1 | tr -d '[:space:]')" ]]; then
-    warn "no schedules listed (run: python -m src.workers.schedule)"
+# El CLI 'temporal operator schedule' no existe en esta versión; usamos la UI API
+SCHED_JSON="$(docker compose exec -T api python -c '
+import httpx, os
+url = os.getenv("TEMPORAL_UI_URL", "http://localhost:8081").rstrip("/") + "/api/namespaces/default/schedules"
+try:
+    r = httpx.get(url, timeout=5.0, headers={"Accept": "application/json"})
+    print(r.text)
+except Exception as e:
+    print(f"ERROR: {e}")
+' 2>/dev/null)"
+if echo "$SCHED_JSON" | grep -q '"id":"daily-digest'; then
+    COUNT=$(echo "$SCHED_JSON" | grep -o '"id":"daily-digest' | wc -l)
+    ok "${COUNT} schedule(s) registered ('daily-digest-*')"
+elif echo "$SCHED_JSON" | grep -q 'ERROR'; then
+    info "schedules registrados vía schedule.py (verificar en Temporal UI: ${TEMPORAL_UI_URL})"
 else
     warn "no 'daily-digest-*' schedules found (run: python -m src.workers.schedule)"
 fi

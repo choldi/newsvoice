@@ -138,6 +138,7 @@ class VoicesService:
         language: str,
         reference_audio: bytes,
         filename: str = "reference.wav",
+        ref_text: str | None = None,
     ) -> dict[str, Any]:
         """Clone a voice from a reference audio file.
 
@@ -146,6 +147,7 @@ class VoicesService:
             language: ISO 639-1 language code.
             reference_audio: Raw audio bytes (WAV/FLAC, 5-30s).
             filename: Uploaded filename used in multipart form.
+            ref_text: Transcription of the reference audio (optional, improves cloning).
 
         Returns:
             The cloning response dict (voice_id, name, language).
@@ -159,6 +161,8 @@ class VoicesService:
             "reference_audio": (filename, reference_audio, "audio/wav"),
         }
         data = {"name": name, "language": language}
+        if ref_text:
+            data["ref_text"] = ref_text
         headers = _headers(settings)
         async with httpx.AsyncClient(timeout=settings.api_request_timeout) as client:
             response = await client.post(url, data=data, files=files, headers=headers)
