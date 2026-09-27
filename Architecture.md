@@ -115,9 +115,12 @@ When a collection has `narration_enabled = true` and `narration_deliver_audio = 
 addition to the text digest and the optional TTS audio.
 
 If the narration render fails, an error notification is sent to the same
-channels. Setting `NARRATION_FALLBACK_TO_EDGE=false` ensures cloned voices
-(e.g. Dwight/MichaelScott) are never silently substituted by a stock Edge voice —
-the render fails and the error alert fires instead.
+channels. For **dialog/podcast renders** (two or more distinct voices, or the
+`conversations` strategy), the fallback is controlled by
+`NARRATIONS_DIALOG_FALLBACK_TO_EDGE` (default `false`), which overrides the
+general `NARRATION_FALLBACK_TO_EDGE` for dialog renders. This ensures cloned
+voices (e.g. Dwight/MichaelScott) are never silently substituted — the render
+fails and the error alert fires instead.
 
 ---
 

@@ -514,6 +514,7 @@ class NarrationTTSService:
         self._timeout = settings.narration_request_timeout
         self._max_chars = settings.narration_max_chars_per_request
         self._fallback_to_edge = settings.narration_fallback_to_edge
+        self._dialog_fallback_to_edge = settings.narrations_dialog_fallback_to_edge
         self._semaphore = asyncio.Semaphore(settings.narration_max_concurrency)
 
     # --- Gateway plumbing ---------------------------------------------------
@@ -698,6 +699,7 @@ class NarrationTTSService:
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        allow_edge_fallback: bool | None = None,
     ) -> tuple[bytes, bool]:
         """Synthesize one turn with the gateway, falling back to Edge on failure.
 
@@ -707,6 +709,9 @@ class NarrationTTSService:
             language: ISO 639-1 language of the text.
             speed: Speaking rate in [0.5, 2.0].
             emotion: Optional emotion tag (honored by OmniVoice only).
+            allow_edge_fallback: Explicitly allow/disallow Edge fallback. ``None``
+                (default) means use the instance default
+                ``self._fallback_to_edge``.
 
         Returns:
             Tuple of ``(wav_bytes, used_edge_fallback)``.
@@ -726,7 +731,10 @@ class NarrationTTSService:
         try:
             return await self._post_audio("tts", payload), False
         except NarrationGatewayError as exc:
-            if not self._fallback_to_edge:
+            fallback_allowed = (
+                self._fallback_to_edge if allow_edge_fallback is None else allow_edge_fallback
+            )
+            if not fallback_allowed:
                 raise
             edge_voice = edge_voice_for(voice_id, language)
             logger.warning(
@@ -1020,8 +1028,33 @@ class NarrationTTSService:
                 voices.append(voice_id)
         return voices
 
+    @staticmethod
+    def _is_dialog(
+        spec: NarrationSpec,
+        script: NarrationScript,
+        strategy: RenderStrategy,
+    ) -> bool:
+        """Determine if a render counts as a dialog/podcast with multiple voices.
+
+        Args:
+            spec: Narration spec.
+            script: Script to render.
+            strategy: Render strategy.
+
+        Returns:
+            True if the render uses the conversations strategy or actually
+            speaks with two or more distinct voices.
+        """
+        if strategy == RenderStrategy.CONVERSATIONS:
+            return True
+        used = NarrationTTSService._used_voices(spec, script)
+        return len(used) >= 2
+
     async def _render_turns_locally(
-        self, spec: NarrationSpec, script: NarrationScript
+        self,
+        spec: NarrationSpec,
+        script: NarrationScript,
+        allow_fallback: bool,
     ) -> tuple[bytes, int]:
         """Synthesize every turn separately and assemble them locally.
 
@@ -1031,6 +1064,7 @@ class NarrationTTSService:
         Args:
             spec: Narration spec.
             script: Script to render.
+            allow_fallback: Whether to allow Edge fallback for this render.
 
         Returns:
             Tuple of ``(canonical_wav_bytes, edge_fallback_count)``.
@@ -1045,7 +1079,12 @@ class NarrationTTSService:
             text = strip_emotion_tags(segment.text)
             for chunk in chunk_text(text, self._max_chars):
                 audio, used_edge = await self.synthesize_turn(
-                    chunk, role.voice_id, language, speed=speed, emotion=emotion
+                    chunk,
+                    role.voice_id,
+                    language,
+                    speed=speed,
+                    emotion=emotion,
+                    allow_edge_fallback=allow_fallback,
                 )
                 fallbacks += int(used_edge)
                 parts.append((await self._to_canonical(audio), 0))
@@ -1106,6 +1145,15 @@ class NarrationTTSService:
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS
+        is_dialog = self._is_dialog(spec, script, strategy)
+        allow_fallback = self._dialog_fallback_to_edge if is_dialog else self._fallback_to_edge
+        if is_dialog and not allow_fallback:
+            logger.warning(
+                "narration_dialog_fallback_denied",
+                collection=collection,
+                used_voices=used_voices,
+                strategy=str(strategy),
+            )
         if used_conversations:
             audio = await self._to_canonical(
                 await self.synthesize_conversation(
@@ -1114,7 +1162,7 @@ class NarrationTTSService:
             )
             fallbacks = 0
         else:
-            audio, fallbacks = await self._render_turns_locally(spec, script)
+            audio, fallbacks = await self._render_turns_locally(spec, script, allow_fallback)
 
         if spec.music is not None:
             audio = await self._mix_music(audio, spec.music)

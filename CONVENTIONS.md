@@ -147,7 +147,18 @@
   frame count
 - The music bed is cosmetic: if ffmpeg fails, `NarrationTTSService._mix_music`
   logs a warning and returns the narration unmuted rather than losing the render.
-  A missing or escaping track is an error, not a silent fallback
+  A missing or escaping track is an error, not a silent fallback.
+
+- **Edge TTS fallback for narration:** two separate settings control the fallback:
+  - `NARRATION_FALLBACK_TO_EDGE` (default `true`): governs single-voice narration
+    renders (`turns` strategy with one voice). When `true`, a gateway failure
+    triggers a transparent Edge TTS retry; when `false`, the failure propagates.
+  - `NARRATIONS_DIALOG_FALLBACK_TO_EDGE` (default `false`): governs dialog/podcast
+    renders (two or more distinct voices, or the `conversations` strategy). When
+    `false` (default), a gateway failure **does not** fall back to Edge; instead it
+    propagates and triggers the error-alert delivery. This prevents two cloned
+    voices from collapsing to the same stock Edge voice. The dialog setting
+    overrides the general one for dialog renders.
 
 ## Collections (Phase 5)
 - Collections live in `collections.toml` (see `collections.toml.example`),
@@ -175,7 +186,8 @@
 - Dedup, clusters, and deliveries are **collection-scoped** in the shared SQLite
   DB (migration `003`); `PipelineConfig` carries `collection` through the workflow
 - Per-collection prompt templates are registered in `src/core/prompts.py` under
-  `DIGEST_TEMPLATES` (built-in: `default`, `finance`, `health`, `investigative`)
+  `DIGEST_TEMPLATE_ADDITIONS` (built-in: `default`, `finance`, `health`,
+  `investigative`, `gaming`)
 
 ## Logging
 - `structlog` with JSON output (workflows use the Temporal sandbox logger)

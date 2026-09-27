@@ -527,6 +527,7 @@ class DigestPipelineWorkflow:
                 "strategy": request.get("strategy") or "turns",
                 "main_story_count": config.main_story_count,
                 "headline_count": config.headline_count,
+                "prompt_template": config.prompt_template,
             },
         }
 

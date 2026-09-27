@@ -6,37 +6,6 @@ EMOTION_TAGS = frozenset(
 )
 
 
-def _build_base_digest_prompt(main_story_count: int, headline_count: int) -> str:
-    """Build the base digest system prompt with configurable story/headline counts.
-
-    Args:
-        main_story_count: Number of main stories to include.
-        headline_count: Number of quick headlines to include.
-
-    Returns:
-        The base system prompt string with the counts interpolated.
-    """
-    return (
-        "You are an expert news editor and curator.\n"
-        "Your task is to create a daily news digest from a list of input articles.\n\n"
-        "Requirements:\n"
-        "1. Output format MUST be Markdown.\n"
-        "2. Structure the output into TWO sections:\n"
-        f'   - Section 1: "Top {main_story_count} Main Stories" '
-        f"(Select {main_story_count} most impactful stories/clusters.\n"
-        "     For each story, provide a title, a 2-3 sentence summary, and source links).\n"
-        f'   - Section 2: "Top {headline_count} Quick Headlines" '
-        f"(Select {headline_count} other notable items\n"
-        "     and provide a 1-sentence quick bullet summary with link).\n"
-        "3. Do not invent news. Rely strictly on the provided articles.\n"
-        "4. If multiple articles cover the same event, combine them into ONE story entry.\n"
-        "5. Respond in clean Markdown, without extra meta commentary."
-    )
-
-
-SUMMARIZE_DIGEST_SYSTEM_PROMPT = _build_base_digest_prompt(5, 5)
-
-
 PODCAST_BEHAVIOR_PROMPT = """\n\nAdditional instruction:
 {behavior}
 
@@ -72,56 +41,62 @@ Rules:
 - If the language code is empty/unspecified, fall back to the source articles' language."""
 
 
-# Registry of per-collection digest system prompts. A collection selects a
-# template by name via its `prompt_template` field. Each template must deliver
-# the configured main stories + headlines structure specified in the base prompt.
-DIGEST_TEMPLATES: dict[str, str] = {
-    "default": SUMMARIZE_DIGEST_SYSTEM_PROMPT,
-}
+def _build_base_digest_prompt(main_story_count: int, headline_count: int) -> str:
+    """Build the base digest system prompt with configurable story/headline counts.
 
-# Finance: prioritizes markets, deals, earnings, and regulatory news.
-DIGEST_TEMPLATES["finance"] = (
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    + """
+    Args:
+        main_story_count: Number of main stories to include.
+        headline_count: Number of quick headlines to include.
+
+    Returns:
+        The base system prompt string with the counts interpolated.
+    """
+    return (
+        "You are an expert news editor and curator.\n"
+        "Your task is to create a daily news digest from a list of input articles.\n\n"
+        "Requirements:\n"
+        "1. Output format MUST be Markdown.\n"
+        "2. Structure the output into TWO sections:\n"
+        f'   - Section 1: "Top {main_story_count} Main Stories" '
+        f"(Select {main_story_count} most impactful stories/clusters.\n"
+        "     For each story, provide a title, a 2-3 sentence summary, and source links).\n"
+        f'   - Section 2: "Top {headline_count} Quick Headlines" '
+        f"(Select {headline_count} other notable items\n"
+        "     and provide a 1-sentence quick bullet summary with link).\n"
+        "3. Do not invent news. Rely strictly on the provided articles.\n"
+        "4. If multiple articles cover the same event, combine them into ONE story entry.\n"
+        "5. Respond in clean Markdown, without extra meta commentary."
+    )
+
+
+# Domain-specific additions appended to the base prompt.
+DIGEST_TEMPLATE_ADDITIONS: dict[str, str] = {
+    "default": "",
+    "finance": """
 
 Finance-specific requirements:
 - Prioritize market-moving stories: earnings, M&A, fundraising, central bank moves.
 - Quote figures (percentages, amounts) when present in the source articles.
 - Flag volatility and risk clearly in the summary.
 
-Keep the Markdown structure described at the top."""
-)
-
-# Health: prioritizes clinically relevant and safety-relevant research.
-DIGEST_TEMPLATES["health"] = (
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    + """
+Keep the Markdown structure described at the top.""",
+    "health": """
 
 Health-specific requirements:
 - Prioritize breakthroughs in diagnosis, treatment, prevention, and policy.
 - Distinguish peer-reviewed findings from preliminary trials and speculation.
 - Note the affected population and the confidence level of the evidence.
 
-Keep the Markdown structure described at the top."""
-)
-
-# Investigative/tech-adjacent: prioritizes policy, regulation, and long reads.
-DIGEST_TEMPLATES["investigative"] = (
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    + """
+Keep the Markdown structure described at the top.""",
+    "investigative": """
 
 Investigative-specific requirements:
 - Prioritize stories with policy, regulatory, or societal impact.
 - Preserve nuance: attribute claims to sources and distinguish fact from opinion.
 - Surface accountability questions (who, what decision, at what cost).
 
-Keep the Markdown structure described at the top."""
-)
-
-# Gaming: videojuegos, lanzamientos, reviews, esports, controversias.
-DIGEST_TEMPLATES["gaming"] = (
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    + """
+Keep the Markdown structure described at the top.""",
+    "gaming": """
 
 Gaming-specific requirements:
 - Prioritize new releases, major updates, hardware announcements, esports results,
@@ -131,22 +106,27 @@ Gaming-specific requirements:
 - Quote key figures (player counts, revenue, review scores) when present.
 - Note platform exclusivity and release dates clearly.
 
-Keep the Markdown structure described at the top."""
-)
+Keep the Markdown structure described at the top.""",
+}
 
 
-def get_digest_template(name: str | None) -> str:
-    """Return the system prompt for a template name, defaulting to the base one.
+def get_digest_template(
+    name: str | None, main_story_count: int = 5, headline_count: int = 5
+) -> str:
+    """Return the system prompt for a template name with the given counts.
 
     Args:
-        name: Template name from the DIGEST_TEMPLATES registry.
+        name: Template name from the DIGEST_TEMPLATE_ADDITIONS registry.
+        main_story_count: Number of main stories to include.
+        headline_count: Number of quick headlines to include.
 
     Returns:
         The system prompt string to use for digest generation.
     """
-    if not name or name not in DIGEST_TEMPLATES:
-        return SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    return DIGEST_TEMPLATES[name]
+    if not name or name not in DIGEST_TEMPLATE_ADDITIONS:
+        name = "default"
+    base = _build_base_digest_prompt(main_story_count, headline_count)
+    return base + DIGEST_TEMPLATE_ADDITIONS[name]
 
 
 def build_digest_system_prompt(
@@ -166,19 +146,21 @@ def build_digest_system_prompt(
         template: Per-collection prompt template name. Empty/None means 'default'.
         podcast_name: Name of the podcast. Empty/None means no podcast identity injection.
         custom_prompt: Full custom system prompt. When provided (non-blank) it
-            replaces the template entirely, overriding prompt_template.
+            replaces the template entirely, overriding prompt_template, behavior,
+            language, and podcast_name.
         main_story_count: Number of main stories to include (default 5).
         headline_count: Number of quick headlines to include (default 5).
 
     Returns:
         The system prompt for digest generation.
     """
-    if main_story_count != 5 or headline_count != 5:
-        base_prompt = _build_base_digest_prompt(main_story_count, headline_count)
-    else:
-        base_prompt = get_digest_template(template)
+    base_prompt = get_digest_template(template, main_story_count, headline_count)
 
     prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else base_prompt
+    if custom_prompt and custom_prompt.strip():
+        # Custom prompt completely replaces the template; don't add behavior,
+        # language, or podcast_name.
+        return prompt
     if podcast_name and podcast_name.strip():
         prompt += PODCAST_NAME_PROMPT.format(podcast_name=podcast_name.strip())
     if behavior and behavior.strip():

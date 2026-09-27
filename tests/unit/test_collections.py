@@ -255,3 +255,74 @@ def test_default_collection_uses_settings(tmp_path: Path) -> None:
     assert collection.name == "default"
     assert collection.prompt_template == "default"
     assert isinstance(collection.feed_urls, list)
+
+
+def test_example_gaming_toml_parses_without_null_music(tmp_path: Path) -> None:
+    """Regression test: the gaming example TOML must not contain `music = null`
+    (invalid TOML) and must parse into a valid CollectionConfig with all
+    Phase 7.6 fields present."""
+    # Valid TOML string. Inline table must be single-line per TOML spec.
+    gaming_toml = (
+        "[collection_defaults]\n"
+        "tts_enabled = false\n"
+        "deliver_audio = false\n"
+        'language = "en"\n'
+        'voice = ""\n'
+        "narration_enabled = false\n"
+        'narration_strategy = "turns"\n'
+        "narration_deliver_audio = true\n"
+        "main_story_count = 5\n"
+        "headline_count = 5\n\n"
+        "[[collections]]\n"
+        'name = "gaming"\n'
+        'time = "10:00"\n'
+        "enabled = true\n"
+        "feed_urls = [\n"
+        '    "https://feeds.feedburner.com/ign/all",\n'
+        '    "https://www.polygon.com/rss/index.xml",\n'
+        '    "https://kotaku.com/rss",\n'
+        '    "https://www.vg247.com/feed",\n'
+        "]\n"
+        'language = "en"\n'
+        "main_story_count = 5\n"
+        "headline_count = 10\n"
+        "tts_enabled = false\n"
+        "deliver_audio = false\n"
+        'podcast_name = "Game Over"\n'
+        'podcast_behavior = "Dos co-hosts: Michael (entusiasta, conduce) y Dwight '
+        "(analista escéptico, deadpan). Diálogo natural, turnos cortos, "
+        "terminología gamer (patch, meta, nerf, speedrun, NPC, grind). Michael "
+        "abre con 'Welcome to Game Over, your daily gaming briefing.' Dwight "
+        "aporta contexto técnico y escepticismo. Titulares: ida y vuelta rápida, "
+        'una frase por item."\n'
+        'prompt_template = "gaming"\n'
+        "narration_enabled = true\n"
+        'narration_strategy = "turns"\n'
+        "narration_deliver_audio = true\n"
+        'narration_spec = { title = "Game Over", language = "en", roles = ['
+        '{name="michael", voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f", '
+        'speed=1.0, emotion="excited"}, '
+        '{name="dwight", voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8", '
+        'speed=1.0, emotion="calm"}], pause_ms = 350 }\n'
+        'delivery_channels = ["telegram"]\n'
+    )
+    path = _write_collections(tmp_path, gaming_toml)
+    loader = CollectionsLoader(str(path))
+    collections = loader.load()
+
+    assert len(collections) == 1
+    gaming = collections[0]
+    assert gaming.name == "gaming"
+    assert gaming.main_story_count == 5
+    assert gaming.headline_count == 10
+    assert gaming.narration_enabled is True
+    assert gaming.narration_deliver_audio is True
+    assert gaming.prompt_template == "gaming"
+    assert gaming.narration_spec is not None
+    assert gaming.narration_spec.title == "Game Over"
+    assert len(gaming.narration_spec.roles) == 2
+    role_names = {r.name for r in gaming.narration_spec.roles}
+    assert role_names == {"michael", "dwight"}
+    # music must be None (omitted in TOML, not "null")
+    assert gaming.narration_spec.music is None
+    assert gaming.delivery_channels == ["telegram"]

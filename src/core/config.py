@@ -140,6 +140,11 @@ class Settings(BaseSettings):
     narration_request_timeout: int = Field(default=300, ge=1)
     # Fall back to a direct Edge TTS call when the gateway fails.
     narration_fallback_to_edge: bool = True
+    # Fall back to Edge TTS for dialog/podcast renders (2+ voices or conversations).
+    # When False, a dialog render will fail with an alert instead of silently
+    # substituting both cloned voices with the same stock Edge voice.
+    # Overrides narration_fallback_to_edge for dialog renders.
+    narrations_dialog_fallback_to_edge: bool = False
     narration_audio_bitrate_kbps: int = Field(default=64, ge=16, le=320)
 
     @property

@@ -48,7 +48,7 @@ class CollectionIn(BaseModel):
     voice: str = Field(default="", description="OmniVoice voice override")
     prompt_template: str = Field(
         default=DEFAULT_PROMPT_TEMPLATE,
-        description="Prompt template name from DIGEST_TEMPLATES",
+        description="Prompt template name from DIGEST_TEMPLATE_ADDITIONS",
     )
     custom_prompt: str = Field(
         default="",

@@ -34,5 +34,5 @@ prompt_template = "gaming"
 narration_enabled = true
 narration_strategy = "turns"
 narration_deliver_audio = true
-narration_spec = { title = "Game Over", language = "en", roles = [{name="michael",voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f",speed=1.0,emotion="excited"},{name="dwight",voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8",speed=1.0,emotion="calm"}], pause_ms = 350, music = null }
+narration_spec = { title = "Game Over", language = "en", roles = [{name="michael",voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f",speed=1.0,emotion="excited"},{name="dwight",voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8",speed=1.0,emotion="calm"}], pause_ms = 350 }
 delivery_channels = ["telegram"]

@@ -237,8 +237,8 @@ async def generate_logic_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payload: Dict with 'clusters' (list of ClusterItem dicts), 'digest'
-            (markdown), 'collection', 'prompt_template', 'custom_prompt', and
-            'language'.
+            (markdown), 'collection', 'prompt_template', 'custom_prompt',
+            'language', 'main_story_count', and 'headline_count'.
 
     Returns:
         Dict with status and the generated 'logic' text.
@@ -263,6 +263,8 @@ async def generate_logic_activity(payload: dict[str, Any]) -> dict[str, Any]:
             prompt_template=payload.get("prompt_template") or "default",
             custom_prompt=payload.get("custom_prompt") or "",
             language=payload.get("language") or "",
+            main_story_count=payload.get("main_story_count", 5),
+            headline_count=payload.get("headline_count", 5),
         )
     except Exception as exc:
         raise ApplicationError(

@@ -800,8 +800,9 @@ async def test_render_falls_back_per_turn_and_counts_it(
             return httpx.Response(404, json={"detail": {"detail": "no such voice"}})
         return httpx.Response(200, content=_wav(frames=2400))
 
-    service, _ = _service(tmp_path, handler)
     monkeypatch.setattr(settings, "narration_fallback_to_edge", True)
+    monkeypatch.setattr(settings, "narrations_dialog_fallback_to_edge", True)
+    service, _ = _service(tmp_path, handler)
 
     async def fake_edge(text: str, voice: str) -> bytes:
         assert voice == "es-MX-DaliaNeural", "legacy names map through the alias table"

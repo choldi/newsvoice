@@ -84,7 +84,8 @@ python examples/podcast-gaming/check_feeds.py
 NARRATION_ENABLED=true
 NARRATION_API_BASE_URL=http://debwk.elver-exponential.ts.net:8000/api/v1
 NARRATION_TASK_QUEUE=news-engine-narration-task-queue
-NARRATION_FALLBACK_TO_EDGE=false  # Importante: evita sustitución silenciosa de voces clonadas
+NARRATION_FALLBACK_TO_EDGE=true  # General (single-voice) fallback stays enabled
+NARRATIONS_DIALOG_FALLBACK_TO_EDGE=false  # Important: prevents silent substitution of cloned voices in dialogs
 NARRATION_LANGUAGE=en
 NARRATION_SPEED=1.0
 NARRATION_PAUSE_MS=350

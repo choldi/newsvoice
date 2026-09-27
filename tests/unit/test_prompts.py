@@ -1,9 +1,9 @@
 """Unit tests for src/core/prompts.py."""
 
 from src.core.prompts import (
-    DIGEST_TEMPLATES,
+    DIGEST_TEMPLATE_ADDITIONS,
     EMOTION_TAGS,
-    SUMMARIZE_DIGEST_SYSTEM_PROMPT,
+    _build_base_digest_prompt,
     build_digest_system_prompt,
     get_digest_template,
     strip_emotion_tags,
@@ -12,9 +12,10 @@ from src.core.prompts import (
 
 def test_build_digest_system_prompt_no_behavior() -> None:
     """build_digest_system_prompt returns the base prompt for empty behavior."""
-    assert build_digest_system_prompt("") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt("   ") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt(None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    base = _build_base_digest_prompt(5, 5)
+    assert build_digest_system_prompt("") == base
+    assert build_digest_system_prompt("   ") == base
+    assert build_digest_system_prompt(None) == base
 
 
 def test_build_digest_system_prompt_with_behavior() -> None:
@@ -46,9 +47,10 @@ def test_build_digest_system_prompt_with_language_and_behavior() -> None:
 
 def test_build_digest_system_prompt_ignores_blank_language() -> None:
     """build_digest_system_prompt ignores blank/None language, returning base prompt."""
-    assert build_digest_system_prompt(None, language="  ") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt(None, language=None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt("", language="") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    base = _build_base_digest_prompt(5, 5)
+    assert build_digest_system_prompt(None, language="  ") == base
+    assert build_digest_system_prompt(None, language=None) == base
+    assert build_digest_system_prompt("", language="") == base
 
 
 def test_emotion_tags_match_spec() -> None:
@@ -77,18 +79,19 @@ def test_strip_emotion_tags_keeps_unknown_brackets() -> None:
 
 def test_get_digest_template_default() -> None:
     """Unknown or blank template names fall back to the base prompt."""
-    assert get_digest_template(None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert get_digest_template("") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert get_digest_template("does-not-exist") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert get_digest_template("default") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    base = _build_base_digest_prompt(5, 5)
+    assert get_digest_template(None) == base
+    assert get_digest_template("") == base
+    assert get_digest_template("does-not-exist") == base
+    assert get_digest_template("default") == base
 
 
 def test_get_digest_template_known() -> None:
     """Named templates are returned and build on the base prompt."""
     finance = get_digest_template("finance")
-    assert finance is not SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    assert finance is not _build_base_digest_prompt(5, 5)
     assert "Finance-specific requirements" in finance
-    assert {"finance", "health", "investigative"} <= set(DIGEST_TEMPLATES)
+    assert {"finance", "health", "investigative", "gaming"} <= set(DIGEST_TEMPLATE_ADDITIONS)
 
 
 def test_build_digest_system_prompt_with_template() -> None:
@@ -108,44 +111,46 @@ def test_build_digest_system_prompt_template_and_behavior() -> None:
     assert "Language requirement" in prompt
 
 
-def test_build_digest_system_prompt_ignores_blank_podcast_name() -> None:
-    """Blank/None podcast_name leaves the base prompt unchanged."""
-    assert build_digest_system_prompt(None, podcast_name=None) == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt(None, podcast_name="  ") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-    assert build_digest_system_prompt("", podcast_name="") == SUMMARIZE_DIGEST_SYSTEM_PROMPT
-
-
-def test_build_digest_system_prompt_with_podcast_name() -> None:
-    """podcast_name adds the podcast identity block to the system prompt."""
-    prompt = build_digest_system_prompt(None, podcast_name="ByteCast")
-    assert "Podcast identity" in prompt
-    assert "This is ByteCast" in prompt
-    assert "co-host/anchor of the news podcast" in prompt
-    assert "Additional instruction" not in prompt
-
-
-def test_build_digest_system_prompt_with_podcast_name_and_behavior() -> None:
-    """podcast_name composes with behavior and language sections."""
+def test_build_digest_system_prompt_with_custom_prompt() -> None:
+    """custom_prompt overrides template entirely when provided."""
+    custom = "You are a custom editor. Write the digest in French."
     prompt = build_digest_system_prompt(
-        "usa un tono fresco", language="es", podcast_name="ByteCast"
+        "some behavior", language="es", template="finance", custom_prompt=custom
     )
+    assert prompt == custom
+    assert "Finance-specific" not in prompt
+
+
+def test_get_digest_template_with_custom_counts() -> None:
+    """get_digest_template respects the main_story_count and headline_count."""
+    base_5_5 = get_digest_template("finance", 5, 5)
+    base_5_10 = get_digest_template("finance", 5, 10)
+    base_10_5 = get_digest_template("finance", 10, 5)
+
+    assert "Top 5 Main Stories" in base_5_5
+    assert "Top 5 Quick Headlines" in base_5_5
+    assert "Top 5 Main Stories" in base_5_10
+    assert "Top 10 Quick Headlines" in base_5_10
+    assert "Top 10 Main Stories" in base_10_5
+    assert "Top 5 Quick Headlines" in base_10_5
+    # Domain-specific additions should be present in all
+    for p in (base_5_5, base_5_10, base_10_5):
+        assert "Finance-specific requirements" in p
+
+
+def test_build_digest_system_prompt_preserves_template_with_counts() -> None:
+    """build_digest_system_prompt preserves template additions when counts != 5/5."""
+    prompt = build_digest_system_prompt(
+        None, template="gaming", main_story_count=5, headline_count=10
+    )
+    assert "Top 5 Main Stories" in prompt
+    assert "Top 10 Quick Headlines" in prompt
+    assert "Gaming-specific requirements" in prompt
+    assert "extended summaries of 5-6 sentences" in prompt
+
+
+def test_build_digest_system_prompt_podcast_name() -> None:
+    """build_digest_system_prompt injects podcast name when provided."""
+    prompt = build_digest_system_prompt(None, podcast_name="My Podcast")
     assert "Podcast identity" in prompt
-    assert "This is ByteCast" in prompt
-    assert "usa un tono fresco" in prompt
-    assert "Language requirement" in prompt
-
-
-def test_build_digest_system_prompt_custom_overrides_template() -> None:
-    """A non-blank custom_prompt replaces the built-in template entirely."""
-    custom = "You are a financial analyst. Focus exclusively on market risk."
-    prompt = build_digest_system_prompt(None, template="finance", custom_prompt=custom)
-    assert "Finance-specific requirements" not in prompt
-    assert custom in prompt
-
-
-def test_build_digest_system_prompt_custom_ignores_blank() -> None:
-    """Blank/None custom_prompt falls back to the template."""
-    base = build_digest_system_prompt(None, template="finance")
-    assert base == build_digest_system_prompt(None, template="finance", custom_prompt="")
-    assert base == build_digest_system_prompt(None, template="finance", custom_prompt=None)
-    assert base == build_digest_system_prompt(None, template="finance", custom_prompt="   ") == base
+    assert "This is My Podcast" in prompt
