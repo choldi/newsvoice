@@ -107,6 +107,18 @@ Both audio paths coexist on the same run: `audio_jobs` is keyed by
 `data/narration/` so their `.meta.json` sidecars cannot collide with
 `data/tts_cache/`. See Phases.md → Phase 7 and CONVENTIONS.md → Narration.
 
+### Narration delivery (Phase 7.6)
+
+When a collection has `narration_enabled = true` and `narration_deliver_audio = true`
+(default), the generated narration M4A is delivered to the collection's
+`delivery_channels` (Telegram audio, email attachment, WhatsApp audio). This is in
+addition to the text digest and the optional TTS audio.
+
+If the narration render fails, an error notification is sent to the same
+channels. Setting `NARRATION_FALLBACK_TO_EDGE=false` ensures cloned voices
+(e.g. Dwight/MichaelScott) are never silently substituted by a stock Edge voice —
+the render fails and the error alert fires instead.
+
 ---
 
 ## Key Decisions

@@ -77,6 +77,12 @@ class DigestIn(BaseModel):
         default=None,
         description="Optional full custom system prompt that overrides prompt_template.",
     )
+    main_story_count: int = Field(
+        default=5, ge=1, le=20, description="Number of main stories to include"
+    )
+    headline_count: int = Field(
+        default=5, ge=1, le=40, description="Number of quick headlines to include"
+    )
     collection: str = Field(
         default="default", description="Collection name, used for scoped delivery tracking"
     )

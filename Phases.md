@@ -306,12 +306,22 @@ noticias", es "narración multi-hablante de un documento".
       `collections.toml` + GUI, player de narración en el detalle de run
 - [x] **7.5 Guion LLM + ops** — prompts, activity de guion, servicio
       `narration-worker` en compose, `status.sh`, Deploy.md y Architecture.md
+- [x] **7.6 Entrega de narración + counts configurables** — counts configurables
+      por colección (`main_story_count`, `headline_count`) propagados al digest,
+      lógica y guion de narración; plantillas `gaming` para digests extendidos
+      (5+10) y narración estilo diálogo; entrega de la narración M4A a los
+      canales configurados; aviso de error cuando el clonado falla
+      (`NARRATION_FALLBACK_TO_EDGE=false`); bump `NARRATION_SCRIPT_TIMEOUT`
+      60s → 300s; GUI/admin actualizado con campos `narration_deliver_audio`,
+      `main_story_count`, `headline_count`; ejemplo `examples/podcast-gaming/`
+      (README, TOML, spec JSON, script ejemplo, verificador de feeds)
 
 **Success criteria:** una colección opt-in produce un M4A de N minutos con ≥2
-voces distintas, música de fondo, cacheado por hash y entregado por el canal
-configurado, sin tocar el pipeline de audio actual.
+voces distintas, música de fondo (opcional), cacheado por hash y **entregado por
+el canal configurado**; si el gateway falla, el error se notifica al canal; los
+counts son configurables por colección.
 
-**Effort:** 12-16 hours.
+**Effort:** 8-10 hours.
 
 ---
 

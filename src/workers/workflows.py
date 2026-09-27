@@ -117,6 +117,11 @@ class PipelineConfig:
     # dispatcher fills this dict with the payload plus the narration task queue.
     # None means "this collection does not narrate".
     narration: dict[str, Any] | None = None
+    # Configurable story counts (Phase 7.6)
+    main_story_count: int = 5
+    headline_count: int = 5
+    # Whether to deliver the narration audio (default true when narration_enabled)
+    narration_deliver_audio: bool = True
 
 
 @workflow.defn
@@ -200,6 +205,8 @@ class DigestPipelineWorkflow:
                 "prompt_template": config.prompt_template,
                 "custom_prompt": config.custom_prompt or None,
                 "collection": config.collection,
+                "main_story_count": config.main_story_count,
+                "headline_count": config.headline_count,
             },
             start_to_close_timeout=DIGEST_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
@@ -353,6 +360,8 @@ class DigestPipelineWorkflow:
                         "prompt_template": config.prompt_template,
                         "custom_prompt": config.custom_prompt or None,
                         "language": config.language,
+                        "main_story_count": config.main_story_count,
+                        "headline_count": config.headline_count,
                     },
                     start_to_close_timeout=LOGIC_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
@@ -450,21 +459,29 @@ class DigestPipelineWorkflow:
                     start_to_close_timeout=NARRATION_RENDER_TIMEOUT,
                     retry_policy=NARRATION_RETRY_POLICY,
                 )
+                narration_audio_path = (
+                    narration.get("audio_path") if isinstance(narration, dict) else None
+                )
                 delivery_status.append(
                     {
                         "channel": "narration",
                         "status": "ok",
-                        "audio_path": narration.get("audio_path")
-                        if isinstance(narration, dict)
-                        else None,
+                        "audio_path": narration_audio_path,
                     }
                 )
+                # Deliver narration audio to configured channels if enabled
+                if narration_audio_path and config.narration_deliver_audio:
+                    await self._deliver_narration_audio(
+                        config, narration_audio_path, digest_markdown, delivery_status
+                    )
             except (ActivityError, ApplicationError) as exc:
                 detail = getattr(exc, "cause", None) or exc
                 workflow.logger.warning(f"Narration step failed; digest continues: {detail}")
                 delivery_status.append(
                     {"channel": "narration", "status": "error", "error": str(detail)}
                 )
+                # Send error notification to configured channels
+                await self._send_narration_error_alert(config, str(detail), delivery_status)
 
         return {
             "status": "ok",
@@ -508,8 +525,130 @@ class DigestPipelineWorkflow:
                 "script": request.get("script"),
                 "script_id": request.get("script_id"),
                 "strategy": request.get("strategy") or "turns",
+                "main_story_count": config.main_story_count,
+                "headline_count": config.headline_count,
             },
         }
+
+    async def _deliver_narration_audio(
+        self,
+        config: PipelineConfig,
+        audio_path: str,
+        digest_markdown: str,
+        delivery_status: list[dict[str, Any]],
+    ) -> None:
+        """Deliver the narration audio to all configured channels.
+
+        Args:
+            config: PipelineConfig with delivery settings.
+            audio_path: Path to the generated narration M4A file.
+            digest_markdown: The digest text for captions.
+            delivery_status: List to append delivery results to.
+        """
+        channels = config.delivery_channels or ["telegram"]
+        caption = f"{config.podcast_name or config.collection} — Narration".strip()
+
+        if "telegram" in channels:
+            try:
+                result = await workflow.execute_activity(
+                    deliver_telegram_audio_activity,
+                    args=[audio_path, caption, config.chat_id],
+                    start_to_close_timeout=DELIVERY_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append({"channel": "telegram_audio", "status": "ok", **result})
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(f"Telegram narration audio failed: {detail}")
+                delivery_status.append(
+                    {"channel": "telegram_audio", "status": "error", "error": str(detail)}
+                )
+
+        if "email" in channels and config.email_recipients:
+            try:
+                result = await workflow.execute_activity(
+                    deliver_email_activity,
+                    args=[config.email_recipients, digest_markdown, config.collection, audio_path],
+                    start_to_close_timeout=EMAIL_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append({"channel": "email_narration", "status": "ok", **result})
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(f"Email narration audio failed: {detail}")
+                delivery_status.append(
+                    {"channel": "email_narration", "status": "error", "error": str(detail)}
+                )
+
+        if "whatsapp" in channels and (config.whatsapp_recipients or config.whatsapp_group_id):
+            try:
+                result = await workflow.execute_activity(
+                    deliver_whatsapp_audio_activity,
+                    args=[
+                        audio_path,
+                        caption,
+                        config.whatsapp_recipients,
+                        config.whatsapp_group_id,
+                    ],
+                    start_to_close_timeout=WHATSAPP_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+                delivery_status.append({"channel": "whatsapp_narration", "status": "ok", **result})
+            except (ActivityError, ApplicationError) as exc:
+                detail = getattr(exc, "cause", None) or exc
+                workflow.logger.warning(f"WhatsApp narration audio failed: {detail}")
+                delivery_status.append(
+                    {"channel": "whatsapp_narration", "status": "error", "error": str(detail)}
+                )
+
+    async def _send_narration_error_alert(
+        self,
+        config: PipelineConfig,
+        error: str,
+        delivery_status: list[dict[str, Any]],
+    ) -> None:
+        """Send a narration failure alert to all configured channels.
+
+        Args:
+            config: PipelineConfig with delivery settings.
+            error: The error message from the narration failure.
+            delivery_status: List to append delivery results to.
+        """
+        channels = config.delivery_channels or ["telegram"]
+        alert_text = f"⚠️ Narration failed for collection '{config.collection}':\n{error}"
+
+        if "telegram" in channels:
+            try:
+                await workflow.execute_activity(
+                    deliver_telegram_message_activity,
+                    args=[alert_text, config.chat_id],
+                    start_to_close_timeout=DELIVERY_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+            except (ActivityError, ApplicationError):
+                pass  # Best effort
+
+        if "email" in channels and config.email_recipients:
+            try:
+                await workflow.execute_activity(
+                    deliver_email_activity,
+                    args=[config.email_recipients, alert_text, config.collection, None],
+                    start_to_close_timeout=EMAIL_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+            except (ActivityError, ApplicationError):
+                pass  # Best effort
+
+        if "whatsapp" in channels and (config.whatsapp_recipients or config.whatsapp_group_id):
+            try:
+                await workflow.execute_activity(
+                    deliver_whatsapp_message_activity,
+                    args=[alert_text, config.whatsapp_recipients, config.whatsapp_group_id],
+                    start_to_close_timeout=WHATSAPP_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+            except (ActivityError, ApplicationError):
+                pass  # Best effort
 
     async def _record_run(
         self,

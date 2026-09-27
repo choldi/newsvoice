@@ -144,6 +144,19 @@ The narration worker uses the same TTS gateway as the digest TTS
 audio to `NARRATION_CACHE_DIR` (`data/narration/`), separate from the digest
 TTS cache.
 
+### Narration delivery (Phase 7.6)
+
+When a collection has `narration_enabled = true` and `narration_deliver_audio = true`
+(default), the generated narration M4A is **delivered** to the collection's
+`delivery_channels` (Telegram audio, email attachment, WhatsApp audio). This is
+in addition to the text digest and the optional TTS audio.
+
+If the narration render fails, an **error notification** is sent to the same
+channels instead of silently substituting a stock Edge voice. To ensure cloned
+voices (e.g. Dwight/MichaelScott) are never silently replaced, set
+`NARRATION_FALLBACK_TO_EDGE=false` in `.env` — the render will fail and the
+error alert will fire, rather than substituting a generic voice.
+
 ### Manual narration render (admin API / CLI)
 
 Trigger a one-off narration from the GUI (`POST /api/admin/narration`) or

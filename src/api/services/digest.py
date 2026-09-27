@@ -96,6 +96,8 @@ class DigestService:
             template=template,
             podcast_name=payload.podcast_name,
             custom_prompt=payload.custom_prompt,
+            main_story_count=payload.main_story_count,
+            headline_count=payload.headline_count,
         )
 
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
@@ -120,7 +122,11 @@ class DigestService:
             stories_text = self._format_clusters(actionable_clusters)
             total_items = sum(len(c.articles) for c in actionable_clusters)
 
-            user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(articles_text=stories_text)
+            user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(
+                articles_text=stories_text,
+                main_story_count=payload.main_story_count,
+                headline_count=payload.headline_count,
+            )
             messages = [
                 {"role": "system", "content": self._system_prompt(payload)},
                 {"role": "user", "content": user_prompt},
@@ -156,7 +162,11 @@ class DigestService:
 
         logger.info("processing_digest_articles", count=len(articles))
         articles_text = self._format_articles(articles)
-        user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(articles_text=articles_text)
+        user_prompt = SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE.format(
+            articles_text=articles_text,
+            main_story_count=payload.main_story_count,
+            headline_count=payload.headline_count,
+        )
 
         messages = [
             {"role": "system", "content": self._system_prompt(payload)},
@@ -188,6 +198,8 @@ class DigestService:
         prompt_template: str = "default",
         custom_prompt: str = "",
         language: str = "",
+        main_story_count: int = 5,
+        headline_count: int = 5,
     ) -> str:
         """Explain the news-selection logic behind an already generated digest.
 
@@ -201,6 +213,8 @@ class DigestService:
             prompt_template: Template name to phrase the active selection rules.
             custom_prompt: Optional custom prompt overriding template rules.
             language: Optional ISO 639-1 language for the explanation.
+            main_story_count: Number of main stories in the digest.
+            headline_count: Number of quick headlines in the digest.
 
         Returns:
             The LLM-generated selection-logic text.
@@ -211,6 +225,10 @@ class DigestService:
                 "A custom collection prompt is in effect; rely on it for the selection criteria."
             )
 
+        system_prompt = GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT.format(
+            main_story_count=main_story_count,
+            headline_count=headline_count,
+        )
         user_prompt = GENERATE_SELECTION_LOGIC_USER_PROMPT_TEMPLATE.format(
             template=custom_prompt or prompt_template,
             template_rules=rules,
@@ -221,7 +239,7 @@ class DigestService:
         if language:
             user_prompt += f"\n\nLanguage: {language}"
         messages = [
-            {"role": "system", "content": GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
         logic_text = await generate_completion(messages=messages, temperature=0.3)

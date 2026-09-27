@@ -5,20 +5,37 @@ EMOTION_TAGS = frozenset(
     {"happy", "sad", "angry", "excited", "calm", "nervous", "whisper", "singing"}
 )
 
-SUMMARIZE_DIGEST_SYSTEM_PROMPT = """You are an expert news editor and curator.
-Your task is to create a daily news digest from a list of input articles.
 
-Requirements:
-1. Output format MUST be Markdown.
-2. Structure the output into TWO sections:
-   - Section 1: "Top 5 Main Stories" (Select 5 most impactful stories/clusters.
-     For each story, provide a title, a 2-3 sentence summary, and source links).
-   - Section 2: "Top 5 Quick Headlines" (Select 5 other notable items
-     and provide a 1-sentence quick bullet summary with link).
-3. Do not invent news. Rely strictly on the provided articles.
-4. If multiple articles cover the same event, combine them into ONE story entry.
-5. Respond in clean Markdown, without extra meta commentary.
-"""
+def _build_base_digest_prompt(main_story_count: int, headline_count: int) -> str:
+    """Build the base digest system prompt with configurable story/headline counts.
+
+    Args:
+        main_story_count: Number of main stories to include.
+        headline_count: Number of quick headlines to include.
+
+    Returns:
+        The base system prompt string with the counts interpolated.
+    """
+    return (
+        "You are an expert news editor and curator.\n"
+        "Your task is to create a daily news digest from a list of input articles.\n\n"
+        "Requirements:\n"
+        "1. Output format MUST be Markdown.\n"
+        "2. Structure the output into TWO sections:\n"
+        f'   - Section 1: "Top {main_story_count} Main Stories" '
+        f"(Select {main_story_count} most impactful stories/clusters.\n"
+        "     For each story, provide a title, a 2-3 sentence summary, and source links).\n"
+        f'   - Section 2: "Top {headline_count} Quick Headlines" '
+        f"(Select {headline_count} other notable items\n"
+        "     and provide a 1-sentence quick bullet summary with link).\n"
+        "3. Do not invent news. Rely strictly on the provided articles.\n"
+        "4. If multiple articles cover the same event, combine them into ONE story entry.\n"
+        "5. Respond in clean Markdown, without extra meta commentary."
+    )
+
+
+SUMMARIZE_DIGEST_SYSTEM_PROMPT = _build_base_digest_prompt(5, 5)
+
 
 PODCAST_BEHAVIOR_PROMPT = """\n\nAdditional instruction:
 {behavior}
@@ -57,7 +74,7 @@ Rules:
 
 # Registry of per-collection digest system prompts. A collection selects a
 # template by name via its `prompt_template` field. Each template must deliver
-# the 5 main stories + 5 headlines structure specified in the base prompt.
+# the configured main stories + headlines structure specified in the base prompt.
 DIGEST_TEMPLATES: dict[str, str] = {
     "default": SUMMARIZE_DIGEST_SYSTEM_PROMPT,
 }
@@ -101,6 +118,22 @@ Investigative-specific requirements:
 Keep the Markdown structure described at the top."""
 )
 
+# Gaming: videojuegos, lanzamientos, reviews, esports, controversias.
+DIGEST_TEMPLATES["gaming"] = (
+    SUMMARIZE_DIGEST_SYSTEM_PROMPT
+    + """
+
+Gaming-specific requirements:
+- Prioritize new releases, major updates, hardware announcements, esports results,
+  and industry controversies.
+- For main stories, use extended summaries of 5-6 sentences covering context,
+  significance, and community reaction.
+- Quote key figures (player counts, revenue, review scores) when present.
+- Note platform exclusivity and release dates clearly.
+
+Keep the Markdown structure described at the top."""
+)
+
 
 def get_digest_template(name: str | None) -> str:
     """Return the system prompt for a template name, defaulting to the base one.
@@ -122,6 +155,8 @@ def build_digest_system_prompt(
     template: str | None = None,
     podcast_name: str | None = None,
     custom_prompt: str | None = None,
+    main_story_count: int = 5,
+    headline_count: int = 5,
 ) -> str:
     """Build the digest system prompt, optionally adding template, behavior, and language.
 
@@ -132,15 +167,18 @@ def build_digest_system_prompt(
         podcast_name: Name of the podcast. Empty/None means no podcast identity injection.
         custom_prompt: Full custom system prompt. When provided (non-blank) it
             replaces the template entirely, overriding prompt_template.
+        main_story_count: Number of main stories to include (default 5).
+        headline_count: Number of quick headlines to include (default 5).
 
     Returns:
         The system prompt for digest generation.
     """
-    prompt = (
-        custom_prompt.strip()
-        if custom_prompt and custom_prompt.strip()
-        else get_digest_template(template)
-    )
+    if main_story_count != 5 or headline_count != 5:
+        base_prompt = _build_base_digest_prompt(main_story_count, headline_count)
+    else:
+        base_prompt = get_digest_template(template)
+
+    prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else base_prompt
     if podcast_name and podcast_name.strip():
         prompt += PODCAST_NAME_PROMPT.format(podcast_name=podcast_name.strip())
     if behavior and behavior.strip():
@@ -167,13 +205,14 @@ def strip_emotion_tags(text: str) -> str:
     return text.replace("[]", "").strip()
 
 
-SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE = """\
-Here is the list of news articles / story clusters to process:
+SUMMARIZE_DIGEST_USER_PROMPT_TEMPLATE = (
+    "Here is the list of news articles / story clusters to process:\n\n"
+    "{articles_text}\n\n"
+    "Please generate the daily news digest "
+    "({main_story_count} Main Stories + {headline_count} Headlines) "
+    "in Markdown format."
+)
 
-{articles_text}
-
-Please generate the daily news digest (5 Main Stories + 5 Headlines) in Markdown format.
-"""
 
 EXTRACT_FINGERPRINT_SYSTEM_PROMPT = """You are an information extraction system.
 Extract the primary main entity and main event action from the given news title and text.
@@ -238,20 +277,19 @@ Title: {new_title}
 Content: {new_content}
 """
 
-GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT = """\
-You are a news editor in charge of explaining the selection logic
-behind a daily AI-curated news digest.
-
-You are given the story clusters the digest was built from and the final digest
-(5 Main Stories + 5 Headlines). Explain, precisely and in a few paragraphs, the
-news selection logic used to pick the main stories and headlines: which clusters
-were chosen, in what order, and why — referencing the selection rules, priority
-criteria, and editorial goals defined by the active collection.
-
-Do NOT re-summarize the articles in detail and do NOT fabricate statistics,
-sources, or reasons that are not present in the input. Write the explanation in
-the requested language.
-"""
+GENERATE_SELECTION_LOGIC_SYSTEM_PROMPT = (
+    "You are a news editor in charge of explaining the selection logic\n"
+    "behind a daily AI-curated news digest.\n\n"
+    "You are given the story clusters the digest was built from and the final digest\n"
+    "({main_story_count} Main Stories + {headline_count} Headlines). "
+    "Explain, precisely and in a few paragraphs, the\n"
+    "news selection logic used to pick the main stories and headlines: which clusters\n"
+    "were chosen, in what order, and why — referencing the selection rules, priority\n"
+    "criteria, and editorial goals defined by the active collection.\n\n"
+    "Do NOT re-summarize the articles in detail and do NOT fabricate statistics,\n"
+    "sources, or reasons that are not present in the input. Write the explanation in\n"
+    "the requested language."
+)
 
 GENERATE_SELECTION_LOGIC_USER_PROMPT_TEMPLATE = """Collection prompt/template: {template}
 Selection rules in effect:
@@ -285,6 +323,11 @@ TEMPLATE_PRIORITY_RULES: dict[str, str] = {
         "Original reporting, accountability and corruption; depth of investigation"
         " and novelty of findings drive the ordering."
     ),
+    "gaming": (
+        "New releases, major patches, hardware reveals, esports results, and"
+        " industry controversies take priority; order tracks player impact and"
+        " community buzz."
+    ),
 }
 
 
@@ -292,43 +335,42 @@ TEMPLATE_PRIORITY_RULES: dict[str, str] = {
 # NARRATION SCRIPT GENERATION (Phase 7.5)
 # =====================================================================
 
-NARRATION_SCRIPT_SYSTEM_PROMPT = """You are an expert news narrator and scriptwriter.
-Your task is to turn a news digest (5 Main Stories + 5 Headlines) into a
-multi-speaker audio script for a narration cast.
-
-INPUT:
-- A markdown digest with "Top 5 Main Stories" and "Top 5 Quick Headlines".
-- A NarrationSpec defining the cast (roles), default language, pause timing,
-  music bed, and render strategy (TURNS or CONVERSATIONS).
-
-OUTPUT:
-A JSON object matching the NarrationScript schema with these fields:
-- source: "llm" (this is always LLM-generated)
-- language: ISO 639-1 code from the spec
-- title: Program title from the spec
-- segments: Array of segment objects, each with:
-    - role: Role name from the spec.roles (must match exactly)
-    - text: Spoken text for this segment (clean, no markdown, no emotion tags)
-    - emotion: Optional emotion tag from EMOTION_TAGS (only if the spec role
-      allows it and the content calls for it)
-    - pause_ms: Optional override of the default pause (ms)
-
-RULES:
-1. The script must cover ALL 5 Main Stories and ALL 5 Headlines, in order.
-2. Distribute speaking time across the available roles as naturally as possible.
-   If only 1 role exists, that role speaks everything.
-3. For TURNS strategy: each segment is one turn. Aim for ~2-4 turns per story.
-4. For CONVERSATIONS strategy: write as a continuous dialogue with role
-   transitions; the renderer will send the whole conversation in one request.
-5. Emotion tags are ONLY allowed when the spec role permits them (OmniVoice
-   backend). Use sparingly: happy, sad, angry, excited, calm, nervous, whisper,
-   singing. If the spec role has a fixed emotion default, you may omit it.
-6. Text must be spoken-form: no markdown, no bullet points, no URLs, no
-   bracketed source citations. Convert to natural speech.
-7. Keep each segment's text under the spec's max_chars_per_request limit.
-8. The total script should render to roughly 3-6 minutes of audio.
-9. Output ONLY the JSON object. No markdown, no explanation, no extra keys.
-"""
+NARRATION_SCRIPT_SYSTEM_PROMPT = (
+    "You are an expert news narrator and scriptwriter.\n"
+    "Your task is to turn a news digest into a\n"
+    "multi-speaker audio script for a narration cast.\n\n"
+    "INPUT:\n"
+    '- A markdown digest with "Top {main_story_count} Main Stories" '
+    'and "Top {headline_count} Quick Headlines".\n'
+    "- A NarrationSpec defining the cast (roles), default language, pause timing,\n"
+    "  music bed, and render strategy (TURNS or CONVERSATIONS).\n\n"
+    "OUTPUT:\n"
+    "A JSON object matching the NarrationScript schema with these fields:\n"
+    '- source: "llm" (this is always LLM-generated)\n'
+    "- language: ISO 639-1 code from the spec\n"
+    "- title: Program title from the spec\n"
+    "- segments: Array of segment objects, each with:\n"
+    "    - role: Role name from the spec.roles (must match exactly)\n"
+    "    - text: Spoken text for this segment (clean, no markdown, no emotion tags)\n"
+    "    - emotion: Optional emotion tag from EMOTION_TAGS (only if the spec role\n"
+    "      allows it and the content calls for it)\n"
+    "    - pause_ms: Optional override of the default pause (ms)\n\n"
+    "RULES:\n"
+    "1. The script must cover ALL main stories and ALL headlines present in the digest, in order.\n"
+    "2. Distribute speaking time across the available roles as naturally as possible.\n"
+    "   If only 1 role exists, that role speaks everything.\n"
+    "3. For TURNS strategy: each segment is one turn. Aim for ~2-4 turns per story.\n"
+    "4. For CONVERSATIONS strategy: write as a continuous dialogue with role\n"
+    "   transitions; the renderer will send the whole conversation in one request.\n"
+    "5. Emotion tags are ONLY allowed when the spec role permits them (OmniVoice\n"
+    "   backend). Use sparingly: happy, sad, angry, excited, calm, nervous, whisper,\n"
+    "   singing. If the spec role has a fixed emotion default, you may omit it.\n"
+    "6. Text must be spoken-form: no markdown, no bullet points, no URLs, no\n"
+    "   bracketed source citations. Convert to natural speech.\n"
+    "7. Keep each segment's text under the spec's max_chars_per_request limit.\n"
+    "8. The total script should render to roughly 8-14 minutes of audio.\n"
+    "9. Output ONLY the JSON object. No markdown, no explanation, no extra keys."
+)
 
 NARRATION_SCRIPT_USER_PROMPT_TEMPLATE = """Digest to narrate (Markdown):
 {digest_markdown}
@@ -342,6 +384,22 @@ Generate the NarrationScript JSON now.
 # Registry of per-collection narration script prompts (extensible for Phase 7.5+)
 NARRATION_SCRIPT_TEMPLATES: dict[str, str] = {
     "default": NARRATION_SCRIPT_SYSTEM_PROMPT,
+    "gaming": (
+        NARRATION_SCRIPT_SYSTEM_PROMPT
+        + """
+
+Gaming podcast style:
+- Two hosts in conversational dialogue (Michael Scott as the enthusiastic host,
+  Dwight as the deadpan analyst/commentator).
+- Open with: "Welcome to Game Over, your daily gaming briefing."
+- Alternate hosts naturally: Michael leads the main stories with excitement,
+  Dwight provides context, skepticism, or industry insight.
+- For headlines: quick back-and-forth banter, one-liners per item.
+- Use gaming terminology naturally (patch, meta, nerf, speedrun, NPC, grind, etc.).
+- Keep segments tight: 2-3 sentences max per turn.
+- Total target: ~10-12 minutes for 5 extended stories + 10 headlines.
+"""
+    ),
 }
 
 

@@ -1,0 +1,133 @@
+{
+  "title": "Game Over",
+  "language": "en",
+  "source": "llm",
+  "segments": [
+    {
+      "role": "michael",
+      "text": "Welcome to Game Over, your daily gaming briefing. Today we're talking about the massive Starfield update that just dropped.",
+      "emotion": "excited",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "dwight",
+      "text": "Starfield's Shattered Space expansion launched yesterday. Bethesda added a new faction, the House Va'ruun, and overhauled the city-building mechanics. Early Steam reviews are mixed, sitting at sixty-eight percent positive.",
+      "emotion": "calm",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "michael",
+      "text": "Mixed reviews for a Bethesda RPG? Color me shocked. But seriously, the city building overhaul sounds like what players have been asking for since launch. Let's move to our second story.",
+      "emotion": "happy",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "dwight",
+      "text": "Sony confirmed the PlayStation 5 Pro launches November seventh, priced at six hundred ninety-nine dollars. The GPU is forty-five percent faster with advanced ray tracing. No disc drive included — that's a separate seventy-nine dollar accessory.",
+      "emotion": "calm",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "michael",
+      "text": "Seven hundred bucks for a mid-gen refresh? And they want eighty more for the disc drive? Dwight, tell me this isn't real.",
+      "emotion": "excited",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "dwight",
+      "text": "It's real. The SSD is two terabytes now, up from one. PSSR — PlayStation Spectral Super Resolution — is their answer to DLSS. First-party titles like Spider-Man 2 and Final Fantasy VII Rebirth will get Pro patches at launch.",
+      "emotion": "calm",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "michael",
+      "text": "Okay, that's actually pretty cool. PSSR could be a game changer for console ray tracing. Next up, the esports world.",
+      "emotion": "excited",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "dwight",
+      "text": "The League of Legends World Championship Swiss stage concluded yesterday. T1, Gen.G, and JDG advanced to the knockout stage at Worlds. The LCK continues its dominance with three Korean teams in the top eight.",
+      "emotion": "calm",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "michael",
+      "text": "Korean dominance, as always. But keep an eye on the LPL — Bilibili Gaming looked scary good in groups. Let's hit the headlines rapid-fire style.",
+      "emotion": "happy",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "dwight",
+      "text": "Headline one: Baldur's Gate 3 Patch 7 adds official mod support and a photo mode. Larian says it's the final major update.",
+      "emotion": "calm",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline two: Microsoft Flight Simulator 2024 delayed to November nineteenth. Asobo needs more time for the career mode polish.",
+      "emotion": "excited",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline three: Steam Deck OLED now available in all regions. Valve says production has caught up with demand.",
+      "emotion": "calm",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline four: Ubisoft's XDefiant season two launches tomorrow with a new faction and map. Free to play, cross-play enabled.",
+      "emotion": "excited",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline five: Nintendo sued the developers of Yuzu emulator. The settlement requires them to pay two point four million dollars and cease development.",
+      "emotion": "calm",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline six: Final Fantasy XIV Dawntrail expansion hits one million sales in first week. Square Enix calls it a strong start.",
+      "emotion": "excited",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline seven: Epic Games Store free this week — The Elder Scrolls IV: Oblivion Game of the Year Edition. Grab it before Thursday.",
+      "emotion": "calm",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline eight: Discord now lets you stream games at 4K sixty FPS for Nitro subscribers. Finally, decent quality streaming.",
+      "emotion": "excited",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline nine: Valve banned one million cheaters in CS2 last month via VAC Live. The new anti-cheat is working.",
+      "emotion": "calm",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline ten: Indie hit Balatro hit five million copies sold. LocalThunk says the poker roguelike will get a mobile port next year.",
+      "emotion": "excited",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "That wraps today's briefing. Thanks for listening to Game Over. I'm Dwight, and as always — save often.",
+      "emotion": "calm",
+      "pause_after_ms": 350
+    },
+    {
+      "role": "michael",
+      "text": "And I'm Michael — see you tomorrow for more gaming news! Game Over and out!",
+      "emotion": "excited",
+      "pause_after_ms": 350
+    }
+  ]
+}

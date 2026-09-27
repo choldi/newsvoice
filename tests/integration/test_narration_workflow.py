@@ -377,4 +377,6 @@ def test_narration_payload_merges_the_opt_in() -> None:
         "script": SCRIPT,
         "script_id": None,
         "strategy": "conversations",
+        "main_story_count": 5,
+        "headline_count": 5,
     }

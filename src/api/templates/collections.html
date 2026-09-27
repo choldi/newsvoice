@@ -68,7 +68,7 @@
         <div class="col">
           <label>Prompt template</label>
           <select name="prompt_template">
-            {% for t in ['default', 'finance', 'health', 'investigative'] %}
+            {% for t in ['default', 'finance', 'health', 'investigative', 'gaming'] %}
             <option value="{{ t }}" {{ 'selected' if c.prompt_template == t else '' }}>{{ t }}</option>
             {% endfor %}
           </select>
@@ -160,6 +160,19 @@
               </select>
             </div>
           </div>
+          <div class="row">
+            <div class="col">
+              <label>Historias principales</label>
+              <input type="number" name="main_story_count" value="{{ c.main_story_count }}" min="1" max="20">
+            </div>
+            <div class="col">
+              <label>Titulares</label>
+              <input type="number" name="headline_count" value="{{ c.headline_count }}" min="1" max="40">
+            </div>
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" {{ 'checked' if c.narration_deliver_audio else '' }}><label>Entregar audio de narración</label></div>
+            </div>
+          </div>
           <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
           <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px">{{ c.narration_spec|tojson(indent=2) if c.narration_spec else '' }}</textarea>
           <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
@@ -203,7 +216,7 @@
       <div class="col">
         <label>Prompt template</label>
         <select name="prompt_template">
-          {% for t in ['default', 'finance', 'health', 'investigative'] %}
+          {% for t in ['default', 'finance', 'health', 'investigative', 'gaming'] %}
           <option value="{{ t }}" {{ 'selected' if t == 'default' else '' }}>{{ t }}</option>
           {% endfor %}
         </select>
@@ -293,6 +306,19 @@
               <option value="turns" selected>Por turnos (TURNS)</option>
               <option value="conversations">Conversaciones (CONVERSATIONS)</option>
             </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Historias principales</label>
+            <input type="number" name="main_story_count" value="5" min="1" max="20">
+          </div>
+          <div class="col">
+            <label>Titulares</label>
+            <input type="number" name="headline_count" value="5" min="1" max="40">
+          </div>
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" checked><label>Entregar audio de narración</label></div>
           </div>
         </div>
         <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>

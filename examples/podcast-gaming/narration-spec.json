@@ -1,0 +1,25 @@
+{
+  "title": "Game Over",
+  "language": "en",
+  "roles": [
+    {
+      "name": "michael",
+      "voice_id": "3e47fbcc-53a8-4551-be91-48f93d62a19f",
+      "language": "en",
+      "speed": 1.0,
+      "emotion": "excited"
+    },
+    {
+      "name": "dwight",
+      "voice_id": "f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8",
+      "language": "en",
+      "speed": 1.0,
+      "emotion": "calm"
+    }
+  ],
+  "pause_ms": 350,
+  "max_chars_per_request": 1500,
+  "music": null,
+  "speed": 1.0,
+  "emotion": null
+}

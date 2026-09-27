@@ -50,6 +50,9 @@ _COLLECTION_KEYS = (
     "narration_enabled",
     "narration_spec",
     "narration_strategy",
+    "narration_deliver_audio",
+    "main_story_count",
+    "headline_count",
     "enabled",
 )
 

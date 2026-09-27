@@ -258,6 +258,8 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
     run_id = _run_id(payload)
     collection = str(payload.get("collection") or "default")
     prompt_template = str(payload.get("prompt_template") or "default")
+    main_story_count = int(payload.get("main_story_count") or 5)
+    headline_count = int(payload.get("headline_count") or 5)
 
     # Fetch the digest text from the run
     row = await RunsRepository().get_run_by_workflow_id(run_id)
@@ -267,7 +269,13 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
     if not digest_markdown:
         raise ApplicationError(f"Digest run {run_id} has no digest text", non_retryable=True)
 
-    system_prompt = build_narration_script_system_prompt(prompt_template)
+    # The narration script system prompt now has {main_story_count} and {headline_count}
+    # placeholders that must be filled with the actual counts.
+    system_prompt_template = build_narration_script_system_prompt(prompt_template)
+    system_prompt = system_prompt_template.format(
+        main_story_count=main_story_count,
+        headline_count=headline_count,
+    )
     user_prompt = NARRATION_SCRIPT_USER_PROMPT_TEMPLATE.format(
         digest_markdown=digest_markdown,
         spec_json=spec.model_dump_json(indent=2),

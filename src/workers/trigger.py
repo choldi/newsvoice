@@ -74,6 +74,18 @@ async def main() -> None:
         default=[],
         help="RSS feed URL (repeatable). Defaults to RSS_FEED_URLS env config.",
     )
+    parser.add_argument(
+        "--main-stories",
+        type=int,
+        default=5,
+        help="Number of main stories in the digest (default 5).",
+    )
+    parser.add_argument(
+        "--headlines",
+        type=int,
+        default=5,
+        help="Number of quick headlines in the digest (default 5).",
+    )
     args = parser.parse_args()
 
     if args.collection:
@@ -99,6 +111,8 @@ async def main() -> None:
             voice=args.voice or settings.tts_voice,
             collection="default",
             prompt_template="default",
+            main_story_count=args.main_stories,
+            headline_count=args.headlines,
         )
 
     workflow_id = (

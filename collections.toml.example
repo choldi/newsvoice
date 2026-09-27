@@ -8,7 +8,7 @@
 # - `time` is HH:MM 24-hour UTC — this collection's digest will run daily at it.
 # - `enabled = false` pauses a collection without deleting its config.
 # - `prompt_template` selects a system prompt from src/core/prompts.py
-#   (built-in: default, finance, health, investigative).
+#   (built-in: default, finance, health, investigative, gaming).
 # - `custom_prompt` (optional) replaces prompt_template entirely: when set, the
 #   collection uses this full custom system prompt instead of any built-in one.
 # - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
@@ -24,12 +24,18 @@
 #   recipients / group).
 # - `deliver_audio = true` attaches the generated audio to Telegram AND to the
 #   email and WhatsApp deliveries (when those channels are active).
+# - Configurable story counts (Phase 7.6):
+#   `main_story_count` (1-20, default 5) — number of main stories in the digest.
+#   `headline_count` (1-40, default 5) — number of quick headlines in the digest.
 # - Narration (Phase 7): `narration_enabled = true` generates a multi-speaker
 #   audio piece from the same digest. Requires `narration_spec` with the cast,
 #   music bed, and defaults. `narration_strategy` selects the render mode:
 #   "turns" (default, one request per segment) or "conversations" (single
 #   request, requires homogeneous cast). The global kill switch is
 #   `NARRATION_ENABLED` in .env.
+# - `narration_deliver_audio = true` (default) delivers the narration M4A to the
+#   configured `delivery_channels`. When false, the narration audio is only stored
+#   in `data/narration/` and the DB, not sent to any channel.
 
 [collection_defaults]
 tts_enabled = false
@@ -38,6 +44,9 @@ language = "es"
 voice = "es-mx-male"
 narration_enabled = false
 narration_strategy = "turns"
+narration_deliver_audio = true
+main_story_count = 5
+headline_count = 5
 # narration_spec = { title = "Briefing", language = "es", roles = [{name="anchor",voice_id="es-mx-male"}], pause_ms = 400, music = null }
 
 [[collections]]

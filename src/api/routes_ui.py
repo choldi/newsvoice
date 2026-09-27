@@ -683,6 +683,9 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             narration_enabled=fields.get("narration_enabled") == "on",
             narration_spec=_narration_spec_from_form(fields),
             narration_strategy=fields.get("narration_strategy", "turns"),
+            narration_deliver_audio=fields.get("narration_deliver_audio") != "off",
+            main_story_count=int(fields.get("main_story_count") or 5),
+            headline_count=int(fields.get("headline_count") or 5),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -740,6 +743,9 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             narration_enabled=fields.get("narration_enabled") == "on",
             narration_spec=_narration_spec_from_form(fields),
             narration_strategy=fields.get("narration_strategy", "turns"),
+            narration_deliver_audio=fields.get("narration_deliver_audio") != "off",
+            main_story_count=int(fields.get("main_story_count") or 5),
+            headline_count=int(fields.get("headline_count") or 5),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

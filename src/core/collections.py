@@ -149,6 +149,15 @@ class CollectionConfig(BaseModel):
     narration_strategy: str = Field(
         default="turns", description="Render strategy: 'turns' or 'conversations'"
     )
+    narration_deliver_audio: bool = Field(
+        default=True, description="Deliver the narration audio to configured channels"
+    )
+    main_story_count: int = Field(
+        default=5, ge=1, le=20, description="Number of main stories to include"
+    )
+    headline_count: int = Field(
+        default=5, ge=1, le=40, description="Number of quick headlines to include"
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     @field_validator("name")

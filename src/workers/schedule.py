@@ -83,6 +83,9 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
             collection.logic_delivery.model_dump() if collection.logic_delivery else None
         ),
         narration=narration_payload,
+        main_story_count=collection.main_story_count,
+        headline_count=collection.headline_count,
+        narration_deliver_audio=collection.narration_deliver_audio,
     )
 
 
