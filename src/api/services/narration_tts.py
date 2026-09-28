@@ -455,6 +455,55 @@ def _split_on_words(text: str, max_chars: int) -> list[str]:
     return pieces
 
 
+def split_turns_into_blocks(
+    turns: Sequence[dict[str, Any]],
+    *,
+    max_chars: int,
+    max_turns: int,
+    min_turns: int,
+) -> list[list[dict[str, Any]]]:
+    """Split a turn list into conversation blocks.
+
+    Blocks are cut at turn boundaries only: a turn is never split, so a block
+    boundary always falls between two complete sentences (turns come from
+    :func:`chunk_text`, which packs whole sentences). A trailing block with
+    fewer turns than ``min_turns`` is merged into the previous one, which may
+    push that block over the caps: a slightly larger request beats a tiny one.
+
+    Args:
+        turns: Turn dicts with 'voice_id', 'text' and 'language'.
+        max_chars: Maximum characters per block.
+        max_turns: Maximum turns per block.
+        min_turns: Trailing blocks smaller than this are merged backwards.
+
+    Returns:
+        The turns grouped into blocks, in order. Empty when ``turns`` is empty.
+
+    Raises:
+        NarrationRenderError: If any cap is not positive.
+    """
+    if max_chars <= 0 or max_turns <= 0 or min_turns <= 0:
+        raise NarrationRenderError("block caps must be positive")
+    if not turns:
+        return []
+    blocks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_chars = 0
+    for turn in turns:
+        text = str(turn.get("text") or "")
+        if current and (current_chars + len(text) > max_chars or len(current) >= max_turns):
+            blocks.append(current)
+            current, current_chars = [], 0
+        current.append(turn)
+        current_chars += len(text)
+    if current:
+        blocks.append(current)
+    if len(blocks) > 1 and len(blocks[-1]) < min_turns:
+        blocks[-2].extend(blocks[-1])
+        blocks.pop()
+    return blocks
+
+
 def content_hash(
     spec: NarrationSpec, script: NarrationScript, strategy: RenderStrategy = RenderStrategy.TURNS
 ) -> str:
@@ -567,6 +616,10 @@ class NarrationTTSService:
         self._fallback_to_edge = settings.narration_fallback_to_edge
         self._dialog_fallback_to_edge = settings.narrations_dialog_fallback_to_edge
         self._semaphore = asyncio.Semaphore(settings.narration_max_concurrency)
+        self._conv_max_chars = settings.narration_conversation_max_chars_per_block
+        self._conv_max_turns = settings.narration_conversation_max_turns_per_block
+        self._conv_min_turns = settings.narration_conversation_min_block_turns
+        self._conv_retries = settings.narration_conversation_block_retries
 
     # --- Gateway plumbing ---------------------------------------------------
 
@@ -806,28 +859,83 @@ class NarrationTTSService:
     async def synthesize_conversation(
         self, turns: list[dict[str, Any]], pause_ms: int, speed: float = 1.0
     ) -> bytes:
-        """Render several turns in a single gateway request.
+        """Render a conversation as several gateway requests, one per block.
 
         Only safe for homogeneous casts: the gateway concatenates the raw frames
         of every turn using the *last* turn's sample rate, so mixed engines would
         come out at the wrong pitch. Use :meth:`render`, which enforces the
         homogeneity rule before calling this.
 
+        The whole dialogue would be a single request, which risks the request
+        timeout on CPU and loses everything when one turn fails. Instead the
+        turns are split into blocks (see :func:`split_turns_into_blocks`), each
+        block is rendered on its own, and the canonical WAVs are joined with the
+        same pause the gateway inserts between turns, so a block boundary sounds
+        like any other turn change.
+
         Args:
             turns: Turn dicts with 'voice_id', 'text' and 'language'.
-            pause_ms: Silence inserted between turns, in milliseconds. The
-                gateway does not scale these with ``speed``.
+            pause_ms: Silence inserted between turns and between blocks, in
+                milliseconds. The gateway does not scale these with ``speed``.
             speed: Speaking rate applied to every turn, in [0.5, 2.0].
 
         Returns:
-            A single WAV payload.
+            A single WAV payload in canonical format.
 
         Raises:
-            NarrationGatewayError: If the gateway rejects the conversation.
+            NarrationGatewayError: If the gateway rejects every attempt of a
+                block.
         """
-        return await self._post_audio(
-            "conversations", {"turns": turns, "pause_ms": pause_ms, "speed": speed}
+        blocks = split_turns_into_blocks(
+            turns,
+            max_chars=self._conv_max_chars,
+            max_turns=self._conv_max_turns,
+            min_turns=self._conv_min_turns,
         )
+        logger.info(
+            "narration_conversation_blocks_rendered",
+            blocks=len(blocks),
+            turns=len(turns),
+        )
+        parts: list[tuple[bytes, int]] = []
+        for index, block in enumerate(blocks):
+            audio = await self._post_conversation_block(
+                {"turns": block, "pause_ms": pause_ms, "speed": speed}, index=index
+            )
+            parts.append((await self._to_canonical(audio), pause_ms))
+        return concat_wavs(parts)
+
+    async def _post_conversation_block(self, payload: dict[str, Any], *, index: int) -> bytes:
+        """POST one conversation block, retrying on gateway failure.
+
+        The conversations strategy has no Edge fallback, so a single failed turn
+        would otherwise discard the whole render. Retrying just the failed block
+        keeps a transient gateway error from throwing away minutes of audio.
+
+        Args:
+            payload: The block payload for the gateway.
+            index: Block position, for logging.
+
+        Returns:
+            The raw WAV payload from the gateway.
+
+        Raises:
+            NarrationGatewayError: If every attempt fails.
+        """
+        attempts = self._conv_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return await self._post_audio("conversations", payload)
+            except NarrationGatewayError as exc:
+                if attempt >= attempts:
+                    raise
+                logger.warning(
+                    "narration_conversation_block_retry",
+                    block=index,
+                    attempt=attempt,
+                    error=str(exc),
+                )
+        raise NarrationGatewayError(f"conversation block {index} failed")
 
     async def _edge_synthesize(self, text: str, voice: str) -> bytes:
         """Synthesize text with edge-tts and convert the MP3 to canonical WAV.
@@ -1199,6 +1307,7 @@ class NarrationTTSService:
                     voices=list(meta.get("voices", [])),
                     used_conversations_api=bool(meta.get("used_conversations_api", False)),
                     edge_fallbacks=int(meta.get("edge_fallbacks", 0)),
+                    conversation_blocks=int(meta.get("conversation_blocks", 1)),
                     music=meta.get("music"),
                     title=script.title or spec.title,
                 )
@@ -1220,8 +1329,17 @@ class NarrationTTSService:
                 used_voices=used_voices,
                 strategy=str(strategy),
             )
+        conversation_blocks = 1
         if used_conversations:
             turns, speed = self._turns_for_conversation(spec, script)
+            conversation_blocks = len(
+                split_turns_into_blocks(
+                    turns,
+                    max_chars=self._conv_max_chars,
+                    max_turns=self._conv_max_turns,
+                    min_turns=self._conv_min_turns,
+                )
+            )
             audio = await self._to_canonical(
                 await self.synthesize_conversation(turns, spec.pause_ms, speed=speed)
             )
@@ -1257,6 +1375,7 @@ class NarrationTTSService:
                     "voices": used_voices,
                     "used_conversations_api": used_conversations,
                     "edge_fallbacks": fallbacks,
+                    "conversation_blocks": conversation_blocks,
                     "music": spec.music.track if spec.music else None,
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
@@ -1282,6 +1401,7 @@ class NarrationTTSService:
             voices=used_voices,
             used_conversations_api=used_conversations,
             edge_fallbacks=fallbacks,
+            conversation_blocks=conversation_blocks,
             music=spec.music.track if spec.music else None,
             title=script.title or spec.title,
         )

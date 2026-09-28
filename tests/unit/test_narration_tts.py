@@ -7,6 +7,7 @@ import subprocess
 import wave
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from src.api.models.narration import (
     NarrationSpec,
 )
 from src.api.services import narration_tts as narration_module
+from src.api.services.audio_files import read_sidecar, sidecar_path
 from src.api.services.narration_tts import (
     CANONICAL_FORMAT,
     CANONICAL_RATE,
@@ -32,6 +34,7 @@ from src.api.services.narration_tts import (
     is_audible,
     narration_filename,
     silence_bytes,
+    split_turns_into_blocks,
     wav_duration,
     wav_format,
     wav_peak_ratio,
@@ -1127,6 +1130,186 @@ async def test_conversations_strategy_needs_two_turns(
     with pytest.raises(NarrationRenderError, match="at least 2 turns"):
         await service.render(spec, script, strategy=RenderStrategy.CONVERSATIONS)
     assert MIN_CONVERSATION_TURNS == 2
+    await service.aclose()
+
+
+# --- Conversation blocks ---------------------------------------------------
+
+
+def _turns(*texts: str) -> list[dict[str, Any]]:
+    """Build turn dicts with a stock voice, one per text."""
+    return [{"voice_id": "es-mx-male", "text": text, "language": "es"} for text in texts]
+
+
+def test_split_turns_into_blocks_respects_the_char_cap() -> None:
+    blocks = split_turns_into_blocks(
+        _turns("a" * 1000, "b" * 1000, "c" * 1000),
+        max_chars=2500,
+        max_turns=10,
+        min_turns=1,
+    )
+
+    assert [[turn["text"] for turn in block] for block in blocks] == [
+        ["a" * 1000, "b" * 1000],
+        ["c" * 1000],
+    ]
+
+
+def test_split_turns_into_blocks_respects_the_turn_cap() -> None:
+    blocks = split_turns_into_blocks(
+        _turns("uno", "dos", "tres", "cuatro", "cinco"),
+        max_chars=100_000,
+        max_turns=2,
+        min_turns=1,
+    )
+
+    assert [[turn["text"] for turn in block] for block in blocks] == [
+        ["uno", "dos"],
+        ["tres", "cuatro"],
+        ["cinco"],
+    ]
+
+
+def test_split_turns_into_blocks_merges_a_short_tail() -> None:
+    blocks = split_turns_into_blocks(
+        _turns("uno", "dos", "tres", "cuatro", "cinco"),
+        max_chars=100_000,
+        max_turns=2,
+        min_turns=2,
+    )
+
+    assert [[turn["text"] for turn in block] for block in blocks] == [
+        ["uno", "dos"],
+        ["tres", "cuatro", "cinco"],
+    ]
+
+
+def test_split_turns_into_blocks_keeps_an_oversized_turn_alone() -> None:
+    blocks = split_turns_into_blocks(_turns("x" * 5000), max_chars=1000, max_turns=10, min_turns=2)
+
+    assert [[turn["text"] for turn in block] for block in blocks] == [["x" * 5000]]
+
+
+def test_split_turns_into_blocks_handles_empty_and_single_turns() -> None:
+    assert split_turns_into_blocks([], max_chars=100, max_turns=2, min_turns=1) == []
+    assert split_turns_into_blocks(_turns("solo"), max_chars=100, max_turns=2, min_turns=2) == [
+        [{"voice_id": "es-mx-male", "text": "solo", "language": "es"}]
+    ]
+
+
+def test_split_turns_into_blocks_rejects_non_positive_caps() -> None:
+    with pytest.raises(NarrationRenderError, match="block caps must be positive"):
+        split_turns_into_blocks(_turns("uno"), max_chars=0, max_turns=2, min_turns=1)
+
+
+async def test_synthesize_conversation_posts_one_request_per_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=24000))
+
+    monkeypatch.setattr(settings, "narration_conversation_max_chars_per_block", 100)
+    monkeypatch.setattr(settings, "narration_conversation_max_turns_per_block", 10)
+    monkeypatch.setattr(settings, "narration_conversation_min_block_turns", 1)
+    service, _ = _service(tmp_path, handler)
+
+    audio = await service.synthesize_conversation(
+        _turns("a" * 60, "b" * 60, "c" * 60), pause_ms=500, speed=1.1
+    )
+
+    assert len(calls) == 3
+    assert [len(call["turns"]) for call in calls] == [1, 1, 1]
+    assert all(call["speed"] == 1.1 for call in calls)
+    assert all(call["pause_ms"] == 500 for call in calls)
+    # three one-second blocks joined by two 500 ms pauses
+    assert wav_duration(audio) == pytest.approx(4.0, abs=0.05)
+    await service.aclose()
+
+
+async def test_synthesize_conversation_retries_a_failed_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, json={"detail": {"detail": "engine down"}})
+        return httpx.Response(200, content=_wav(frames=24000))
+
+    monkeypatch.setattr(settings, "narration_conversation_max_chars_per_block", 100)
+    monkeypatch.setattr(settings, "narration_conversation_max_turns_per_block", 10)
+    monkeypatch.setattr(settings, "narration_conversation_min_block_turns", 1)
+    service, _ = _service(tmp_path, handler)
+
+    audio = await service.synthesize_conversation(_turns("a" * 60), pause_ms=500)
+
+    assert attempts == 2
+    assert wav_duration(audio) == pytest.approx(1.0, abs=0.05)
+    await service.aclose()
+
+
+async def test_synthesize_conversation_gives_up_after_the_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, json={"detail": {"detail": "engine down"}})
+
+    monkeypatch.setattr(settings, "narration_conversation_max_chars_per_block", 100)
+    monkeypatch.setattr(settings, "narration_conversation_max_turns_per_block", 10)
+    monkeypatch.setattr(settings, "narration_conversation_min_block_turns", 1)
+    monkeypatch.setattr(settings, "narration_conversation_block_retries", 2)
+    service, _ = _service(tmp_path, handler)
+
+    with pytest.raises(NarrationGatewayError, match="engine down"):
+        await service.synthesize_conversation(_turns("a" * 60), pause_ms=500)
+
+    assert attempts == 3
+    await service.aclose()
+
+
+async def test_render_conversations_records_the_block_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=24000))
+
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(settings, "narration_conversation_max_chars_per_block", 100)
+    monkeypatch.setattr(settings, "narration_conversation_max_turns_per_block", 10)
+    monkeypatch.setattr(settings, "narration_conversation_min_block_turns", 1)
+    service, _ = _service(tmp_path, handler)
+    spec = _spec(
+        roles=[
+            {"name": "anchor", "voice_id": "es-mx-male"},
+            {"name": "guest", "voice_id": "es-mx-female"},
+        ]
+    )
+    script = _script(
+        spec,
+        [
+            {"role": "anchor", "text": "a" * 60},
+            {"role": "guest", "text": "b" * 60},
+            {"role": "anchor", "text": "c" * 60},
+        ],
+    )
+
+    result = await service.render(
+        spec, script, collection="tech", strategy=RenderStrategy.CONVERSATIONS
+    )
+
+    assert result.conversation_blocks == 3
+    meta = read_sidecar(sidecar_path(Path(result.wav_path)))
+    assert meta is not None
+    assert meta["conversation_blocks"] == 3
     await service.aclose()
 
 

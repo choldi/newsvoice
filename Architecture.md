@@ -91,6 +91,8 @@ same digest. It is generic multi-speaker narration, not a news-only podcast.
      |                  queue, only NarrationWorkflow + narration activities)
      |--> [resolve_narration_script_activity]  inline script or narration_scripts row
      |--> [render_narration_activity]  --> TTS gateway /tts | /conversations
+     |                                    (conversations: one request per block,
+     |                                     blocks joined with the turn pause)
      |                                    + ffmpeg music bed + M4A encode
      v
 [digest_runs.narration_path]  +  audio_jobs row with kind='narration'

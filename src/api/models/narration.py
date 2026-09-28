@@ -394,6 +394,7 @@ class NarrationOut(BaseModel):
         voices: Voice ids actually used, in order of first appearance.
         used_conversations_api: Whether the multi-turn gateway endpoint was used.
         edge_fallbacks: Number of turns that fell back to a direct Edge call.
+        conversation_blocks: Gateway requests the conversation was split into.
         music: Music track mixed in, if any.
         title: Program title of the rendered piece.
     """
@@ -409,5 +410,8 @@ class NarrationOut(BaseModel):
         default=False, description="True when /conversations was used"
     )
     edge_fallbacks: int = Field(default=0, ge=0, description="Turns served by direct Edge")
+    conversation_blocks: int = Field(
+        default=1, ge=1, description="Gateway requests the conversation was split into"
+    )
     music: str | None = Field(default=None, description="Music track mixed in")
     title: str = Field(default="", description="Program title")

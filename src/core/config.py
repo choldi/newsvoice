@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -135,6 +135,19 @@ class Settings(BaseSettings):
     # requests are split client-side and the cap must be respected.
     narration_max_chars_per_request: int = Field(default=1500, ge=100, le=10_000)
     narration_max_concurrency: int = Field(default=2, ge=1, le=8)
+    # The conversations strategy renders the whole dialogue in one gateway
+    # request. Long requests risk timeouts and degrade on CPU, so the client
+    # splits them into blocks of at most this many characters. Cuts fall
+    # between turns, never inside a sentence.
+    narration_conversation_max_chars_per_block: int = Field(default=4000, ge=500, le=20_000)
+    # Hard cap on turns per block, so a block of many short turns stays small.
+    narration_conversation_max_turns_per_block: int = Field(default=10, ge=2, le=60)
+    # A trailing block with fewer turns than this is merged into the previous
+    # one, so the render does not end with a tiny request.
+    narration_conversation_min_block_turns: int = Field(default=2, ge=1, le=20)
+    # Retries per block. The conversations strategy has no Edge fallback, so a
+    # single failed turn would otherwise kill the whole render.
+    narration_conversation_block_retries: int = Field(default=1, ge=0, le=5)
     # Generous timeout: the gateway has no server-side timeout, and a long
     # multi-turn conversation can take minutes on CPU.
     narration_request_timeout: int = Field(default=300, ge=1)
@@ -146,6 +159,19 @@ class Settings(BaseSettings):
     # Overrides narration_fallback_to_edge for dialog renders.
     narrations_dialog_fallback_to_edge: bool = False
     narration_audio_bitrate_kbps: int = Field(default=64, ge=16, le=320)
+
+    @model_validator(mode="after")
+    def _conversation_block_bounds(self) -> "Settings":
+        """Keep the block merge floor at or below the block turn cap."""
+        if (
+            self.narration_conversation_min_block_turns
+            > self.narration_conversation_max_turns_per_block
+        ):
+            raise ValueError(
+                "narration_conversation_min_block_turns must not exceed "
+                "narration_conversation_max_turns_per_block"
+            )
+        return self
 
     @property
     def data_dir(self) -> Path:
