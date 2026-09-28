@@ -17,8 +17,8 @@ Design notes, all of them forced by how the gateway actually behaves:
   rate.** Mixing engines with different rates in one request therefore produces
   mangled audio, so the single-request path is an explicit opt-in
   (:class:`RenderStrategy`) and the default is turn-by-turn synthesis with local
-  resampling. The endpoint also ignores per-turn speed and emotion, and needs at
-  least two turns.
+  resampling. The endpoint applies one global speed (it still ignores
+  per-turn emotion) and needs at least two turns.
 
 Narration audio is cached by content hash (spec + script) in
 ``narration_cache_dir``, next to a JSON sidecar, exactly like the digest TTS
@@ -803,7 +803,9 @@ class NarrationTTSService:
                     f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
                 ) from edge_exc
 
-    async def synthesize_conversation(self, turns: list[dict[str, Any]], pause_ms: int) -> bytes:
+    async def synthesize_conversation(
+        self, turns: list[dict[str, Any]], pause_ms: int, speed: float = 1.0
+    ) -> bytes:
         """Render several turns in a single gateway request.
 
         Only safe for homogeneous casts: the gateway concatenates the raw frames
@@ -813,7 +815,9 @@ class NarrationTTSService:
 
         Args:
             turns: Turn dicts with 'voice_id', 'text' and 'language'.
-            pause_ms: Silence inserted between turns, in milliseconds.
+            pause_ms: Silence inserted between turns, in milliseconds. The
+                gateway does not scale these with ``speed``.
+            speed: Speaking rate applied to every turn, in [0.5, 2.0].
 
         Returns:
             A single WAV payload.
@@ -821,7 +825,9 @@ class NarrationTTSService:
         Raises:
             NarrationGatewayError: If the gateway rejects the conversation.
         """
-        return await self._post_audio("conversations", {"turns": turns, "pause_ms": pause_ms})
+        return await self._post_audio(
+            "conversations", {"turns": turns, "pause_ms": pause_ms, "speed": speed}
+        )
 
     async def _edge_synthesize(self, text: str, voice: str) -> bytes:
         """Synthesize text with edge-tts and convert the MP3 to canonical WAV.
@@ -1013,15 +1019,16 @@ class NarrationTTSService:
 
     def _turns_for_conversation(
         self, spec: NarrationSpec, script: NarrationScript
-    ) -> list[dict[str, Any]]:
-        """Build the turn list for the single-request strategy.
+    ) -> tuple[list[dict[str, Any]], float]:
+        """Build the turn list and speaking rate for the single-request strategy.
 
         Args:
             spec: Narration spec.
             script: Script to render.
 
         Returns:
-            Turn list ready for ``/conversations``.
+            Turn list ready for ``/conversations`` and the single speaking
+            rate shared by every turn.
 
         Raises:
             NarrationRenderError: If the cast needs per-turn emotion, needs
@@ -1053,13 +1060,14 @@ class NarrationTTSService:
                     }
                 )
         if len(speeds) > 1:
-            # The endpoint takes no per-turn speed, so a heterogeneous cast would
-            # be rendered at one arbitrary rate: fail loudly instead.
+            # The endpoint takes one speed for the whole request, so a
+            # heterogeneous cast would be rendered at one arbitrary rate: fail
+            # loudly instead.
             raise NarrationRenderError(
                 "the conversations endpoint applies a single speaking rate, got "
                 f"{sorted(speeds)}; use the turns strategy for per-role speeds"
             )
-        return turns
+        return turns, speeds.pop()
 
     @staticmethod
     def _used_voices(spec: NarrationSpec, script: NarrationScript) -> list[str]:
@@ -1213,10 +1221,9 @@ class NarrationTTSService:
                 strategy=str(strategy),
             )
         if used_conversations:
+            turns, speed = self._turns_for_conversation(spec, script)
             audio = await self._to_canonical(
-                await self.synthesize_conversation(
-                    self._turns_for_conversation(spec, script), spec.pause_ms
-                )
+                await self.synthesize_conversation(turns, spec.pause_ms, speed=speed)
             )
             fallbacks = 0
         else:

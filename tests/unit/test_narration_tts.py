@@ -561,7 +561,28 @@ async def test_synthesize_conversation_sends_turns_and_pause(
 
     assert wav_format(audio) == CANONICAL_FORMAT
     assert seen["pause_ms"] == 300
+    assert seen["speed"] == 1.0
     assert seen["turns"][0]["voice_id"] == "es-mx-male"
+    await service.aclose()
+
+
+async def test_synthesize_conversation_forwards_speed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=_wav())
+
+    service, _ = _service(tmp_path, handler)
+
+    await service.synthesize_conversation(
+        [{"voice_id": "es-mx-male", "text": "uno", "language": "es"}], 300, speed=1.2
+    )
+
+    assert seen["speed"] == 1.2
+    assert seen["pause_ms"] == 300
     await service.aclose()
 
 
@@ -1035,8 +1056,40 @@ async def test_render_with_the_conversations_strategy_uses_one_request(
     assert len(calls) == 1
     assert calls[0][0].endswith("/conversations")
     assert [turn["voice_id"] for turn in calls[0][1]["turns"]] == ["es-mx-male", "es-mx-female"]
+    assert calls[0][1]["speed"] == 1.0
     assert result.used_conversations_api is True
     assert result.duration_seconds == pytest.approx(0.1, abs=0.01)
+    await service.aclose()
+
+
+async def test_conversations_strategy_sends_the_spec_speed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec(
+        speed=1.2,
+        roles=[
+            {"name": "anchor", "voice_id": "es-mx-male"},
+            {"name": "guest", "voice_id": "es-mx-female"},
+        ],
+    )
+
+    result = await service.render(
+        spec, _script(spec), collection="tech", strategy=RenderStrategy.CONVERSATIONS
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/conversations")
+    assert calls[0][1]["speed"] == 1.2
+    assert calls[0][1]["pause_ms"] == 500
+    assert result.used_conversations_api is True
     await service.aclose()
 
 
