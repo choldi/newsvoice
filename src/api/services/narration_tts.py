@@ -1206,7 +1206,7 @@ class NarrationTTSService:
         is_dialog = self._is_dialog(spec, script, strategy)
         allow_fallback = self._dialog_fallback_to_edge if is_dialog else self._fallback_to_edge
         if is_dialog and not allow_fallback:
-            logger.warning(
+            logger.info(
                 "narration_dialog_fallback_denied",
                 collection=collection,
                 used_voices=used_voices,
