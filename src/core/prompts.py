@@ -107,6 +107,23 @@ Gaming-specific requirements:
 - Note platform exclusivity and release dates clearly.
 
 Keep the Markdown structure described at the top.""",
+    "ai": """
+
+AI-specific requirements:
+- Prioritize: new model releases, benchmark results with measurable gains,
+  research papers with broad impact, product launches, funding rounds, and
+  AI policy or regulation.
+- Always name the actor (lab or company), the model or version, and the date.
+- Separate measured results from marketing claims; call out when a
+  "breakthrough" has no independent evaluation.
+- Mark open-weight vs proprietary models, and note hardware or VRAM needs
+  when the sources mention them.
+- For main stories, use extended summaries of 5-6 sentences covering context,
+  significance, and community reaction.
+- Keep figures (benchmarks, percentages, dollar amounts, context lengths)
+  from the sources.
+
+Keep the Markdown structure described at the top.""",
 }
 
 
@@ -380,6 +397,24 @@ Gaming podcast style:
 - Use gaming terminology naturally (patch, meta, nerf, speedrun, NPC, grind, etc.).
 - Keep segments tight: 2-3 sentences max per turn.
 - Total target: ~10-12 minutes for 5 extended stories + 10 headlines.
+"""
+    ),
+    "ai": (
+        NARRATION_SCRIPT_SYSTEM_PROMPT
+        + """
+
+AI podcast style:
+- Two hosts in continuous dialogue: Michael (enthusiastic host, curious
+  about the implications) and Dwight (deadpan analyst, skeptical, dry).
+- Open with: "Welcome to AI Pulse, your daily AI briefing."
+- Alternate naturally. Michael frames the story, Dwight challenges it.
+- For headlines: quick back-and-forth, one line per item.
+- Use AI terminology naturally (model, weights, inference, fine-tuning,
+  tokens, context window, benchmark, open weights, GPU, latency).
+- NEVER emit emotion tags or bracketed annotations: the conversations
+  render strategy ignores them and fails if they appear.
+- Keep segments tight: 2-3 sentences max per turn.
+- Total target: ~10-12 minutes for 5 main stories + 8 headlines.
 """
     ),
 }

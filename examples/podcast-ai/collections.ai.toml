@@ -1,0 +1,38 @@
+# Configuración del podcast diario "AI Pulse" (novedades de IA)
+# Copia este bloque [[collections]] a tu collections.toml principal
+
+[collection_defaults]
+tts_enabled = false
+deliver_audio = false
+language = "en"
+voice = ""
+narration_enabled = false
+narration_strategy = "turns"
+narration_deliver_audio = true
+main_story_count = 5
+headline_count = 5
+
+[[collections]]
+name = "ai"
+time = "11:00"
+enabled = true
+feed_urls = [
+    "https://techcrunch.com/category/artificial-intelligence/feed/",
+    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+    "https://www.wired.com/feed/tag/ai/latest/rss",
+    "https://www.marktechpost.com/feed/",
+    "https://export.arxiv.org/rss/stat.ML",
+]
+language = "en"
+main_story_count = 5
+headline_count = 8
+tts_enabled = false
+deliver_audio = false
+podcast_name = "AI Pulse"
+podcast_behavior = "Two co-hosts: Michael (enthusiastic host who frames the story and asks the naive question everyone is thinking) and Dwight (deadpan analyst who challenges claims, asks for the benchmark and deflates the hype). Natural dialogue, short turns, AI terminology (model, weights, inference, fine-tuning, context window, open weights, latency). Michael opens with 'Welcome to AI Pulse, your daily AI briefing.' Headlines: quick back-and-forth, one line per item."
+prompt_template = "ai"
+narration_enabled = true
+narration_strategy = "conversations"
+narration_deliver_audio = true
+narration_spec = { title = "AI Pulse", language = "en", roles = [{name="michael",voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f"},{name="dwight",voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8"}], pause_ms = 300, speed = 1.1 }
+delivery_channels = ["telegram"]

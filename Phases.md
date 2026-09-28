@@ -315,6 +315,14 @@ noticias", es "narración multi-hablante de un documento".
       60s → 300s; GUI/admin actualizado con campos `narration_deliver_audio`,
       `main_story_count`, `headline_count`; ejemplo `examples/podcast-gaming/`
       (README, TOML, spec JSON, script ejemplo, verificador de feeds)
+- [x] **7.7 Conversations por bloques + plantilla `ai`** — `conversations` troceado
+      en requests de ≤4000 caracteres (`split_turns_into_blocks`, cortes en
+      frontera de turno, nunca a mitad de frase) con 1 reintento por bloque y
+      unión de WAVs canónicos con `concat_wavs` + `pause_ms`; settings
+      `narration_conversation_*` en `.env.example`; `conversation_blocks` en
+      `NarrationOut` y en el sidecar; plantilla `ai` en
+      `DIGEST_TEMPLATE_ADDITIONS` y `NARRATION_SCRIPT_TEMPLATES` (prohíbe
+      emotion tags, que `conversations` rechaza); ejemplo `examples/podcast-ai/`
 
 **Success criteria:** una colección opt-in produce un M4A de N minutos con ≥2
 voces distintas, música de fondo (opcional), cacheado por hash y **entregado por

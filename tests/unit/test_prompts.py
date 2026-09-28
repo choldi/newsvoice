@@ -3,8 +3,10 @@
 from src.core.prompts import (
     DIGEST_TEMPLATE_ADDITIONS,
     EMOTION_TAGS,
+    NARRATION_SCRIPT_TEMPLATES,
     _build_base_digest_prompt,
     build_digest_system_prompt,
+    build_narration_script_system_prompt,
     get_digest_template,
     strip_emotion_tags,
 )
@@ -91,7 +93,17 @@ def test_get_digest_template_known() -> None:
     finance = get_digest_template("finance")
     assert finance is not _build_base_digest_prompt(5, 5)
     assert "Finance-specific requirements" in finance
-    assert {"finance", "health", "investigative", "gaming"} <= set(DIGEST_TEMPLATE_ADDITIONS)
+    assert {"finance", "health", "investigative", "gaming", "ai"} <= set(DIGEST_TEMPLATE_ADDITIONS)
+
+
+def test_ai_templates_are_registered_and_format() -> None:
+    """The ai templates exist and survive the placeholder formatting."""
+    assert "ai" in DIGEST_TEMPLATE_ADDITIONS
+    assert "ai" in NARRATION_SCRIPT_TEMPLATES
+    assert "AI-specific requirements" in get_digest_template("ai")
+    prompt = build_narration_script_system_prompt("ai").format(main_story_count=5, headline_count=8)
+    assert "AI Pulse" in prompt
+    assert "NEVER emit emotion tags" in prompt
 
 
 def test_build_digest_system_prompt_with_template() -> None:

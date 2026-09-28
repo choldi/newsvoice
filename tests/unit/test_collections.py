@@ -326,3 +326,59 @@ def test_example_gaming_toml_parses_without_null_music(tmp_path: Path) -> None:
     # music must be None (omitted in TOML, not "null")
     assert gaming.narration_spec.music is None
     assert gaming.delivery_channels == ["telegram"]
+
+
+def test_example_ai_toml_parses_with_a_conversations_spec(tmp_path: Path) -> None:
+    """The AI Pulse example TOML parses into a conversations-ready spec.
+
+    The conversations strategy rejects per-role emotions and heterogeneous
+    speeds, so the example must carry neither: one global speed only.
+    """
+    ai_toml = (
+        "[[collections]]\n"
+        'name = "ai"\n'
+        'time = "11:00"\n'
+        "enabled = false\n"
+        "feed_urls = [\n"
+        '    "https://techcrunch.com/category/artificial-intelligence/feed/",\n'
+        '    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",\n'
+        '    "https://www.wired.com/feed/tag/ai/latest/rss",\n'
+        '    "https://www.marktechpost.com/feed/",\n'
+        '    "https://export.arxiv.org/rss/stat.ML",\n'
+        "]\n"
+        'language = "en"\n'
+        "main_story_count = 5\n"
+        "headline_count = 8\n"
+        "tts_enabled = false\n"
+        "deliver_audio = false\n"
+        'podcast_name = "AI Pulse"\n'
+        'podcast_behavior = "Two co-hosts: Michael and Dwight."\n'
+        'prompt_template = "ai"\n'
+        "narration_enabled = true\n"
+        'narration_strategy = "conversations"\n'
+        "narration_deliver_audio = true\n"
+        'narration_spec = { title = "AI Pulse", language = "en", roles = ['
+        '{name="michael", voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f"}, '
+        '{name="dwight", voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8"}], '
+        "pause_ms = 300, speed = 1.1 }\n"
+        'delivery_channels = ["telegram"]\n'
+    )
+    path = _write_collections(tmp_path, ai_toml)
+    collections = CollectionsLoader(str(path)).load()
+
+    assert len(collections) == 1
+    ai = collections[0]
+    assert ai.name == "ai"
+    assert ai.time == "11:00"
+    assert ai.enabled is False
+    assert ai.language == "en"
+    assert ai.prompt_template == "ai"
+    assert ai.narration_strategy == "conversations"
+    assert ai.narration_spec is not None
+    assert ai.narration_spec.speed == 1.1
+    assert ai.narration_spec.emotion is None
+    assert len(ai.narration_spec.roles) == 2
+    assert {r.name for r in ai.narration_spec.roles} == {"michael", "dwight"}
+    assert all(r.emotion is None for r in ai.narration_spec.roles)
+    assert all(r.speed == 1.0 for r in ai.narration_spec.roles)
+    assert ai.delivery_channels == ["telegram"]
