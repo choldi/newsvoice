@@ -29,10 +29,12 @@ from src.api.services.narration_tts import (
     concat_wavs,
     content_hash,
     edge_voice_for,
+    is_audible,
     narration_filename,
     silence_bytes,
     wav_duration,
     wav_format,
+    wav_peak_ratio,
 )
 from src.core.config import settings
 
@@ -68,9 +70,14 @@ def fake_ffmpeg_run(
 
 
 def _wav(frames: int = 4800, fmt: object = CANONICAL_FORMAT) -> bytes:
-    """Build a WAV payload of silent frames in the given format."""
-    silence = b"\x00" * (frames * fmt.frame_size)
-    return build_wav(silence, fmt)
+    """Build a WAV payload of audible frames in the given format.
+
+    The render refuses to ship inaudible audio, so the fixture must not be
+    silent: a full-scale 16-bit sample keeps every render above the guard.
+    """
+    total = frames * fmt.frame_size
+    payload = (b"\xff\x7f" * (total // 2 + 1))[:total]
+    return build_wav(payload, fmt)
 
 
 def _spec(**overrides: object) -> NarrationSpec:
@@ -746,6 +753,70 @@ async def test_render_ignores_a_stale_sidecar(
     again = await service.render(spec, script)
 
     assert again.cached is False
+    await service.aclose()
+
+
+def test_wav_peak_ratio_measures_silence_and_full_scale() -> None:
+    silent = build_wav(b"\x00" * (2400 * CANONICAL_FORMAT.frame_size))
+    loud = _wav(frames=2400)
+
+    assert wav_peak_ratio(silent) == 0.0
+    assert wav_peak_ratio(loud) == pytest.approx(1.0)
+    assert not is_audible(silent)
+    assert is_audible(loud)
+
+
+def test_is_audible_tolerates_unmeasurable_formats() -> None:
+    """A sample width other than 16 bit is reported as audible, never rejected."""
+    mono8 = narration_module.WavFormat(channels=1, sample_width=1, framerate=8000)
+
+    assert wav_peak_ratio(build_wav(b"\x00" * 800, mono8)) is None
+    assert is_audible(build_wav(b"\x00" * 800, mono8))
+
+
+async def test_render_rejects_silent_audio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A render that comes back empty fails instead of being delivered."""
+    silent = build_wav(b"\x00" * (2400 * CANONICAL_FORMAT.frame_size))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=silent)
+
+    service, compressor = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+
+    with pytest.raises(NarrationRenderError, match="inaudible"):
+        await service.render(spec, _script(spec), collection="tech")
+
+    assert compressor.calls == []
+    assert list((tmp_path / "narration").glob("*")) == []
+    await service.aclose()
+
+
+async def test_render_discards_a_silent_cache_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached render that turns out silent is re-rendered, not served."""
+    calls: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = _wav(frames=2400)
+        calls.append(payload)
+        return httpx.Response(200, content=payload)
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    first = await service.render(spec, script, collection="tech")
+    Path(first.wav_path).write_bytes(build_wav(b"\x00" * (2400 * 2)))
+
+    again = await service.render(spec, script, collection="tech")
+
+    assert first.cached is False
+    assert again.cached is False
+    assert is_audible(Path(again.wav_path).read_bytes())
     await service.aclose()
 
 

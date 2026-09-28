@@ -27,6 +27,7 @@ cache, and lives outside ``tts_cache_dir`` so the two caches never collide.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import hashlib
 import io
@@ -34,6 +35,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import wave
 from collections.abc import Sequence
@@ -78,6 +80,14 @@ EDGE_NEURAL_SUFFIX = "Neural"
 # Bumped when the hashing inputs or the render pipeline change, so every cached
 # narration is regenerated instead of a wrong audio being served.
 SIDECAR_VERSION = 1
+
+# Peak below this fraction of full scale (-60 dBFS) is inaudible. A render
+# that ends up here has produced an empty podcast, which must fail loudly
+# instead of being compressed, delivered and remembered as a cache hit.
+SILENCE_PEAK_RATIO = 0.001
+
+# Full scale of the canonical 16-bit PCM samples.
+_PCM16_FULL_SCALE = 32767.0
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _CLAUSE_SPLIT = re.compile(r"(?<=[,;:])\s+")
@@ -283,6 +293,47 @@ def wav_duration(data: bytes) -> float:
     _, size = _data_span(data)
     frame_size = fmt.channels * fmt.sample_width
     return round(size / frame_size / fmt.framerate, 3)
+
+
+def wav_peak_ratio(data: bytes) -> float | None:
+    """Return the peak amplitude of a WAV payload as a fraction of full scale.
+
+    Only 16-bit PCM (the canonical narration format) can be measured; any
+    other sample width returns ``None`` so callers can skip a check they
+    cannot evaluate instead of guessing.
+
+    Args:
+        data: Raw WAV bytes.
+
+    Returns:
+        Magnitude in ``0.0..1.0``, where ``0.0`` is digital silence, or
+        ``None`` when the sample width is not 16 bit.
+    """
+    fmt = wav_format(data)
+    if fmt.sample_width != CANONICAL_SAMPLE_WIDTH:
+        return None
+    frames = wav_frames(data)
+    samples = array.array("h")
+    samples.frombytes(frames[: len(frames) - (len(frames) % 2)])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return 0.0
+    return max(max(samples), -min(samples)) / _PCM16_FULL_SCALE
+
+
+def is_audible(data: bytes) -> bool:
+    """Report whether a WAV payload carries audible content.
+
+    Args:
+        data: Raw WAV bytes.
+
+    Returns:
+        ``False`` only when the payload is measurable and its peak stays
+        below :data:`SILENCE_PEAK_RATIO`.
+    """
+    peak = wav_peak_ratio(data)
+    return peak is None or peak >= SILENCE_PEAK_RATIO
 
 
 def concat_wavs(parts: Sequence[tuple[bytes, int]]) -> bytes:
@@ -1116,7 +1167,8 @@ class NarrationTTSService:
 
         Raises:
             NarrationGatewayError: If synthesis fails and no fallback is possible.
-            NarrationRenderError: If audio cannot be assembled, mixed or written.
+            NarrationRenderError: If audio cannot be assembled, mixed or written,
+                or if the assembled audio is inaudible.
         """
         script = NarrationScript.model_validate(script.model_dump(), context={"spec": spec})
         key = content_hash(spec, script, strategy)
@@ -1127,7 +1179,7 @@ class NarrationTTSService:
         meta = read_sidecar(meta_path)
         if wav_path.exists() and meta and meta.get("key") == key:
             m4a_path = Path(str(wav_path.with_suffix(".m4a")))
-            if m4a_path.exists():
+            if m4a_path.exists() and is_audible(wav_path.read_bytes()):
                 logger.info("narration_cache_hit", audio_path=str(m4a_path))
                 return NarrationOut(
                     audio_path=str(m4a_path),
@@ -1142,6 +1194,12 @@ class NarrationTTSService:
                     music=meta.get("music"),
                     title=script.title or spec.title,
                 )
+            if m4a_path.exists():
+                # A cached entry that would ship an empty podcast: drop it so
+                # the render below runs again instead of serving it forever.
+                logger.warning("narration_cache_entry_discarded", wav_path=str(wav_path))
+                for stale in (wav_path, m4a_path, meta_path):
+                    stale.unlink(missing_ok=True)
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS
@@ -1168,6 +1226,13 @@ class NarrationTTSService:
             audio = await self._mix_music(audio, spec.music)
 
         duration = wav_duration(audio)
+        peak = wav_peak_ratio(audio)
+        if peak is not None and peak < SILENCE_PEAK_RATIO:
+            raise NarrationRenderError(
+                "narration audio is inaudible: "
+                f"peak={peak:.6f} of full scale after {duration}s "
+                f"({len(script.segments)} segments, collection={collection})"
+            )
         atomic_write(wav_path, audio)
         m4a_path = Path(await self._compressor.compress(str(wav_path)))
         atomic_write(
