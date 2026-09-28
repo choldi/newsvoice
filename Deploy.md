@@ -108,6 +108,18 @@ docker compose exec worker python -m src.workers.schedule
 This registers `daily-digest-<name>` schedules for every enabled collection.
 Target a single collection with `--collection <name>`.
 
+> **Editing `collections.toml` on a deployed host:** the file is bind-mounted,
+> so a running container keeps reading the *old* file it was started with.
+> `sed -i`, `git pull` and most editors replace the file, and the worker keeps
+> serving the previous content — a changed `narration_spec` (voices, `speed`)
+> or `enabled` flag then looks like it was ignored. Prefer editing in place,
+> and after any edit recreate the containers and re-register the schedules:
+
+```bash
+docker compose up -d --build api worker narration-worker
+docker compose exec worker python -m src.workers.schedule --collection <name>
+```
+
 ### Narration (Phase 7)
 
 From 7.3+, the same digest can also produce a **multi-speaker narration**
