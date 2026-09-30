@@ -15,6 +15,7 @@ import pytest
 from src.api.models.narration import (
     NarrationScript,
     NarrationSpec,
+    TTSBackend,
 )
 from src.api.services import narration_tts as narration_module
 from src.api.services.audio_files import read_sidecar, sidecar_path
@@ -819,6 +820,118 @@ async def test_cache_probe_ignores_other_strategy(
         service.cache_probe(spec, script, collection="tech", strategy=RenderStrategy.CONVERSATIONS)
         is None
     )
+    await service.aclose()
+
+
+async def test_synthesize_turn_dispatches_to_modal_for_qwen3_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_modal(**kwargs: object) -> bytes:
+        assert kwargs["voice_ref"] == "anchor_neutral_m"
+        return _wav(frames=2400)
+
+    monkeypatch.setattr("src.core.modal_client.modal_tts", fake_modal)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Hola", "anchor_neutral_m", "es", backend=TTSBackend.QWEN3_TTS
+    )
+
+    assert used_edge is False
+    assert wav_format(audio).framerate == CANONICAL_RATE
+    await service.aclose()
+
+
+async def test_post_modal_tts_wraps_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def failing_modal(**kwargs: object) -> bytes:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("src.core.modal_client.modal_tts", failing_modal)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    with pytest.raises(NarrationGatewayError, match="modal tts call failed"):
+        await service.synthesize_turn("Hola", "anchor", "es", backend=TTSBackend.QWEN3_TTS)
+    await service.aclose()
+
+
+async def test_render_rejects_conversations_for_non_omni_voice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec(tts_backend=TTSBackend.QWEN3_TTS)
+    script = _script(spec)
+
+    with pytest.raises(NarrationRenderError, match="conversations"):
+        await service.render(spec, script, strategy=RenderStrategy.CONVERSATIONS)
+    await service.aclose()
+
+
+async def test_render_prepends_disclosure_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(settings, "narration_ai_disclosure_text", "Voz generada por IA.")
+    spec = _spec(ai_disclosure=True)
+    script = _script(spec)
+
+    await service.render(spec, script)
+
+    assert calls[0]["text"].startswith("Voz generada por IA.")
+    await service.aclose()
+
+
+async def test_render_omits_disclosure_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    await service.render(spec, script)
+
+    assert not calls[0]["text"].startswith("Voz generada")
+    await service.aclose()
+
+
+async def test_sidecar_records_backend_and_disclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_modal(**kwargs: object) -> bytes:
+        return _wav(frames=2400)
+
+    monkeypatch.setattr("src.core.modal_client.modal_tts", fake_modal)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(settings, "narration_ai_disclosure_text", "Voz generada por IA.")
+    spec = _spec(tts_backend=TTSBackend.QWEN3_TTS, ai_disclosure=True)
+    script = _script(spec)
+
+    result = await service.render(spec, script, collection="tech")
+
+    meta = json.loads(Path(result.wav_path).with_suffix(".meta.json").read_text())
+    assert meta["tts_backend"] == "qwen3_tts"
+    assert meta["ai_disclosure"] is True
+    assert result.tts_backend == "qwen3_tts"
+    assert result.ai_disclosure is True
     await service.aclose()
 
 

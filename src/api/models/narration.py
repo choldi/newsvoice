@@ -13,8 +13,11 @@ in [0, 5000] and two-letter ISO 639-1 language codes.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.api.models.voices import VoiceSource
 from src.core.prompts import EMOTION_TAGS
 
 # Audio jobs of a run are discriminated by this column ('tts' | 'narration').
@@ -24,6 +27,22 @@ AUDIO_JOB_KINDS = (TTS_KIND, NARRATION_KIND)
 
 # Where a script came from: the LLM, the admin editor/GUI, or an external API.
 SCRIPT_SOURCES = ("llm", "manual", "api")
+
+
+class TTSBackend(StrEnum):
+    """Which engine synthesizes a narration.
+
+    Attributes:
+        OMNIVOICE: The self-hosted TTS gateway (OmniVoice/Edge). Local, no
+            spend, honors per-turn speed and emotion.
+        QWEN3_TTS: Qwen3-TTS on Modal. Synthetic voices from the catalog; no
+            emotion or speed control (speed is post-processed with atempo).
+        ZONOS2: ZONOS2 on Modal. Adds native speed and emotion control.
+    """
+
+    OMNIVOICE = "omni_voice"
+    QWEN3_TTS = "qwen3_tts"
+    ZONOS2 = "zonos2"
 
 
 class SpeakerRole(BaseModel):
@@ -133,6 +152,10 @@ class NarrationSpec(BaseModel):
         music: Optional music bed.
         speed: Default speaking rate for roles that do not override it.
         emotion: Default emotion for roles that do not override it.
+        tts_backend: Engine that synthesizes this narration.
+        voice_source: Where the reference voice comes from (non-OMNIVOICE only).
+        voice_ref: Reference voice name from the catalog (non-OMNIVOICE only).
+        ai_disclosure: Prepend an audible AI-generated disclosure.
     """
 
     title: str = Field(default="", max_length=200, description="Program title")
@@ -149,6 +172,19 @@ class NarrationSpec(BaseModel):
     music: MusicBed | None = Field(default=None, description="Optional local music bed")
     speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Default speaking rate")
     emotion: str | None = Field(default=None, description="Default emotion tag")
+    tts_backend: TTSBackend = Field(
+        default=TTSBackend.OMNIVOICE, description="Engine that synthesizes this narration"
+    )
+    voice_source: VoiceSource = Field(
+        default=VoiceSource.QWEN_DESIGN,
+        description="Where the reference voice comes from (non-OMNIVOICE only)",
+    )
+    voice_ref: str = Field(
+        default="", description="Reference voice name from the catalog (non-OMNIVOICE only)"
+    )
+    ai_disclosure: bool = Field(
+        default=False, description="Prepend an audible AI-generated disclosure"
+    )
 
     @field_validator("language")
     @classmethod
@@ -397,6 +433,9 @@ class NarrationOut(BaseModel):
         conversation_blocks: Gateway requests the conversation was split into.
         music: Music track mixed in, if any.
         title: Program title of the rendered piece.
+        tts_backend: Engine that synthesized the audio.
+        voice_source: Source of the reference voice.
+        ai_disclosure: Whether an audible AI disclosure was prepended.
     """
 
     audio_path: str = Field(..., description="Final M4A path for delivery")
@@ -415,3 +454,8 @@ class NarrationOut(BaseModel):
     )
     music: str | None = Field(default=None, description="Music track mixed in")
     title: str = Field(default="", description="Program title")
+    tts_backend: str = Field(default="", description="Engine that synthesized the audio")
+    voice_source: str = Field(default="", description="Source of the reference voice")
+    ai_disclosure: bool = Field(
+        default=False, description="Whether an audible AI disclosure was prepended"
+    )

@@ -160,6 +160,31 @@ class Settings(BaseSettings):
     narrations_dialog_fallback_to_edge: bool = False
     narration_audio_bitrate_kbps: int = Field(default=64, ge=16, le=320)
 
+    # --- Modal (Phase 7.8) --------------------------------------------------
+    # Kill switch for every Modal call. While False the Modal code path is
+    # unreachable: no .spawn(), no spend, and narration stays on the local
+    # queue. The hard budget caps land in a later commit; this flag is what
+    # makes the dispatch safe to merge before they do.
+    modal_enabled: bool = False
+    modal_app_name: str = "news-engine"
+    modal_token_id: str = ""
+    modal_token_secret: str = ""
+    modal_volume_name: str = "news-engine-voices"
+    modal_gpu: str = "L4"
+    # Qwen3-TTS runs in its own Modal image (Python 3.12, qwen-tts), so the
+    # package never enters pyproject.toml and the local path needs no GPU.
+    qwen_tts_base_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    qwen_tts_design_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    qwen_tts_max_new_tokens: int = Field(default=2048, ge=256, le=8192)
+    qwen_tts_batch_size: int = Field(default=8, ge=1, le=32)
+    # Audible AI disclosure (EU AI Act Art. 50(4)). Empty text disables it even
+    # when the collection flag is on, which is the escape hatch if a legal
+    # review concludes the duty does not apply.
+    narration_ai_disclosure_text: str = (
+        "Este episodio se ha producido con una voz generada por inteligencia artificial."
+    )
+    narration_ai_disclosure_interval_minutes: int = Field(default=0, ge=0, le=60)
+
     @model_validator(mode="after")
     def _conversation_block_bounds(self) -> "Settings":
         """Keep the block merge floor at or below the block turn cap."""

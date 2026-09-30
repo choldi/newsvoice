@@ -55,6 +55,7 @@ from src.api.models.narration import (
     NarrationOut,
     NarrationScript,
     NarrationSpec,
+    TTSBackend,
 )
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
@@ -720,6 +721,46 @@ class NarrationTTSService:
             raise NarrationGatewayError(f"gateway returned an empty body for {path}")
         return response.content
 
+    async def _post_modal_tts(
+        self,
+        text: str,
+        voice_ref: str,
+        language: str,
+        speed: float = 1.0,
+        emotion: str | None = None,
+    ) -> bytes:
+        """Synthesize one turn on Modal and return the WAV payload.
+
+        The Modal client is imported lazily so the local path never needs the
+        ``modal`` package or credentials.
+
+        Args:
+            text: Speech text for the turn.
+            voice_ref: Reference voice name from the catalog.
+            language: ISO 639-1 language code.
+            speed: Speaking rate in [0.5, 2.0].
+            emotion: Optional emotion tag, accepted for ZONOS2 parity.
+
+        Returns:
+            The WAV payload returned by Modal.
+
+        Raises:
+            NarrationGatewayError: When Modal is disabled, unconfigured, or the
+                call fails.
+        """
+        from src.core.modal_client import modal_tts
+
+        try:
+            return await modal_tts(
+                text=text,
+                voice_ref=voice_ref,
+                language=language,
+                speed=speed,
+                emotion=emotion,
+            )
+        except Exception as exc:
+            raise NarrationGatewayError(f"modal tts call failed: {exc}") from exc
+
     async def health(self) -> GatewayHealthOut:
         """Probe the gateway health endpoint.
 
@@ -804,26 +845,37 @@ class NarrationTTSService:
         speed: float = 1.0,
         emotion: str | None = None,
         allow_edge_fallback: bool | None = None,
+        backend: TTSBackend = TTSBackend.OMNIVOICE,
     ) -> tuple[bytes, bool]:
-        """Synthesize one turn with the gateway, falling back to Edge on failure.
+        """Synthesize one turn, dispatching on the configured backend.
 
         Args:
             text: Speech text for the turn.
-            voice_id: Gateway voice id (stock name, clone UUID or Edge ShortName).
+            voice_id: Gateway voice id (stock name, clone UUID or Edge
+                ShortName) for OmniVoice; reference voice name for the Modal
+                backends.
             language: ISO 639-1 language of the text.
-            speed: Speaking rate in [0.5, 2.0].
+            speed: Speaking rate in [0.5, 2.0]. Honored by OmniVoice; passed
+                through for the Modal backends, which post-process it.
             emotion: Optional emotion tag (honored by OmniVoice only).
             allow_edge_fallback: Explicitly allow/disallow Edge fallback. ``None``
                 (default) means use the instance default
                 ``self._fallback_to_edge``.
+            backend: Engine that synthesizes the turn.
 
         Returns:
-            Tuple of ``(wav_bytes, used_edge_fallback)``.
+            Tuple of ``(wav_bytes, used_edge_fallback)``. The fallback flag is
+            always False for the Modal backends: they have no Edge path.
 
         Raises:
             NarrationGatewayError: When the gateway fails and the fallback is
-                disabled or itself fails.
+                disabled or itself fails, or when the Modal call fails.
         """
+        if backend is not TTSBackend.OMNIVOICE:
+            return (
+                await self._post_modal_tts(text, voice_id, language, speed=speed, emotion=emotion),
+                False,
+            )
         payload: dict[str, Any] = {
             "text": text,
             "voice_id": voice_id,
@@ -1252,6 +1304,7 @@ class NarrationTTSService:
                     speed=speed,
                     emotion=emotion,
                     allow_edge_fallback=allow_fallback,
+                    backend=spec.tts_backend,
                 )
                 fallbacks += int(used_edge)
                 parts.append((await self._to_canonical(audio), 0))
@@ -1260,6 +1313,26 @@ class NarrationTTSService:
             )
             parts[-1] = (parts[-1][0], pause_ms)
         return concat_wavs(parts), fallbacks
+
+    @staticmethod
+    def _with_disclosure(script: NarrationScript, disclosure: str) -> NarrationScript:
+        """Return a copy of the script with the AI disclosure prepended.
+
+        The disclosure is spoken by the same voice as the first segment, so it
+        needs no extra synthesis call. It is part of the rendered text and
+        therefore part of the content hash.
+
+        Args:
+            script: Script to annotate.
+            disclosure: Audible disclosure text.
+
+        Returns:
+            A new script whose first segment opens with the disclosure.
+        """
+        first = script.segments[0]
+        segments = [first.model_copy(update={"text": f"{disclosure} {first.text}"})]
+        segments.extend(script.segments[1:])
+        return script.model_copy(update={"segments": segments})
 
     def cache_probe(
         self,
@@ -1320,6 +1393,9 @@ class NarrationTTSService:
             conversation_blocks=int(meta.get("conversation_blocks", 1)),
             music=meta.get("music"),
             title=script.title or spec.title,
+            tts_backend=str(meta.get("tts_backend", "")),
+            voice_source=str(meta.get("voice_source", "")),
+            ai_disclosure=bool(meta.get("ai_disclosure", False)),
         )
 
     async def render(
@@ -1347,6 +1423,10 @@ class NarrationTTSService:
             NarrationRenderError: If audio cannot be assembled, mixed or written,
                 or if the assembled audio is inaudible.
         """
+        disclosure = get_settings().narration_ai_disclosure_text
+        if spec.ai_disclosure and disclosure:
+            script = self._with_disclosure(script, disclosure)
+
         cached = self.cache_probe(spec, script, collection=collection, day=day, strategy=strategy)
         if cached is not None:
             return cached
@@ -1357,6 +1437,10 @@ class NarrationTTSService:
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS
+        if used_conversations and spec.tts_backend is not TTSBackend.OMNIVOICE:
+            raise NarrationRenderError(
+                "conversations strategy is only supported by the omni_voice backend"
+            )
         is_dialog = self._is_dialog(spec, script, strategy)
         allow_fallback = self._dialog_fallback_to_edge if is_dialog else self._fallback_to_edge
         if is_dialog and not allow_fallback:
@@ -1414,6 +1498,9 @@ class NarrationTTSService:
                     "edge_fallbacks": fallbacks,
                     "conversation_blocks": conversation_blocks,
                     "music": spec.music.track if spec.music else None,
+                    "tts_backend": str(spec.tts_backend),
+                    "voice_source": str(spec.voice_source),
+                    "ai_disclosure": spec.ai_disclosure,
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
                 indent=2,
@@ -1441,4 +1528,7 @@ class NarrationTTSService:
             conversation_blocks=conversation_blocks,
             music=spec.music.track if spec.music else None,
             title=script.title or spec.title,
+            tts_backend=str(spec.tts_backend),
+            voice_source=str(spec.voice_source),
+            ai_disclosure=spec.ai_disclosure,
         )
