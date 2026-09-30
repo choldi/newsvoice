@@ -935,6 +935,74 @@ async def test_sidecar_records_backend_and_disclosure(
     await service.aclose()
 
 
+async def test_apply_atempo_returns_input_when_speed_is_one(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    audio = _wav(frames=2400)
+    assert await service._apply_atempo(audio, 1.0) is audio
+    await service.aclose()
+
+
+async def test_apply_atempo_runs_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", fake_ffmpeg_run(_wav(frames=2400), calls=calls))
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    result = await service._apply_atempo(_wav(frames=2400), 1.2)
+
+    assert wav_format(result).framerate == CANONICAL_RATE
+    assert any("atempo=1.2" in part for part in calls[0])
+    await service.aclose()
+
+
+async def test_apply_atempo_wraps_ffmpeg_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(subprocess, "run", fake_ffmpeg_run(b"", returncode=1, stderr=b"boom"))
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    with pytest.raises(NarrationRenderError, match="atempo error"):
+        await service._apply_atempo(_wav(frames=2400), 1.2)
+    await service.aclose()
+
+
+async def test_render_applies_atempo_for_qwen3_tts_with_speed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_modal(**kwargs: object) -> bytes:
+        return _wav(frames=2400)
+
+    ffmpeg_calls: list[list[str]] = []
+    monkeypatch.setattr("src.core.modal_client.modal_tts", fake_modal)
+    monkeypatch.setattr(subprocess, "run", fake_ffmpeg_run(_wav(frames=2400), calls=ffmpeg_calls))
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec(tts_backend=TTSBackend.QWEN3_TTS)
+    script = _script(spec)
+
+    await service.render(spec, script)
+
+    atempo_calls = [c for c in ffmpeg_calls if any("atempo" in part for part in c)]
+    assert len(atempo_calls) == 1
+    assert any("atempo=1.1" in part for part in atempo_calls[0])
+    await service.aclose()
+
+
+async def test_render_skips_atempo_for_omni_voice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ffmpeg_calls: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "run", fake_ffmpeg_run(_wav(frames=2400), calls=ffmpeg_calls))
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    await service.render(spec, script)
+
+    assert not [c for c in ffmpeg_calls if any("atempo" in part for part in c)]
+    await service.aclose()
+
+
 async def test_render_regenerates_when_the_script_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

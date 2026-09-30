@@ -1269,6 +1269,51 @@ class NarrationTTSService:
         used = NarrationTTSService._used_voices(spec, script)
         return len(used) >= 2
 
+    async def _apply_atempo(self, audio: bytes, speed: float) -> bytes:
+        """Change the playback rate of a WAV while preserving pitch.
+
+        Qwen3-TTS Base has no speed control, so the rate is adjusted in
+        post-processing. ffmpeg's atempo keeps the pitch intact, unlike a
+        resampler, which would shift it.
+
+        Args:
+            audio: Canonical WAV bytes.
+            speed: Speaking rate multiplier in [0.5, 2.0].
+
+        Returns:
+            The time-stretched WAV bytes.
+
+        Raises:
+            NarrationRenderError: When ffmpeg is missing or fails.
+        """
+        if speed == 1.0:
+            return audio
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "in.wav"
+            target = Path(tmp) / "out.wav"
+            source.write_bytes(audio)
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-filter:a",
+                f"atempo={speed}",
+                str(target),
+            ]
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run, command, capture_output=True, text=True, timeout=300
+                )
+            except FileNotFoundError as exc:
+                raise NarrationRenderError("ffmpeg not found for atempo") from exc
+            if result.returncode != 0:
+                raise NarrationRenderError(f"atempo error: {result.stderr.strip()}")
+            return target.read_bytes()
+
     async def _render_turns_locally(
         self,
         spec: NarrationSpec,
@@ -1307,7 +1352,10 @@ class NarrationTTSService:
                     backend=spec.tts_backend,
                 )
                 fallbacks += int(used_edge)
-                parts.append((await self._to_canonical(audio), 0))
+                audio = await self._to_canonical(audio)
+                if spec.tts_backend is TTSBackend.QWEN3_TTS and speed != 1.0:
+                    audio = await self._apply_atempo(audio, speed)
+                parts.append((audio, 0))
             pause_ms = (
                 segment.pause_after_ms if segment.pause_after_ms is not None else spec.pause_ms
             )
