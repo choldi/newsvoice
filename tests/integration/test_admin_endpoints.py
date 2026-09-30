@@ -413,3 +413,56 @@ def test_voice_clone_invalid_base64_422() -> None:
         },
     )
     assert response.status_code == 422
+
+
+def test_voice_catalog_status_lists_profiles() -> None:
+    """GET /admin/voices/catalog returns the catalog and its status."""
+    response = client.get("/api/admin/voices/catalog")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert len(body["profiles"]) == 12
+    assert body["generated"] == []
+    assert len(body["missing"]) == 12
+
+
+def test_voice_catalog_generate_starts_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /admin/voices/catalog/generate starts a VoiceCatalogWorkflow."""
+    started: dict[str, object] = {}
+
+    class _FakeClient:
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def execute_workflow(self, *args: object, **kwargs: object) -> None:
+            started["args"] = args
+            started["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "src.api.routes.admin_voices.build_client", AsyncMock(return_value=_FakeClient())
+    )
+    response = client.post("/api/admin/voices/catalog/generate", json={"upload": True})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "started"
+    assert "voice-catalog" in body["workflow_id"]
+    assert started["kwargs"]["task_queue"] == settings.narration_modal_task_queue
+
+
+def test_voice_catalog_generate_wraps_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Temporal failure surfaces as a 502."""
+
+    async def boom() -> None:
+        raise RuntimeError("temporal down")
+
+    monkeypatch.setattr("src.api.routes.admin_voices.build_client", boom)
+    response = client.post("/api/admin/voices/catalog/generate", json={})
+    assert response.status_code == 502
+    assert "temporal down" in response.json()["detail"]
