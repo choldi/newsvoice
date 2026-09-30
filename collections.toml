@@ -30,6 +30,12 @@
 #   "turns" (default, one request per segment) or "conversations" (single
 #   request, requires homogeneous cast). The global kill switch is
 #   `NARRATION_ENABLED` in .env.
+# - Narration backend (Phase 7.8): `narration_tts_backend` selects the engine:
+#   "omni_voice" (default, self-hosted gateway), "qwen3_tts" (Modal, synthetic
+#   voices) or "zonos2" (Modal, behind the benchmark gate). `narration_voice_source`
+#   selects where the reference voice comes from: "qwen_design" (synthetic, no
+#   personality rights) or "recording" (requires written consent + transcript).
+#   `ai_disclosure = true` in the spec prepends an audible AI-generated notice.
 
 [collection_defaults]
 tts_enabled = false

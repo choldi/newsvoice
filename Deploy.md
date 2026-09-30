@@ -355,3 +355,56 @@ To cancel/remove a schedule from the CLI or UI:
 docker compose exec worker python -m src.workers.trigger   # manual runs only
 ```
 Delete schedules through the Temporal UI at `http://localhost:8080/namespaces/default/schedules`.
+
+---
+
+## 7. Modal (Phase 7.8)
+
+The Modal worker is declared in `docker-compose.yml` behind the `modal` profile,
+so it is created but **not started**. No collection uses a Modal backend yet,
+so there is no spend.
+
+### Enable Modal
+
+1. Set the credentials in `.env`:
+   ```bash
+   MODAL_ENABLED=true
+   MODAL_TOKEN_ID=...
+   MODAL_TOKEN_SECRET=...
+   ```
+2. Start the Modal worker:
+   ```bash
+   docker compose --profile modal up -d narration-modal-worker
+   ```
+3. Opt a collection into a Modal backend in `collections.toml`:
+   ```toml
+   narration_tts_backend = "qwen3_tts"   # or "zonos2" once the gate passes
+   narration_voice_source = "qwen_design"
+   ```
+
+### Generate the reference voices
+
+```bash
+docker compose exec narration-modal-worker python -m src.workers.design_voice --all --upload
+```
+
+This runs `VoiceCatalogWorkflow`, which designs every missing or stale profile
+with Qwen3-TTS VoiceDesign, stores the reference in `data/voices/refs/`, records
+it in `data/voices/manifest.json` and uploads it to the Modal Volume.
+
+### Budget
+
+The guard enforces `MODAL_BUDGET_USD_DAILY` (default $1) and
+`MODAL_BUDGET_USD_MONTHLY` (default $10) before any `.spawn()`. A cache hit is
+always allowed. The `modal_budget` monitor check alerts at 50/80/100%.
+
+### Rollback
+
+```bash
+docker compose --profile modal down
+# and set MODAL_ENABLED=false, or revert narration_tts_backend to "omni_voice"
+```
+
+`collections.toml` is bind-mounted on the server (inode 461207). Changing
+branches without checking that bind mount is the known footgun — see commit
+`80a19a5`.

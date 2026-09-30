@@ -331,6 +331,31 @@ counts son configurables por colección.
 
 **Effort:** 8-10 hours.
 
+- [ ] **7.8 Voz pública con Qwen3-TTS en Modal** — vía pública con derechos
+      comerciales claros, en paralelo a la vía privada actual (OmniVoice + clones):
+      `TTSBackend` = `OMNIVOICE` | `QWEN3_TTS` | `ZONOS2` (ZONOS2 behind gate);
+      `VoiceSource` = `QWEN_DESIGN` | `RECORDING`; catálogo JSON versionable
+      (`voice_profiles.json`, 8 inglés + 4 español) con guard anti-drift
+      (`instruct_sha256`, `ref_text_sha256` en el manifiesto); flujo
+      `VoiceCatalogWorkflow` → `design_voice_activity` (Modal one-off) →
+      `upload_voice_activity` → Modal Volume; local = fuente de verdad; dos task
+      queues (`narration_local_task_queue`, `narration_modal_task_queue`) con
+      enrutado por `tts_backend`; worker Modal creado pero NO levantado;
+      dispatch en `synthesize_turn()` con `_post_modal_tts()` (import lazy);
+      `atempo` para `speed` en QWEN3_TTS; descargo AI Act audible con
+      interruptor por colección; presupuesto $1/día y $10/mes con cuatro capas
+      (preflight + `cache_probe`, caps en runtime, `terminate` en `finally`,
+      `modal_spend` + alerta `modal_budget`); `modal` como única dep nueva;
+      `qwen-tts` vive en la Modal image (Python 3.12), no en `pyproject.toml`;
+      gate ZONOS2 (`scripts/benchmark_zonos.py`) — solo se activa si pasa
+
+**Success criteria:** la vía A (OmniVoice + clones) sigue intacta y sin cambios
+audibles; la vía B produce un M4A con voz sintética propia, descargo AI Act y
+coste registrado en `modal_spend`; el worker Modal está creado pero no levantado;
+ningún audio publicado usa voces de terceros sin licencia.
+
+**Effort:** 12-16 hours.
+
 ---
 
 ## ANTI-PATTERNS TO AVOID
