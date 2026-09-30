@@ -29,6 +29,7 @@ from temporalio.client import (
 )
 
 from src.api.models.monitoring import MonitorRunConfig
+from src.api.models.narration import NarrationSpec, TTSBackend
 from src.core.collections import CollectionConfig, get_collections
 from src.core.config import settings
 from src.workers.run_worker import build_client
@@ -45,6 +46,24 @@ MONITOR_SCHEDULE_ID = "collections-config-monitor"
 SYSTEM_MONITOR_SCHEDULE_ID = "system-monitor"
 
 
+def _narration_task_queue(spec: NarrationSpec | None) -> str:
+    """Pick the narration task queue for a collection.
+
+    Modal backends run on their own queue so the worker holding Modal
+    credentials and spend is separately scalable and restartable; everything
+    else stays on the local queue.
+
+    Args:
+        spec: The collection's narration spec, or None.
+
+    Returns:
+        The task queue name.
+    """
+    if spec is not None and spec.tts_backend is not TTSBackend.OMNIVOICE:
+        return settings.narration_modal_task_queue
+    return settings.narration_local_task_queue
+
+
 def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> PipelineConfig:
     """Build the PipelineConfig for a collection.
 
@@ -58,7 +77,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
     narration_payload = None
     if collection.narration_enabled and collection.narration_spec:
         narration_payload = {
-            "task_queue": settings.narration_task_queue,
+            "task_queue": _narration_task_queue(collection.narration_spec),
             "spec": collection.narration_spec.model_dump(),
             "strategy": collection.narration_strategy,
         }

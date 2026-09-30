@@ -73,6 +73,56 @@ def test_pipeline_config_for_tts_flag_overrides() -> None:
     assert disabled.tts_enabled is False
 
 
+def _narration_spec(**overrides: object) -> dict[str, object]:
+    """Build a minimal narration spec dict for tests."""
+    payload: dict[str, object] = {
+        "title": "Briefing",
+        "roles": [{"name": "anchor", "voice_id": "es-mx-male"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_narration_routes_to_local_queue_for_omni_voice() -> None:
+    collection = _collection(
+        narration_enabled=True,
+        narration_spec=_narration_spec(tts_backend="omni_voice"),
+    )
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.narration is not None
+    assert config.narration["task_queue"] == settings.narration_local_task_queue
+
+
+def test_narration_routes_to_modal_queue_for_qwen3_tts() -> None:
+    collection = _collection(
+        narration_enabled=True,
+        narration_spec=_narration_spec(tts_backend="qwen3_tts"),
+    )
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.narration is not None
+    assert config.narration["task_queue"] == settings.narration_modal_task_queue
+
+
+def test_narration_routes_to_modal_queue_for_zonos2() -> None:
+    collection = _collection(
+        narration_enabled=True,
+        narration_spec=_narration_spec(tts_backend="zonos2"),
+    )
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.narration is not None
+    assert config.narration["task_queue"] == settings.narration_modal_task_queue
+
+
+def test_narration_disabled_has_no_task_queue() -> None:
+    collection = _collection(narration_enabled=False)
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.narration is None
+
+
 def test_build_schedule_has_per_collection_ids() -> None:
     """Each collection gets its own schedule id and calendar time."""
     collection = _collection(time="17:15")

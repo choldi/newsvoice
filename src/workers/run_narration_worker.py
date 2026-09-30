@@ -9,6 +9,7 @@ Example:
     python -m src.workers.run_narration_worker
 """
 
+import argparse
 import asyncio
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
@@ -76,11 +77,21 @@ async def run_narration_worker(
 
 async def main() -> None:
     """Run DB migrations, start the narration worker, and run until stopped."""
+    parser = argparse.ArgumentParser(description="Narration worker (Phase 7)")
+    parser.add_argument(
+        "--queue",
+        default=None,
+        help="Task queue to poll. Defaults to the configured narration queue.",
+    )
+    args = parser.parse_args()
     configure_logging()
     await run_migrations()
     client: Client = await build_client()
-    async with run_narration_worker(client):
-        logger.info("narration_worker_running", task_queue=settings.narration_task_queue)
+    async with run_narration_worker(client, task_queue=args.queue):
+        logger.info(
+            "narration_worker_running",
+            task_queue=args.queue or settings.narration_task_queue,
+        )
         await asyncio.Event().wait()
 
 

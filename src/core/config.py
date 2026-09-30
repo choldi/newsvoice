@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     narration_api_key: str = ""
     # Task queue served by the dedicated narration worker.
     narration_task_queue: str = "news-engine-narration-task-queue"
+    # Phase 7.8 splits narration by backend: the local queue serves the
+    # self-hosted gateway, the modal queue serves the GPU backends and holds
+    # the Modal credentials, so the two scale and restart independently.
+    narration_local_task_queue: str = "news-engine-narration-local-task-queue"
+    narration_modal_task_queue: str = "news-engine-narration-modal-task-queue"
     # Narration audio lives outside tts_cache so WAV/M4A files and their
     # .meta.json sidecars cannot collide with the digest TTS cache.
     narration_cache_dir: str = "data/narration"
