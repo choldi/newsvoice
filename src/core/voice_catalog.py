@@ -37,6 +37,18 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def sha256_bytes(data: bytes) -> str:
+    """Return the SHA-256 digest of raw bytes.
+
+    Args:
+        data: Bytes to digest.
+
+    Returns:
+        Hex SHA-256 digest.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
 def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
     """Load and validate the voice catalog.
 

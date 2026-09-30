@@ -207,6 +207,9 @@ class Settings(BaseSettings):
     modal_estimated_chars_per_second: float = Field(default=17.5, gt=0.0)
     modal_estimated_rtf: float = Field(default=0.65, gt=0.0, le=10.0)
     modal_budget_alert_percent: list[int] = Field(default_factory=lambda: [50, 80, 100])
+    # Runtime voice catalog: profiles are versionable in the repo, generated
+    # references and the manifest live here and are never committed.
+    voices_dir: str = "data/voices"
 
     @model_validator(mode="after")
     def _conversation_block_bounds(self) -> "Settings":
