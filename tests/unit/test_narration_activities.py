@@ -7,7 +7,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from src.api.db.database import AudioJobsRepository, NarrationRepository, RunsRepository
-from src.api.models.narration import NarrationScript, NarrationSpec
+from src.api.models.narration import NarrationOut, NarrationScript, NarrationSpec
 from src.workers import narration_activities
 
 SPEC: dict[str, Any] = {
@@ -44,10 +44,20 @@ RENDER_RESULT: dict[str, Any] = {
 class _FakeService:
     """NarrationTTSService stand-in recording how it was called."""
 
-    def __init__(self, result: dict[str, Any] | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        result: dict[str, Any] | None = None,
+        error: Exception | None = None,
+        cached: Any = None,
+    ):
         self.result = result
         self.error = error
+        self.cached = cached
         self.calls: list[dict[str, Any]] = []
+
+    def cache_probe(self, *args: Any, **kwargs: Any) -> Any:
+        """Return the configured cache probe result (None by default)."""
+        return self.cached
 
     async def render(
         self,
@@ -211,6 +221,87 @@ async def test_render_activity_rejects_a_script_with_an_unknown_role(
 
     assert excinfo.value.non_retryable is True
     assert service.calls == []
+
+
+def _modal_spec(**overrides: Any) -> dict[str, Any]:
+    """Build a spec that opts into a Modal backend."""
+    payload: dict[str, Any] = {**SPEC, "tts_backend": "qwen3_tts"}
+    payload.update(overrides)
+    return payload
+
+
+async def test_render_activity_skips_budget_for_omni_voice(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    service = _FakeService(RENDER_RESULT)
+    _patch_service(monkeypatch, service)
+    payload = {"run_id": "r", "collection": "tech", "spec": SPEC, "script": SCRIPT}
+
+    await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert len(service.calls) == 1
+
+
+async def test_render_activity_raises_when_modal_disabled(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    monkeypatch.setattr(narration_activities.settings, "modal_enabled", False)
+    _patch_service(monkeypatch, _FakeService(RENDER_RESULT))
+    payload = {
+        "run_id": "r",
+        "collection": "tech",
+        "spec": _modal_spec(),
+        "script": SCRIPT,
+    }
+
+    with pytest.raises(ApplicationError, match="modal is disabled") as excinfo:
+        await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
+async def test_render_activity_raises_when_budget_exceeded(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    monkeypatch.setattr(narration_activities.settings, "modal_enabled", True)
+    monkeypatch.setattr(narration_activities.settings, "modal_budget_usd_daily", 0.00001)
+    monkeypatch.setattr(narration_activities.settings, "modal_budget_usd_monthly", 0.00001)
+    _patch_service(monkeypatch, _FakeService(RENDER_RESULT))
+    payload = {
+        "run_id": "r",
+        "collection": "tech",
+        "spec": _modal_spec(),
+        "script": SCRIPT,
+    }
+
+    with pytest.raises(ApplicationError, match="budget guard") as excinfo:
+        await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
+async def test_render_activity_allows_a_cache_hit(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    monkeypatch.setattr(narration_activities.settings, "modal_enabled", True)
+    monkeypatch.setattr(narration_activities.settings, "modal_budget_usd_daily", 0.00001)
+    cached = NarrationOut.model_validate(RENDER_RESULT)
+    service = _FakeService(RENDER_RESULT, cached=cached)
+    _patch_service(monkeypatch, service)
+    payload = {
+        "run_id": "r",
+        "collection": "tech",
+        "spec": _modal_spec(),
+        "script": SCRIPT,
+    }
+
+    await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert len(service.calls) == 1
 
 
 async def test_render_activity_needs_both_spec_and_script(

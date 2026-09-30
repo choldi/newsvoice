@@ -962,3 +962,90 @@ class MonitorRepository:
             async with db.execute("SELECT COUNT(*) FROM monitor_events") as cursor:
                 row = await cursor.fetchone()
                 return int(row[0]) if row else 0
+
+
+class ModalSpendRepository:
+    """Repository for the Modal GPU spend ledger (Phase 7.8)."""
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def record(
+        self,
+        *,
+        collection: str,
+        stage: str,
+        backend: str,
+        gpu_seconds: float,
+        cost_usd: float,
+        run_id: str | None = None,
+        audio_seconds: float | None = None,
+        cache_hit: bool = False,
+    ) -> None:
+        """Persist one Modal spend record.
+
+        Args:
+            collection: Collection that triggered the call.
+            stage: Pipeline stage ('llm', 'tts', 'voice_design').
+            backend: Engine that served the call.
+            gpu_seconds: GPU time billed for the call.
+            cost_usd: Cost in USD.
+            run_id: Optional digest run id.
+            audio_seconds: Optional audio duration produced.
+            cache_hit: True when the call was served from cache (zero cost).
+        """
+        query = """
+            INSERT INTO modal_spend (
+                ts, collection, stage, backend, run_id,
+                gpu_seconds, cost_usd, audio_seconds, cache_hit
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                query,
+                (
+                    datetime.now(UTC).isoformat(),
+                    collection,
+                    stage,
+                    backend,
+                    run_id,
+                    gpu_seconds,
+                    cost_usd,
+                    audio_seconds,
+                    int(cache_hit),
+                ),
+            )
+            await db.commit()
+
+    async def spent_since(self, since: str) -> float:
+        """Return the total spend since an ISO-8601 timestamp.
+
+        Args:
+            since: Start of the window (UTC).
+
+        Returns:
+            Total cost in USD.
+        """
+        query = "SELECT COALESCE(SUM(cost_usd), 0) FROM modal_spend WHERE ts >= ?"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (since,)) as cursor:
+                row = await cursor.fetchone()
+                return float(row[0]) if row else 0.0
+
+    async def last_call_ts(self) -> str | None:
+        """Return the timestamp of the most recent Modal call.
+
+        Returns:
+            ISO-8601 timestamp, or None when no call has been recorded.
+        """
+        query = "SELECT ts FROM modal_spend ORDER BY ts DESC LIMIT 1"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query) as cursor:
+                row = await cursor.fetchone()
+                return str(row[0]) if row else None

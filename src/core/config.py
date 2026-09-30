@@ -184,6 +184,24 @@ class Settings(BaseSettings):
         "Este episodio se ha producido con una voz generada por inteligencia artificial."
     )
     narration_ai_disclosure_interval_minutes: int = Field(default=0, ge=0, le=60)
+    # Hard budget caps. The estimated daily spend is ~$0.10, so the defaults
+    # sit 10x above it: they never cut normal operation but do stop a runaway
+    # retry loop, which is what they are for.
+    modal_budget_usd_daily: float = Field(default=1.0, gt=0.0)
+    modal_budget_usd_monthly: float = Field(default=10.0, gt=0.0)
+    # Anti-retry-storm: minimum seconds between two Modal calls.
+    modal_cooldown_minutes: int = Field(default=30, ge=0, le=1440)
+    # One Modal container at a time, so a spawn can never double the spend.
+    modal_max_concurrency: int = Field(default=1, ge=1, le=4)
+    # Runtime caps inside the Modal function, independent of the text length.
+    modal_max_audio_seconds_per_episode: int = Field(default=900, ge=60, le=3600)
+    modal_max_chunks_per_episode: int = Field(default=20, ge=1, le=100)
+    # L4 on Modal Starter, used only to estimate cost before a call.
+    modal_usd_per_gpu_second: float = Field(default=0.000222, gt=0.0)
+    # Throughput model for the estimate: measured chars/s and RTF on L4.
+    modal_estimated_chars_per_second: float = Field(default=17.5, gt=0.0)
+    modal_estimated_rtf: float = Field(default=0.65, gt=0.0, le=10.0)
+    modal_budget_alert_percent: list[int] = Field(default_factory=lambda: [50, 80, 100])
 
     @model_validator(mode="after")
     def _conversation_block_bounds(self) -> "Settings":

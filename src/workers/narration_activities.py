@@ -18,13 +18,20 @@ from pydantic import ValidationError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from src.api.db.database import AudioJobsRepository, NarrationRepository, RunsRepository
-from src.api.models.narration import NarrationScript, NarrationSpec
+from src.api.db.database import (
+    AudioJobsRepository,
+    ModalSpendRepository,
+    NarrationRepository,
+    RunsRepository,
+)
+from src.api.models.narration import NarrationScript, NarrationSpec, TTSBackend
 from src.api.services.narration_tts import (
     NarrationError,
     NarrationTTSService,
     RenderStrategy,
 )
+from src.core.budget import preflight
+from src.core.config import settings
 
 #: ``audio_jobs.kind`` discriminator owned by this module. The digest TTS job
 #: keeps ``'tts'`` so the two audio paths never overwrite each other.
@@ -70,6 +77,58 @@ def _run_id(payload: dict[str, Any]) -> str:
         The explicit ``run_id`` when present, else the calling workflow id.
     """
     return str(payload.get("run_id") or activity.info().workflow_id)
+
+
+async def _enforce_modal_budget(
+    service: NarrationTTSService,
+    spec: NarrationSpec,
+    script: NarrationScript,
+    *,
+    collection: str,
+    run_id: str,
+    strategy: RenderStrategy,
+) -> None:
+    """Run the Modal budget preflight before any ``.spawn()``.
+
+    A cache hit is free and always allowed, so an exhausted budget never blocks
+    audio that is already on disk. A blocked render is non-retryable: replaying
+    the same payload cannot make room in the budget.
+
+    Args:
+        service: Narration service, for the cache probe.
+        spec: Narration spec.
+        script: Script to render.
+        collection: Collection name owning the narration.
+        run_id: Run id the activity payload targets.
+        strategy: Render strategy.
+
+    Raises:
+        ApplicationError: When Modal is disabled, or the budget guard blocks
+            the render. Non-retryable in both cases.
+    """
+    if not settings.modal_enabled:
+        raise ApplicationError(
+            f"tts_backend {spec.tts_backend} requires modal, but modal is disabled",
+            non_retryable=True,
+        )
+    cached = service.cache_probe(spec, script, collection=collection, strategy=strategy)
+    if cached is not None:
+        await ModalSpendRepository().record(
+            collection=collection,
+            stage="tts",
+            backend=str(spec.tts_backend),
+            gpu_seconds=0.0,
+            cost_usd=0.0,
+            run_id=run_id,
+            cache_hit=True,
+        )
+        return
+    decision = await preflight(char_count=script.total_chars(), cache_hit=False)
+    if not decision.allowed:
+        raise ApplicationError(
+            f"modal budget guard blocked the render: {decision.reason}",
+            non_retryable=True,
+        )
 
 
 @activity.defn
@@ -172,6 +231,10 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     await jobs.set_generating(run_id, kind=NARRATION_JOB_KIND)
     started = time.monotonic()
     service = NarrationTTSService()
+    if spec.tts_backend is not TTSBackend.OMNIVOICE:
+        await _enforce_modal_budget(
+            service, spec, script, collection=collection, run_id=run_id, strategy=strategy
+        )
     try:
         result = await service.render(spec, script, collection=collection, strategy=strategy)
     except Exception as exc:
