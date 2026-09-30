@@ -2,6 +2,7 @@
 
 import inspect
 
+from src.core.config import settings
 from src.workers import narration_activities
 from src.workers.narration_workflows import NarrationWorkflow
 from src.workers.run_narration_worker import worker_activities
@@ -46,3 +47,23 @@ def test_narration_workflow_registers_only_its_own_workflow() -> None:
     from src.workers.run_narration_worker import run_narration_worker  # noqa: F401
 
     assert NarrationWorkflow.__name__ == "NarrationWorkflow"
+
+
+def test_modal_worker_registers_the_same_narration_activities() -> None:
+    """The Modal queue serves the same activities as the local one.
+
+    Both queues must register every narration activity, or a workflow step
+    addressed by name fails at runtime with a Temporal NotFoundError.
+    """
+    from src.workers.run_modal_worker import worker_activities as modal_activities
+
+    local = {getattr(a, "__name__") for a in worker_activities()}
+    modal = {getattr(a, "__name__") for a in modal_activities()}
+    assert modal == local
+    assert _all_defined_activity_names() - modal == set()
+
+
+def test_modal_queue_is_separate_from_the_local_one() -> None:
+    """The two queues are distinct so the workers scale independently."""
+    assert settings.narration_modal_task_queue != settings.narration_local_task_queue
+    assert settings.narration_modal_task_queue != settings.narration_task_queue

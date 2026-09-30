@@ -64,6 +64,31 @@ services:
     command: ["python", "-m", "src.workers.run_narration_worker"]
     restart: unless-stopped
 
+  # Modal narration worker (Phase 7.8). Declared behind the "modal" profile so
+  # it is created but NOT started: no collection uses a Modal backend yet, so
+  # there is no spend and no GPU to pay for. Start it with:
+  #   docker compose --profile modal up -d narration-modal-worker
+  narration-modal-worker:
+    profiles: ["modal"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_engine_narration_modal_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_modal_worker"]
+    restart: unless-stopped
+
   # WhatsApp delivery gateway (Baileys, blakegt/whatsapp-web-api-rest). Not
   # reachable from outside the compose network; the worker talks to it as
   # http://there:8085. The gateway exposes NO auth, so it must stay internal.
