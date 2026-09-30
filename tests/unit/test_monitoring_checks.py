@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ConnectError
 
+from src.api.db.database import ModalSpendRepository
 from src.api.models.monitoring import CheckResult
 from src.api.services.monitoring import CheckContext
 from src.api.services.monitoring.checks import (
@@ -15,6 +16,7 @@ from src.api.services.monitoring.checks import (
     check_disk_local,
     check_docker_containers,
     check_edge_tts,
+    check_modal_budget,
     check_services,
     check_tts_server_disk,
     run_all_checks,
@@ -423,6 +425,61 @@ async def test_check_disk_local_missing_path_error(
     )
     result = await check_disk_local(CheckContext())
     assert result.status == "error"
+
+
+async def test_check_modal_budget_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "modal_enabled", False)
+    result = await check_modal_budget(CheckContext())
+    assert result.status == "ok"
+    assert "disabled" in result.detail
+
+
+async def test_check_modal_budget_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    monkeypatch.setattr(settings, "modal_budget_usd_daily", 10.0)
+    monkeypatch.setattr(settings, "modal_budget_usd_monthly", 100.0)
+    result = await check_modal_budget(CheckContext())
+    assert result.status == "ok"
+    assert "daily" in result.detail
+
+
+async def test_check_modal_budget_warns_at_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    monkeypatch.setattr(settings, "modal_budget_usd_daily", 1.0)
+    monkeypatch.setattr(settings, "modal_budget_usd_monthly", 100.0)
+    await ModalSpendRepository().record(
+        collection="tech", stage="tts", backend="qwen3_tts", gpu_seconds=1.0, cost_usd=0.6
+    )
+    result = await check_modal_budget(CheckContext())
+    assert result.status == "warning"
+    assert "50%" in result.detail
+
+
+async def test_check_modal_budget_errors_at_100_percent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    monkeypatch.setattr(settings, "modal_budget_usd_daily", 1.0)
+    monkeypatch.setattr(settings, "modal_budget_usd_monthly", 100.0)
+    await ModalSpendRepository().record(
+        collection="tech", stage="tts", backend="qwen3_tts", gpu_seconds=1.0, cost_usd=1.5
+    )
+    result = await check_modal_budget(CheckContext())
+    assert result.status == "error"
+    assert "100%" in result.detail
+
+
+async def test_check_modal_budget_wraps_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom() -> float:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("src.api.services.monitoring.checks.daily_spend", boom)
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    result = await check_modal_budget(CheckContext())
+    assert result.status == "error"
+    assert "modal_budget failed" in result.detail
 
 
 async def test_run_all_checks_returns_registered_results(monkeypatch: pytest.MonkeyPatch) -> None:

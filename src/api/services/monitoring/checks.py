@@ -24,6 +24,7 @@ import structlog
 from src.api.db.database import RunsRepository
 from src.api.models.monitoring import CheckResult
 from src.api.services.monitoring.docker_status import DockerNotAvailableError, DockerService
+from src.core.budget import daily_spend, monthly_spend
 from src.core.config import Settings, get_settings
 
 if TYPE_CHECKING:
@@ -413,6 +414,43 @@ async def check_disk_local(ctx: CheckContext) -> CheckResult:
     return CheckResult(check="disk_local", status="ok", detail=detail)
 
 
+async def check_modal_budget(ctx: CheckContext) -> CheckResult:
+    """Report Modal budget consumption against the daily and monthly caps.
+
+    Args:
+        ctx: Shared check dependencies.
+
+    Returns:
+        CheckResult 'ok', 'warning' or 'error' by the highest threshold crossed.
+    """
+    settings = ctx.settings
+    if not settings.modal_enabled:
+        return CheckResult(check="modal_budget", status="ok", detail="modal disabled")
+    try:
+        daily = await daily_spend()
+        monthly = await monthly_spend()
+    except Exception as exc:
+        return CheckResult(
+            check="modal_budget", status="error", detail=f"modal_budget failed: {exc}"
+        )
+    daily_pct = daily / settings.modal_budget_usd_daily * 100
+    monthly_pct = monthly / settings.modal_budget_usd_monthly * 100
+    detail = (
+        f"daily ${daily:.4f}/${settings.modal_budget_usd_daily:.2f} ({daily_pct:.0f}%); "
+        f"monthly ${monthly:.4f}/${settings.modal_budget_usd_monthly:.2f} ({monthly_pct:.0f}%)"
+    )
+    highest = max(daily_pct, monthly_pct)
+    for threshold in sorted(settings.modal_budget_alert_percent, reverse=True):
+        if highest >= threshold:
+            status = "error" if threshold >= 100 else "warning"
+            return CheckResult(
+                check="modal_budget",
+                status=status,
+                detail=f"{detail} — at {threshold}%",
+            )
+    return CheckResult(check="modal_budget", status="ok", detail=detail)
+
+
 # Registry: append a check function here to include it in every monitor run.
 MONITOR_CHECKS: list[tuple[str, CheckFn]] = [
     ("docker_containers", check_docker_containers),
@@ -422,6 +460,7 @@ MONITOR_CHECKS: list[tuple[str, CheckFn]] = [
     ("collections", check_collections),
     ("digest_runs", check_digest_runs),
     ("disk_local", check_disk_local),
+    ("modal_budget", check_modal_budget),
 ]
 
 
