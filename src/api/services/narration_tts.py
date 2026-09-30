@@ -1261,6 +1261,67 @@ class NarrationTTSService:
             parts[-1] = (parts[-1][0], pause_ms)
         return concat_wavs(parts), fallbacks
 
+    def cache_probe(
+        self,
+        spec: NarrationSpec,
+        script: NarrationScript,
+        collection: str = "default",
+        day: datetime | None = None,
+        strategy: RenderStrategy = RenderStrategy.TURNS,
+    ) -> NarrationOut | None:
+        """Return a cached render when one is still usable, else None.
+
+        A cache hit is free: no synthesis, no gateway call and no Modal spend.
+        The budget guard in the Modal activity calls this before estimating
+        cost, so an exhausted budget never blocks audio that is already on disk.
+
+        A cached entry whose audio is inaudible is discarded rather than served,
+        so the caller re-renders instead of shipping an empty podcast.
+
+        Args:
+            spec: Narration spec.
+            script: Script to render.
+            collection: Collection name owning the narration.
+            day: Optional datetime driving the cache filename.
+            strategy: Render strategy; different strategies produce different audio.
+
+        Returns:
+            The cached render, or None when the caller must render.
+        """
+        script = NarrationScript.model_validate(script.model_dump(), context={"spec": spec})
+        key = content_hash(spec, script, strategy)
+        wav_path = self._cache_dir / narration_filename(collection, day, key)
+        meta_path = sidecar_path(wav_path)
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+        meta = read_sidecar(meta_path)
+        if not (wav_path.exists() and meta and meta.get("key") == key):
+            return None
+        m4a_path = Path(str(wav_path.with_suffix(".m4a")))
+        if not (m4a_path.exists() and is_audible(wav_path.read_bytes())):
+            if m4a_path.exists():
+                # A cached entry that would ship an empty podcast: drop it so
+                # the render below runs again instead of serving it forever.
+                logger.warning("narration_cache_entry_discarded", wav_path=str(wav_path))
+                for stale in (wav_path, m4a_path, meta_path):
+                    stale.unlink(missing_ok=True)
+            return None
+        logger.info("narration_cache_hit", audio_path=str(m4a_path))
+        return NarrationOut(
+            audio_path=str(m4a_path),
+            wav_path=str(wav_path),
+            duration_seconds=float(meta.get("duration_seconds", 0.0)),
+            cached=True,
+            segments=int(meta.get("segments", len(script.segments))),
+            char_count=script.total_chars(),
+            voices=list(meta.get("voices", [])),
+            used_conversations_api=bool(meta.get("used_conversations_api", False)),
+            edge_fallbacks=int(meta.get("edge_fallbacks", 0)),
+            conversation_blocks=int(meta.get("conversation_blocks", 1)),
+            music=meta.get("music"),
+            title=script.title or spec.title,
+        )
+
     async def render(
         self,
         spec: NarrationSpec,
@@ -1286,37 +1347,13 @@ class NarrationTTSService:
             NarrationRenderError: If audio cannot be assembled, mixed or written,
                 or if the assembled audio is inaudible.
         """
-        script = NarrationScript.model_validate(script.model_dump(), context={"spec": spec})
+        cached = self.cache_probe(spec, script, collection=collection, day=day, strategy=strategy)
+        if cached is not None:
+            return cached
+
         key = content_hash(spec, script, strategy)
         wav_path = self._cache_dir / narration_filename(collection, day, key)
         meta_path = sidecar_path(wav_path)
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
-
-        meta = read_sidecar(meta_path)
-        if wav_path.exists() and meta and meta.get("key") == key:
-            m4a_path = Path(str(wav_path.with_suffix(".m4a")))
-            if m4a_path.exists() and is_audible(wav_path.read_bytes()):
-                logger.info("narration_cache_hit", audio_path=str(m4a_path))
-                return NarrationOut(
-                    audio_path=str(m4a_path),
-                    wav_path=str(wav_path),
-                    duration_seconds=float(meta.get("duration_seconds", 0.0)),
-                    cached=True,
-                    segments=int(meta.get("segments", len(script.segments))),
-                    char_count=script.total_chars(),
-                    voices=list(meta.get("voices", [])),
-                    used_conversations_api=bool(meta.get("used_conversations_api", False)),
-                    edge_fallbacks=int(meta.get("edge_fallbacks", 0)),
-                    conversation_blocks=int(meta.get("conversation_blocks", 1)),
-                    music=meta.get("music"),
-                    title=script.title or spec.title,
-                )
-            if m4a_path.exists():
-                # A cached entry that would ship an empty podcast: drop it so
-                # the render below runs again instead of serving it forever.
-                logger.warning("narration_cache_entry_discarded", wav_path=str(wav_path))
-                for stale in (wav_path, m4a_path, meta_path):
-                    stale.unlink(missing_ok=True)
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS

@@ -732,6 +732,96 @@ async def test_render_reuses_the_cache_for_identical_inputs(
     await service.aclose()
 
 
+async def test_cache_probe_returns_none_when_nothing_cached(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    assert service.cache_probe(_spec(), _script(_spec()), collection="tech") is None
+    await service.aclose()
+
+
+async def test_cache_probe_returns_cached_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    rendered = await service.render(spec, script, collection="tech")
+    probed = service.cache_probe(spec, script, collection="tech")
+
+    assert probed is not None
+    assert probed.cached is True
+    assert probed.audio_path == rendered.audio_path
+    await service.aclose()
+
+
+async def test_cache_probe_returns_none_when_key_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    rendered = await service.render(spec, script, collection="tech")
+    meta_path = sidecar_path(Path(rendered.wav_path))
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["key"] = "0" * 64
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    assert service.cache_probe(spec, script, collection="tech") is None
+    await service.aclose()
+
+
+async def test_cache_probe_discards_inaudible_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    rendered = await service.render(spec, script, collection="tech")
+    wav_path = Path(rendered.wav_path)
+    m4a_path = Path(rendered.audio_path)
+    meta_path = sidecar_path(wav_path)
+    wav_path.write_bytes(build_wav(b"\x00" * 4800, CANONICAL_FORMAT))
+
+    assert service.cache_probe(spec, script, collection="tech") is None
+    assert not wav_path.exists()
+    assert not m4a_path.exists()
+    assert not meta_path.exists()
+    await service.aclose()
+
+
+async def test_cache_probe_ignores_other_strategy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+
+    await service.render(spec, script, collection="tech", strategy=RenderStrategy.TURNS)
+    assert (
+        service.cache_probe(spec, script, collection="tech", strategy=RenderStrategy.CONVERSATIONS)
+        is None
+    )
+    await service.aclose()
+
+
 async def test_render_regenerates_when_the_script_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
