@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "anchor_neutral_m",
+      "label": "Anchor — neutral male",
+      "language": "en",
+      "instruct": "Male, late 40s, warm baritone, broadcast clarity, neutral delivery, measured pace, no regional accent",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "anchor",
+      "enabled": true
+    },
+    {
+      "name": "anchor_neutral_f",
+      "label": "Anchor — neutral female",
+      "language": "en",
+      "instruct": "Female, early 40s, bright alto with a settled core, broadcast clarity, neutral delivery, measured pace, no regional accent",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "anchor",
+      "enabled": true
+    },
+    {
+      "name": "cohost_warm_f",
+      "label": "Cohost — warm female",
+      "language": "en",
+      "instruct": "Female, mid 30s, conversational and relaxed, natural smile in the voice, easy laugh, warm lower register",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "cohost",
+      "enabled": true
+    },
+    {
+      "name": "narrator_calm_m",
+      "label": "Narrator — calm male",
+      "language": "en",
+      "instruct": "Male, 50s, low and unhurried, documentary tone, even pacing, no affectation, smooth chest register",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "narrator",
+      "enabled": true
+    },
+    {
+      "name": "analyst_measured_m",
+      "label": "Analyst — measured male",
+      "language": "en",
+      "instruct": "Male, 40s, dry and understated, deadpan restraint, precise consonants, minimal pitch range",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "analyst",
+      "enabled": true
+    },
+    {
+      "name": "reporter_bright_f",
+      "label": "Reporter — bright female",
+      "language": "en",
+      "instruct": "Female, late 20s, energetic and forward, field-report urgency, crisp articulation, bright timbre",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "reporter",
+      "enabled": true
+    },
+    {
+      "name": "commentator_deep_m",
+      "label": "Commentator — deep male",
+      "language": "en",
+      "instruct": "Male, late 50s, deep register, unhurried confidence, resonant, low-key authority",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "commentator",
+      "enabled": true
+    },
+    {
+      "name": "narrator_neutral_f",
+      "label": "Narrator — neutral female",
+      "language": "en",
+      "instruct": "Female, mid 40s, balanced and clear, neutral register, unhurried, no regional accent",
+      "ref_text": "Welcome to the daily briefing. Today we look at the stories shaping technology, markets and culture, with reporting from our correspondents around the world. Here is what you need to know this morning, the context behind each headline, and what to watch for in the hours ahead.",
+      "role_hint": "narrator",
+      "enabled": true
+    },
+    {
+      "name": "es_anchor_neutral_m",
+      "label": "Presentador — masculino neutro",
+      "language": "es",
+      "instruct": "Hombre, finales de los 40, barítono cálido, claridad de radio, tono neutro, ritmo medido, sin acento regional",
+      "ref_text": "Bienvenidos al resumen diario. Hoy repasamos las noticias que marcan la tecnología, los mercados y la cultura, con información de nuestros corresponsales en todo el mundo. Esto es lo que necesitas saber esta mañana, el contexto detrás de cada titular y qué vigilar en las próximas horas.",
+      "role_hint": "anchor",
+      "enabled": true
+    },
+    {
+      "name": "es_anchor_neutral_f",
+      "label": "Presentadora — femenina neutra",
+      "language": "es",
+      "instruct": "Mujer, principios de los 40, registro medio brillante con núcleo asentado, claridad de radio, tono neutro, ritmo medido",
+      "ref_text": "Bienvenidos al resumen diario. Hoy repasamos las noticias que marcan la tecnología, los mercados y la cultura, con información de nuestros corresponsales en todo el mundo. Esto es lo que necesitas saber esta mañana, el contexto detrás de cada titular y qué vigilar en las próximas horas.",
+      "role_hint": "anchor",
+      "enabled": true
+    },
+    {
+      "name": "es_narrator_calm_m",
+      "label": "Narrador — masculino sereno",
+      "language": "es",
+      "instruct": "Hombre, 50, voz baja y pausada, tono documental, ritmo uniforme, sin afectación, registro de pecho suave",
+      "ref_text": "Bienvenidos al resumen diario. Hoy repasamos las noticias que marcan la tecnología, los mercados y la cultura, con información de nuestros corresponsales en todo el mundo. Esto es lo que necesitas saber esta mañana, el contexto detrás de cada titular y qué vigilar en las próximas horas.",
+      "role_hint": "narrator",
+      "enabled": true
+    },
+    {
+      "name": "es_cohost_warm_f",
+      "label": "Copresentadora — cálida",
+      "language": "es",
+      "instruct": "Mujer, mediana de los 30, conversacional y relajada, sonrisa natural en la voz, risa fácil, registro grave cálido",
+      "ref_text": "Bienvenidos al resumen diario. Hoy repasamos las noticias que marcan la tecnología, los mercados y la cultura, con información de nuestros corresponsales en todo el mundo. Esto es lo que necesitas saber esta mañana, el contexto detrás de cada titular y qué vigilar en las próximas horas.",
+      "role_hint": "cohost",
+      "enabled": true
+    }
+  ]
+}
