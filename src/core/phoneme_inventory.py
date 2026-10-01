@@ -44,10 +44,12 @@ class CoverageWord:
     phonemes: tuple[str, ...]
 
 
-#: General American English: 24 consonants + 17 vowels = 41 phonemes.
+#: General American English: 24 consonants + 18 vowels = 42 phonemes.
 #:
 #: GA merges /e/ and /ɛ/ (both spelled ``ɛ`` here) and treats the r-colored
-#: schwa as ``ɚ``, so there is no separate /e/ or /ɝ/ entry.
+#: schwa as ``ɚ``, so there is no separate /e/ or /ɝ/ entry. ``i`` is the
+#: tense unstressed vowel of "happy"/"very", kept apart from both ``iː`` and
+#: ``ɪ`` because GA speakers do.
 ENGLISH_PHONEMES: tuple[str, ...] = (
     "p",
     "b",
@@ -75,6 +77,7 @@ ENGLISH_PHONEMES: tuple[str, ...] = (
     "j",
     "iː",
     "ɪ",
+    "i",
     "ɛ",
     "æ",
     "ɑ",
@@ -197,14 +200,14 @@ SPANISH_COVERAGE_WORDS: tuple[CoverageWord, ...] = (
         "corresponsales",
         ("k", "o", "r", "r", "e", "s", "p", "o", "n", "s", "a", "l", "e", "s"),
     ),
-    CoverageWord("Cada", ("k", "a", "ð̞", "a")),
+    CoverageWord("Cada", ("k", "a", "d", "a")),
     CoverageWord("titular", ("t", "i", "t", "u", "l", "a", "ɾ")),
     CoverageWord("llega", ("ʝ", "e", "ɣ", "a")),
     CoverageWord("mucho", ("m", "u", "tʃ", "o")),
     CoverageWord("contexto", ("k", "o", "n", "t", "e", "k", "s", "t", "o")),
     CoverageWord("análisis", ("a", "n", "a", "l", "i", "s", "i", "s")),
     CoverageWord("nombre", ("n", "o", "m", "b", "ɾ̩", "e")),
-    CoverageWord("puerto", ("p", "w", "e", "ɾ̩", "t", "o")),
+    CoverageWord("puerto", ("p", "u", "e", "ɾ̩", "t", "o")),
     CoverageWord("golpe", ("ɡ", "o", "l̩", "p", "e")),
     CoverageWord("banco", ("b", "a", "n", "k", "o")),
     CoverageWord("central", ("s", "e", "n", "t", "ɾ̩", "a", "l")),
