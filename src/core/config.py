@@ -171,6 +171,9 @@ class Settings(BaseSettings):
     # queue. The hard budget caps land in a later commit; this flag is what
     # makes the dispatch safe to merge before they do.
     modal_enabled: bool = False
+    # Gate for the ZONOS2 backend. ZONOS2 is implemented but inactive until
+    # scripts/benchmark_zonos.py passes every criterion with a real voice.
+    zonos2_enabled: bool = False
     modal_app_name: str = "news-engine"
     modal_token_id: str = ""
     modal_token_secret: str = ""

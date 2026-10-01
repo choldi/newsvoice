@@ -728,6 +728,7 @@ class NarrationTTSService:
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        backend: TTSBackend = TTSBackend.QWEN3_TTS,
     ) -> bytes:
         """Synthesize one turn on Modal and return the WAV payload.
 
@@ -739,7 +740,8 @@ class NarrationTTSService:
             voice_ref: Reference voice name from the catalog.
             language: ISO 639-1 language code.
             speed: Speaking rate in [0.5, 2.0].
-            emotion: Optional emotion tag, accepted for ZONOS2 parity.
+            emotion: Optional emotion tag, honored by ZONOS2 only.
+            backend: Modal engine to call.
 
         Returns:
             The WAV payload returned by Modal.
@@ -748,9 +750,17 @@ class NarrationTTSService:
             NarrationGatewayError: When Modal is disabled, unconfigured, or the
                 call fails.
         """
-        from src.core.modal_client import modal_tts
+        from src.core.modal_client import modal_tts, modal_zonos2_tts
 
         try:
+            if backend is TTSBackend.ZONOS2:
+                return await modal_zonos2_tts(
+                    text=text,
+                    voice_ref=voice_ref,
+                    language=language,
+                    speed=speed,
+                    emotion=emotion,
+                )
             return await modal_tts(
                 text=text,
                 voice_ref=voice_ref,
@@ -873,7 +883,9 @@ class NarrationTTSService:
         """
         if backend is not TTSBackend.OMNIVOICE:
             return (
-                await self._post_modal_tts(text, voice_id, language, speed=speed, emotion=emotion),
+                await self._post_modal_tts(
+                    text, voice_id, language, speed=speed, emotion=emotion, backend=backend
+                ),
                 False,
             )
         payload: dict[str, Any] = {
