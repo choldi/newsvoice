@@ -8,8 +8,8 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from src.api.services.narration_tts import CANONICAL_FORMAT, build_wav
 from src.core import voice_catalog
+from src.core.audio import CANONICAL_FORMAT, build_wav
 from src.core.config import settings
 from src.workers import voice_activities
 

@@ -27,7 +27,6 @@ from src.api.services.narration_tts import (
     NarrationRenderError,
     NarrationTTSService,
     RenderStrategy,
-    build_wav,
     chunk_text,
     concat_wavs,
     content_hash,
@@ -40,6 +39,7 @@ from src.api.services.narration_tts import (
     wav_format,
     wav_peak_ratio,
 )
+from src.core.audio import AudioError, WavFormat, build_wav
 from src.core.config import settings
 
 
@@ -176,7 +176,7 @@ def test_concat_wavs_ignores_the_trailing_pause() -> None:
 
 
 def test_concat_wavs_rejects_mismatched_formats() -> None:
-    stereo = narration_module.WavFormat(channels=2, sample_width=2, framerate=24000)
+    stereo = WavFormat(channels=2, sample_width=2, framerate=24000)
 
     with pytest.raises(NarrationRenderError, match="has format"):
         concat_wavs([(_wav(frames=240), 0), (_wav(240, stereo), 0)])
@@ -188,7 +188,9 @@ def test_concat_wavs_requires_parts() -> None:
 
 
 def test_wav_format_rejects_garbage() -> None:
-    with pytest.raises(NarrationRenderError, match="invalid WAV payload"):
+    # The PCM primitives now live in src.core.audio and raise AudioError, the
+    # base of NarrationRenderError, so the broader type is what callers see.
+    with pytest.raises(AudioError, match="invalid WAV payload"):
         wav_format(b"definitely not a wav")
 
 
@@ -1117,7 +1119,7 @@ def test_wav_peak_ratio_measures_silence_and_full_scale() -> None:
 
 def test_is_audible_tolerates_unmeasurable_formats() -> None:
     """A sample width other than 16 bit is reported as audible, never rejected."""
-    mono8 = narration_module.WavFormat(channels=1, sample_width=1, framerate=8000)
+    mono8 = WavFormat(channels=1, sample_width=1, framerate=8000)
 
     assert wav_peak_ratio(build_wav(b"\x00" * 800, mono8)) is None
     assert is_audible(build_wav(b"\x00" * 800, mono8))
@@ -1187,7 +1189,7 @@ async def test_render_rejects_segments_naming_an_unknown_role(
 async def test_render_resamples_a_non_canonical_gateway_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    other = narration_module.WavFormat(channels=1, sample_width=2, framerate=22050)
+    other = WavFormat(channels=1, sample_width=2, framerate=22050)
     calls: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1766,7 +1768,7 @@ async def test_real_m4a_is_produced_and_playable(
 async def test_real_resample_of_a_foreign_sample_rate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    other = narration_module.WavFormat(channels=1, sample_width=2, framerate=22050)
+    other = WavFormat(channels=1, sample_width=2, framerate=22050)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=_wav(frames=22050, fmt=other))
