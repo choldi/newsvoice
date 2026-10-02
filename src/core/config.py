@@ -185,6 +185,11 @@ class Settings(BaseSettings):
     qwen_tts_design_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     qwen_tts_max_new_tokens: int = Field(default=2048, ge=256, le=8192)
     qwen_tts_batch_size: int = Field(default=8, ge=1, le=32)
+    # Voice design runs on the GPU box (Phase 7.9), not in the container. sdpa is
+    # the default because designing a batch of short clips does not need
+    # flash-attn, which keeps the worker off the CUDA runtime.
+    qwen_tts_device: str = "cuda:0"
+    qwen_tts_attn_implementation: str = "sdpa"
     # Audible AI disclosure (EU AI Act Art. 50(4)). Empty text disables it even
     # when the collection flag is on, which is the escape hatch if a legal
     # review concludes the duty does not apply.
