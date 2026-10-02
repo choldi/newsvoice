@@ -72,13 +72,12 @@ async def main() -> None:
         design_task_queue=settings.voice_design_task_queue,
     )
     client = await build_client(settings.temporal_voices_namespace)
-    async with client:
-        result = await client.execute_workflow(
-            VoiceCatalogWorkflow.run,
-            config,
-            id=f"voice-catalog-{asyncio.get_running_loop().time():.0f}",
-            task_queue=settings.voice_catalog_task_queue,
-        )
+    result = await client.execute_workflow(
+        VoiceCatalogWorkflow.run,
+        config,
+        id=f"voice-catalog-{asyncio.get_running_loop().time():.0f}",
+        task_queue=settings.voice_catalog_task_queue,
+    )
     print(json.dumps(result, indent=2, default=str))
 
 
