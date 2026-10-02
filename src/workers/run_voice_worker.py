@@ -123,7 +123,7 @@ async def main() -> None:
     configure_logging()
     client: Client = await build_client(settings.temporal_voices_namespace)
     async with run_voice_worker(client, role=args.role, task_queue=args.queue):
-        logger.info("voice_worker_running", role=args.role, task_queue=args.queue)
+        logger.info("voice_worker_running", role=args.role)
         await asyncio.Event().wait()
 
 
