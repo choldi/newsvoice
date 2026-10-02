@@ -33,13 +33,12 @@ from src.api.services.narration_tts import (
     edge_voice_for,
     is_audible,
     narration_filename,
-    silence_bytes,
     split_turns_into_blocks,
     wav_duration,
     wav_format,
     wav_peak_ratio,
 )
-from src.core.audio import AudioError, WavFormat, build_wav
+from src.core.audio import AudioError, WavFormat, build_wav, silence_bytes
 from src.core.config import settings
 
 

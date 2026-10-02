@@ -13,6 +13,7 @@ import array
 import io
 import sys
 import wave
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -210,3 +211,43 @@ def wav_peak_ratio(data: bytes) -> float | None:
     if not samples:
         return 0.0
     return max(max(samples), -min(samples)) / _PCM16_FULL_SCALE
+
+
+def concat_wavs(parts: Sequence[tuple[bytes, int]], fmt: WavFormat | None = None) -> bytes:
+    """Concatenate WAV payloads inserting a pause after each one.
+
+    All parts must already share the same format; the caller is responsible for
+    resampling. The pause of the last element is ignored.
+
+    Args:
+        parts: Sequence of ``(wav_bytes, pause_after_ms)`` pairs.
+        fmt: PCM format every part must be in. When omitted it is read from the
+            first part.
+
+    Returns:
+        A single WAV payload in ``fmt``.
+
+    Raises:
+        AudioError: If the parts have mismatched formats or are empty.
+    """
+    if not parts:
+        raise AudioError("nothing to concatenate")
+
+    fmt = fmt or wav_format(parts[0][0])
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(fmt.channels)
+        handle.setsampwidth(fmt.sample_width)
+        handle.setframerate(fmt.framerate)
+        for index, (data, pause_ms) in enumerate(parts):
+            part_fmt = wav_format(data)
+            if (
+                part_fmt.channels != fmt.channels
+                or part_fmt.sample_width != fmt.sample_width
+                or part_fmt.framerate != fmt.framerate
+            ):
+                raise AudioError(f"WAV part {index} has format {part_fmt}, expected {fmt}")
+            handle.writeframes(wav_frames(data))
+            if index < len(parts) - 1:
+                handle.writeframes(silence_bytes(pause_ms, fmt))
+    return buffer.getvalue()

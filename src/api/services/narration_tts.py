@@ -29,13 +29,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import json
 import os
 import re
 import subprocess
 import tempfile
-import wave
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -62,11 +60,12 @@ from src.core.audio import (
     CANONICAL_FORMAT,
     CANONICAL_RATE,
     AudioError,
-    silence_bytes,
     wav_duration,
     wav_format,
-    wav_frames,
     wav_peak_ratio,
+)
+from src.core.audio import (
+    concat_wavs as _concat_wavs,
 )
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
@@ -175,29 +174,10 @@ def concat_wavs(parts: Sequence[tuple[bytes, int]]) -> bytes:
     Raises:
         NarrationRenderError: If the parts have mismatched formats or are empty.
     """
-    if not parts:
-        raise NarrationRenderError("nothing to concatenate")
-
-    fmt = wav_format(parts[0][0])
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as handle:
-        handle.setnchannels(fmt.channels)
-        handle.setsampwidth(fmt.sample_width)
-        handle.setframerate(fmt.framerate)
-        for index, (data, pause_ms) in enumerate(parts):
-            part_fmt = wav_format(data)
-            if (
-                part_fmt.channels != fmt.channels
-                or part_fmt.sample_width != fmt.sample_width
-                or part_fmt.framerate != fmt.framerate
-            ):
-                raise NarrationRenderError(
-                    f"WAV part {index} has format {part_fmt}, expected {fmt}"
-                )
-            handle.writeframes(wav_frames(data))
-            if index < len(parts) - 1:
-                handle.writeframes(silence_bytes(pause_ms, fmt))
-    return buffer.getvalue()
+    try:
+        return _concat_wavs(parts)
+    except AudioError as exc:
+        raise NarrationRenderError(str(exc)) from exc
 
 
 def chunk_text(text: str, max_chars: int) -> list[str]:
