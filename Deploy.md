@@ -384,13 +384,9 @@ so there is no spend.
 
 ### Generate the reference voices
 
-```bash
-docker compose exec narration-modal-worker python -m src.workers.design_voice --all --upload
-```
-
-This runs `VoiceCatalogWorkflow`, which designs every missing or stale profile
-with Qwen3-TTS VoiceDesign, stores the reference in `data/voices/refs/`, records
-it in `data/voices/manifest.json` and uploads it to the Modal Volume.
+Design left Modal in Phase 7.9: the reference voices are generated on the GPU
+box, and only the clone upload still needs Modal. See
+[section 8](#8-voice-catalog-phase-79).
 
 ### Budget
 
@@ -408,3 +404,111 @@ docker compose --profile modal down
 `collections.toml` is bind-mounted on the server (inode 461207). Changing
 branches without checking that bind mount is the known footgun — see commit
 `80a19a5`.
+---
+
+## 8. Voice catalog (Phase 7.9)
+
+`VoiceCatalogWorkflow` designs the reference voices the clone backends read.
+The whole flow runs in its own Temporal namespace, `news-engine-voices`,
+split across two workers — a Temporal activity always executes in the
+namespace of the workflow that scheduled it, so both halves must live there:
+
+| Role | Runs on | Queue | Registers |
+| --- | --- | --- | --- |
+| `--role catalog` | the server (compose) | `VOICE_CATALOG_TASK_QUEUE` | `VoiceCatalogWorkflow` + status/store/upload |
+| `--role design` | the GPU box (debwk) | `VOICE_DESIGN_TASK_QUEUE` | `design_voice_activity` |
+
+The design worker synthesizes with Qwen3-TTS VoiceDesign and returns the audio
+gzipped over the wire, so it never touches `data/voices`: only the catalog
+worker writes `data/voices/refs/*.wav` and `manifest.json`.
+
+### 8.1 One-time: create the namespace
+
+```bash
+docker compose exec temporal temporal operator namespace create \
+  --namespace news-engine-voices --address temporal:7233
+docker compose exec temporal temporal operator namespace list \
+  --address temporal:7233
+```
+
+Re-run it after any Temporal restore: the namespace lives in Postgres, not in
+the repo, so a fresh `temporal_pg_data` comes back with `default` only.
+
+### 8.2 Server: the catalog worker
+
+```bash
+docker compose up -d voice-catalog-worker
+docker compose logs -f voice-catalog-worker
+```
+
+Without it the admin trigger starts a workflow nobody picks up. The API route
+that starts it already connects with
+`build_client(settings.temporal_voices_namespace)`, so the namespace above
+must exist first.
+
+### 8.3 GPU box: the design worker
+
+The box (debwk, `100.75.148.68`) runs a **user-level** systemd service, not a
+container: Docker there has no NVIDIA runtime, and the CUDA stack is already
+installed system-wide (`torch 2.14.1+cu130`, `qwen_tts 0.1.1`).
+
+One-time setup:
+
+```bash
+# 1. clone the repo (the worker only needs src/, not the docker image)
+git clone <repo-url> ~/news-summary && cd ~/news-summary
+
+# 2. the Temporal client, on top of the CUDA stack already in that venv
+~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings
+
+# 3. worker unit
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/news-engine-voice-worker.service <<'UNIT'
+[Unit]
+Description=news-engine voice design worker (Temporal)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/news-summary
+Environment=PYTHONUNBUFFERED=1
+Environment=TEMPORAL_HOST=192.168.5.7:7233
+ExecStart=%h/qwen3-tts/venv/bin/python -m src.workers.run_voice_worker --role design
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+
+systemctl --user daemon-reload
+systemctl --user enable --now news-engine-voice-worker
+loginctl enable-linger "$USER"   # keep it up after logout
+journalctl --user -fu news-engine-voice-worker
+```
+
+`voice_design_task_queue` and `temporal_voices_namespace` keep their defaults,
+so `TEMPORAL_HOST` is the only value the unit has to set. The box must reach
+the server: `nc -vz 192.168.5.7 7233` (Tailscale address `100.75.148.68`). The first run downloads
+`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` (~4 GB) into the HuggingFace cache.
+
+### 8.4 Generating the voices
+
+```bash
+docker compose exec voice-catalog-worker python -m src.workers.design_voice --all --upload
+```
+
+Same CLI as before, but it now starts `VoiceCatalogWorkflow` in
+`news-engine-voices`. It designs every missing or stale profile, stores each
+reference in `data/voices/refs/`, records it in `data/voices/manifest.json`
+and uploads it to the Modal Volume for the clone backends. Cost is recorded as
+`modal_cost_usd: 0.0`: design no longer runs on Modal.
+
+### 8.5 Rollback
+
+```bash
+docker compose down voice-catalog-worker
+systemctl --user disable --now news-engine-voice-worker   # on the GPU box
+```
+
+The catalog keeps working from the references already in `data/voices/`.
