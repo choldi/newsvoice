@@ -10,7 +10,8 @@ queue, and every side effect lives in the design/store/upload activities.
 
 Reference audio never travels through this workflow: the design activity stages
 it on the server and the store activity reads it back, so a whole 24-voice
-batch adds only digests to the history.
+batch adds only digests to the history. What the workflow does carry, it keeps
+short — hence the single-attempt upload policy below.
 """
 
 from dataclasses import dataclass, field
@@ -35,6 +36,12 @@ DESIGN_VOICE_RETRY_POLICY = RetryPolicy(maximum_attempts=2)
 #: Storing only fails on a full disk or a corrupt payload, neither of which
 #: a couple of retries can fix, but a transient I/O error is worth one more go.
 STORE_VOICE_RETRY_POLICY = RetryPolicy(maximum_attempts=3)
+#: An upload failure is configuration, not flakiness: missing Modal credentials,
+#: a missing ``modal`` package, a bad token. The default policy retries it
+#: forever with backoff, which is how the first catalog run wedged a workflow
+#: for hours while doing nothing but waiting. One attempt, then the profile is
+#: marked failed and the operator fixes the configuration.
+UPLOAD_VOICE_RETRY_POLICY = RetryPolicy(maximum_attempts=1)
 
 #: Activity names, kept as constants because they are resolved by string.
 VOICE_STATUS_ACTIVITY = "voice_catalog_status_activity"
@@ -114,6 +121,7 @@ class VoiceCatalogWorkflow:
                         {"name": profile["name"]},
                         task_queue=config.task_queue,
                         start_to_close_timeout=UPLOAD_VOICE_TIMEOUT,
+                        retry_policy=UPLOAD_VOICE_RETRY_POLICY,
                     )
                 results.append({"name": name, "status": "ok", "voice": stored})
             except Exception as exc:

@@ -1,5 +1,6 @@
 """Integration tests for VoiceCatalogWorkflow via WorkflowEnvironment."""
 
+from datetime import timedelta
 from typing import Any
 
 from temporalio import activity
@@ -18,6 +19,7 @@ from src.workers.voice_workflows import (
 QUEUE = "voice-test-queue"
 SEEN: dict[str, list[dict[str, Any]]] = {"design": [], "store": [], "upload": []}
 FAIL: dict[str, str] = {}
+FAIL_UPLOAD: set[str] = set()
 PROFILES: list[dict[str, Any]] = []
 
 
@@ -76,6 +78,8 @@ async def stub_store(payload: dict) -> dict:
 @activity.defn(name=UPLOAD_VOICE_ACTIVITY)
 async def stub_upload(payload: dict) -> dict:
     SEEN["upload"].append(payload)
+    if payload["name"] in FAIL_UPLOAD:
+        raise RuntimeError("modal is disabled")
     return {"name": payload["name"], "uploaded": True}
 
 
@@ -84,6 +88,7 @@ def _reset(profiles: list[dict[str, Any]]) -> None:
     SEEN["store"].clear()
     SEEN["upload"].clear()
     FAIL.clear()
+    FAIL_UPLOAD.clear()
     PROFILES.clear()
     PROFILES.extend(profiles)
 
@@ -182,6 +187,26 @@ async def test_voice_catalog_workflow_ships_the_design_result_to_the_store_step(
     # the audio travels through staging, so it must never be in the payload:
     # a 24-voice batch of it exceeded the server's workflow history limit
     assert "wav_gz_b64" not in stored
+
+
+async def test_voice_catalog_workflow_gives_up_on_a_failed_upload() -> None:
+    _reset([_profile("a")])
+    FAIL_UPLOAD.add("a")
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with _worker(env.client):
+            result = await env.client.execute_workflow(
+                VoiceCatalogWorkflow.run,
+                VoiceCatalogConfig(upload=True, task_queue=QUEUE),
+                id="voice-catalog-7",
+                task_queue=QUEUE,
+                execution_timeout=timedelta(minutes=5),
+            )
+
+    # one attempt: retrying a configuration failure forever is what wedged the
+    # first catalog run, so the profile must simply be marked failed
+    assert result["results"][0]["status"] == "error"
+    assert result["results"][0]["error"]
+    assert len(SEEN["upload"]) == 1
 
 
 async def test_voice_catalog_workflow_routes_the_design_step_to_its_own_queue() -> None:

@@ -522,7 +522,9 @@ and uploads it to the Modal Volume for the clone backends. Cost is recorded as
 The audio itself never goes through Temporal: the design activity stages it at
 `POST /api/internal/voices/staged/{name}` and the store activity reads it back
 from `data/voices/.staging/`. Only the sha256 crosses the workflow history, so
-a full 24-voice batch no longer trips the server's history size limit.
+a full 24-voice batch no longer trips the server's history size limit. An
+upload to Modal is attempted **once**: it fails on configuration, not on
+flakiness, and an endless retry would wedge the workflow.
 
 ### 8.5 Rollback
 
