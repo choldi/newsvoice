@@ -95,17 +95,21 @@ systemctl --user edit news-engine-voice-worker   # o editar la unit directa
 systemctl --user restart news-engine-voice-worker
 ```
 
-Comprobar en los logs de la API el evento (una petición por voz):
+Comprobar en los logs de la API el evento (una petición por voz) y en los del
+design worker la síntesis, con `staged_bytes` en la línea:
 
 ```bash
-docker compose logs api | grep voice_reference_staged   # {"bytes": ..., "name": ...}
-ls data/voices/.staging/                                # vacío tras el store
+docker compose logs api | grep voice_reference_staged     # {"bytes": ..., "name": ...}
+docker compose logs voice-catalog-worker | grep "Voice stored"
+journalctl --user -u news-engine-voice-worker | grep "Voice designed"   # en debwk
+ls data/voices/.staging/                                  # vacío tras el store
 ```
 
-Los `activity.logger` de Temporal no llegan a `journalctl` (nivel WARNING por
-defecto), así que la prueba de que el diseño corrió es la línea anterior más
-`results[].status == "ok"` del CLI; los fallos se ven en la Temporal UI o en
-`docker compose logs voice-catalog-worker`.
+Desde `3d74687` el bootstrap de los workers enciende los loggers del SDK de
+Temporal (`configure_temporal_logging()` en `src/workers/client.py`), así que
+estas líneas llegan a `docker logs` y a `journalctl` con el contexto del
+workflow/activity entre paréntesis. El CLI imprime además
+`results[].status == "ok"`, y los fallos se ven ahí mismo o en la Temporal UI.
 
 ## 6. Credenciales de Modal (solo si se activa la vía B)
 
