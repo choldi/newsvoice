@@ -19,43 +19,16 @@ from temporalio.worker import Worker
 from src.api.db.database import run_migrations
 from src.core.config import settings
 from src.workers import activities
+from src.workers.client import build_client, configure_logging
 from src.workers.workflows import (
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
     SystemMonitorWorkflow,
 )
 
-
-def configure_logging() -> None:
-    """Configure structlog with JSON output for the worker process."""
-    structlog.configure(
-        processors=[
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(settings.log_level),
-    )
-
-
 logger = structlog.get_logger(__name__)
 
-
-async def build_client() -> Client:
-    """Connect to the Temporal server.
-
-    Returns:
-        A Temporal Client connected to the configured server/namespace.
-    """
-    logger.info(
-        "connecting_to_temporal",
-        host=settings.temporal_host,
-        namespace=settings.temporal_namespace,
-    )
-    return await Client.connect(
-        settings.temporal_host,
-        namespace=settings.temporal_namespace,
-    )
+__all__ = ["build_client", "configure_logging", "run_worker", "worker_activities"]
 
 
 def worker_activities() -> list[object]:

@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "news-engine-task-queue"
+    # The voice catalog lives in its own namespace so the remote GPU worker only
+    # ever sees voice traffic. A Temporal activity always executes in the
+    # namespace of the workflow that scheduled it, so the workflow, the
+    # store/status activities and the design activity all live here
+    # (see src/workers/run_voice_worker.py).
+    temporal_voices_namespace: str = "news-engine-voices"
+    voice_design_task_queue: str = "news-engine-voice-design-queue"
+    voice_catalog_task_queue: str = "news-engine-voice-catalog-queue"
     rss_feed_urls: list[str] = []
     collections_file: str = "collections.toml"
     # How often (minutes) the collections-config monitor workflow wakes to check
