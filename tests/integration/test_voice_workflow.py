@@ -51,7 +51,6 @@ async def stub_design(payload: dict) -> dict:
         raise RuntimeError(FAIL[payload["name"]])
     return {
         "name": payload["name"],
-        "wav_gz_b64": "Z256ZWQ=",
         "sha256": "a" * 64,
         "sample_rate": 24000,
         "duration_seconds": 15.0,
@@ -178,9 +177,11 @@ async def test_voice_catalog_workflow_ships_the_design_result_to_the_store_step(
 
     stored = SEEN["store"][0]
     assert stored["sha256"] == "a" * 64
-    assert stored["wav_gz_b64"] == "Z256ZWQ="
     assert stored["instruct"] == _profile("a")["instruct"]
     assert stored["ref_text"] == _profile("a")["ref_text"]
+    # the audio travels through staging, so it must never be in the payload:
+    # a 24-voice batch of it exceeded the server's workflow history limit
+    assert "wav_gz_b64" not in stored
 
 
 async def test_voice_catalog_workflow_routes_the_design_step_to_its_own_queue() -> None:

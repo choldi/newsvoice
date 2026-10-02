@@ -3,8 +3,11 @@
 The activities are split across two machines on purpose:
 
 * ``design_voice_activity`` runs on the voice-design queue, polled by the GPU
-  box. It loads Qwen3-TTS, synthesises the reference and returns the audio
-  gzipped so it can travel over the wire. It never touches the server disk.
+  box. It loads Qwen3-TTS, synthesises the reference and ships the bytes to
+  the server's staging endpoint (``/api/internal/voices/staged/{name}``):
+  putting 24 voices through activity results filled the workflow history and
+  the server terminated the run. The result carries only the digest. It never
+  touches the server disk.
 * ``store_voice_activity``, ``upload_voice_activity`` and
   ``voice_catalog_status_activity`` run on the narration queue, which owns
   ``data/voices``.
@@ -15,8 +18,6 @@ Everything with side effects lives here; the workflow only orchestrates.
 from __future__ import annotations
 
 import asyncio
-import base64
-import gzip
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,33 +42,6 @@ from src.core.voice_catalog import (
 VOICE_JOB_KIND = "voice"
 
 
-def _gzip_b64(wav: bytes) -> str:
-    """Compress and encode audio so it fits in an activity result.
-
-    Args:
-        wav: Raw WAV bytes.
-
-    Returns:
-        Base64 of the gzip stream, as ASCII text.
-    """
-    return base64.b64encode(gzip.compress(wav)).decode("ascii")
-
-
-def _gunzip_b64(encoded: str) -> bytes:
-    """Decode an audio payload produced by :func:`_gzip_b64`.
-
-    Args:
-        encoded: Base64 of a gzip stream.
-
-    Returns:
-        The original WAV bytes.
-
-    Raises:
-        ValueError: If the payload is not valid base64 or gzip.
-    """
-    return gzip.decompress(base64.b64decode(encoded))
-
-
 def _profile(name: str) -> dict[str, Any]:
     """Return the catalog profile matching a name.
 
@@ -88,10 +62,12 @@ def _profile(name: str) -> dict[str, Any]:
 
 @activity.defn
 async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
-    """Synthesise a reference voice on the GPU box and return it for shipping.
+    """Synthesise a reference voice on the GPU box and stage it for the server.
 
-    The result carries the audio itself, gzipped: the design worker has no
-    access to ``data/voices``, so writing the file is a separate activity.
+    The audio itself never enters the workflow: it goes straight to the
+    staging endpoint, so the history only grows by the digest. The design
+    worker has no access to ``data/voices``, which is why writing the real
+    reference stays a separate activity.
 
     Args:
         payload: Dict with ``name``, ``instruct``, ``ref_text`` and
@@ -100,11 +76,14 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
             silence, which keeps a long reference inside one generation).
 
     Returns:
-        Dict with ``name``, ``wav_gz_b64``, ``sha256``, ``sample_rate``,
-        ``duration_seconds``, ``design_model`` and ``design_seconds``.
+        Dict with ``name``, ``sha256``, ``sample_rate``, ``duration_seconds``,
+        ``design_model`` and ``design_seconds``. The audio is reachable by
+        name through the staging endpoint, not in the result.
 
     Raises:
-        ApplicationError: When the payload is invalid or the model fails.
+        ApplicationError: When the payload is invalid, the model fails or the
+            audio cannot be staged. Staging failures that a retry could fix
+            (network, 5xx) stay retryable; a missing key does not.
     """
     name = str(payload.get("name") or "")
     instruct = str(payload.get("instruct") or "")
@@ -131,16 +110,28 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         raise ApplicationError(f"voice design failed for {name}: {exc}") from exc
     elapsed = time.monotonic() - started
 
+    # Ship the bytes before returning: the result must stay small enough for
+    # the workflow history to survive a whole 24-voice batch.
+    from src.api.services.voice_staging import VoiceStagingError, stage_from_design
+
+    try:
+        staged = await stage_from_design(name, wav)
+    except VoiceStagingError as exc:
+        raise ApplicationError(
+            f"voice staging failed for {name}: {exc}",
+            non_retryable=not exc.retryable,
+        ) from exc
+
     activity.logger.info(
         "Voice designed",
         name=name,
         design_seconds=round(elapsed, 2),
         sha256=sha256_bytes(wav),
         sample_rate=sample_rate,
+        staged_bytes=staged,
     )
     return {
         "name": name,
-        "wav_gz_b64": _gzip_b64(wav),
         "sha256": sha256_bytes(wav),
         "sample_rate": sample_rate,
         "duration_seconds": wav_duration(wav),
@@ -154,11 +145,13 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Write a designed reference to the voices directory and the manifest.
 
     Runs on the server, which owns ``data/voices``: the design worker never
-    sees that path, so this is the step that makes the reference real.
+    sees that path, so this is the step that makes the reference real. The
+    audio is read back from the staging endpoint the design step wrote to,
+    never from the workflow payload.
 
     Args:
         payload: The profile fields (``name``, ``instruct``, ``ref_text``)
-            plus the design result (``wav_gz_b64``, ``sha256`` and optionally
+            plus the design result (``sha256`` and optionally
             ``design_model``).
 
     Returns:
@@ -166,26 +159,29 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         ``duration_seconds``.
 
     Raises:
-        ApplicationError: When the payload is invalid, the audio cannot be
-            read, or it does not match the digest the design step reported.
-            All of them are non-retryable: a retry cannot fix the bytes.
+        ApplicationError: When the payload is invalid, nothing was staged, the
+            audio cannot be read, or it does not match the digest the design
+            step reported. All of them are non-retryable: a retry cannot fix
+            the bytes.
     """
     name = str(payload.get("name") or "")
     instruct = str(payload.get("instruct") or "")
     ref_text = str(payload.get("ref_text") or "")
-    encoded = str(payload.get("wav_gz_b64") or "")
     digest = str(payload.get("sha256") or "")
-    if not name or not instruct or not ref_text or not encoded:
+    if not name or not instruct or not ref_text or not digest:
         raise ApplicationError(
-            "store_voice_activity needs name, instruct, ref_text and wav_gz_b64",
+            "store_voice_activity needs name, instruct, ref_text and sha256",
             non_retryable=True,
         )
 
+    from src.api.services.voice_staging import VoiceStagingError, clear_staged, read_staged
+
     try:
-        wav = _gunzip_b64(encoded)
-    except Exception as exc:
+        wav = read_staged(name)
+    except VoiceStagingError as exc:
         raise ApplicationError(
-            f"voice audio for {name} is unreadable: {exc}", non_retryable=True
+            f"voice audio for {name} is unavailable: {exc}",
+            non_retryable=not exc.retryable,
         ) from exc
     if sha256_bytes(wav) != digest:
         raise ApplicationError(
@@ -222,6 +218,8 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
     manifest[name] = entry
     write_manifest(manifest, manifest_path)
+
+    clear_staged(name)
 
     activity.logger.info(
         "Voice stored",

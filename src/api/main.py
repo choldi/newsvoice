@@ -22,6 +22,7 @@ from src.api.routes import (
     mvp_router,
     summarize_router,
     tts_router,
+    voice_staging_router,
 )
 from src.api.routes_ui import router as ui_router
 from src.core.config import settings
@@ -73,6 +74,7 @@ app.include_router(admin_voices_router, prefix="/api")
 app.include_router(admin_runs_router, prefix="/api")
 app.include_router(admin_schedules_router, prefix="/api")
 app.include_router(admin_narration_router, prefix="/api")
+app.include_router(voice_staging_router, prefix="/api")
 app.include_router(ui_router)
 
 

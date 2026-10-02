@@ -446,6 +446,15 @@ that starts it already connects with
 `build_client(settings.temporal_voices_namespace)`, so the namespace above
 must exist first.
 
+It also serves the staging endpoint the design box uploads to, so the server
+`.env` needs a shared key (empty disables the endpoint):
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # once
+echo "VOICE_STAGING_API_KEY=<the value above>" >> ~/news-summary/.env
+docker compose up -d api voice-catalog-worker
+```
+
 ### 8.3 GPU box: the design worker
 
 The box (debwk, `100.75.148.68`) runs a **user-level** systemd service, not a
@@ -458,8 +467,9 @@ One-time setup:
 # 1. clone the repo (the worker only needs src/, not the docker image)
 git clone <repo-url> ~/news-summary && cd ~/news-summary
 
-# 2. the Temporal client, on top of the CUDA stack already in that venv
-~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings
+# 2. the Temporal client plus httpx for the staging upload, on top of the CUDA
+#    stack already in that venv
+~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings httpx
 
 # 3. worker unit
 mkdir -p ~/.config/systemd/user
@@ -473,6 +483,10 @@ Wants=network-online.target
 WorkingDirectory=%h/news-summary
 Environment=PYTHONUNBUFFERED=1
 Environment=TEMPORAL_HOST=192.168.5.7:7233
+# The design activity POSTs the WAV here (same key as the server's .env);
+# localhost would be this box, so the server address is explicit.
+Environment=VOICE_STAGING_URL=http://192.168.5.7:8000
+Environment=VOICE_STAGING_API_KEY=<same value as VOICE_STAGING_API_KEY on the server>
 ExecStart=%h/qwen3-tts/venv/bin/python -m src.workers.run_voice_worker --role design
 Restart=on-failure
 RestartSec=5
@@ -488,7 +502,8 @@ journalctl --user -fu news-engine-voice-worker
 ```
 
 `voice_design_task_queue` and `temporal_voices_namespace` keep their defaults,
-so `TEMPORAL_HOST` is the only value the unit has to set. The box must reach
+so the only values the unit has to set are `TEMPORAL_HOST` and the staging
+pair (`VOICE_STAGING_URL` + `VOICE_STAGING_API_KEY`). The box must reach
 the server: `nc -vz 192.168.5.7 7233` (Tailscale address `100.75.148.68`). The first run downloads
 `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` (~4 GB) into the HuggingFace cache.
 
@@ -503,6 +518,11 @@ Same CLI as before, but it now starts `VoiceCatalogWorkflow` in
 reference in `data/voices/refs/`, records it in `data/voices/manifest.json`
 and uploads it to the Modal Volume for the clone backends. Cost is recorded as
 `modal_cost_usd: 0.0`: design no longer runs on Modal.
+
+The audio itself never goes through Temporal: the design activity stages it at
+`POST /api/internal/voices/staged/{name}` and the store activity reads it back
+from `data/voices/.staging/`. Only the sha256 crosses the workflow history, so
+a full 24-voice batch no longer trips the server's history size limit.
 
 ### 8.5 Rollback
 

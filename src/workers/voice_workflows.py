@@ -7,6 +7,10 @@ recorded with its own status so the operator can retry the failures.
 The workflow does no I/O and runs on the narration queue: the catalog is read
 by ``voice_catalog_status_activity``, the GPU box does the synthesis on its own
 queue, and every side effect lives in the design/store/upload activities.
+
+Reference audio never travels through this workflow: the design activity stages
+it on the server and the store activity reads it back, so a whole 24-voice
+batch adds only digests to the history.
 """
 
 from dataclasses import dataclass, field
@@ -148,13 +152,14 @@ class VoiceCatalogWorkflow:
             designed: Result of ``design_voice_activity``.
 
         Returns:
-            Payload for ``store_voice_activity``.
+            Payload for ``store_voice_activity``. The audio itself is not part
+            of it: the design activity staged it under the profile name, and
+            only the digest crosses the history.
         """
         return {
             "name": profile["name"],
             "instruct": profile["instruct"],
             "ref_text": profile["ref_text"],
-            "wav_gz_b64": designed["wav_gz_b64"],
             "sha256": designed["sha256"],
             "design_model": designed.get("design_model", ""),
         }

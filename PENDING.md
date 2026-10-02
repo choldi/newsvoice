@@ -70,6 +70,27 @@ guarda los WAV en `data/voices/refs/`, actualiza `data/voices/manifest.json`
 Comprobar `GET /admin/voices/catalog`: 24 perfiles y `ref_text_sha256` igual al
 de `voice_profiles.json`.
 
+## 5.b Staging de audio (clave compartida)
+
+El diseño deja de pasar el WAV por el historial de Temporal: la activity lo
+sube a `POST /api/internal/voices/staged/{name}` en el servidor y la store
+activity lo lee de `data/voices/.staging/`. Mientras no haya clave, el
+endpoint responde 503 y ningún perfil puede completarse.
+
+```bash
+# servidor: una vez
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+echo "VOICE_STAGING_API_KEY=<valor>" >> ~/news-summary/.env
+docker compose up -d api voice-catalog-worker
+
+# debwk: la misma clave en la unit (deploy/§8.3)
+systemctl --user edit news-engine-voice-worker   # o editar la unit directa
+systemctl --user restart news-engine-voice-worker
+```
+
+Comprobar en los logs del design worker que `Voice designed` lleva
+`staged_bytes`, y en `journalctl`/api que no hay `voice staging failed`.
+
 ## 6. Credenciales de Modal (solo si se activa la vía B)
 
 El upload del Volume y el render Qwen/ZONOS2 siguen en Modal; el diseño ya no.

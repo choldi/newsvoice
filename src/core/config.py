@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     temporal_voices_namespace: str = "news-engine-voices"
     voice_design_task_queue: str = "news-engine-voice-design-queue"
     voice_catalog_task_queue: str = "news-engine-voice-catalog-queue"
+    # The design worker runs on another box, so a reference reaches the server
+    # over HTTP instead of through Temporal history: a 24-voice batch put ~20 MB
+    # of gzipped WAV in one workflow and the server terminated it with
+    # "Workflow history size exceeds limit". The activity POSTs the bytes to
+    # this base URL; the workflow carries only the digest.
+    voice_staging_url: str = "http://localhost:8000"
+    # Shared key for POST /api/internal/voices/staged/{name}. Empty disables
+    # the endpoint (503), which is the default: staging is opt-in.
+    voice_staging_api_key: str = ""
     rss_feed_urls: list[str] = []
     collections_file: str = "collections.toml"
     # How often (minutes) the collections-config monitor workflow wakes to check
