@@ -4,6 +4,13 @@ Pasos operativos. La implementación está en la branch `phase-7.8-modal-tts` y
 es inerte hasta ejecutarlos: **la vía A (OmniVoice + clones) no cambia en
 ningún paso** y el render diario sigue igual.
 
+**Estado (2026-10-02):** pasos 1-5.b hechos y verificados en producción —
+namespace, `voice-catalog-worker`, design worker en debwk, modelo VoiceDesign
+y las 24 voces (`modal_cost_usd: 0.0`); staging desplegado y probado con 1
+perfil y con un lote de 3 (`status: ok`, sin `TMPRL1103` en el historial).
+Quedan 6-10 (credenciales Modal, gate ZONOS2, vía B, merge). Los texto de
+abajo describen cómo quedó el sistema, no lo que falta.
+
 ## 1. Namespace en el servidor (una vez)
 
 Un workflow y sus actividades viven en el mismo namespace, así que las dos
@@ -88,8 +95,17 @@ systemctl --user edit news-engine-voice-worker   # o editar la unit directa
 systemctl --user restart news-engine-voice-worker
 ```
 
-Comprobar en los logs del design worker que `Voice designed` lleva
-`staged_bytes`, y en `journalctl`/api que no hay `voice staging failed`.
+Comprobar en los logs de la API el evento (una petición por voz):
+
+```bash
+docker compose logs api | grep voice_reference_staged   # {"bytes": ..., "name": ...}
+ls data/voices/.staging/                                # vacío tras el store
+```
+
+Los `activity.logger` de Temporal no llegan a `journalctl` (nivel WARNING por
+defecto), así que la prueba de que el diseño corrió es la línea anterior más
+`results[].status == "ok"` del CLI; los fallos se ven en la Temporal UI o en
+`docker compose logs voice-catalog-worker`.
 
 ## 6. Credenciales de Modal (solo si se activa la vía B)
 
