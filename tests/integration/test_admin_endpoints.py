@@ -443,15 +443,16 @@ def test_voice_catalog_generate_starts_workflow(
             started["args"] = args
             started["kwargs"] = kwargs
 
-    monkeypatch.setattr(
-        "src.api.routes.admin_voices.build_client", AsyncMock(return_value=_FakeClient())
-    )
+    connect = AsyncMock(return_value=_FakeClient())
+    monkeypatch.setattr("src.api.routes.admin_voices.build_client", connect)
     response = client.post("/api/admin/voices/catalog/generate", json={"upload": True})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "started"
     assert "voice-catalog" in body["workflow_id"]
-    assert started["kwargs"]["task_queue"] == settings.narration_modal_task_queue
+    assert started["kwargs"]["task_queue"] == settings.voice_catalog_task_queue
+    assert started["args"][1].design_task_queue == settings.voice_design_task_queue
+    connect.assert_awaited_once_with(settings.temporal_voices_namespace)
 
 
 def test_voice_catalog_generate_wraps_failures(
@@ -459,7 +460,7 @@ def test_voice_catalog_generate_wraps_failures(
 ) -> None:
     """A Temporal failure surfaces as a 502."""
 
-    async def boom() -> None:
+    async def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("temporal down")
 
     monkeypatch.setattr("src.api.routes.admin_voices.build_client", boom)

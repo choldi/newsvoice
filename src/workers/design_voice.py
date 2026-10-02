@@ -1,8 +1,8 @@
-"""Generate reference voices for the catalog (Phase 7.8).
+"""Generate reference voices for the catalog (Phase 7.8/7.9).
 
-Starts a ``VoiceCatalogWorkflow`` on the Modal narration queue, which designs
-every missing or stale profile with Qwen3-TTS VoiceDesign, stores the reference
-locally and records it in the manifest.
+Starts a ``VoiceCatalogWorkflow`` in the voices namespace, which designs every
+missing or stale profile with Qwen3-TTS VoiceDesign on the GPU box, stores the
+reference locally and records it in the manifest.
 
 Examples:
     python -m src.workers.design_voice --all
@@ -66,15 +66,18 @@ async def main() -> None:
         return
 
     config = VoiceCatalogConfig(
-        names=names, upload=args.upload, task_queue=settings.narration_modal_task_queue
+        names=names,
+        upload=args.upload,
+        task_queue=settings.voice_catalog_task_queue,
+        design_task_queue=settings.voice_design_task_queue,
     )
-    client = await build_client()
+    client = await build_client(settings.temporal_voices_namespace)
     async with client:
         result = await client.execute_workflow(
             VoiceCatalogWorkflow.run,
             config,
             id=f"voice-catalog-{asyncio.get_running_loop().time():.0f}",
-            task_queue=settings.narration_modal_task_queue,
+            task_queue=settings.voice_catalog_task_queue,
         )
     print(json.dumps(result, indent=2, default=str))
 
