@@ -106,52 +106,6 @@ class QwenTTS:
 
 @app.cls(
     gpu=modal.gpu.L4(),
-    timeout=1800,
-)
-class VoiceDesignModel:
-    """Qwen3-TTS VoiceDesign, loaded once per container."""
-
-    @modal.enter()
-    def load(self) -> None:
-        """Load the VoiceDesign model once per container."""
-        import torch
-        from qwen_tts import Qwen3TTSModel
-
-        self._model = Qwen3TTSModel.from_pretrained(
-            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-        )
-
-    @modal.method()
-    def design(self, *, text: str, instruct: str, language: str) -> tuple[bytes, int]:
-        """Generate a reference sample from a persona description.
-
-        Args:
-            text: The text to speak; becomes the reference transcript.
-            instruct: Natural-language persona description.
-            language: ISO 639-1 language code.
-
-        Returns:
-            Tuple of ``(wav_bytes, sample_rate)``.
-        """
-        import io
-
-        import soundfile as sf
-
-        wavs, sample_rate = self._model.generate_voice_design(
-            text=text,
-            language=language,
-            instruct=instruct,
-        )
-        buffer = io.BytesIO()
-        sf.write(buffer, wavs[0], sample_rate, format="WAV")
-        return buffer.getvalue(), sample_rate
-
-
-@app.cls(
-    gpu=modal.gpu.L4(),
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )

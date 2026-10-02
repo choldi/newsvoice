@@ -51,37 +51,6 @@ async def modal_tts(
     )
 
 
-async def modal_design_voice(
-    *,
-    text: str,
-    instruct: str,
-    language: str,
-) -> tuple[bytes, int]:
-    """Call the Modal VoiceDesign function and return WAV bytes plus sample rate.
-
-    Args:
-        text: The text to speak; becomes the reference transcript.
-        instruct: Natural-language persona description.
-        language: ISO 639-1 language code.
-
-    Returns:
-        Tuple of ``(wav_bytes, sample_rate)``.
-
-    Raises:
-        RuntimeError: When Modal is disabled or credentials are missing.
-        Exception: Whatever the Modal call raises, for the caller to wrap.
-    """
-    if not settings.modal_enabled:
-        raise RuntimeError("modal is disabled")
-    if not settings.modal_token_id or not settings.modal_token_secret:
-        raise RuntimeError("modal credentials are not configured")
-
-    import modal
-
-    function = modal.Function.from_name(settings.modal_app_name, "design_voice")
-    return await function.remote.aio(text=text, instruct=instruct, language=language)
-
-
 async def modal_zonos2_tts(
     *,
     text: str,
