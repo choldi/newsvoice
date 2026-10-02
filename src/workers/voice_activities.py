@@ -100,7 +100,9 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     from src.core.local_tts import design_voice
 
-    activity.logger.info("Designing voice", name=name, language=language, segments=len(segments))
+    activity.logger.info(
+        f"Designing voice name={name} language={language} segments={len(segments)}"
+    )
     started = time.monotonic()
     try:
         # The synthesis is a blocking GPU call; keep the event loop free so the
@@ -123,12 +125,8 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     activity.logger.info(
-        "Voice designed",
-        name=name,
-        design_seconds=round(elapsed, 2),
-        sha256=sha256_bytes(wav),
-        sample_rate=sample_rate,
-        staged_bytes=staged,
+        f"Voice designed name={name} design_seconds={round(elapsed, 2)} "
+        f"sha256={sha256_bytes(wav)} sample_rate={sample_rate} staged_bytes={staged}"
     )
     return {
         "name": name,
@@ -222,10 +220,7 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     clear_staged(name)
 
     activity.logger.info(
-        "Voice stored",
-        name=name,
-        duration_seconds=entry.duration_seconds,
-        sha256=entry.sha256,
+        f"Voice stored name={name} duration_seconds={entry.duration_seconds} sha256={entry.sha256}"
     )
     return {
         "name": name,
@@ -262,7 +257,7 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         await upload_voice(name, ref_path.read_bytes())
     except Exception as exc:
         raise ApplicationError(f"voice upload failed for {name}: {exc}") from exc
-    activity.logger.info("Voice uploaded", name=name)
+    activity.logger.info(f"Voice uploaded name={name}")
     return {"name": name, "uploaded": True}
 
 

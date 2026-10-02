@@ -225,11 +225,8 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     activity.logger.info(
-        "Rendering narration",
-        collection=collection,
-        run_id=run_id,
-        segments=len(script.segments),
-        strategy=str(strategy),
+        f"Rendering narration collection={collection} run_id={run_id} "
+        f"segments={len(script.segments)} strategy={strategy}"
     )
     jobs = AudioJobsRepository()
     await jobs.start_job(run_id, collection, kind=NARRATION_JOB_KIND)
@@ -272,9 +269,7 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
         # an error, the audio and the job row already exist. The flag lets the
         # caller (and 7.4's API) tell both cases apart.
         activity.logger.info(
-            "narration_run_without_digest_row",
-            run_id=run_id,
-            audio_path=result.audio_path,
+            f"narration_run_without_digest_row run_id={run_id} audio_path={result.audio_path}"
         )
     payload = result.model_dump()
     payload["run_attached"] = bool(updated)
@@ -350,10 +345,8 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
     )
 
     activity.logger.info(
-        "Generating narration script via LLM",
-        collection=collection,
-        run_id=run_id,
-        template=prompt_template,
+        f"Generating narration script via LLM collection={collection} "
+        f"run_id={run_id} template={prompt_template}"
     )
     try:
         content = await generate_completion(
@@ -366,7 +359,7 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
     except Exception as exc:
         raise ApplicationError(f"LLM call for narration script failed: {exc}") from exc
 
-    activity.logger.info("LLM narration script response length", length=len(content))
+    activity.logger.info(f"LLM narration script response length: {len(content)}")
 
     # Extract JSON from the response (LLM may wrap in markdown code fences)
 

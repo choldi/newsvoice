@@ -490,10 +490,8 @@ async def record_run_activity(run: dict[str, Any]) -> dict[str, Any]:
         ApplicationError: If recording the run fails.
     """
     activity.logger.info(
-        "Recording run",
-        collection=run.get("collection"),
-        status=run.get("status"),
-        workflow_id=run.get("workflow_id"),
+        f"Recording run collection={run.get('collection')} status={run.get('status')} "
+        f"workflow_id={run.get('workflow_id')}"
     )
     try:
         run_id = await RunsRepository().record_run(**run)
