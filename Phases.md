@@ -335,19 +335,20 @@ counts son configurables por colección.
       comerciales claros, en paralelo a la vía privada actual (OmniVoice + clones):
       `TTSBackend` = `OMNIVOICE` | `QWEN3_TTS` | `ZONOS2` (ZONOS2 behind gate);
       `VoiceSource` = `QWEN_DESIGN` | `RECORDING`; catálogo JSON versionable
-      (`voice_profiles.json`, 8 inglés + 4 español) con guard anti-drift
+      (`voice_profiles.json`, 24 perfiles desde 7.9) con guard anti-drift
       (`instruct_sha256`, `ref_text_sha256` en el manifiesto); flujo
-      `VoiceCatalogWorkflow` → `design_voice_activity` (Modal one-off) →
-      `upload_voice_activity` → Modal Volume; local = fuente de verdad; dos task
-      queues (`narration_local_task_queue`, `narration_modal_task_queue`) con
-      enrutado por `tts_backend`; worker Modal creado pero NO levantado;
-      dispatch en `synthesize_turn()` con `_post_modal_tts()` (import lazy);
-      `atempo` para `speed` en QWEN3_TTS; descargo AI Act audible con
-      interruptor por colección; presupuesto $1/día y $10/mes con cuatro capas
-      (preflight + `cache_probe`, caps en runtime, `terminate` en `finally`,
-      `modal_spend` + alerta `modal_budget`); `modal` como única dep nueva;
-      `qwen-tts` vive en la Modal image (Python 3.12), no en `pyproject.toml`;
-      gate ZONOS2 (`scripts/benchmark_zonos.py`) — solo se activa si pasa
+      `VoiceCatalogWorkflow` → `design_voice_activity` (el diseño se ejecuta en
+      la GPU box, ver 7.9) → `upload_voice_activity` → Modal Volume; local =
+      fuente de verdad; dos task queues (`narration_local_task_queue`,
+      `narration_modal_task_queue`) con enrutado por `tts_backend`; worker Modal
+      creado pero NO levantado; dispatch en `synthesize_turn()` con
+      `_post_modal_tts()` (import lazy); `atempo` para `speed` en QWEN3_TTS;
+      descargo AI Act audible con interruptor por colección; presupuesto $1/día y
+      $10/mes con cuatro capas (preflight + `cache_probe`, caps en runtime,
+      `terminate` en `finally`, `modal_spend` + alerta `modal_budget`); `modal`
+      como única dep nueva; `qwen-tts` vive en la Modal image (Python 3.12), no
+      en `pyproject.toml`; gate ZONOS2 (`scripts/benchmark_zonos.py`) — solo se
+      activa si pasa
 
 **Success criteria:** la vía A (OmniVoice + clones) sigue intacta y sin cambios
 audibles; la vía B produce un M4A con voz sintética propia, descargo AI Act y
@@ -355,6 +356,32 @@ coste registrado en `modal_spend`; el worker Modal está creado pero no levantad
 ningún audio publicado usa voces de terceros sin licencia.
 
 **Effort:** 12-16 hours.
+
+- [ ] **7.9 Diseño de voces en la GPU box (debwk)** — el diseño sale de Modal y
+      se ejecuta en `debwk` (`100.75.148.68`, RTX 2000 Ada) con Qwen3-TTS
+      VoiceDesign local: `run_voice_worker --role design` registra solo
+      `design_voice_activity` (cola `VOICE_DESIGN_TASK_QUEUE`, sin DB ni
+      `data/voices`; el audio vuelve gzipeado por la red), `--role catalog`
+      corre en el servidor (`voice-catalog-worker`, docker-compose) con
+      `VoiceCatalogWorkflow` + status/store/upload en
+      `VOICE_CATALOG_TASK_QUEUE`; **ambas mitades en el namespace propio**
+      `news-engine-voices` porque una actividad siempre se ejecuta en el
+      namespace de su workflow; catálogo ampliado a **24 voces (16 en + 8 es)**
+      con `ref_text` compartido por idioma (`languages.<lang>.ref_segments`,
+      `VoiceProfile` exige que `ref_text` sea exactamente la lectura de los
+      segmentos, 42/42 fonemas EN y 32/32 ES vía
+      `scripts/check_phoneme_coverage.py`); `concat_wavs` y la síntesis viven
+      en `src/core/audio.py` y `src/core/local_tts.py` (libres de numpy y de
+      feedparser/aiosqlite, así el worker arranca con venv mínimo); la vía A y
+      el render diario siguen en OmniVoice y `modal_tts` — Modal solo queda
+      para el upload del Volume y el render.
+
+**Success criteria:** `design_voice --all --upload` genera 24 WAV en
+`data/voices/refs/` con `modal_cost_usd: 0.0`, ambos workers se conectan al
+namespace `news-engine-voices`, `status` reporta 24 perfiles listos, y la vía A
+no cambia ni audiblemente ni en tests.
+
+**Effort:** 6-8 hours (setup de debwk, namespace, verificación y gate).
 
 ---
 

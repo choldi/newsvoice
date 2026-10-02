@@ -3,6 +3,11 @@
 > **ESTADO: EN DESARROLLO** en la branch `phase-7.8-modal-tts`. Nada está
 > desplegado. La vía A (OmniVoice + clones actuales) permanece intacta.
 > Documento de diseño aprobado el 2026-09-30.
+>
+> **Amendado 2026-10-02 (Fase 7.9):** el diseño de voces sale de Modal y se
+> ejecuta en la GPU box (`debwk`); el catálogo pasa de 12 a 24 perfiles con
+> `ref_text` compartido por idioma. Modal queda solo para el upload del Volume
+> y el render. Detalle en `Phases.md` 7.9 y `Deploy.md` §8.
 
 ## Objetivo
 
@@ -16,8 +21,8 @@ presupuesto duro y un catálogo de voces propio.
 |---|---|
 | 1 | `TTSBackend` = `OMNIVOICE` \| **`QWEN3_TTS`** \| `ZONOS2` (ZONOS2 behind gate) |
 | 2 | `VoiceSource` = **`QWEN_DESIGN`** \| `RECORDING`, ambos desde el día 1 |
-| 3 | VoiceDesign = Modal one-off, mismo proveedor |
-| 4 | Catálogo: **8 inglés + 4 español**, JSON versionable, 12 perfiles |
+| 3 | ~~VoiceDesign = Modal one-off~~ → **GPU box `debwk`, Fase 7.9** |
+| 4 | Catálogo: **16 inglés + 8 español**, JSON versionable, 24 perfiles |
 | 5 | Local = fuente de verdad → subida al Modal Volume |
 | 6 | Dos task queues: **local** + **modal** |
 | 7 | Worker modal **creado pero NO levantado** |
@@ -38,31 +43,40 @@ DigestWorkflow ──► task_queue desde PipelineConfig.narration
                                      design_voice_activity
                                      upload_voice_activity
                         │
-   VoiceCatalogWorkflow ──► por perfil, independiente
-        │                          │
-        ├─► data/voices/refs/<name>.wav     fuente de verdad
-        ├─► data/voices/manifest.json
-        └─► upload ──► Modal Volume ──► ZONOS2 / Qwen-Base
+   VoiceCatalogWorkflow ──► namespace news-engine-voices (Fase 7.9), dos colas
+        │
+        ├─► design_voice_activity  → GPU box debwk, Qwen3-TTS VoiceDesign
+        │                           local; audio ida/vuelta gzipeado, sin disco
+        ├─► store_voice_activity   → servidor: data/voices/refs/<name>.wav
+        │                           + manifest.json (fuente de verdad)
+        └─► upload_voice_activity  → Modal Volume ──► ZONOS2 / Qwen-Base
 ```
 
 Enrutado en `schedule.py:61` por `collection.narration_tts_backend`:
 `OMNIVOICE` → local, resto → modal.
 
-## Los 12 perfiles
+## Los 24 perfiles
 
 `voice_profiles.json` en la raíz, versionable. Todos describen **atributos
 vocales, nunca una persona real**.
 
-**Inglés** — `anchor_neutral_m`, `anchor_neutral_f`, `cohost_warm_f`,
-`narrator_calm_m`, `analyst_measured_m`, `reporter_bright_f`,
-`commentator_deep_m`, `narrator_neutral_f`
+**Inglés (16)** — `anchor_neutral_m`, `anchor_neutral_f`, `anchor_warm_m`,
+`anchor_measured_f`, `cohost_warm_f`, `cohost_bright_f`, `cohost_dry_m`,
+`narrator_calm_m`, `narrator_neutral_f`, `narrator_deep_f`,
+`analyst_measured_m`, `analyst_warm_m`, `reporter_bright_f`,
+`reporter_calm_m`, `commentator_deep_m`, `commentator_warm_m`
 
-**Español** — `es_anchor_neutral_m`, `es_anchor_neutral_f`,
-`es_narrator_calm_m`, `es_cohost_warm_f`
+**Español (8)** — `es_anchor_neutral_m`, `es_anchor_neutral_f`,
+`es_narrator_calm_m`, `es_narrator_neutral_f`, `es_cohost_warm_f`,
+`es_analyst_measured_m`, `es_reporter_bright_f`, `es_commentator_deep_m`
 
-Cada uno: `name`, `label`, `language`, `instruct` completo, `ref_text` de
-250–320 chars (~14–18 s, satisface la ventana de 10–30 s de ZONOS2 y el
-mínimo de 3 s de Qwen), `role_hint`, `enabled`.
+Cada uno: `name`, `label`, `language`, `instruct` completo, `role_hint`,
+`enabled`. El `ref_text` no se escribe a mano: se compone en el bloque
+`languages.<lang>.ref_segments` (2 segmentos concatenados — 239 + 142 chars
+en inglés, 160 + 240 en español — dentro de la ventana de 5–10 s que pide
+Qwen y de 10–30 s que pide ZONOS2). `VoiceProfile` exige que `ref_text` sea
+**exactamente** la lectura de esos segmentos, y
+`scripts/check_phoneme_coverage.py` cubre 42/42 fonemas EN y 32/32 ES.
 
 ## Guard anti-drift
 
@@ -130,8 +144,9 @@ servidor, inode `461207`).
 
 ## Coste
 
-12 perfiles × VoiceDesign ≈ **$0,12** una vez. Operativo ~$0,10/día sobre topes
-de $1/día y $10/mes.
+24 diseños en la GPU box ≈ **$0**: Qwen3-TTS VoiceDesign corre en `debwk`, sin
+Modal. Operativo ~$0,10/día sobre topes de $1/día y $10/mes (los topes siguen
+vigentes porque el **render** Qwen/ZONOS2 sí va a Modal).
 
 ## Orden de ejecución
 
@@ -148,9 +163,9 @@ de $1/día y $10/mes.
 
 ## Efectos colaterales
 
-- `data/*` está gitignored (`.gitignore:28`), así que los 12 perfiles se versionan
-  pero sus WAV no — si pierdes el servidor, el manifiesto se regenera con $0,12
-  y los `instruct` intactos.
+- `data/*` está gitignored (`.gitignore:28`), así que los 24 perfiles se versionan
+  pero sus WAV no — si pierdes el servidor, el manifiesto se regenera en la GPU
+  box sin coste, con los `instruct` y `ref_segments` intactos.
 - Al desplegar, `tts_backend` entra en el hash, así que **la caché se invalida
   una vez y vía A re-renderiza**: tus amigos recibirán un audio nuevo ese día, y
   el normal desde el siguiente.
