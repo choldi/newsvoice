@@ -89,6 +89,30 @@ services:
     command: ["python", "-m", "src.workers.run_modal_worker"]
     restart: unless-stopped
 
+  # Voice catalog worker (Phase 7.9). Hosts VoiceCatalogWorkflow plus the
+  # status/store/upload activities in the voices namespace, which owns
+  # data/voices. The design half runs outside the compose network, on the GPU
+  # box (Deploy.md section 8).
+  voice-catalog-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_engine_voice_catalog_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_voice_worker", "--role", "catalog"]
+    restart: unless-stopped
+
   # WhatsApp delivery gateway (Baileys, blakegt/whatsapp-web-api-rest). Not
   # reachable from outside the compose network; the worker talks to it as
   # http://there:8085. The gateway exposes NO auth, so it must stay internal.
