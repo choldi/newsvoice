@@ -19,6 +19,7 @@ from src.core.phoneme_inventory import (
     coverage_words,
     inventory,
     missing_phonemes,
+    words_missing_from,
 )
 from src.core.voice_catalog import load_profiles
 
@@ -76,3 +77,20 @@ def test_repo_catalog_languages_all_have_an_inventory() -> None:
     languages = {profile.language for profile in load_profiles(CATALOG)}
     for language in languages:
         assert language in set(LANGUAGES), f"no phoneme inventory for {language!r}"
+
+
+def test_repo_catalog_ref_texts_cover_the_inventory() -> None:
+    """Every catalog transcript contains every coverage word of its language.
+
+    The inventory check alone only proves the curated word list is complete;
+    this is the one that fails when someone edits a transcript and drops the
+    only word carrying a rare phoneme.
+    """
+    by_language: dict[str, set[str]] = defaultdict(set)
+    for profile in load_profiles(CATALOG):
+        by_language[profile.language].add(profile.ref_text)
+
+    for language, ref_texts in by_language.items():
+        for ref_text in ref_texts:
+            missing = words_missing_from(language, ref_text)
+            assert not missing, f"{language} ref_text is missing: {missing}"

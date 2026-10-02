@@ -52,6 +52,12 @@ def sha256_bytes(data: bytes) -> str:
 def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
     """Load and validate the voice catalog.
 
+    The catalog may declare reference segments once per language under a
+    ``languages`` block, which every profile of that language then inherits:
+    all voices of a language are cloned from the same transcript, so it only
+    makes sense to write it once. A profile may still spell out its own text,
+    but it must then agree with the block, so the two can never drift apart.
+
     Args:
         path: Catalog JSON path. Defaults to ``voice_profiles.json``.
 
@@ -60,7 +66,8 @@ def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
 
     Raises:
         VoiceCatalogError: If the file is missing, unreadable, not valid JSON,
-            or contains duplicate names.
+            contains duplicate names, or leaves a profile without any
+            reference text.
     """
     catalog = Path(path) if path else Path(DEFAULT_PROFILES_FILE)
     if not catalog.is_file():
@@ -71,8 +78,26 @@ def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
         raise VoiceCatalogError(f"voice catalog is not readable JSON: {exc}") from exc
     if not isinstance(raw, dict) or not isinstance(raw.get("profiles"), list):
         raise VoiceCatalogError("voice catalog needs a 'profiles' list")
+    languages = raw.get("languages") or {}
+    if not isinstance(languages, dict):
+        raise VoiceCatalogError("voice catalog 'languages' must be an object")
 
-    profiles = [VoiceProfile.model_validate(item) for item in raw["profiles"]]
+    profiles: list[VoiceProfile] = []
+    for item in raw["profiles"]:
+        if not isinstance(item, dict):
+            raise VoiceCatalogError("voice catalog profiles must be objects")
+        profile = dict(item)
+        language = str(profile.get("language") or "").strip().lower()
+        block = languages.get(language)
+        if isinstance(block, dict) and block.get("ref_segments"):
+            profile["ref_segments"] = [str(part) for part in block["ref_segments"]]
+        elif not profile.get("ref_segments") and not profile.get("ref_text"):
+            raise VoiceCatalogError(
+                f"voice profile {profile.get('name')!r} has no reference text: "
+                f"declare 'languages.{language}.ref_segments' or a profile ref_text"
+            )
+        profiles.append(VoiceProfile.model_validate(profile))
+
     names = [profile.name for profile in profiles]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:

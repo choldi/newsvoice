@@ -421,9 +421,9 @@ def test_voice_catalog_status_lists_profiles() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert len(body["profiles"]) == 12
+    assert len(body["profiles"]) == 24
     assert body["generated"] == []
-    assert len(body["missing"]) == 12
+    assert len(body["missing"]) == 24
 
 
 def test_voice_catalog_generate_starts_workflow(

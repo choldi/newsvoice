@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: Slug pattern for a profile name: it becomes a file name on disk.
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -42,9 +43,13 @@ class VoiceProfile(BaseModel):
         label: Human-readable name for the admin GUI.
         language: ISO 639-1 code the voice speaks.
         instruct: Natural-language persona description for VoiceDesign.
-        ref_text: Exact transcript of the reference sample. 250-320 chars
-            yields ~14-18 s, which satisfies both the 10-30 s window ZONOS2
-            needs to clone and the 3 s minimum Qwen3-TTS needs.
+        ref_segments: Reference text spoken in order, each with a short silence
+            after it. Splitting the ~25 s reference in two keeps every
+            generation call short while landing inside the 10-30 s window
+            ZONOS2 needs to clone.
+        ref_text: Exact transcript of the sample as a whole. Derived from
+            ``ref_segments`` and asserted equal to them, because the clone is
+            conditioned on exactly what the voice reads.
         role_hint: Intended use (anchor, cohost, narrator, ...).
         enabled: Whether the design flow generates this voice.
     """
@@ -61,8 +66,58 @@ class VoiceProfile(BaseModel):
         max_length=600,
         description="Exact transcript of the reference sample",
     )
+    ref_segments: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=8,
+        description="Reference text segments spoken in order",
+    )
     role_hint: str = Field(default="", description="Intended role")
     enabled: bool = Field(default=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_reference_text(cls, data: Any) -> Any:
+        """Derive the reference transcript from its segments, or vice versa.
+
+        The transcript a clone is conditioned on must be exactly what the voice
+        reads, so one side is always derived from the other: a catalog may
+        declare shared segments per language, a profile may declare a single
+        text, and both orders work.
+
+        Args:
+            data: Raw profile payload.
+
+        Returns:
+            The payload with both ``ref_segments`` and ``ref_text`` present.
+        """
+        if not isinstance(data, dict):
+            return data
+        ref_text = data.get("ref_text")
+        segments = [str(part) for part in (data.get("ref_segments") or [])]
+        if not segments and isinstance(ref_text, str) and ref_text:
+            segments = [ref_text]
+        if not segments:
+            return data
+        resolved = dict(data)
+        resolved["ref_segments"] = segments
+        resolved.setdefault("ref_text", " ".join(segments))
+        return resolved
+
+    @model_validator(mode="after")
+    def _ref_text_is_exactly_what_is_read(self) -> VoiceProfile:
+        """Reject a transcript that is not its own segments joined.
+
+        Returns:
+            The profile.
+
+        Raises:
+            ValueError: If ``ref_text`` differs from the segments.
+        """
+        expected = " ".join(self.ref_segments)
+        if self.ref_text != expected:
+            raise ValueError("ref_text must be the ref_segments joined by a single space")
+        return self
 
     @field_validator("language")
     @classmethod

@@ -34,9 +34,12 @@ PROFILE = {
 }
 
 
-def _write_catalog(tmp_path: Path, profiles: list[dict]) -> Path:
+def _write_catalog(tmp_path: Path, profiles: list[dict], languages: dict | None = None) -> Path:
     path = tmp_path / "profiles.json"
-    path.write_text(json.dumps({"version": 1, "profiles": profiles}), encoding="utf-8")
+    payload: dict = {"version": 2, "profiles": profiles}
+    if languages is not None:
+        payload["languages"] = languages
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -106,12 +109,55 @@ def test_load_profiles_rejects_bad_slug(tmp_path: Path) -> None:
 
 def test_repo_catalog_loads_and_is_balanced() -> None:
     profiles = load_profiles(CATALOG)
-    assert len(profiles) == 12
+    assert len(profiles) == 24
     english = [p for p in profiles if p.language == "en"]
     spanish = [p for p in profiles if p.language == "es"]
-    assert len(english) == 8
-    assert len(spanish) == 4
+    assert len(english) == 16
+    assert len(spanish) == 8
     assert all(p.enabled for p in profiles)
+
+
+def test_repo_catalog_profiles_inherit_their_language_segments() -> None:
+    """The reference transcript is written once per language, not per profile."""
+    profiles = load_profiles(CATALOG)
+    by_language: dict[str, set[tuple[str, ...]]] = {}
+    for profile in profiles:
+        by_language.setdefault(profile.language, set()).add(tuple(profile.ref_segments))
+
+    assert all(len(segments) == 1 for segments in by_language.values())
+    assert {len(segments.pop()) for segments in by_language.values()} == {2}
+
+
+def test_load_profiles_inherits_the_language_block(tmp_path: Path) -> None:
+    """A profile with no text of its own takes the shared segments."""
+    first = "Shared first half of the reference transcript used by this test"
+    second = "Shared second half of the reference transcript used by this test"
+    textless = {k: v for k, v in PROFILE.items() if k != "ref_text"}
+    path = _write_catalog(tmp_path, [textless], languages={"en": {"ref_segments": [first, second]}})
+
+    profile = load_profiles(path)[0]
+
+    assert profile.ref_segments == [first, second]
+    assert profile.ref_text == f"{first} {second}"
+
+
+def test_load_profiles_rejects_a_profile_without_any_reference_text(tmp_path: Path) -> None:
+    path = _write_catalog(tmp_path, [{k: v for k, v in PROFILE.items() if k != "ref_text"}])
+
+    with pytest.raises(VoiceCatalogError, match="has no reference text"):
+        load_profiles(path)
+
+
+def test_load_profiles_rejects_a_ref_text_that_disagrees_with_the_segments(
+    tmp_path: Path,
+) -> None:
+    path = _write_catalog(
+        tmp_path,
+        [{**PROFILE, "ref_segments": ["first half", "second half"]}],
+    )
+
+    with pytest.raises(ValidationError, match="ref_text must be the ref_segments"):
+        load_profiles(path)
 
 
 # --- load_manifest ---------------------------------------------------------
