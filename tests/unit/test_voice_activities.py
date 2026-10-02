@@ -1,5 +1,7 @@
-"""Unit tests for the voice catalog activities (Phase 7.8)."""
+"""Unit tests for the voice catalog activities (Phase 7.8/7.9)."""
 
+import base64
+import gzip
 import json
 from pathlib import Path
 from typing import Any
@@ -9,7 +11,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from src.core import voice_catalog
-from src.core.audio import CANONICAL_FORMAT, build_wav
+from src.core.audio import CANONICAL_FORMAT, build_wav, wav_duration
 from src.core.config import settings
 from src.workers import voice_activities
 
@@ -26,28 +28,73 @@ def _profile(name: str = "anchor_neutral_m") -> dict[str, Any]:
     }
 
 
-async def test_design_voice_activity_stores_reference_and_manifest(
+def _design_result(profile: dict[str, Any], wav: bytes = WAV) -> dict[str, Any]:
+    """Build what ``design_voice_activity`` would return for a profile."""
+    return {
+        "name": profile["name"],
+        "wav_gz_b64": voice_activities._gzip_b64(wav),
+        "sha256": voice_catalog.sha256_bytes(wav),
+        "sample_rate": 24000,
+        "duration_seconds": wav_duration(wav),
+        "design_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "design_seconds": 1.5,
+    }
+
+
+def _store_payload(profile: dict[str, Any], wav: bytes = WAV) -> dict[str, Any]:
+    """Build the store activity input for a profile and a design result."""
+    return {
+        "name": profile["name"],
+        "instruct": profile["instruct"],
+        "ref_text": profile["ref_text"],
+        **_design_result(profile, wav),
+    }
+
+
+# --- design (runs on the GPU box) -------------------------------------------
+
+
+async def test_design_voice_activity_ships_the_audio_without_touching_disk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def fake_design(**kwargs: object) -> tuple[bytes, int]:
-        assert kwargs["instruct"] == _profile()["instruct"]
+    seen: dict[str, Any] = {}
+
+    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+        seen["segments"] = segments
+        seen["instruct"] = instruct
+        seen["language"] = language
         return WAV, 24000
 
-    monkeypatch.setattr("src.core.modal_client.modal_design_voice", fake_design)
+    monkeypatch.setattr("src.core.local_tts.design_voice", fake_design)
     monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
-    monkeypatch.setattr(settings, "qwen_tts_design_model", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
 
     result = await ActivityEnvironment().run(voice_activities.design_voice_activity, _profile())
 
+    assert seen["instruct"] == _profile()["instruct"]
+    assert seen["language"] == "en"
+    assert seen["segments"] == [_profile()["ref_text"]]
     assert result["name"] == "anchor_neutral_m"
     assert result["sample_rate"] == 24000
     assert result["sha256"] == voice_catalog.sha256_bytes(WAV)
-    ref_path = tmp_path / "voices" / "refs" / "anchor_neutral_m.wav"
-    assert ref_path.read_bytes() == WAV
-    manifest = json.loads((tmp_path / "voices" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["anchor_neutral_m"]["instruct_sha256"] == voice_catalog.sha256_text(
-        _profile()["instruct"]
-    )
+    assert gzip.decompress(base64.b64decode(result["wav_gz_b64"])) == WAV
+    assert not (tmp_path / "voices").exists()
+
+
+async def test_design_voice_activity_speaks_each_segment_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, list[str]] = {}
+
+    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+        seen["segments"] = segments
+        return WAV, 24000
+
+    monkeypatch.setattr("src.core.local_tts.design_voice", fake_design)
+    payload = {**_profile(), "ref_segments": ["first half", "second half"]}
+
+    await ActivityEnvironment().run(voice_activities.design_voice_activity, payload)
+
+    assert seen["segments"] == ["first half", "second half"]
 
 
 async def test_design_voice_activity_rejects_incomplete_payload() -> None:
@@ -58,17 +105,90 @@ async def test_design_voice_activity_rejects_incomplete_payload() -> None:
     assert excinfo.value.non_retryable is True
 
 
-async def test_design_voice_activity_wraps_modal_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_design_voice_activity_wraps_model_failure(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def failing_design(**kwargs: object) -> tuple[bytes, int]:
-        raise RuntimeError("modal down")
+    def failing_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+        raise RuntimeError("cuda out of memory")
 
-    monkeypatch.setattr("src.core.modal_client.modal_design_voice", failing_design)
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+    monkeypatch.setattr("src.core.local_tts.design_voice", failing_design)
 
     with pytest.raises(ApplicationError, match="voice design failed"):
         await ActivityEnvironment().run(voice_activities.design_voice_activity, _profile())
+
+
+# --- store (runs on the server) ---------------------------------------------
+
+
+async def test_store_voice_activity_writes_reference_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+
+    result = await ActivityEnvironment().run(
+        voice_activities.store_voice_activity, _store_payload(_profile())
+    )
+
+    assert result["name"] == "anchor_neutral_m"
+    assert result["sample_rate"] == 24000
+    assert result["duration_seconds"] == wav_duration(WAV)
+    ref_path = tmp_path / "voices" / "refs" / "anchor_neutral_m.wav"
+    assert ref_path.read_bytes() == WAV
+    manifest = json.loads((tmp_path / "voices" / "manifest.json").read_text(encoding="utf-8"))
+    entry = manifest["anchor_neutral_m"]
+    assert entry["sha256"] == voice_catalog.sha256_bytes(WAV)
+    assert entry["design_model"] == "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    assert entry["modal_cost_usd"] == 0.0
+    assert entry["instruct_sha256"] == voice_catalog.sha256_text(_profile()["instruct"])
+
+
+async def test_store_voice_activity_keeps_a_previous_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+    other = _profile("cohost_warm_f")
+
+    await ActivityEnvironment().run(
+        voice_activities.store_voice_activity, _store_payload(_profile())
+    )
+    await ActivityEnvironment().run(voice_activities.store_voice_activity, _store_payload(other))
+
+    manifest = json.loads((tmp_path / "voices" / "manifest.json").read_text(encoding="utf-8"))
+    assert sorted(manifest) == ["anchor_neutral_m", "cohost_warm_f"]
+
+
+async def test_store_voice_activity_rejects_a_digest_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+    payload = _store_payload(_profile())
+    payload["sha256"] = "0" * 64
+
+    with pytest.raises(ApplicationError, match="does not match the reported digest") as excinfo:
+        await ActivityEnvironment().run(voice_activities.store_voice_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+    assert not (tmp_path / "voices" / "refs" / "anchor_neutral_m.wav").exists()
+
+
+async def test_store_voice_activity_rejects_unreadable_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+    payload = _store_payload(_profile())
+    payload["wav_gz_b64"] = "not base64 at all!"
+
+    with pytest.raises(ApplicationError, match="is unreadable"):
+        await ActivityEnvironment().run(voice_activities.store_voice_activity, payload)
+
+
+async def test_store_voice_activity_rejects_incomplete_payload() -> None:
+    with pytest.raises(ApplicationError, match="needs name, instruct, ref_text") as excinfo:
+        await ActivityEnvironment().run(voice_activities.store_voice_activity, {"name": "a"})
+    assert excinfo.value.non_retryable is True
+
+
+# --- upload -----------------------------------------------------------------
 
 
 async def test_upload_voice_activity_uploads(
@@ -103,6 +223,9 @@ async def test_upload_voice_activity_rejects_missing_reference(
     with pytest.raises(ApplicationError, match="no reference") as excinfo:
         await ActivityEnvironment().run(voice_activities.upload_voice_activity, {"name": "ghost"})
     assert excinfo.value.non_retryable is True
+
+
+# --- status -----------------------------------------------------------------
 
 
 async def test_voice_catalog_status_activity_reports_pending(

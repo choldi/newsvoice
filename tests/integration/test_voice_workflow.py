@@ -4,9 +4,11 @@ from typing import Any
 
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
 
 from src.workers.voice_workflows import (
     DESIGN_VOICE_ACTIVITY,
+    STORE_VOICE_ACTIVITY,
     UPLOAD_VOICE_ACTIVITY,
     VOICE_STATUS_ACTIVITY,
     VoiceCatalogConfig,
@@ -14,7 +16,7 @@ from src.workers.voice_workflows import (
 )
 
 QUEUE = "voice-test-queue"
-SEEN: dict[str, list[dict[str, Any]]] = {"design": [], "upload": []}
+SEEN: dict[str, list[dict[str, Any]]] = {"design": [], "store": [], "upload": []}
 FAIL: dict[str, str] = {}
 PROFILES: list[dict[str, Any]] = []
 
@@ -49,8 +51,24 @@ async def stub_design(payload: dict) -> dict:
         raise RuntimeError(FAIL[payload["name"]])
     return {
         "name": payload["name"],
-        "file": f"refs/{payload['name']}.wav",
+        "wav_gz_b64": "Z256ZWQ=",
         "sha256": "a" * 64,
+        "sample_rate": 24000,
+        "duration_seconds": 15.0,
+        "design_model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "design_seconds": 1.5,
+    }
+
+
+@activity.defn(name=STORE_VOICE_ACTIVITY)
+async def stub_store(payload: dict) -> dict:
+    SEEN["store"].append(payload)
+    if payload["name"] in FAIL:
+        raise RuntimeError(FAIL[payload["name"]])
+    return {
+        "name": payload["name"],
+        "file": f"refs/{payload['name']}.wav",
+        "sha256": payload["sha256"],
         "sample_rate": 24000,
         "duration_seconds": 15.0,
     }
@@ -64,20 +82,19 @@ async def stub_upload(payload: dict) -> dict:
 
 def _reset(profiles: list[dict[str, Any]]) -> None:
     SEEN["design"].clear()
+    SEEN["store"].clear()
     SEEN["upload"].clear()
     FAIL.clear()
     PROFILES.clear()
     PROFILES.extend(profiles)
 
 
-def _worker(client: Any) -> Any:
-    from temporalio.worker import Worker
-
+def _worker(client: Any) -> Worker:
     return Worker(
         client,
         task_queue=QUEUE,
         workflows=[VoiceCatalogWorkflow],
-        activities=[stub_status, stub_design, stub_upload],
+        activities=[stub_status, stub_design, stub_store, stub_upload],
     )
 
 
@@ -94,6 +111,7 @@ async def test_voice_catalog_workflow_designs_pending_profiles() -> None:
 
     assert sorted(result["pending"]) == ["a", "b"]
     assert len(SEEN["design"]) == 2
+    assert len(SEEN["store"]) == 2
     assert all(r["status"] == "ok" for r in result["results"])
     assert SEEN["upload"] == []
 
@@ -114,6 +132,7 @@ async def test_voice_catalog_workflow_isolates_failures() -> None:
     assert by_name["a"]["status"] == "ok"
     assert by_name["b"]["status"] == "error"
     assert by_name["b"]["error"]
+    assert [p["name"] for p in SEEN["store"]] == ["a"]
 
 
 async def test_voice_catalog_workflow_uploads_when_requested() -> None:
@@ -144,3 +163,48 @@ async def test_voice_catalog_workflow_honours_the_name_subset() -> None:
 
     assert result["pending"] == ["a"]
     assert len(SEEN["design"]) == 1
+
+
+async def test_voice_catalog_workflow_ships_the_design_result_to_the_store_step() -> None:
+    _reset([_profile("a")])
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with _worker(env.client):
+            await env.client.execute_workflow(
+                VoiceCatalogWorkflow.run,
+                VoiceCatalogConfig(task_queue=QUEUE),
+                id="voice-catalog-5",
+                task_queue=QUEUE,
+            )
+
+    stored = SEEN["store"][0]
+    assert stored["sha256"] == "a" * 64
+    assert stored["wav_gz_b64"] == "Z256ZWQ="
+    assert stored["instruct"] == _profile("a")["instruct"]
+    assert stored["ref_text"] == _profile("a")["ref_text"]
+
+
+async def test_voice_catalog_workflow_routes_the_design_step_to_its_own_queue() -> None:
+    _reset([_profile("a")])
+    design_queue = "voice-design-queue"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=QUEUE,
+            workflows=[VoiceCatalogWorkflow],
+            activities=[stub_status, stub_store, stub_upload],
+        ):
+            async with Worker(
+                env.client,
+                task_queue=design_queue,
+                activities=[stub_design],
+            ):
+                await env.client.execute_workflow(
+                    VoiceCatalogWorkflow.run,
+                    VoiceCatalogConfig(task_queue=QUEUE, design_task_queue=design_queue),
+                    id="voice-catalog-6",
+                    task_queue=QUEUE,
+                )
+
+    # The remote worker only ever sees the design activity.
+    assert len(SEEN["design"]) == 1
+    assert len(SEEN["store"]) == 1
