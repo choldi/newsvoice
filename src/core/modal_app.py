@@ -305,3 +305,56 @@ def upload_voice(name: str, wav: bytes) -> None:
     target = Path(_VOLUME_PATH) / _REFS_DIR / f"{name}.wav"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(wav)
+
+
+# --- Phase 7.13: LLM judge for digest verification ---------------------------
+# A separate image from the TTS one: the judge needs transformers and an ungated
+# instruct model, the TTS class needs qwen-tts. Both live in the same app, so
+# `modal deploy src/core/modal_app.py` ships them together, but each function
+# only pays for its own image.
+
+_JUDGE_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "torch", "transformers>=4.51", "accelerate"
+)
+
+
+@app.function(
+    image=_JUDGE_IMAGE,
+    gpu=modal.gpu.L4(),
+    timeout=900,
+    # 30 GB of disk keeps the 8B weights cached across container reuse.
+    block_network=False,
+)
+def judge(system_prompt: str, user_prompt: str, model: str, max_tokens: int = 2048) -> dict:
+    """Run one verification judgement on Modal.
+
+    Loads the model per call rather than per container: a digest needs a handful
+    of short judgements, so a cached container is worth less than the simplicity.
+
+    Args:
+        system_prompt: Judge system prompt.
+        user_prompt: Judge user prompt.
+        model: HuggingFace model id.
+        max_tokens: Response budget.
+
+    Returns:
+        Dict with the raw ``content`` the model produced.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model)
+    llm = AutoModelForCausalLM.from_pretrained(
+        model,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    )
+    chat = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+    inputs = tokenizer.apply_chat_template(
+        chat, add_generation_prompt=True, return_tensors="pt"
+    ).to(llm.device)
+    generated = llm.generate(
+        inputs, max_new_tokens=max_tokens, do_sample=False, temperature=None, top_p=None
+    )
+    new_tokens = generated[0][inputs.shape[-1] :]
+    return {"content": tokenizer.decode(new_tokens, skip_special_tokens=True)}

@@ -13,9 +13,10 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 import structlog
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.api.models.narration import NarrationSpec
 from src.core.config import get_settings
@@ -25,6 +26,18 @@ logger = structlog.get_logger()
 DEFAULT_COLLECTION_NAME = "default"
 DEFAULT_COLLECTION_TIME = "08:00"
 DEFAULT_PROMPT_TEMPLATE = "default"
+
+
+class FeedSource(BaseModel):
+    """One configured RSS feed with the reliability Phase 7.13 scores it with."""
+
+    url: str = Field(..., min_length=1, description="Feed URL as configured")
+    host: str = Field(default="", description="Lowercase host of the feed URL")
+    reliability: float = Field(default=1.0, ge=0.0, le=1.0, description="Trust score in [0, 1]")
+    hosts: list[str] = Field(
+        default_factory=list,
+        description="Extra article hosts this feed publishes under (aggregators)",
+    )
 
 
 class LogicDeliveryConfig(BaseModel):
@@ -158,6 +171,30 @@ class CollectionConfig(BaseModel):
     headline_count: int = Field(
         default=5, ge=1, le=40, description="Number of quick headlines to include"
     )
+    # --- Phase 7.13: source reliability and LLM verification ---------------
+    # Populated from inline tables in ``feed_urls``: a plain string keeps
+    # ``source_reliability_default``, a table adds its own reliability and,
+    # optionally, the extra hosts an aggregator publishes under.
+    source_reliability: dict[str, float] = Field(
+        default_factory=dict,
+        description="Feed URL to reliability in [0, 1], from inline feed_urls tables",
+    )
+    source_hosts: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Feed URL to extra article hosts it publishes under (aggregators)",
+    )
+    llm_verify: bool = Field(
+        default=False,
+        description="Verify the generated digest against its sources before delivering",
+    )
+    llm_verify_threshold: float | None = Field(
+        default=None,
+        description="Faithfulness threshold for this collection; empty = global setting",
+    )
+    llm_verify_backend: str | None = Field(
+        default=None,
+        description="Judge backend for this collection: 'local', 'modal' or 'api'",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     @field_validator("name")
@@ -180,11 +217,120 @@ class CollectionConfig(BaseModel):
             raise ValueError("time must be in HH:MM format")
         return f"{hours:02d}:{minutes:02d}"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _split_inline_feed_tables(cls, value: object) -> object:
+        """Split inline feed tables into plain URLs plus their reliability maps.
+
+        ``feed_urls`` accepts two spellings so a collection can keep its list
+        readable while still scoring its sources::
+
+            feed_urls = [
+              "https://elpais.com/rss",
+              { url = "https://news.google.com/rss", reliability = 0.6,
+                hosts = ["bbc.co.uk"] },
+            ]
+
+        The URLs stay a plain ``list[str]`` for every consumer (the RSS fetcher,
+        the GUI textarea) and the extra keys are lifted into ``source_reliability``
+        and ``source_hosts``. An explicit ``source_reliability`` table in the same
+        document wins over the inline one.
+
+        Args:
+            value: Raw mapping of field names straight from the TOML document.
+
+        Returns:
+            The mapping with normalized feed entries, or the value untouched when
+            it is not a mapping.
+        """
+        if not isinstance(value, dict):
+            return value
+        entries = value.get("feed_urls")
+        if not isinstance(entries, list):
+            return value
+        urls: list[str] = []
+        inline_reliability: dict[str, float] = {}
+        inline_hosts: dict[str, list[str]] = {}
+        for entry in entries:
+            if isinstance(entry, str):
+                url = entry.strip()
+                if url:
+                    urls.append(url)
+                continue
+            if not isinstance(entry, dict):
+                continue
+            url = str(entry.get("url") or "").strip()
+            if not url:
+                continue
+            urls.append(url)
+            reliability = entry.get("reliability")
+            if reliability is not None:
+                inline_reliability[url] = float(reliability)
+            hosts = entry.get("hosts")
+            if hosts:
+                inline_hosts[url] = [str(host).strip() for host in hosts if str(host).strip()]
+        merged = {**value, "feed_urls": urls}
+        if inline_reliability:
+            merged["source_reliability"] = {
+                **inline_reliability,
+                **(value.get("source_reliability") or {}),
+            }
+        if inline_hosts:
+            merged["source_hosts"] = {**inline_hosts, **(value.get("source_hosts") or {})}
+        return merged
+
     @field_validator("feed_urls")
     @classmethod
     def _feed_urls(cls, value: list[str]) -> list[str]:
         """Return only non-blank feed URLs."""
         return [url.strip() for url in value if url.strip()]
+
+    @field_validator("source_reliability")
+    @classmethod
+    def _source_reliability(cls, value: dict[str, float]) -> dict[str, float]:
+        """Normalize reliability keys and reject values outside [0, 1].
+
+        Args:
+            value: Raw reliability map keyed by feed URL.
+
+        Returns:
+            The map with trimmed, lowercase-free keys (URLs keep their case) and
+            float values.
+
+        Raises:
+            ValueError: When any reliability falls outside [0, 1].
+        """
+        clean: dict[str, float] = {}
+        for key, score in value.items():
+            url = str(key).strip()
+            if not url:
+                continue
+            score = float(score)
+            if not 0.0 <= score <= 1.0:
+                raise ValueError(f"source_reliability[{url}] must be within [0, 1]: {score}")
+            clean[url] = score
+        return clean
+
+    @field_validator("source_hosts")
+    @classmethod
+    def _source_hosts(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Normalize the extra hosts declared for each feed.
+
+        Args:
+            value: Raw host map keyed by feed URL.
+
+        Returns:
+            The map with trimmed, lowercase, non-blank hosts.
+        """
+        clean: dict[str, list[str]] = {}
+        for key, hosts in value.items():
+            url = str(key).strip()
+            if not url:
+                continue
+            normalized = [str(host).strip().lower() for host in hosts if str(host).strip()]
+            if normalized:
+                clean[url] = normalized
+        return clean
 
     @field_validator("delivery_channels")
     @classmethod
@@ -220,6 +366,108 @@ class CollectionConfig(BaseModel):
         if val not in allowed:
             raise ValueError(f"narration_strategy must be one of {allowed}: {value!r}")
         return val
+
+    def resolved_feed_sources(self) -> list[FeedSource]:
+        """Return each configured feed with its reliability and extra hosts.
+
+        Returns:
+            One FeedSource per feed URL, in configuration order.
+        """
+        sources: list[FeedSource] = []
+        for url in self.feed_urls:
+            host = (urlparse(url).hostname or "").lower()
+            sources.append(
+                FeedSource(
+                    url=url,
+                    host=host,
+                    reliability=self.source_reliability.get(url, self.reliability_default()),
+                    hosts=self.source_hosts.get(url, []),
+                )
+            )
+        return sources
+
+    def reliability_default(self) -> float:
+        """Return the global default reliability for feeds without an explicit one.
+
+        Returns:
+            The configured default in [0, 1].
+        """
+        return get_settings().source_reliability_default
+
+    def host_reliability(self) -> dict[str, float]:
+        """Return the host to reliability map the verifier matches articles against.
+
+        An article is attributed to the host of its own link, so a feed that
+        republishes under other domains (``hosts``) contributes those domains too.
+
+        Returns:
+            Lowercase host to reliability.
+        """
+        mapping: dict[str, float] = {}
+        for source in self.resolved_feed_sources():
+            mapping[source.host] = source.reliability
+            for host in source.hosts:
+                mapping[host] = source.reliability
+        return mapping
+
+    def trusted_feed_urls(self) -> list[str]:
+        """Return the feed URLs whose reliability clears the global floor.
+
+        A source the operator does not trust is dropped before it reaches the
+        pipeline: it must not be able to influence the digest at all. The
+        collections signature keeps every URL so a change in an excluded feed
+        still triggers a re-sync.
+
+        Returns:
+            Feed URLs in configuration order, excluding unreliable ones.
+        """
+        floor = get_settings().min_source_reliability
+        return [
+            url
+            for url in self.feed_urls
+            if self.source_reliability.get(url, self.reliability_default()) >= floor
+        ]
+
+    def unreliable_hosts(self) -> set[str]:
+        """Return the hosts whose reliability falls below the global floor.
+
+        These are dropped before clustering: a source the operator does not trust
+        must not be able to influence the digest at all.
+
+        Returns:
+            Lowercase hosts to exclude.
+        """
+        floor = get_settings().min_source_reliability
+        return {host for host, score in self.host_reliability().items() if score < floor}
+
+    def resolve_llm_verify(self) -> dict[str, object] | None:
+        """Return the Phase 7.13 verification payload for this collection.
+
+        The kill switch and the per-collection opt-in are resolved **here**, outside
+        the workflow, because a workflow cannot read settings. ``None`` means the
+        collection does not verify, and the pipeline skips the check entirely.
+
+        Returns:
+            The verification payload, or None when verification is off.
+        """
+        settings = get_settings()
+        if not settings.llm_verify_enabled or not self.llm_verify:
+            return None
+        threshold = (
+            self.llm_verify_threshold
+            if self.llm_verify_threshold is not None
+            else settings.llm_verify_threshold
+        )
+        payload: dict[str, object] = {
+            "enabled": True,
+            "threshold": threshold,
+            "groundedness_threshold": settings.llm_verify_groundedness_threshold,
+            "backend": (self.llm_verify_backend or settings.llm_verify_backend).strip().lower(),
+            "model": settings.llm_verify_model,
+            "host_reliability": self.host_reliability(),
+            "min_reliability": settings.min_source_reliability,
+        }
+        return payload
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

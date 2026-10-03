@@ -103,6 +103,27 @@ class CollectionIn(BaseModel):
     headline_count: int = Field(
         default=5, ge=1, le=40, description="Number of quick headlines to include"
     )
+    # --- Phase 7.13: source reliability and LLM verification ---------------
+    source_reliability: dict[str, float] = Field(
+        default_factory=dict,
+        description="Feed URL to reliability in [0, 1] (inline feed_urls tables)",
+    )
+    source_hosts: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Feed URL to extra article hosts it publishes under (aggregators)",
+    )
+    llm_verify: bool = Field(
+        default=False,
+        description="Verify the generated digest against its sources before delivering",
+    )
+    llm_verify_threshold: float | None = Field(
+        default=None,
+        description="Faithfulness threshold for this collection; empty = global setting",
+    )
+    llm_verify_backend: str | None = Field(
+        default=None,
+        description="Judge backend for this collection: 'local', 'modal' or 'api'",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     def to_config(self) -> CollectionConfig:

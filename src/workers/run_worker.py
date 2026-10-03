@@ -47,6 +47,7 @@ def worker_activities() -> list[object]:
         activities.cluster_activity,
         activities.generate_digest_activity,
         activities.generate_logic_activity,
+        activities.verify_digest_activity,
         activities.generate_tts_activity,
         activities.compress_audio_activity,
         activities.deliver_telegram_message_activity,

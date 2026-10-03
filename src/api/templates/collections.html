@@ -176,6 +176,33 @@
           <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
           <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px">{{ c.narration_spec|tojson(indent=2) if c.narration_spec else '' }}</textarea>
           <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+          <hr>
+          <h3>Verificación LLM (Fase 7.13)</h3>
+          <div class="row">
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="llm_verify" {{ 'checked' if c.llm_verify else '' }}><label>Verificar digest antes de entregar</label></div>
+            </div>
+            <div class="col">
+              <label>Umbral faithfulness (vacío = global)</label>
+              <input type="number" name="llm_verify_threshold" value="{{ c.llm_verify_threshold if c.llm_verify_threshold is not none else '' }}" min="0" max="1" step="0.05">
+            </div>
+            <div class="col">
+              <label>Backend del juez</label>
+              <select name="llm_verify_backend">
+                <option value="">(global)</option>
+                <option value="local" {{ 'selected' if c.llm_verify_backend == 'local' else '' }}>local</option>
+                <option value="modal" {{ 'selected' if c.llm_verify_backend == 'modal' else '' }}>modal</option>
+                <option value="api" {{ 'selected' if c.llm_verify_backend == 'api' else '' }}>api</option>
+              </select>
+            </div>
+          </div>
+          <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
+          <textarea name="source_reliability" rows="3">{% for url, score in c.source_reliability.items() %}{{ url }}={{ score }}
+{% endfor %}</textarea>
+          <label>Hosts extra por feed (URL=host1,host2, una por línea)</label>
+          <textarea name="source_hosts" rows="3">{% for url, hosts in c.source_hosts.items() %}{{ url }}={{ hosts|join(',') }}
+{% endfor %}</textarea>
+          <p class="muted" style="font-size:12px">Las fuentes con fiabilidad inferior a <code>min_source_reliability</code> se excluyen antes del clustering. Los hosts extra cubren agregadores (p. ej. Google News publica artículos de otros dominios).</p>
         </div>
       </details>
     </form>
@@ -324,6 +351,30 @@
         <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
         <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px"></textarea>
         <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+        <hr>
+        <h3>Verificación LLM (Fase 7.13)</h3>
+        <div class="row">
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="llm_verify"><label>Verificar digest antes de entregar</label></div>
+          </div>
+          <div class="col">
+            <label>Umbral faithfulness (vacío = global)</label>
+            <input type="number" name="llm_verify_threshold" min="0" max="1" step="0.05">
+          </div>
+          <div class="col">
+            <label>Backend del juez</label>
+            <select name="llm_verify_backend">
+              <option value="">(global)</option>
+              <option value="local">local</option>
+              <option value="modal">modal</option>
+              <option value="api">api</option>
+            </select>
+          </div>
+        </div>
+        <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
+        <textarea name="source_reliability" rows="3"></textarea>
+        <label>Hosts extra por feed (URL=host1,host2, una por línea)</label>
+        <textarea name="source_hosts" rows="3"></textarea>
       </div>
     </details>
   </form>

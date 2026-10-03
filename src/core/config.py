@@ -12,10 +12,52 @@ class Settings(BaseSettings):
 
     llm_api_base: str = "http://localhost:8080/v1"
     llm_model: str = "openai/local-model"
+    # Credential for a hosted provider pointed at by llm_api_base. Empty (the
+    # default) keeps local llama.cpp endpoints working without an Authorization
+    # header; Phase 7.13 uses it for the 'api' verification backend.
+    llm_api_key: str = ""
     llm_temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     llm_timeout_seconds: int = Field(default=1800, ge=1)
     llm_max_tokens: int = Field(default=4096, gt=0)
     llm_disable_thinking: bool = True
+    # --- Phase 7.13: LLM output verification -------------------------------
+    # Global kill switch. The per-collection opt-in is `llm_verify` in
+    # collections.toml; this flag can only turn every collection off.
+    llm_verify_enabled: bool = True
+    # Faithfulness score (supported claims / total claims) a digest must reach.
+    # Verified against known-good digests before being tightened; see Deploy.md.
+    llm_verify_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
+    # Share of numbers/dates/percentages that must exist verbatim in a source
+    # article. This check needs no LLM, so it stays at 1.0: a fabricated figure
+    # is the failure mode worth blocking on.
+    llm_verify_groundedness_threshold: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Which LLM judges the claims: 'local' (llm_api_base), 'modal' (a Llama-3
+    # class judge on Modal) or 'api' (a hosted OpenAI-compatible provider).
+    llm_verify_backend: str = "local"
+    # Judge model. Empty means "reuse llm_model" for the local backend,
+    # `modal_judge_model` for the Modal backend and `llm_verify_api_base`'s own
+    # default model for 'api'.
+    llm_verify_model: str = ""
+    # OpenAI-compatible endpoint for the 'api' backend. Empty reuses llm_api_base,
+    # which is usually your local llama.cpp: set this to point the judge at a
+    # hosted provider without moving the digest generation off the local model.
+    llm_verify_api_base: str = ""
+    # API key for the 'api' backend (Groq, OpenRouter, ...). Never logged.
+    llm_verify_api_key: str = ""
+    # A digest shorter than this many claims is judged on groundedness alone:
+    # a score over one or two claims is noise.
+    llm_verify_min_claims: int = Field(default=3, ge=0)
+    llm_verify_max_claims: int = Field(default=40, ge=1)
+    llm_verify_claims_per_call: int = Field(default=5, ge=1)
+    # Sources sent to the judge. The judge prompt repeats them on every batch, so
+    # they are capped; the free groundedness check always uses the full text.
+    llm_verify_max_sources: int = Field(default=40, ge=1)
+    llm_verify_source_chars: int = Field(default=1200, ge=100)
+    # Per-source reliability. A feed without an explicit value scores
+    # `source_reliability_default`; below `min_source_reliability` the source is
+    # dropped before clustering.
+    source_reliability_default: float = Field(default=1.0, ge=0.0, le=1.0)
+    min_source_reliability: float = Field(default=0.5, ge=0.0, le=1.0)
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
     smtp_host: str = "smtp.gmail.com"
@@ -208,6 +250,10 @@ class Settings(BaseSettings):
     modal_token_secret: str = ""
     modal_volume_name: str = "news-engine-voices"
     modal_gpu: str = "L4"
+    # Model the Phase 7.13 verification judge runs on Modal. An ungated 8B by
+    # default: Llama-3.3-70B is gated on HuggingFace and does not fit an L4
+    # comfortably, so switching to it means accepting the license and quantizing.
+    modal_judge_model: str = "Qwen/Qwen3-8B"
     # Qwen3-TTS runs in its own Modal image (Python 3.12, qwen-tts), so the
     # package never enters pyproject.toml and the local path needs no GPU.
     qwen_tts_base_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"

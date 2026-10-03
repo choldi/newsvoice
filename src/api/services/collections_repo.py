@@ -53,6 +53,11 @@ _COLLECTION_KEYS = (
     "narration_deliver_audio",
     "main_story_count",
     "headline_count",
+    "source_reliability",
+    "source_hosts",
+    "llm_verify",
+    "llm_verify_threshold",
+    "llm_verify_backend",
     "enabled",
 )
 

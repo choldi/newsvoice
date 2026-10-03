@@ -14,16 +14,23 @@ from pydantic import ValidationError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 
-from src.api.db.database import AudioJobsRepository, RunsRepository, SyncStateRepository
+from src.api.db.database import (
+    AudioJobsRepository,
+    RunsRepository,
+    SyncStateRepository,
+    VerificationsRepository,
+)
 from src.api.models.article import ArticleIn, DigestIn
 from src.api.models.cluster import ClusterIn, ClusterItem
 from src.api.models.tts import TTSIn
+from src.api.models.verification import VerifyDigestIn
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.cluster import ClusterService
 from src.api.services.dedup import DedupService
 from src.api.services.digest import DigestService
 from src.api.services.email import EmailService
 from src.api.services.tts import TTSService
+from src.api.services.verification import VerificationService
 from src.api.services.whatsapp import (
     WhatsAppConfigError,
     WhatsAppNotAllowedError,
@@ -225,6 +232,87 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         raise ApplicationError(f"Digest generation failed: {exc}", non_retryable=True) from exc
     return result.model_dump()
+
+
+@activity.defn
+async def verify_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Verify a generated digest against the clusters it was written from (Phase 7.13).
+
+    Two layers run back to back: a deterministic groundedness pass over the
+    figures of the digest, and an LLM faithfulness pass over its atomic claims.
+    Each layer is persisted in the ``verifications`` table so a failure can be
+    audited after the fact.
+
+    The activity never raises on a bad digest: it returns the report with
+    ``passed`` set to False and lets the workflow record the run as
+    ``verification_failed`` before anything is delivered. Only operational
+    failures (database, unusable payload) raise.
+
+    Args:
+        payload: Dict with 'digest', 'clusters', 'collection', 'run_id',
+            'workflow_id', 'threshold', 'groundedness_threshold', 'backend',
+            'model' and 'host_reliability'.
+
+    Returns:
+        The VerificationReportOut dump plus 'run_id'.
+
+    Raises:
+        ApplicationError: If the payload is unusable or persistence fails.
+    """
+    activity.logger.info("Verifying digest against sources")
+    digest = payload.get("digest")
+    if not digest:
+        raise ApplicationError("Digest text missing for verification", non_retryable=True)
+    run_id = str(payload.get("run_id") or "")
+    workflow_id = str(payload.get("workflow_id") or "")
+    collection = payload.get("collection") or "default"
+    request = VerifyDigestIn(
+        digest=str(digest),
+        clusters=payload.get("clusters") or [],
+        collection=str(collection),
+        threshold=float(payload.get("threshold") or get_settings().llm_verify_threshold),
+        groundedness_threshold=float(
+            payload.get("groundedness_threshold")
+            or get_settings().llm_verify_groundedness_threshold
+        ),
+        backend=payload.get("backend") or get_settings().llm_verify_backend,
+        model=payload.get("model") or get_settings().llm_verify_model,
+        host_reliability=payload.get("host_reliability") or {},
+        run_id=run_id,
+        workflow_id=workflow_id,
+    )
+    report = await VerificationService().verify_digest(request)
+    # One row per layer: a run that fails on the numbers but passes the LLM judge
+    # (or the other way round) must be diagnosable without re-running the check.
+    layers = (
+        ("groundedness", report.groundedness.score, request.groundedness_threshold),
+        ("faithfulness", report.faithfulness.score, request.threshold),
+    )
+    try:
+        repo = VerificationsRepository()
+        for method, score, threshold in layers:
+            await repo.record(
+                run_id=run_id,
+                collection=str(collection),
+                target=report.workflow_id or "digest",
+                method=method,
+                verdict=report.verdict.value,
+                score=score,
+                threshold=threshold,
+                passed=report.passed,
+                details=report.model_dump(mode="json"),
+                model=report.judge_model,
+                duration_seconds=report.duration_seconds,
+            )
+    except Exception as exc:
+        raise ApplicationError(f"Verification persistence failed: {exc}") from exc
+    activity.logger.info(
+        f"digest_verification: verdict={report.verdict.value} score={report.score:.3f} "
+        f"threshold={request.threshold} passed={report.passed}"
+    )
+    result = report.model_dump(mode="json")
+    result["run_id"] = run_id
+    return result
 
 
 @activity.defn

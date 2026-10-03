@@ -7,7 +7,11 @@ collection immediately.
 import structlog
 from fastapi import APIRouter, HTTPException, Query, status
 
-from src.api.db.database import AudioJobsRepository, RunsRepository
+from src.api.db.database import (
+    AudioJobsRepository,
+    RunsRepository,
+    VerificationsRepository,
+)
 from src.api.models.admin import AudioJobOut, RunOut, RunsListOut, TriggerRunOut
 from src.api.services.collections_repo import CollectionsRepository
 from src.api.services.temporal_admin import TemporalAdminService
@@ -94,6 +98,33 @@ async def get_run_audio(run_id: int) -> AudioJobOut:
             detail=f"No audio job recorded for run {run_id}",
         )
     return AudioJobOut(job=job)
+
+
+@router.get("/admin/runs/{run_id}/verifications")
+async def get_run_verifications(run_id: int) -> dict[str, object]:
+    """Return the verification ledger entries for a digest run.
+
+    Phase 7.13: each run that passes through the verification gate records one
+    row per layer (groundedness, faithfulness) in the ``verifications`` table.
+    This endpoint exposes them so the GUI can show why a digest was rejected.
+
+    Args:
+        run_id: Digest run row id.
+
+    Returns:
+        Dict with 'status': 'ok' and 'verifications': list of rows.
+
+    Raises:
+        HTTPException: 404 if the run does not exist.
+    """
+    run = await RunsRepository().get_run(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run {run_id} not found",
+        )
+    rows = await VerificationsRepository().get_for_run(run["workflow_id"])
+    return {"status": "ok", "verifications": rows}
 
 
 @router.post("/admin/collections/{name}/run", response_model=TriggerRunOut)

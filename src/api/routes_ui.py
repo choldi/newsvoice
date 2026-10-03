@@ -65,6 +65,7 @@ STATUS_LABELS = {
     "canceled": "cancelado",
     "timed_out": "tiempo agotado",
     "continued_as_new": "continúa como nuevo",
+    "verification_failed": "verificación fallida",
 }
 
 
@@ -134,6 +135,63 @@ def _split_whatsapp(raw: str) -> list[str]:
         `CollectionConfig`.
     """
     return _split_list(raw)
+
+
+def _parse_key_value(raw: str) -> dict[str, str]:
+    """Parse a textarea of ``key=value`` lines into a dict.
+
+    Args:
+        raw: Raw textarea value with one ``key=value`` pair per line.
+
+    Returns:
+        Dict of trimmed keys to trimmed values. Blank lines and lines without
+        ``=`` are ignored.
+    """
+    result: dict[str, str] = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key:
+            result[key] = value.strip()
+    return result
+
+
+def _parse_reliability(raw: str) -> dict[str, float]:
+    """Parse a textarea of ``url=0.9`` lines into a reliability map.
+
+    Args:
+        raw: Raw textarea value with one ``url=score`` pair per line.
+
+    Returns:
+        Dict of feed URLs to reliability scores. Invalid scores are skipped.
+    """
+    result: dict[str, float] = {}
+    for key, value in _parse_key_value(raw).items():
+        try:
+            result[key] = float(value)
+        except ValueError:
+            continue
+    return result
+
+
+def _parse_hosts(raw: str) -> dict[str, list[str]]:
+    """Parse a textarea of ``url=host1,host2`` lines into a host map.
+
+    Args:
+        raw: Raw textarea value with one ``url=hosts`` pair per line.
+
+    Returns:
+        Dict of feed URLs to lists of trimmed, lowercase hosts.
+    """
+    result: dict[str, list[str]] = {}
+    for key, value in _parse_key_value(raw).items():
+        hosts = [h.strip().lower() for h in value.split(",") if h.strip()]
+        if hosts:
+            result[key] = hosts
+    return result
 
 
 DELIVERY_CHANNELS = ("telegram", "email", "whatsapp")
@@ -686,6 +744,15 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             narration_deliver_audio=fields.get("narration_deliver_audio") != "off",
             main_story_count=int(fields.get("main_story_count") or 5),
             headline_count=int(fields.get("headline_count") or 5),
+            source_reliability=_parse_reliability(fields.get("source_reliability", "")),
+            source_hosts=_parse_hosts(fields.get("source_hosts", "")),
+            llm_verify=fields.get("llm_verify") == "on",
+            llm_verify_threshold=(
+                float(fields["llm_verify_threshold"])
+                if fields.get("llm_verify_threshold", "").strip()
+                else None
+            ),
+            llm_verify_backend=fields.get("llm_verify_backend", "").strip() or None,
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -746,6 +813,15 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             narration_deliver_audio=fields.get("narration_deliver_audio") != "off",
             main_story_count=int(fields.get("main_story_count") or 5),
             headline_count=int(fields.get("headline_count") or 5),
+            source_reliability=_parse_reliability(fields.get("source_reliability", "")),
+            source_hosts=_parse_hosts(fields.get("source_hosts", "")),
+            llm_verify=fields.get("llm_verify") == "on",
+            llm_verify_threshold=(
+                float(fields["llm_verify_threshold"])
+                if fields.get("llm_verify_threshold", "").strip()
+                else None
+            ),
+            llm_verify_backend=fields.get("llm_verify_backend", "").strip() or None,
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

@@ -98,6 +98,24 @@ def estimate_cost(char_count: int) -> float:
     return estimate_gpu_seconds(char_count) * settings.modal_usd_per_gpu_second
 
 
+def estimate_judge_cost(prompt_chars: int, completion_chars: int) -> float:
+    """Estimate the USD cost of one Modal LLM judge call (Phase 7.13).
+
+    Reuses the TTS chars-to-GPU-seconds ratio as a throughput proxy: a judge
+    decodes far fewer characters per second than a TTS model emits audio, so this
+    estimate is deliberately generous and the real ledger row carries the measured
+    wall-clock time next to it.
+
+    Args:
+        prompt_chars: Characters sent to the judge.
+        completion_chars: Characters expected back.
+
+    Returns:
+        Estimated cost in USD.
+    """
+    return estimate_cost(prompt_chars + completion_chars)
+
+
 async def budget_headroom() -> float:
     """Return the smallest remaining headroom across both windows.
 

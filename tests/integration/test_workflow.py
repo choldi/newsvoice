@@ -142,6 +142,40 @@ async def stub_generate_logic(payload: dict) -> dict:
     return LOGIC
 
 
+VERIFICATION_PASSED = {
+    "status": "ok",
+    "verdict": "valid",
+    "score": 1.0,
+    "threshold": 0.9,
+    "passed": True,
+    "backend": "local",
+    "judge_model": "test-model",
+    "reasons": [],
+    "run_id": "workflow-test",
+}
+VERIFICATION_FAILED = {
+    "status": "ok",
+    "verdict": "invalid",
+    "score": 0.5,
+    "threshold": 0.9,
+    "passed": False,
+    "backend": "local",
+    "judge_model": "test-model",
+    "reasons": ["ungrounded figure: 999"],
+    "run_id": "workflow-test",
+}
+
+
+@activity.defn(name="verify_digest_activity")
+async def stub_verify_digest(payload: dict) -> dict:
+    return VERIFICATION_PASSED
+
+
+@activity.defn(name="verify_digest_activity")
+async def stub_verify_digest_fail(payload: dict) -> dict:
+    return VERIFICATION_FAILED
+
+
 @activity.defn(name="deliver_logic_activity")
 async def stub_deliver_logic(logic: str, delivery: dict, collection: str) -> dict:
     return {
@@ -171,6 +205,7 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_deliver_whatsapp_audio,
                 stub_generate_logic,
                 stub_deliver_logic,
+                stub_verify_digest,
                 stub_record_run,
             ],
         ):
@@ -1477,3 +1512,73 @@ def test_workflow_never_references_a_missing_application_error_symbol() -> None:
 
     assert "activity.ApplicationError" not in source
     assert workflows_module.ApplicationError is ApplicationError
+
+
+async def test_pipeline_with_verification_passes() -> None:
+    """A collection with verify=True and a passing report delivers normally."""
+    config = PipelineConfig(
+        feed_urls=["https://feed.example/rss"],
+        tts_enabled=True,
+        deliver_audio=True,
+        verify={
+            "threshold": 0.9,
+            "groundedness_threshold": 1.0,
+            "backend": "local",
+            "model": "test-model",
+            "host_reliability": {},
+        },
+    )
+    result = await _run_workflow(config)
+
+    assert result["status"] == "ok"
+    assert result["verification"] is not None
+    assert result["verification"]["verdict"] == "valid"
+
+
+async def test_pipeline_with_verification_failure_blocks_delivery() -> None:
+    """A failed verification records the run and raises before any delivery."""
+    config = PipelineConfig(
+        feed_urls=["https://feed.example/rss"],
+        tts_enabled=True,
+        deliver_audio=True,
+        verify={
+            "threshold": 0.9,
+            "groundedness_threshold": 1.0,
+            "backend": "local",
+            "model": "test-model",
+            "host_reliability": {},
+        },
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq-verify-fail",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_compress_audio,
+                stub_deliver_message,
+                stub_deliver_audio,
+                stub_deliver_email,
+                stub_deliver_whatsapp_message,
+                stub_deliver_whatsapp_audio,
+                stub_generate_logic,
+                stub_deliver_logic,
+                stub_verify_digest_fail,
+                stub_record_run,
+            ],
+        ):
+            with pytest.raises(WorkflowFailureError) as excinfo:
+                await env.client.execute_workflow(
+                    DigestPipelineWorkflow.run,
+                    config,
+                    id="verify-fail-test",
+                    task_queue="tq-verify-fail",
+                )
+    cause = str(excinfo.value.cause)
+    assert "verification failed" in cause.lower()

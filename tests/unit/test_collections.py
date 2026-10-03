@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.collections import (
+    CollectionConfig,
     CollectionsLoader,
     default_collection,
     get_collection,
@@ -382,3 +383,161 @@ def test_example_ai_toml_parses_with_a_conversations_spec(tmp_path: Path) -> Non
     assert all(r.emotion is None for r in ai.narration_spec.roles)
     assert all(r.speed == 1.0 for r in ai.narration_spec.roles)
     assert ai.delivery_channels == ["telegram"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.13: source reliability and LLM verification
+# ---------------------------------------------------------------------------
+
+
+def test_inline_feed_table_splits_into_plain_urls_and_reliability(tmp_path: Path) -> None:
+    """Inline feed tables are decomposed into feed_urls + source_reliability + source_hosts."""
+    content = """
+[[collections]]
+name = "ai"
+feed_urls = [
+  "https://elpais.com/rss",
+  { url = "https://news.google.com/rss", reliability = 0.6, hosts = ["bbc.co.uk"] },
+  { url = "https://low.trust/rss", reliability = 0.2 },
+]
+"""
+    path = tmp_path / "collections.toml"
+    path.write_text(content)
+    collections = CollectionsLoader(str(path)).load()
+
+    assert len(collections) == 1
+    ai = collections[0]
+    assert ai.feed_urls == [
+        "https://elpais.com/rss",
+        "https://news.google.com/rss",
+        "https://low.trust/rss",
+    ]
+    assert ai.source_reliability == {
+        "https://news.google.com/rss": 0.6,
+        "https://low.trust/rss": 0.2,
+    }
+    assert ai.source_hosts == {"https://news.google.com/rss": ["bbc.co.uk"]}
+
+
+def test_explicit_source_reliability_table_merges_with_inline(tmp_path: Path) -> None:
+    """An explicit source_reliability table is merged with inline table entries."""
+    content = """
+[[collections]]
+name = "ai"
+feed_urls = [
+  "https://elpais.com/rss",
+  { url = "https://news.google.com/rss", reliability = 0.6 },
+]
+source_reliability = { "https://elpais.com/rss" = 0.95 }
+"""
+    path = tmp_path / "collections.toml"
+    path.write_text(content)
+    collections = CollectionsLoader(str(path)).load()
+
+    ai = collections[0]
+    assert ai.source_reliability == {
+        "https://news.google.com/rss": 0.6,
+        "https://elpais.com/rss": 0.95,
+    }
+
+
+def test_source_reliability_rejects_out_of_range_values(tmp_path: Path) -> None:
+    """Reliability scores outside [0, 1] are rejected."""
+    content = """
+[[collections]]
+name = "ai"
+feed_urls = [
+  { url = "https://bad.com/rss", reliability = 1.5 },
+]
+"""
+    path = tmp_path / "collections.toml"
+    path.write_text(content)
+    with pytest.raises(Exception):
+        CollectionsLoader(str(path)).load()
+
+
+def test_host_reliability_map_includes_extra_hosts() -> None:
+    """host_reliability() maps both the feed host and its extra hosts."""
+    config = CollectionConfig.model_validate(
+        {
+            "name": "ai",
+            "feed_urls": [
+                "https://news.google.com/rss",
+            ],
+            "source_reliability": {"https://news.google.com/rss": 0.6},
+            "source_hosts": {"https://news.google.com/rss": ["bbc.co.uk", "cnn.com"]},
+        }
+    )
+    mapping = config.host_reliability()
+    assert mapping["news.google.com"] == 0.6
+    assert mapping["bbc.co.uk"] == 0.6
+    assert mapping["cnn.com"] == 0.6
+
+
+def test_unreliable_hosts_below_floor() -> None:
+    """Hosts with reliability below min_source_reliability are flagged."""
+    config = CollectionConfig.model_validate(
+        {
+            "name": "ai",
+            "feed_urls": [
+                "https://trusted.com/rss",
+                "https://low.trust/rss",
+            ],
+            "source_reliability": {"https://low.trust/rss": 0.2},
+        }
+    )
+    assert config.unreliable_hosts() == {"low.trust"}
+
+
+def test_trusted_feed_urls_excludes_unreliable() -> None:
+    """trusted_feed_urls() drops feeds below the reliability floor."""
+    config = CollectionConfig.model_validate(
+        {
+            "name": "ai",
+            "feed_urls": [
+                "https://trusted.com/rss",
+                "https://low.trust/rss",
+            ],
+            "source_reliability": {"https://low.trust/rss": 0.2},
+        }
+    )
+    assert config.trusted_feed_urls() == ["https://trusted.com/rss"]
+
+
+def test_resolve_llm_verify_returns_none_when_disabled() -> None:
+    """resolve_llm_verify() returns None when the collection does not opt in."""
+    config = CollectionConfig(name="ai", feed_urls=["https://a.com/rss"])
+    assert config.resolve_llm_verify() is None
+
+
+def test_resolve_llm_verify_returns_payload_when_enabled() -> None:
+    """resolve_llm_verify() returns the full payload when opted in."""
+    config = CollectionConfig.model_validate(
+        {
+            "name": "ai",
+            "feed_urls": ["https://a.com/rss"],
+            "llm_verify": True,
+            "llm_verify_threshold": 0.85,
+            "llm_verify_backend": "modal",
+        }
+    )
+    payload = config.resolve_llm_verify()
+    assert payload is not None
+    assert payload["enabled"] is True
+    assert payload["threshold"] == 0.85
+    assert payload["backend"] == "modal"
+    assert payload["host_reliability"] == {"a.com": 1.0}
+
+
+def test_resolve_llm_verify_uses_global_threshold_when_not_set() -> None:
+    """A collection without its own threshold falls back to the global setting."""
+    config = CollectionConfig.model_validate(
+        {
+            "name": "ai",
+            "feed_urls": ["https://a.com/rss"],
+            "llm_verify": True,
+        }
+    )
+    payload = config.resolve_llm_verify()
+    assert payload is not None
+    assert payload["threshold"] == 0.9  # global default

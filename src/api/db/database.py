@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 import structlog
@@ -1049,3 +1050,138 @@ class ModalSpendRepository:
             async with db.execute(query) as cursor:
                 row = await cursor.fetchone()
                 return str(row[0]) if row else None
+
+
+class VerificationsRepository:
+    """Repository for the LLM verification ledger (Phase 7.13).
+
+    One row per (run_id, target, method): the digest is verified by the free
+    ``groundedness`` check and by the LLM judge (``faithfulness``), so a run can
+    accumulate several rows without overwriting each other.
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def record(
+        self,
+        *,
+        run_id: str,
+        collection: str,
+        target: str,
+        method: str,
+        verdict: str,
+        score: float | None = None,
+        threshold: float | None = None,
+        passed: bool = False,
+        details: dict[str, Any] | None = None,
+        model: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> int:
+        """Persist one verification verdict and return its row id.
+
+        Args:
+            run_id: Workflow id of the digest run being verified.
+            collection: Collection name the run belongs to.
+            target: What was verified ('digest', 'narration_script', ...).
+            method: Check that produced the score ('groundedness', 'faithfulness').
+            verdict: 'valid', 'invalid' or 'error'.
+            score: Measured score, or None when the check could not run.
+            threshold: Threshold the score was compared against.
+            passed: True when the score met the threshold.
+            details: JSON breakdown of the verdict (claims, numbers, sources).
+            model: Model or engine that produced the score.
+            duration_seconds: Wall-clock time the check took.
+
+        Returns:
+            Id of the inserted row.
+        """
+        query = """
+            INSERT INTO verifications (
+                run_id, collection, target, method, verdict, score, threshold,
+                passed, details, model, duration_seconds
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            run_id,
+            collection,
+            target,
+            method,
+            verdict,
+            score,
+            threshold,
+            int(passed),
+            json.dumps(details, sort_keys=True) if details is not None else None,
+            model,
+            duration_seconds,
+        )
+        async with get_db(self.db_path) as db:
+            await db.execute(query, params)
+            await db.commit()
+            cursor = await db.execute("SELECT last_insert_rowid()")
+            row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    async def get_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        """Return every verification row of a run, oldest first.
+
+        Args:
+            run_id: Workflow id of the digest run.
+
+        Returns:
+            List of dicts with the columns of ``verifications`` plus a parsed
+            ``details`` object (an empty dict when the column is NULL).
+        """
+        query = """
+            SELECT id, run_id, collection, target, method, verdict, score,
+                   threshold, passed, details, model, duration_seconds, created_at
+            FROM verifications
+            WHERE run_id = ?
+            ORDER BY id ASC
+        """
+        rows: list[dict[str, Any]] = []
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (run_id,)) as cursor:
+                async for row in cursor:
+                    try:
+                        details = json.loads(row["details"]) if row["details"] else {}
+                    except ValueError:
+                        details = {}
+                    rows.append(
+                        {
+                            "id": row["id"],
+                            "run_id": row["run_id"],
+                            "collection": row["collection"],
+                            "target": row["target"],
+                            "method": row["method"],
+                            "verdict": row["verdict"],
+                            "score": row["score"],
+                            "threshold": row["threshold"],
+                            "passed": bool(row["passed"]),
+                            "details": details,
+                            "model": row["model"],
+                            "duration_seconds": row["duration_seconds"],
+                            "created_at": row["created_at"],
+                        }
+                    )
+        return rows
+
+    async def get_latest_for_run(self, run_id: str, target: str) -> dict[str, Any] | None:
+        """Return the most recent verification row of a run for one target.
+
+        Args:
+            run_id: Workflow id of the digest run.
+            target: Target to look up ('digest', 'narration_script', ...).
+
+        Returns:
+            The newest matching row as a dict, or None when there is none.
+        """
+        rows = await self.get_for_run(run_id)
+        matching = [row for row in rows if row["target"] == target]
+        return matching[-1] if matching else None

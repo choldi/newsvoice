@@ -413,6 +413,69 @@ conectan a namespaces distintos y verificables con
 
 ---
 
+- [x] **7.13 Verificación LLM del digest contra sus fuentes** — todo digest
+      generado pasa por un gate duro **antes** de cualquier entrega: ni texto,
+      ni TTS, ni narración salen si la verificación falla. Dos capas en
+      `src/api/services/verification.py`: (1) *groundedness* determinista — toda
+      cifra (moneda, %, fecha, número) del digest debe existir en un artículo,
+      con matching por variantes (`1.200` = `1200`) y saneado de la estructura
+      Markdown y de versiones de producto (`Llama 3.3`, `GPT-6`) para no dar
+      falsos positivos; (2) *faithfulness* con juez LLM vía LiteLLM
+      (`local | api | modal`, temperatura 0.3) que parte el digest en claims
+      atómicos y los etiqueta `supported | contradicted | unsupported` con cita
+      literal, ponderando por fiabilidad de la fuente. Opt-in por colección
+      (`llm_verify = true`) con kill switch global (`LLM_VERIFY_ENABLED`), por lo
+      que la fase se entrega inerte. `verify_digest_activity` persiste una fila
+      por capa en la tabla `verifications` (migración `010`) y
+      `DigestPipelineWorkflow` llama al gate justo después de generar el digest
+      y antes del bloque de canales: si `passed` es falso, registra el run como
+      `verification_failed` y lanza `ApplicationError` no reintentable.
+      Fiabilidad por fuente con tablas inline en `feed_urls`
+      (`{ url, reliability, hosts }`, retrocompatible con strings): una fuente
+      bajo `MIN_SOURCE_RELIABILITY` se descarta **antes** del clustering, y el
+      artículo se puntúa por el host de su propio `link` (no por el feed), con
+      `hosts` para agregadores. `PipelineConfig.verify` se resuelve fuera del
+      workflow en `pipeline_config_for` (schedule, trigger CLI y trigger API).
+      GUI: casilla/umbral/backend + mapas de fiabilidad por colección, etiqueta
+      `verification_failed` en el listado de runs y endpoint
+      `GET /api/admin/runs/{id}/verifications`. Configuración y calibración en
+      `Deploy.md` §11, variables nuevas en `.env.example`.
+
+**Success criteria:** `745 passed` con `ruff` limpio; una cifra inventada en el
+digest bloquea la entrega (`test_pipeline_with_verification_failure_blocks_delivery`),
+un digest con todas las cifras en las fuentes entrega igual que antes
+(`test_pipeline_with_verification_passes`), y las 21 pruebas de
+`tests/unit/test_verification.py` cubren extracción de cifras, matching y cada
+veredicto.
+
+**Effort:** 4-5 hours.
+
+---
+
+- [ ] **7.10 Resumen de URL (entrada por URL)** — endpoint `POST /api/summarize/url`
+      con `trafilatura` para extraer el cuerpo del artículo, `store = false` por
+      defecto (el texto no se persiste en `articles`) y entrega por los destinos
+      ya configurados de la colección. Pendiente: añadir `trafilatura` a
+      `pyproject.toml` (nueva dependencia, preguntar).
+
+- [ ] **7.11 TTS de documentos largos (PDF/EPUB/TXT/MD)** — worker propio con
+      `pypdf` + `ebooklib`, un solo audio por documento, entrega como URL local
+      (Tailscale) en lugar de adjunto; auth doble: endpoint admin y enlace HMAC
+      firmado. Dependencias nuevas (`pypdf`, `ebooklib`, `python-multipart`).
+
+- [ ] **7.12 Worker profesor de idiomas** — subes apuntes (fichero) → el LLM
+      genera la clase → TTS con la misma voz clonada. Tres modos: mixto, dual
+      (dos idiomas/dos voces) y explicación en la lengua nativa; el texto llega
+      como adjunto `.md`/`.txt` y el audio solo si dura ≤ 300 s (configurable),
+      si no una URL. Usa `NarrationSpec.language` (ya existe).
+
+- [ ] **7.14 Verificación de audio por bloques con Whisper** — `faster-whisper`
+      en CPU para transcribir la narración/TTS, `jiwer` para el WER y similitud
+      contra el script esperado, gate de entrega como 7.13. Dependencias nuevas
+      (`faster-whisper`, `jiwer`).
+
+---
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable

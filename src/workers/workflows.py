@@ -39,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
         send_monitor_alert_activity,
         set_monitor_state_activity,
         sync_collections_schedules_activity,
+        verify_digest_activity,
     )
 
 # Reasonable per-step timeouts for activity execution.
@@ -62,6 +63,11 @@ TTS_TIMEOUT = timedelta(seconds=8100)
 # Local ffmpeg transcode of the synthesized WAV; fast even for long digests.
 COMPRESS_TIMEOUT = timedelta(seconds=600)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
+# Phase 7.13: claim extraction plus one judge call per batch. A digest yields at
+# most llm_verify_max_claims (40) claims in batches of llm_verify_claims_per_call
+# (5), i.e. up to 8 sequential local LLM calls; judge_llm_timeout (600s) bounds
+# each one, so keep the whole gate above 8 x 600s.
+VERIFY_TIMEOUT = timedelta(seconds=5400)
 EMAIL_TIMEOUT = timedelta(seconds=90)
 # WhatsApp pacing (human delay + per-recipient cool-down) per message multiplied
 # across recipients/chunks; give it head-room over the Telegram timeout.
@@ -125,6 +131,11 @@ class PipelineConfig:
     # Configurable story counts (Phase 7.6)
     main_story_count: int = 5
     headline_count: int = 5
+    # Phase 7.13 verification. Resolved **outside** the workflow by the
+    # dispatchers (a workflow cannot read settings): it carries the thresholds,
+    # the judge backend and the host -> reliability map. None means the
+    # collection does not verify and the gate is skipped entirely.
+    verify: dict[str, Any] | None = None
     # Whether to deliver the narration audio (default true when narration_enabled)
     narration_deliver_audio: bool = True
 
@@ -221,6 +232,52 @@ class DigestPipelineWorkflow:
         workflow.logger.info(
             f"Digest generated for {article_count} articles (collection '{config.collection}')"
         )
+
+        # Phase 7.13 hard gate. This runs after the digest is generated and
+        # BEFORE any delivery, TTS or narration: a digest whose figures are not in
+        # the sources, or whose claims the judge contradicts, must never leave
+        # the system. The run row is written first so the failure is visible in
+        # the GUI even though the workflow then fails.
+        verification: dict[str, Any] | None = None
+        if config.verify:
+            verification = await workflow.execute_activity(
+                verify_digest_activity,
+                {
+                    "digest": digest_markdown,
+                    "clusters": clusters,
+                    "collection": config.collection,
+                    "run_id": workflow.info().workflow_id,
+                    "workflow_id": workflow.info().workflow_id,
+                    "threshold": config.verify.get("threshold"),
+                    "groundedness_threshold": config.verify.get("groundedness_threshold"),
+                    "backend": config.verify.get("backend"),
+                    "model": config.verify.get("model"),
+                    "host_reliability": config.verify.get("host_reliability") or {},
+                },
+                start_to_close_timeout=VERIFY_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+            passed = bool(verification.get("passed"))
+            workflow.logger.info(
+                f"Digest verification: verdict={verification.get('verdict')} "
+                f"score={verification.get('score')} passed={passed}"
+            )
+            if not passed:
+                await self._record_run(
+                    status="verification_failed",
+                    collection=config.collection,
+                    article_count=article_count,
+                    cluster_count=len(clusters),
+                    digest_preview=digest_markdown,
+                    audio_path=None,
+                    error=str(verification.get("reasons") or "digest verification failed"),
+                )
+                raise ApplicationError(
+                    f"Digest verification failed: score={verification.get('score')} "
+                    f"threshold={verification.get('threshold')} "
+                    f"reasons={verification.get('reasons')}",
+                    non_retryable=True,
+                )
 
         channels = config.delivery_channels or ["telegram"]
         use_telegram = "telegram" in channels
@@ -495,6 +552,17 @@ class DigestPipelineWorkflow:
             "cluster_count": len(clusters),
             "digest": digest_markdown,
             "delivery_status": delivery_status,
+            "verification": (
+                {
+                    "verdict": verification.get("verdict"),
+                    "score": verification.get("score"),
+                    "threshold": verification.get("threshold"),
+                    "backend": verification.get("backend"),
+                    "judge_model": verification.get("judge_model"),
+                }
+                if verification
+                else None
+            ),
         }
 
     @staticmethod

@@ -420,6 +420,64 @@ AI podcast style:
 }
 
 
+# --- Phase 7.13: LLM output verification -------------------------------------
+# Two prompts, both answered as JSON: the first decomposes the generated text
+# into atomic checkable claims, the second judges a batch of those claims against
+# the source articles. The prompts are deliberately strict about evidence: a
+# small local model is prone to "helpfully" agreeing with a claim, so the judge
+# is told that an unsupported claim must be reported as such and that quoting is
+# mandatory (a verdict without a quote is treated as unsupported by the parser).
+
+VERIFY_CLAIMS_SYSTEM_PROMPT = (
+    "You are a fact-checking assistant. You receive a generated news digest and\n"
+    "must decompose it into atomic, independently verifiable claims.\n\n"
+    "Rules:\n"
+    "- One claim per entry: a single fact, with its subject, quantity and time\n"
+    "  when the text has them.\n"
+    "- Split compound sentences into separate claims.\n"
+    "- Keep every number, date, percentage and proper noun exactly as written.\n"
+    "- Do NOT verify anything, do NOT add facts and do NOT comment.\n"
+    "- Ignore pure opinion, framing, transitions and the headline section's\n"
+    "  editorial connective tissue; keep only statements that could be wrong.\n\n"
+    'Answer with JSON only: {{"claims": ["...", "..."]}}'
+)
+
+VERIFY_CLAIMS_USER_PROMPT_TEMPLATE = """Digest to decompose (Markdown):
+{digest}
+
+Return the atomic claims as a JSON object with a single "claims" array.
+"""
+
+VERIFY_CLAIM_SYSTEM_PROMPT = (
+    "You are a strict fact-checking judge. You receive atomic claims taken from a\n"
+    "generated news digest and the source articles the digest was built from.\n\n"
+    "For every claim decide exactly one label:\n"
+    "- 'supported': the sources state this fact.\n"
+    "- 'contradicted': the sources state something incompatible with this claim.\n"
+    "- 'unsupported': the sources neither state nor contradict it.\n\n"
+    "Rules:\n"
+    "- Judge only against the sources. Never use your own knowledge and never\n"
+    "  assume a claim is true because it sounds plausible.\n"
+    "- 'unsupported' is the correct answer when the evidence is thin, ambiguous,\n"
+    "  or only about a different entity, place, date or unit.\n"
+    "- A paraphrased but factually identical statement is 'supported'.\n"
+    "- 'quote' must be copied verbatim from the sources and be short (max 25\n"
+    "  words). Use an empty string when there is no such text.\n"
+    "- Return one entry per claim, in the same order, with the same 'id'.\n\n"
+    'Answer with JSON only: {{"verdicts": [{{"id": 1, "label": "supported", '
+    '"quote": "..."}}]}}'
+)
+
+VERIFY_CLAIM_USER_PROMPT_TEMPLATE = """Source articles (n={source_count}):
+{sources_text}
+
+Claims to judge:
+{claims_text}
+
+Return a JSON object with a single "verdicts" array, one entry per claim id.
+"""
+
+
 def get_narration_script_template(name: str | None) -> str:
     """Return the system prompt for a narration script template name.
 

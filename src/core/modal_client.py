@@ -108,3 +108,41 @@ async def upload_voice(name: str, wav: bytes) -> None:
 
     function = modal.Function.from_name(settings.modal_app_name, "upload_voice")
     await function.remote.aio(name=name, wav=wav)
+
+
+async def modal_judge(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    model: str,
+    max_tokens: int = 2048,
+) -> dict[str, str]:
+    """Call the Modal LLM judge used by digest verification (Phase 7.13).
+
+    Args:
+        system_prompt: Judge system prompt.
+        user_prompt: Judge user prompt.
+        model: HuggingFace model id to serve as judge.
+        max_tokens: Response budget for the judgement.
+
+    Returns:
+        Dict with the judge's raw ``content``.
+
+    Raises:
+        RuntimeError: When Modal is disabled or credentials are missing.
+        Exception: Whatever the Modal call raises.
+    """
+    if not settings.modal_enabled:
+        raise RuntimeError("modal is disabled")
+    if not settings.modal_token_id or not settings.modal_token_secret:
+        raise RuntimeError("modal credentials are not configured")
+
+    import modal
+
+    function = modal.Function.from_name(settings.modal_app_name, "judge")
+    return await function.remote.aio(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        model=model,
+        max_tokens=max_tokens,
+    )

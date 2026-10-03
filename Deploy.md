@@ -699,3 +699,135 @@ systemctl --user stop omnivoice-api.service
 and records the narration as `error`. To move the clones back onto the
 `omnivoice` engine instead, re-clone them there so their `engine` tag changes,
 then set `TTS_ENGINE=omnivoice` and drop `TTS_ENGINES`.
+
+---
+
+## 11. LLM verification (Phase 7.13)
+
+Cada digest generado se verifica contra sus propias fuentes **antes** de
+entregar nada: ni texto, ni audio, ni narración. Si la verificación falla, el
+run queda en `verification_failed` en `/ui` y el workflow termina en error; la
+fila de `digest_runs` conserva el texto para auditar qué se rechazó.
+
+### 11.1 Activation (opt-in per collection)
+
+Verification does nothing until a collection opts in:
+
+```toml
+[[collections]]
+name = "ai"
+feed_urls = ["https://elpais.com/rss"]
+llm_verify = true
+# optional per-collection overrides (empty = global settings)
+llm_verify_threshold = 0.9
+llm_verify_backend = "local"   # local | modal | api
+```
+
+The global kill switch `LLM_VERIFY_ENABLED=false` turns it off for every
+collection at once. Defaults ship with verification **on globally but off per
+collection**, so upgrading changes no existing digest.
+
+### 11.2 What is checked
+
+1. **Groundedness** (free, no LLM): every figure of the digest — currency,
+   percentages, dates and bare numbers — must exist in a source article. Spelling
+   variants are matched (`1.200` = `1200`, `1,2%` = `1.2%`). Markdown structure
+   and product versions (`Llama 3.3`, `GPT-6`) are ignored so they cannot fail a
+   digest. Threshold: `LLM_VERIFY_GROUNDEDNESS_THRESHOLD` (default `1.0`).
+2. **Faithfulness** (LLM judge): the digest is split into atomic claims and each
+   is labelled `supported | contradicted | unsupported` with a verbatim quote.
+   Score = supported / total, compared against `LLM_VERIFY_THRESHOLD`
+   (default `0.9`). A digest with fewer than `LLM_VERIFY_MIN_CLAIMS` claims is
+   scored on groundedness alone.
+
+Both layers are written to the `verifications` table (one row per layer), so a
+failure can be audited later:
+
+```bash
+sqlite3 data/news.db 'SELECT method, verdict, score, threshold FROM verifications ORDER BY id DESC LIMIT 5;'
+```
+
+### 11.3 Judge backends
+
+| Backend | Endpoint | Model default | Cost |
+|---|---|---|---|
+| `local` (default) | `LLM_API_BASE` | `LLM_MODEL` | free |
+| `api` | `LLM_VERIFY_API_BASE` (empty = `LLM_API_BASE`) | provider default | paid |
+| `modal` | Modal GPU | `MODAL_JUDGE_MODEL` (Qwen/Qwen3-8B) | per-use |
+
+`api` keeps digest generation on your local model while only the judge runs on a
+hosted provider (Groq, OpenRouter, ...): set `LLM_VERIFY_API_BASE`,
+`LLM_VERIFY_API_KEY` and `LLM_VERIFY_BACKEND=api`. The Modal backend requires
+`MODAL_ENABLED=true` plus Modal credentials; it is inert otherwise. The key is
+never written to logs or the `verifications` rows.
+
+### 11.4 Calibration
+
+`LLM_VERIFY_THRESHOLD=0.9` is a starting point, not a measured value. Before
+tightening it for a real collection:
+
+1. Run 10-15 known-good digests through the pipeline with `llm_verify = true`
+   (a failing run never delivers, so test against a throwaway collection).
+2. Read `SELECT score FROM verifications WHERE method='faithfulness'` and check
+   that every accepted digest sits above the threshold with margin.
+3. Raise the threshold to the lowest accepted score minus ~0.05; lower it if
+   good digests are rejected.
+
+Groundedness stays at `1.0`: there is no acceptable level of a fabricated figure.
+A false positive there means a number was misread (usually a model version or a
+date fragment) — fix the extractor in
+`src/api/services/verification.py::extract_figures` instead of lowering the bar.
+
+### 11.5 Source reliability
+
+Feeds can be trusted to different degrees; an untrusted source is excluded
+**before clustering**, so it never reaches the prompt at all:
+
+```toml
+feed_urls = [
+  "https://elpais.com/rss",                       # 1.0 (SOURCE_RELIABILITY_DEFAULT)
+  { url = "https://news.google.com/rss",          # aggregator: score the feed,
+    reliability = 0.6,                            # map its real publishers
+    hosts = ["bbc.co.uk", "cnn.com"] },
+]
+```
+
+- A feed whose reliability is below `MIN_SOURCE_RELIABILITY` (default `0.5`) is
+  dropped in `pipeline_config_for` before the run starts.
+- Article reliability is looked up by the host of the article's own `link`, not
+  by the feed URL, which is why aggregators need `hosts`.
+- Reliability also weights the per-source faithfulness breakdown shown in the
+  report (`details.sources`).
+
+### 11.6 Audit endpoints
+
+```bash
+# ledger of one run (needs the run's workflow_id)
+curl -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/runs/<run_id>/verifications
+```
+
+The GUI shows `verification_failed` runs in the run list with their digest
+preview.
+
+### 11.7 Rollback
+
+Nothing runs without `llm_verify = true`, so the phase ships inert. To disable
+everything at once:
+
+```bash
+# .env
+LLM_VERIFY_ENABLED=false
+```
+
+then restart the worker and re-register the schedules, because `verify` is
+resolved into the schedule payload when `schedule.py` builds it:
+
+```bash
+docker compose up -d --force-recreate worker
+docker compose exec worker python -m src.workers.schedule
+```
+
+Manual runs (`trigger.py`, `POST /admin/collections/{name}/run`) resolve the
+config at request time, so they pick the change up after a restart of the API
+and the worker without re-registering anything.

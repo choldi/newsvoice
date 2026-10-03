@@ -13,6 +13,7 @@ Examples:
 
 import argparse
 import asyncio
+import logging
 from datetime import timedelta
 
 from temporalio.client import (
@@ -40,6 +41,8 @@ from src.workers.workflows import (
     PipelineConfig,
     SystemMonitorWorkflow,
 )
+
+logger = logging.getLogger(__name__)
 
 # Schedule id of the recurring collections-config monitor workflow.
 MONITOR_SCHEDULE_ID = "collections-config-monitor"
@@ -98,8 +101,21 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
             "strategy": collection.narration_strategy,
         }
 
+    # Phase 7.13: drop feeds the operator does not trust before they reach the
+    # pipeline. A source below the reliability floor must not be able to
+    # influence the digest at all, so it is excluded here rather than scored
+    # later. The collections signature keeps every URL so a change in an
+    # excluded feed still triggers a re-sync.
+    trusted_feed_urls = collection.trusted_feed_urls()
+    if len(trusted_feed_urls) != len(collection.feed_urls):
+        logger.warning(
+            f"Excluding {len(collection.feed_urls) - len(trusted_feed_urls)} "
+            f"unreliable feed(s) below min_source_reliability for "
+            f"collection '{collection.name}'"
+        )
+
     return PipelineConfig(
-        feed_urls=collection.feed_urls,
+        feed_urls=trusted_feed_urls,
         tts_enabled=collection.tts_enabled if tts_flag is None else tts_flag,
         deliver_audio=collection.deliver_audio,
         podcast_name=collection.podcast_name,
@@ -121,6 +137,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         main_story_count=collection.main_story_count,
         headline_count=collection.headline_count,
         narration_deliver_audio=collection.narration_deliver_audio,
+        verify=collection.resolve_llm_verify(),
     )
 
 
