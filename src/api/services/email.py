@@ -9,6 +9,7 @@ codebase.
 """
 
 import asyncio
+import mimetypes
 import smtplib
 import ssl
 from datetime import UTC, datetime
@@ -143,6 +144,7 @@ class EmailService:
         collection: str,
         subject: str | None = None,
         audio_path: str | None = None,
+        attachments: list[str] | None = None,
     ) -> EmailMessage:
         """Build a MIME email with an HTML and plain-text alternative.
 
@@ -152,6 +154,9 @@ class EmailService:
             collection: Collection name.
             subject: Optional subject override; auto-generated when None.
             audio_path: Optional audio file to attach (missing file is ignored).
+            attachments: Extra file paths to attach with a guessed MIME type
+                (missing files are ignored); used by Phase 7.12 to ship the
+                lesson `.md`.
 
         Returns:
             A ready-to-send ``EmailMessage`` instance.
@@ -186,6 +191,23 @@ class EmailService:
                 )
             else:
                 logger.warning("email_audio_missing", audio_path=audio_path)
+
+        for extra_path in attachments or []:
+            extra_file = Path(extra_path)
+            if not extra_file.exists():
+                logger.warning("email_attachment_missing", attachment=extra_path)
+                continue
+            guessed, _ = mimetypes.guess_type(str(extra_file))
+            if guessed:
+                maintype, _, subtype = guessed.partition("/")
+            else:
+                maintype, subtype = "application", "octet-stream"
+            msg.add_attachment(
+                extra_file.read_bytes(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=extra_file.name,
+            )
 
         return msg
 
@@ -233,6 +255,7 @@ class EmailService:
         collection: str,
         subject: str | None = None,
         audio_path: str | None = None,
+        attachments: list[str] | None = None,
     ) -> dict[str, str]:
         """Build and send the digest email asynchronously.
 
@@ -245,6 +268,7 @@ class EmailService:
             collection: Collection name.
             subject: Optional subject line override.
             audio_path: Optional audio file to attach to the email.
+            attachments: Extra files to attach (Phase 7.12 lesson text).
 
         Returns:
             Dict with status and recipient count.
@@ -261,6 +285,7 @@ class EmailService:
             collection,
             subject=subject,
             audio_path=audio_path,
+            attachments=attachments,
         )
         await asyncio.to_thread(self.send_message, message)
         logger.info(

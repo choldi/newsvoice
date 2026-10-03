@@ -54,6 +54,7 @@ def worker_activities() -> list[object]:
         activities.compress_audio_activity,
         activities.deliver_telegram_message_activity,
         activities.deliver_telegram_audio_activity,
+        activities.deliver_telegram_document_activity,
         activities.deliver_email_activity,
         activities.deliver_whatsapp_message_activity,
         activities.deliver_whatsapp_audio_activity,

@@ -219,3 +219,43 @@ async def test_deliver_email_activity_calls_service() -> None:
     assert mock_email.await_count == 1
     _, kwargs = mock_email.await_args
     assert kwargs["audio_path"] == "/tmp/digest.wav"
+
+
+def test_build_message_attaches_extra_files(tmp_path: object) -> None:
+    """Extra attachments (Phase 7.12 lesson Markdown) ship with a guessed type."""
+    from pathlib import Path
+
+    lesson = Path(tmp_path) / "clase.md"  # type: ignore[operator]
+    lesson.write_text("# Clase de subjuntivo\n", encoding="utf-8")
+    service = EmailService(smtp_settings=email_config)
+
+    message = service.build_message(
+        ["a@example.com"],
+        "# Titulo",
+        collection="tech",
+        attachments=[str(lesson)],
+    )
+
+    parts = list(message.walk())
+    markdown_parts = [p for p in parts if p.get_content_type() == "text/markdown"]
+    assert len(markdown_parts) == 1
+    assert markdown_parts[0].get_filename() == "clase.md"
+    assert b"subjuntivo" in markdown_parts[0].get_payload(decode=True)
+
+
+def test_build_message_ignores_missing_attachments(tmp_path: object) -> None:
+    """A missing attachment is skipped with a warning, the email is still built."""
+    from pathlib import Path
+
+    missing = Path(tmp_path) / "nope.md"  # type: ignore[operator]
+    service = EmailService(smtp_settings=email_config)
+
+    message = service.build_message(
+        ["a@example.com"],
+        "# Titulo",
+        collection="tech",
+        attachments=[str(missing)],
+    )
+
+    parts = list(message.walk())
+    assert not any(p.get_content_type() == "text/markdown" for p in parts)

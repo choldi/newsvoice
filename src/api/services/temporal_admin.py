@@ -23,6 +23,7 @@ logger = structlog.get_logger(__name__)
 SCHEDULE_PREFIX = "daily-digest-"
 WORKFLOW_PREFIX = "digest-pipeline-"
 DOC_TTS_WORKFLOW_PREFIX = "doc-tts-"
+LESSON_WORKFLOW_PREFIX = "lesson-"
 
 
 def new_document_run_id() -> str:
@@ -35,6 +36,18 @@ def new_document_run_id() -> str:
         Id like ``doc-tts-1a2b3c4d5e6f``.
     """
     return f"{DOC_TTS_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
+
+
+def new_lesson_run_id() -> str:
+    """Return a fresh workflow id for a teacher lesson run (Phase 7.12).
+
+    Same reasoning as the document ids: the upload, the metadata and the
+    audio_jobs row are keyed by it before the workflow exists.
+
+    Returns:
+        Id like ``lesson-1a2b3c4d5e6f``.
+    """
+    return f"{LESSON_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
 
 
 class TemporalAdminService:
@@ -237,6 +250,31 @@ class TemporalAdminService:
             task_queue=app_settings.doc_tts_task_queue,
         )
         logger.info("doc_tts_workflow_started", workflow_id=workflow_id)
+        return workflow_id
+
+    async def start_lesson(self, config: object, workflow_id: str) -> str:
+        """Start a LessonWorkflow on the teacher queue (Phase 7.12).
+
+        Args:
+            config: LessonConfig with the notes path, the cast and the
+                delivery options resolved by the caller.
+            workflow_id: Id assigned by the caller: the upload, the metadata
+                and the audio_jobs row are already keyed by it.
+
+        Returns:
+            The workflow id of the started run.
+        """
+        from src.core.config import settings as app_settings
+        from src.workers.lesson_workflows import LessonWorkflow
+
+        client = await self.client()
+        await client.start_workflow(
+            LessonWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=app_settings.teacher_task_queue,
+        )
+        logger.info("lesson_workflow_started", workflow_id=workflow_id)
         return workflow_id
 
     async def is_collection_running(self, collection_name: str) -> bool:

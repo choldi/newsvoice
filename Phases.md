@@ -529,11 +529,54 @@ token de admin y uno manipulado/expirado da 403.
 
 **Effort:** 5-6 hours.
 
-- [ ] **7.12 Worker profesor de idiomas** — subes apuntes (fichero) → el LLM
-      genera la clase → TTS con la misma voz clonada. Tres modos: mixto, dual
-      (dos idiomas/dos voces) y explicación en la lengua nativa; el texto llega
-      como adjunto `.md`/`.txt` y el audio solo si dura ≤ 300 s (configurable),
-      si no una URL. Usa `NarrationSpec.language` (ya existe).
+- [x] **7.12 Worker profesor de idiomas** — `POST /api/admin/lessons`
+      (multipart: notas `.md`/`.txt`, modo, idiomas, colección y el **cast en
+      la petición** como `NarrationSpec` JSON o un `voice` suelto) sube las
+      notas a `data/lessons/uploads/`, abre la fila en `audio_jobs`
+      (`kind='lesson'`, sin migración) y arranca `LessonWorkflow` en la cola
+      propia `news-engine-teacher-queue`, servida por el contenedor nuevo
+      `teacher-worker`: ni el LLM ni un render de 10+ minutos pueden ocupar
+      los slots del worker de digest. El workflow `generate → render →
+      deliver` vive en `src/workers/lesson_{activities,workflows}.py` (módulo
+      propio, igual que narración). **generate**: valida las notas (extensión,
+      `TEACHER_MAX_NOTES_CHARS`), construye el prompt con el modo y el cast
+      (`src/core/prompts.py::build_lesson_system_prompt`), llama al LLM con
+      LiteLLM a 0.7, parsea JSON tolerante a vallas y guarda
+      `text/<id>.md` + `text/<id>.script.json` — solo viajan paths por
+      Temporal; la única pieza de contenido en el workflow es el Markdown, que
+      necesita para entregar (un workflow no lee ficheros). Validaciones
+      permanentes (notas, modo `dual` sin 2 voces, roles desconocidos) dan
+      `FINISHED_ERROR` sin reintentos; el fallo de red del LLM reintenta.
+      **render**: `NarrationTTSService.render` con las MISMAS voces clonadas
+      de la narración (resuelve `NarrationSpec.language` y los roles como en
+      el resto del proyecto) y cierra el job; la activity construye la URL
+      firmada (settings sí, workflows no). **deliver**: direccionalas activities
+      de entrega **por nombre en la cola del digest** (`task_queue=` resuelto
+      fuera del workflow), patrón ya documentado para narración: email con el
+      `.md` en `attachments=[...]` (parámetro nuevo y genérico en
+      `EmailService`) y Telegram con `sendDocument` (activity nueva
+      `deliver_telegram_document_activity`, registrada en el worker de digest).
+      Regla de audio: si `duration ≤ TEACHER_MAX_AUDIO_SECONDS` (300 s,
+      configurable) el audio viaja adjunto/`sendAudio`; si no, el cuerpo y el
+      caption llevan `/api/audio/lesson/<id>?exp=&sig=` — HMAC con el MISMO
+      secreto que los documentos (`signed_links.build_signed_path` ahora
+      acepta `prefix`), servido por la ruta pública nueva que confina el
+      fichero a `narration_cache_dir`. Estados en
+      `/api/admin/lessons/{id}` + `data/lessons/meta/<id>.json`. Modos:
+      `mixed` (una voz, nativa + ejemplos en objetivo), `dual` (dos voces,
+      obligatorio en el cast, primera en nativa y segunda en objetivo) y
+      `native` (todo en nativa, la objetivo citada). Cola y contenedor
+      (`teacher-worker`) añadidos a compose; sin dependencias nuevas.
+
+**Success criteria:** `933 passed` con `ruff` limpio; el worker nuevo espeja
+el de digest (`test_run_teacher_worker.py`: registra exactamente sus dos
+activities y ninguna otra, y la cola es distinta de las otras tres); sin token
+da 401, un `.pdf` da 415, `mode=dual` con una sola voz da 422, el audio de
+640 s **no** se adjunta y su URL aparece en el cuerpo (`test_lesson_long_audio_becomes_a_link`),
+las deliveries se ejecutan en la cola del digest (test con dos workers) y el
+enlace de audio se sirve sin token pero un `sig` alterado da 403.
+
+**Effort:** 6-8 hours.
 
 - [ ] **7.14 Verificación de audio por bloques con Whisper** — `faster-whisper`
       en CPU para transcribir la narración/TTS, `jiwer` para el WER y similitud

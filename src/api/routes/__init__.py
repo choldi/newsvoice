@@ -2,6 +2,7 @@
 
 from src.api.routes.admin_collections import router as admin_collections_router
 from src.api.routes.admin_documents import router as admin_documents_router
+from src.api.routes.admin_lessons import router as admin_lessons_router
 from src.api.routes.admin_narration import router as admin_narration_router
 from src.api.routes.admin_runs import router as admin_runs_router
 from src.api.routes.admin_schedules import router as admin_schedules_router
@@ -17,6 +18,7 @@ from src.api.routes.voice_staging import router as voice_staging_router
 
 __all__ = [
     "admin_collections_router",
+    "admin_lessons_router",
     "admin_documents_router",
     "admin_narration_router",
     "admin_runs_router",

@@ -696,6 +696,21 @@ async def deliver_telegram_message_activity(
     return {"status": "ok", "message_ids": [r["message_id"] for r in results]}
 
 
+def _document_mime_type(path: str) -> str:
+    """Return the MIME type of any file to send as a Telegram document.
+
+    Args:
+        path: Path of the file.
+
+    Returns:
+        MIME type string; 'application/octet-stream' when unknown.
+    """
+    import mimetypes
+
+    guessed, _ = mimetypes.guess_type(path)
+    return guessed or "application/octet-stream"
+
+
 def _audio_mime_type(audio_path: str) -> str:
     """Return the audio MIME type based on the file extension.
 
@@ -778,11 +793,63 @@ async def deliver_telegram_audio_activity(
 
 
 @activity.defn
+async def deliver_telegram_document_activity(
+    document_path: str, caption: str | None = None, chat_id: str | None = None
+) -> dict[str, Any]:
+    """Send a file (lesson Markdown, notes, ...) via Telegram's sendDocument.
+
+    Args:
+        document_path: Path of the file to send.
+        caption: Optional caption text for the document message.
+        chat_id: Optional per-collection chat id; falls back to settings.
+
+    Returns:
+        Dict with status and Telegram message id.
+
+    Raises:
+        ApplicationError: If credentials are missing, the file does not exist,
+            or the API returns an error.
+    """
+    activity.logger.info(f"Sending Telegram document: {document_path}")
+    settings = get_settings()
+    target_chat = chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token or not target_chat:
+        raise ApplicationError(
+            "Telegram bot token and chat id must be configured",
+            non_retryable=True,
+        )
+    try:
+        document = open(document_path, "rb")
+    except OSError as exc:
+        raise ApplicationError(
+            f"Cannot open document {document_path}: {exc}", non_retryable=True
+        ) from exc
+    with document:
+        files = {
+            "document": (Path(document_path).name, document, _document_mime_type(document_path))
+        }
+        clean_caption = strip_emotion_tags(caption) if caption else None
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                TELEGRAM_API_URL.format(token=settings.telegram_bot_token, method="sendDocument"),
+                data={"chat_id": target_chat, "caption": clean_caption},
+                files=files,
+            )
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ApplicationError("Telegram returned a non-JSON body") from exc
+    return {"status": "ok", "message_id": data.get("result", {}).get("message_id")}
+
+
+@activity.defn
 async def deliver_email_activity(
     recipients: list[str],
     markdown_text: str,
     collection: str,
     audio_path: str | None = None,
+    attachments: list[str] | None = None,
 ) -> dict[str, Any]:
     """Send the digest as an HTML email to a list of recipients.
 
@@ -791,6 +858,8 @@ async def deliver_email_activity(
         markdown_text: Raw digest markdown content.
         collection: Collection name (used in subject and header).
         audio_path: Optional audio file to attach to the email.
+        attachments: Optional extra files to attach (Phase 7.12 ships the
+            lesson Markdown this way); missing files are ignored.
 
     Returns:
         Dict with status and recipient count.
@@ -808,6 +877,7 @@ async def deliver_email_activity(
             markdown_text,
             collection,
             audio_path=audio_path,
+            attachments=attachments,
         )
     except Exception as exc:
         raise ApplicationError(f"Email delivery failed: {exc}", non_retryable=True) from exc

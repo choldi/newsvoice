@@ -76,6 +76,23 @@ class Settings(BaseSettings):
     # useless, and an unguessable URL is the only auth a link has.
     doc_tts_link_secret: str = ""
     doc_tts_link_ttl_seconds: int = Field(default=604_800, ge=60)
+    # --- Phase 7.12: language teacher ---------------------------------------
+    # Kill switch for POST /api/admin/lessons.
+    teacher_enabled: bool = True
+    # Dedicated queue served by the teacher-worker compose service: an LLM call
+    # plus a full narration render must not occupy the digest worker.
+    teacher_task_queue: str = "news-engine-teacher-queue"
+    # Notes upload cap (bytes) and extracted notes cap (characters).
+    teacher_max_file_bytes: int = Field(default=5_000_000, ge=1024)
+    teacher_max_notes_chars: int = Field(default=60_000, ge=1000)
+    # Above this duration the audio is NOT attached: the lesson text carries a
+    # signed URL instead (Phase 7.12 decision, configurable).
+    teacher_max_audio_seconds: float = Field(default=300.0, ge=10.0)
+    # Uploads, lesson text and job metadata (shared ./data volume).
+    teacher_dir: str = "data/lessons"
+    # Signed lesson-audio links share doc_tts_link_secret: one secret for every
+    # shareable audio URL the project hands out.
+    teacher_link_ttl_seconds: int = Field(default=604_800, ge=60)
     # --- Phase 7.10: single-URL summary -------------------------------------
     # Kill switch for POST /api/summarize/url (the endpoint stays behind the
     # admin auth either way; this closes it without a code change).

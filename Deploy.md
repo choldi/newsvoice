@@ -1026,3 +1026,116 @@ y reinicia la API (`docker compose up -d --force-recreate api`): el endpoint
 responde 403 sin tocar código. Para retirar la cola por completo:
 `docker compose stop doc-tts-worker` (los jobs en vuelo quedan `GENERATING`;
 borra sus filas en `audio_jobs` si no te importan).
+
+---
+
+## 14. Language teacher (Phase 7.12)
+
+Subes unos apuntes → el LLM genera la clase (Markdown para leer + guion
+hablado) → se graba con el cast que tú indiques (voces clonadas) → llega por
+los canales de la colección: el **texto siempre como adjunto** y el **audio
+solo si dura ≤ `TEACHER_MAX_AUDIO_SECONDS`**; si dura más, el texto lleva un
+enlace firmado en su lugar.
+
+### 14.1 One-time setup
+
+```bash
+# The signed audio links reuse the secret from section 13; generate it once:
+grep -q DOC_TTS_LINK_SECRET .env || echo "DOC_TTS_LINK_SECRET=$(openssl rand -hex 32)" >> .env
+
+docker compose up -d --build api worker teacher-worker
+```
+
+The teacher worker runs `python -m src.workers.run_teacher_worker`
+(`--queue` overrides `TEACHER_TASK_QUEUE`), in the **default** namespace. Its
+queue only executes the LLM call and the render; deliveries are addressed by
+name on the digest queue, so a slow class never delays a daily digest.
+
+### 14.2 Usage
+
+```bash
+# 1) Pick your cast (cloned voices live in the catalog)
+curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/narration/voices
+
+# 2) Submit the notes (spec = NarrationSpec JSON with your roles)
+curl -X POST http://localhost:8000/api/admin/lessons \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  -F "file=@apuntes_subjuntivo.md" \
+  -F "mode=dual" \
+  -F "target_language=en" -F "native_language=es" \
+  -F "collection=tech" -F "title=Subjuntivo en 10 minutos" \
+  -F 'spec={"language":"en","roles":[
+        {"name":"profe_es","voice_id":"<clon-es>","language":"es"},
+        {"name":"profe_en","voice_id":"<clon-en>","language":"en"}]}'
+# 202 {"workflow_id": "lesson-ab12cd34ef56", "mode": "dual", "status_url": "..."}
+
+# 3) Poll until FINISHED_OK
+curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/lessons/lesson-ab12cd34ef56
+# {"job_status": "FINISHED_OK", "duration_estimate": 180.0,
+#  "audio_url": "/api/audio/lesson/lesson-ab12cd34ef56?exp=...&sig=...", ...}
+```
+
+Si omites `spec`, pásale `voice=<id>` (o nada) y se construye un cast de una
+voz con `TTS_VOICE`. Modos:
+
+| Modo | Voces | Qué hace el LLM |
+|---|---|---|
+| `mixed` | 1+ | Explica en la lengua nativa e intercala ejemplos en la objetivo |
+| `dual` | **2+** (requisito, si no 422) | Primera voz explica en nativa, segunda enseña en la objetivo |
+| `native` | 1+ | Todo en la lengua nativa; la objetivo aparece citada como material |
+
+### 14.3 Pipeline
+
+`LessonWorkflow` = `generate → render → deliver`, en `TEACHER_TASK_QUEUE`:
+
+1. **generate** — `generate_lesson_activity` valida las notas (`.md`/`.txt`),
+   construye el prompt con el modo y el cast, llama al LLM (LiteLLM,
+   temperatura 0.7), parsea el JSON tolerante a vallas de código y guarda
+   `data/lessons/text/<id>.md` (adjunto) + `<id>.script.json` (guion). Solo
+   viajan paths por Temporal. Un fallo de validación es permanente
+   (`FINISHED_ERROR` sin reintentos); un fallo de red del LLM reintenta.
+2. **render** — `render_lesson_activity` sintetiza con
+   `NarrationTTSService` (las MISMAS voces clonadas de la narración) y cierra
+   la fila de `audio_jobs` (`kind='lesson'`). Aquí se construye también la
+   URL firmada (las activities sí pueden leer settings; los workflows no).
+3. **deliver** — en la cola del digest: email con el `.md` adjunto
+   (`attachments=[...]` en `deliver_email_activity`) y Telegram con
+   `sendDocument`. Si `duration ≤ TEACHER_MAX_AUDIO_SECONDS` se adjunta/manda
+   el audio; si no, el cuerpo y el caption llevan la URL firmada. Un fallo de
+   canal se registra y no tumba la lección.
+
+### 14.4 Settings
+
+```bash
+TEACHER_ENABLED=true                  # kill switch del endpoint
+TEACHER_TASK_QUEUE=news-engine-teacher-queue
+TEACHER_MAX_FILE_BYTES=5000000        # 413 si se supera
+TEACHER_MAX_NOTES_CHARS=60000
+TEACHER_MAX_AUDIO_SECONDS=300         # umbral audio adjunto vs URL
+TEACHER_DIR=data/lessons
+TEACHER_LINK_TTL_SECONDS=604800
+```
+
+### 14.5 Notes
+
+- Auth: los dos endpoints están bajo `/api/admin/*` (middleware de admin); el
+  enlace de audio es público y se valida con HMAC (mismo secreto que los
+  documentos de la §13). Sin `DOC_TTS_LINK_SECRET` el submit da 503.
+- Los canales salen de la colección (`delivery_channels`, `chat_id`,
+  `email_recipients`); una colección desconocida cae a Telegram global.
+  **WhatsApp no está soportado para lecciones** (no hay envío de documentos).
+- El estado vive en `audio_jobs(kind='lesson')` + `data/lessons/meta/<id>.json`.
+- Nuevas dependencias en esta fase: ninguna (multipart, email y LLM ya estaban).
+
+### 14.6 Rollback
+
+```bash
+# .env
+TEACHER_ENABLED=false
+```
+
+y reinicia la API (`docker compose up -d --force-recreate api`): 403 sin tocar
+código. Para retirar la cola: `docker compose stop teacher-worker` (los jobs
+en vuelo quedan `GENERATING`; borra sus filas en `audio_jobs` si no te importan).

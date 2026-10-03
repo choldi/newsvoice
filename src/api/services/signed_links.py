@@ -21,6 +21,7 @@ from src.core.config import get_settings
 _WORKFLOW_ID_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 AUDIO_LINK_PREFIX = "/api/audio/doc"
+LESSON_AUDIO_LINK_PREFIX = "/api/audio/lesson"
 
 
 class SignedLinkError(Exception):
@@ -59,11 +60,20 @@ def _mac(secret: str, workflow_id: str, exp: int) -> str:
     return hmac.new(secret.encode(), message, sha256).hexdigest()
 
 
-def build_signed_path(workflow_id: str, *, ttl: int | None = None, now: int | None = None) -> str:
+def build_signed_path(
+    workflow_id: str,
+    *,
+    prefix: str = AUDIO_LINK_PREFIX,
+    ttl: int | None = None,
+    now: int | None = None,
+) -> str:
     """Build a ready-to-open signed audio path.
 
     Args:
-        workflow_id: Workflow id of the finished document job.
+        workflow_id: Workflow id of the finished job.
+        prefix: Endpoint serving this kind of audio ('/api/audio/doc' for
+            documents, '/api/audio/lesson' for lessons). The signature only
+            covers the id, so both prefixes share one secret.
         ttl: Seconds the link stays valid. Defaults to
             ``doc_tts_link_ttl_seconds``.
         now: Unix timestamp to anchor expiry on. Defaults to the current time.
@@ -84,7 +94,7 @@ def build_signed_path(workflow_id: str, *, ttl: int | None = None, now: int | No
         ttl if ttl is not None else settings.doc_tts_link_ttl_seconds
     )
     sig = _mac(secret, cleaned, expires)
-    return f"{AUDIO_LINK_PREFIX}/{cleaned}?exp={expires}&sig={sig}"
+    return f"{prefix.rstrip('/')}/{cleaned}?exp={expires}&sig={sig}"
 
 
 def verify_signed_link(workflow_id: str, exp: str | int, sig: str) -> None:

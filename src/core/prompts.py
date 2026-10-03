@@ -502,3 +502,106 @@ def build_narration_script_system_prompt(template: str | None = None) -> str:
         The system prompt for narration script generation.
     """
     return get_narration_script_template(template)
+
+
+# LANGUAGE TEACHER LESSON GENERATION (Phase 7.12)
+LESSON_SYSTEM_PROMPT_TEMPLATE = """Eres un profesor de idiomas experimentado, claro y estructurado.
+Te entrego unos apuntes de un alumno y debo convertirlos en una clase completa:
+por un lado un documento de estudio en Markdown y, por otro, el guion hablado
+que una voz (o dos) grabará en audio.
+
+Modo de la clase: {mode}
+Reparto de voces (roles): {roles_json}
+Lengua objetivo: {target_language}
+Lengua nativa del alumno: {native_language}
+
+Instrucciones del modo:
+{mode_instructions}
+
+Devuelve SOLO un objeto JSON (sin markdown, sin ``` , sin comentarios) con
+exactamente esta forma:
+{{
+  "title": "titulo corto y descriptivo de la clase",
+  "markdown": "la clase completa para LEER, en Markdown, con secciones, ejemplos y ejercicios",
+  "segments": [
+    {{"role": "nombre_exacto_de_un_rol", "text": "lo que dice esa voz, sin Markdown"}},
+    {{"role": "otro_rol", "text": "..."}}
+  ]
+}}
+
+Reglas:
+- "markdown" es el material de estudio del alumno: usa titulos, listas y
+  ejemplos; incluye siempre al final una seccion de ejercicios con sus
+  soluciones.
+- "segments" es lo que se PRONUNCIA: 8 a 80 segmentos, cada uno entre 1 y 1500
+  caracteres, sin Markdown (sin #, *, ni listas), en frases naturales para
+  escuchar.
+- El rol de cada segmento debe ser exactamente uno de los nombres de
+  {roles_json}; respeta los idiomas asignados a cada rol.
+- Los segmentos deben cubrir la clase entera (no la resumas) y son para ser
+  escuchados: nada de "observa la imagen", "en la tabla anterior" ni
+  referencias al documento.
+- language del alumno = {native_language}; no inventes datos ni frases
+  "oficiales" que no esten en los apuntes: puedes explicar, ejemplificar y
+  practicar a partir de ellos.
+"""
+
+LESSON_MODE_INSTRUCTIONS = {
+    "mixed": (
+        "Clasica mixta: una unica voz explica en {native_language} e intercala "
+        "vocabulario, ejemplos y frases de muestra en {target_language}, "
+        "traduciendo siempre lo importante. El alumno puede seguirla aunque su "
+        "nivel en la lengua objetivo sea bajo."
+    ),
+    "dual": (
+        "Dual (dos voces): el PRIMER rol explica y orienta en {native_language}; "
+        "el SEGUNDO rol da las explicaciones y los ejemplos hablados en "
+        "{target_language}. Alternan por bloques con naturalidad y se citan "
+        "el uno al otro."
+    ),
+    "native": (
+        "Explicacion en la lengua nativa: TODO se explica en {native_language} y "
+        "las frases o vocabulario en {target_language} aparecen citadas como "
+        "material a estudiar, con su traduccion."
+    ),
+}
+
+LESSON_USER_PROMPT_TEMPLATE = """Apuntes del alumno:
+--- INICIO APUNTES ---
+{notes}
+--- FIN APUNTES ---
+
+Genera ahora la clase en JSON."""
+
+
+def build_lesson_system_prompt(
+    mode: str,
+    roles_json: str,
+    target_language: str,
+    native_language: str,
+) -> str:
+    """Build the system prompt for lesson generation (Phase 7.12).
+
+    Args:
+        mode: Lesson mode: 'mixed', 'dual' or 'native'.
+        roles_json: JSON description of the cast (names + languages).
+        target_language: ISO 639-1 language the student is learning.
+        native_language: ISO 639-1 language the student thinks in.
+
+    Returns:
+        The formatted system prompt.
+
+    Raises:
+        KeyError: If the mode has no instruction text (caller validates first).
+    """
+    instructions = LESSON_MODE_INSTRUCTIONS[mode].format(
+        native_language=native_language,
+        target_language=target_language,
+    )
+    return LESSON_SYSTEM_PROMPT_TEMPLATE.format(
+        mode=mode,
+        roles_json=roles_json,
+        target_language=target_language,
+        native_language=native_language,
+        mode_instructions=instructions,
+    )
