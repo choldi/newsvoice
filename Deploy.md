@@ -25,7 +25,12 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
    cp .env.example .env
    ```
 3. Update `.env` with production values:
-   - `LLM_API_BASE` — URL of your llama.cpp instance
+   - `LLM_API_BASE` — endpoint OpenAI-compatible del LLM. En producción:
+     `http://100.75.148.68:11434/v1` con `LLM_MODEL=openai/qwen3:8b` (Ollama de
+     debwk, el LLM migrado; modelos: `qwen3:8b`, `llama3.1:8b`, `phi3:mini`,
+     `nemotron-cascade-2`). Fallback si debwk cae:
+     `http://192.168.5.4:9000/v1` (Qwen3.5-4B en winsrv, verificado).
+     **No uses `localhost:8080` en esta caja: ahí vive qBittorrent.**
    - `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`
    - `RSS_FEED_URLS` — JSON list of feed URLs (fallback for the implicit default
      collection when no `collections.toml` is present)
@@ -39,6 +44,15 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
    - **Preferred**: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt). The login
      form will use username/password instead of the token. Generate the hash
      with: `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"`
+   Nota de topología (tras el cutover): **esta caja es la instancia
+   autoritativa** del pack (la que despliega `scripts/deploy.sh`). En debwk
+   (`100.75.148.68`) la copia anterior del pack sigue **parada** para evitar
+   digestos duplicados: solo corren allí Ollama (el backend de `LLM_API_BASE`)
+   y los servicios ajenos (`litellm-proxy`, `filestash`, ...). Para revivir esa
+   copia: `docker start news_engine_api news_engine_worker news_engine_narration_worker`
+   (y devolverles el arranque automático con
+   `docker update --restart=unless-stopped <nombre>`).
+
 4. Copy `collections.toml.example` to `collections.toml` and define your
    collections (names, feed URLs, per-collection schedule `time`, TTS flags,
    prompt templates, optional per-collection `chat_id`)
