@@ -55,6 +55,14 @@ class NarrationConfig:
         run_id: Digest run this narration belongs to. When empty a synthetic id
             derived from the workflow id is used, so standalone runs still get
             their own audio_jobs row.
+        strategy: Render strategy, ``turns`` or ``conversations``.
+        prompt_template: Digest prompt template of the collection, used when
+            the script has to be generated from the digest text. A workflow
+            cannot read settings, so the caller passes it down.
+        main_story_count: Number of main stories the digest rendered, part of
+            the script generation prompt.
+        headline_count: Number of quick headlines the digest rendered, part of
+            the script generation prompt.
     """
 
     collection: str = "default"
@@ -63,6 +71,9 @@ class NarrationConfig:
     script_id: int | None = None
     run_id: str = ""
     strategy: str = "turns"
+    prompt_template: str = "default"
+    main_story_count: int = 5
+    headline_count: int = 5
 
 
 @workflow.defn
@@ -97,6 +108,15 @@ class NarrationWorkflow:
                 "script": config.script,
                 "script_id": config.script_id,
                 "collection": config.collection,
+                # The digest run has to travel with the payload: when no inline
+                # script is given, the resolver generates one from that run's
+                # text, and it looks the run up by workflow id. Without run_id
+                # here it would fall back to THIS workflow id
+                # ("narration-<collection>-<run>") and find no digest run.
+                "run_id": config.run_id,
+                "prompt_template": config.prompt_template,
+                "main_story_count": config.main_story_count,
+                "headline_count": config.headline_count,
             },
             start_to_close_timeout=NARRATION_SCRIPT_TIMEOUT,
             retry_policy=LOCAL_RETRY_POLICY,

@@ -1012,7 +1012,8 @@ async def dispatch_narration_activity(payload: dict[str, Any]) -> dict[str, Any]
 
     Args:
         payload: Dict with 'run_id', 'collection', 'spec', 'script',
-            'script_id', 'strategy' and, optionally, 'namespace' and
+            'script_id', 'strategy', 'prompt_template', 'main_story_count'
+            and 'headline_count', plus, optionally, 'namespace' and
             'task_queue'. Without them the backend of the spec decides.
 
     Returns:
@@ -1057,6 +1058,11 @@ async def dispatch_narration_activity(payload: dict[str, Any]) -> dict[str, Any]
         script_id=payload.get("script_id"),
         run_id=run_id,
         strategy=str(payload.get("strategy") or "turns"),
+        # A workflow cannot read settings, so the digest hands its prompt
+        # template and counts down for the script generation step.
+        prompt_template=str(payload.get("prompt_template") or "default"),
+        main_story_count=int(payload.get("main_story_count") or 5),
+        headline_count=int(payload.get("headline_count") or 5),
     )
     workflow_id = _narration_workflow_id(collection, run_id)
 

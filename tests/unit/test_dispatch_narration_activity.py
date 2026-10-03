@@ -228,6 +228,9 @@ async def test_dispatch_accepts_the_payload_the_digest_workflow_builds(
     payload = DigestPipelineWorkflow._narration_payload(
         PipelineConfig(
             collection="tech",
+            main_story_count=7,
+            headline_count=9,
+            prompt_template="ai",
             narration={
                 "namespace": settings.temporal_podcast_local_namespace,
                 "task_queue": settings.narration_local_task_queue,
@@ -245,6 +248,12 @@ async def test_dispatch_accepts_the_payload_the_digest_workflow_builds(
     started = fake_client.started[0]
     assert started["id"] == "narration-tech-digest-round-trip"
     assert started["task_queue"] == settings.narration_local_task_queue
-    assert started["config"].run_id == "digest-round-trip"
-    assert started["config"].spec == SPEC
+    config = started["config"]
+    assert config.run_id == "digest-round-trip"
+    assert config.spec == SPEC
+    # The digest context has to reach the narration workflow: it generates the
+    # script from that run's text when the caller carries no script.
+    assert config.prompt_template == "ai"
+    assert config.main_story_count == 7
+    assert config.headline_count == 9
     assert result == RENDER

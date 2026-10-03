@@ -207,6 +207,39 @@ async def test_narration_workflow_renders_the_resolved_script() -> None:
     assert SEEN["render"][0]["script"]["segments"][0]["role"] == "anchor"
 
 
+async def test_narration_workflow_carries_the_digest_context_to_the_resolver() -> None:
+    """The resolver generates the script from the digest run when none is given.
+
+    It looks that run up by workflow id, so ``run_id`` (and the prompt
+    template and counts the generation prompt needs) must travel with the
+    payload. Dropping them made the lookup fall back to this workflow's own id
+    ("narration-<collection>-<run>") and fail with "No digest run found".
+    """
+    _reset()
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with _narration_worker(env.client):
+            await env.client.execute_workflow(
+                NarrationWorkflow.run,
+                NarrationConfig(
+                    collection="ai",
+                    spec=SPEC,
+                    script=SCRIPT,
+                    run_id="digest-ai-1",
+                    prompt_template="ai",
+                    main_story_count=5,
+                    headline_count=8,
+                ),
+                id="narration-ai-digest-ai-1",
+                task_queue=NARRATION_QUEUE,
+            )
+
+    resolve = SEEN["resolve"][0]
+    assert resolve["run_id"] == "digest-ai-1"
+    assert resolve["prompt_template"] == "ai"
+    assert resolve["main_story_count"] == 5
+    assert resolve["headline_count"] == 8
+
+
 async def test_narration_workflow_falls_back_to_its_own_workflow_id() -> None:
     """A standalone run keys its audio job on the narration workflow id."""
     _reset()
