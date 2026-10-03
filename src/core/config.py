@@ -53,6 +53,29 @@ class Settings(BaseSettings):
     # they are capped; the free groundedness check always uses the full text.
     llm_verify_max_sources: int = Field(default=40, ge=1)
     llm_verify_source_chars: int = Field(default=1200, ge=100)
+    # --- Phase 7.11: long-document TTS --------------------------------------
+    # Kill switch for POST /api/admin/documents/tts.
+    doc_tts_enabled: bool = True
+    # Dedicated task queue: a 300-page render must not occupy the digest
+    # worker's activity slots.
+    doc_tts_task_queue: str = "news-engine-doc-tts-queue"
+    # Upload cap in bytes; the body is rejected before extraction.
+    doc_tts_max_file_bytes: int = Field(default=20_000_000, ge=1024)
+    # Extracted-text cap in characters (~300 pages). Over it the job fails with
+    # an explicit error instead of silently shipping a truncated book.
+    doc_tts_max_source_chars: int = Field(default=600_000, ge=10_000)
+    # Characters per edge-tts request; the chunks are joined into one MP3.
+    doc_tts_chunk_chars: int = Field(default=4000, ge=500)
+    # Chunks synthesized concurrently inside a single activity.
+    doc_tts_concurrency: int = Field(default=4, ge=1, le=16)
+    # Uploads, extracted text, chunk cache and finished audio (shared ./data
+    # volume, so the API and the doc-tts worker see the same files).
+    doc_tts_dir: str = "data/doc_tts"
+    # HMAC key for the shareable audio links. Empty disables signed links and
+    # the submit endpoint answers 503: a document audio without its URL is
+    # useless, and an unguessable URL is the only auth a link has.
+    doc_tts_link_secret: str = ""
+    doc_tts_link_ttl_seconds: int = Field(default=604_800, ge=60)
     # --- Phase 7.10: single-URL summary -------------------------------------
     # Kill switch for POST /api/summarize/url (the endpoint stays behind the
     # admin auth either way; this closes it without a code change).

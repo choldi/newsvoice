@@ -919,3 +919,110 @@ URL_SUMMARY_ENABLED=false
 
 y reinicia la API (`docker compose up -d --force-recreate api`). El endpoint
 responde 403 sin tocar el código; el resto del sistema no se ve afectado.
+
+---
+
+## 13. Document TTS (Phase 7.11)
+
+Convierte un documento largo (PDF, EPUB, TXT, MD) en **un solo MP3** y lo deja
+disponible como enlace firmado. Nada se envía a Telegram/email: la entrega es
+la URL, pensada para abrirla desde el móvil por la LAN o por Tailscale.
+
+### 13.1 One-time setup
+
+```bash
+# 1. Secret for the shareable links (required; without it the submit 503s)
+echo "DOC_TTS_LINK_SECRET=$(openssl rand -hex 32)" >> .env
+
+# 2. Rebuild and start the dedicated worker (own queue: a 300-page render can
+#    never occupy the digest worker's slots)
+docker compose up -d --build api worker doc-tts-worker
+```
+
+The worker entry point is `python -m src.workers.run_doc_tts_worker`
+(`--queue` overrides `DOC_TTS_TASK_QUEUE`). It runs in the **default**
+namespace, same as the digest: the API schedules there and an activity always
+executes in the namespace of its workflow.
+
+### 13.2 Usage
+
+```bash
+# Submit (multipart; voice/language/title are optional form fields)
+curl -X POST http://localhost:8000/api/admin/documents/tts \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  -F "file=@apuntes.epub" -F "title=Clase de espanol" -F "language=es"
+# 202 {"workflow_id": "doc-tts-ab12cd34ef56", "status_url": "...", ...}
+
+# Poll until job_status is FINISHED_OK
+curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/documents/tts/doc-tts-ab12cd34ef56
+# {"job_status": "GENERATING", "char_count": 0, "audio_url": null, ...}
+# {"job_status": "FINISHED_OK", "char_count": 432100, "chunk_count": 108,
+#  "duration_estimate": 28806.67, "audio_url": "/api/audio/doc/...?exp=...&sig=..."}
+
+# Open the link (NO admin token: the signature is the authorization)
+curl -OJ "http://192.168.5.6:8000/api/audio/doc/doc-tts-ab12cd34ef56?exp=...&sig=..."
+```
+
+Estados del job (`audio_jobs.kind='doc_tts'`): `STARTING` (aceptado) →
+`GENERATING` (extracción + síntesis) → `FINISHED_OK` / `FINISHED_ERROR` con el
+motivo en `error`. Los metadatos (título, `char_count`, `chunk_count`,
+duración) viven en `data/doc_tts/meta/<id>.json`.
+
+### 13.3 Pipeline
+
+`DocumentTtsWorkflow` = `extract → synthesize`, en la cola
+`DOC_TTS_TASK_QUEUE`:
+
+1. **extract** — `pypdf`/`ebooklib` extraen el texto en orden de lectura
+   (sin la nav del EPUB; un PDF escaneado sin texto falla con explicación) y lo
+   escriben en `data/doc_tts/text/<id>.txt` (los payloads de Temporal no viajan
+   con el libro). Límite: `DOC_TTS_MAX_SOURCE_CHARS`.
+2. **synthesize** — troceado en párrafos→frases→palabras
+   (`DOC_TTS_CHUNK_CHARS`), `DOC_TTS_CONCURRENCY` trozos en paralelo con
+   reintentos individuales, unión en orden en un MP3. Cada trozo se cachea por
+   hash y el resultado final por (voz, idioma, texto): un reinicio retoma donde
+   estaba. La activity manda un heartbeat por trozo.
+
+### 13.4 Settings
+
+```bash
+DOC_TTS_ENABLED=true                 # kill switch del endpoint
+DOC_TTS_TASK_QUEUE=news-engine-doc-tts-queue
+DOC_TTS_MAX_FILE_BYTES=20000000      # 413 si se supera
+DOC_TTS_MAX_SOURCE_CHARS=600000      # ~300 páginas
+DOC_TTS_CHUNK_CHARS=4000
+DOC_TTS_CONCURRENCY=4
+DOC_TTS_DIR=data/doc_tts
+DOC_TTS_LINK_SECRET=                 # obligatorio; ver 13.1
+DOC_TTS_LINK_TTL_SECONDS=604800      # caducidad de los enlaces
+```
+
+### 13.5 Notes
+
+- Auth doble: el **submit** y el **estado** van tras el middleware de admin
+  (`/api/admin/*`); el **enlace de audio** es el único endpoint público del
+  proyecto y su autorización es el HMAC (`exp` + `sig` sobre
+  `"<id>:<exp>"`). Enlaces manipulados, caducados o de otro job dan 403, y el
+  fichero que se sirve está confinado a `DOC_TTS_DIR/audio`.
+- Sin `DOC_TTS_LINK_SECRET` el submit responde 503: un trabajo sin enlace
+  servible no tiene sentido.
+- La voz por defecto es la del digest (`TTS_VOICE`/`TTS_LANGUAGE`); se puede
+  sobreescribir por llamada con los campos `voice`/`language`.
+- Nuevas dependencias: `pypdf`, `ebooklib`, `python-multipart`. Tras un
+  `git pull`: `pip install -e .` en el venv y `docker compose build api worker
+  doc-tts-worker`.
+- Limpieza manual: `rm -rf data/doc_tts/{uploads,text}` es seguro; borra
+  también `data/doc_tts/audio` y `meta` si ya no necesitas los enlaces.
+
+### 13.6 Rollback
+
+```bash
+# .env
+DOC_TTS_ENABLED=false
+```
+
+y reinicia la API (`docker compose up -d --force-recreate api`): el endpoint
+responde 403 sin tocar código. Para retirar la cola por completo:
+`docker compose stop doc-tts-worker` (los jobs en vuelo quedan `GENERATING`;
+borra sus filas en `audio_jobs` si no te importan).

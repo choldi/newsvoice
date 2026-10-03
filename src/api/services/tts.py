@@ -50,6 +50,23 @@ DEFAULT_VOICE_BY_LANGUAGE = {
 # level so a workflow run (many activity calls) only fetches it once.
 _EDGE_VOICES: list[dict] | None = None
 
+
+async def _available_voice_names() -> set[str]:
+    """Return the set of Edge voice ShortNames (cached at module level).
+
+    Returns:
+        Lowercased ShortName set. Empty when the catalogue cannot be fetched.
+    """
+    global _EDGE_VOICES
+    if _EDGE_VOICES is None:
+        try:
+            _EDGE_VOICES = await edge_tts.list_voices()
+        except Exception as exc:
+            logger.warning("edge_voices_unavailable", error=str(exc))
+            _EDGE_VOICES = []
+    return {v.get("ShortName", "").lower() for v in _EDGE_VOICES}
+
+
 # Schema version stored in the cache sidecar, so a future change of the hashing
 # inputs invalidates every cached file instead of reusing a wrong audio.
 SIDECAR_VERSION = 1
@@ -88,9 +105,21 @@ def _audio_filename(collection: str, day: datetime | None = None) -> str:
     return f"news_{name}_{stamp}.mp3"
 
 
-def _estimate_duration(char_count: int) -> float:
-    """Rough duration estimate in seconds (~15 chars/sec for Spanish TTS)."""
+def estimate_duration_seconds(char_count: int) -> float:
+    """Rough duration estimate in seconds (~15 chars/sec for Spanish TTS).
+
+    Args:
+        char_count: Number of characters handed to the engine.
+
+    Returns:
+        Estimated duration in seconds.
+    """
     return round(char_count / 15.0, 2)
+
+
+def _estimate_duration(char_count: int) -> float:
+    """Rough duration estimate in seconds (delegate to the shared helper)."""
+    return estimate_duration_seconds(char_count)
 
 
 def _truncate_for_tts(text: str, max_chars: int) -> str:
@@ -127,6 +156,87 @@ def _markdown_to_speech_text(text: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def markdown_to_speech_text(text: str) -> str:
+    """Public entry point for markdown-to-speech conversion (Phase 7.11).
+
+    Other services (document extraction) must strip markdown exactly the way
+    the digest TTS does, so they call this instead of re-implementing the
+    rules.
+
+    Args:
+        text: Markdown (or plain) text to convert.
+
+    Returns:
+        Plain, speech-friendly text.
+    """
+    return _markdown_to_speech_text(text)
+
+
+async def resolve_edge_voice(voice: str, language: str) -> str:
+    """Map a configured voice name to a valid Edge neural ShortName.
+
+    Tries an exact Edge catalogue match first, then legacy OmniVoice aliases,
+    and finally a language-based default. The lookup does not require the
+    network when an alias or the language default applies.
+
+    Args:
+        voice: Configured voice name (Edge ShortName, legacy alias, or free text).
+        language: ISO 639-1 language code driving the fallback default.
+
+    Returns:
+        A valid Edge voice ShortName.
+    """
+    requested = voice.strip().lower()
+    if not requested:
+        return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
+
+    known = await _available_voice_names()
+    if requested in known:
+        return voice.strip()
+
+    alias = LEGACY_VOICE_ALIASES.get(requested)
+    if alias:
+        return alias
+
+    logger.info("tts_voice_not_matched_falling_back", voice=voice, language=language)
+    return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
+
+
+async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -> bytes:
+    """Synthesize text with an Edge neural voice, returning the MP3 bytes.
+
+    Args:
+        text: Speech-friendly plain text to synthesize.
+        voice: Valid Edge voice ShortName.
+        timeout: Seconds before the call is abandoned. Defaults to
+            ``settings.tts_request_timeout``.
+
+    Returns:
+        Raw MP3 audio bytes.
+
+    Raises:
+        RuntimeError: If synthesis yields no audio or times out.
+    """
+    if not text.strip():
+        raise RuntimeError("No text to synthesize")
+    limit = timeout if timeout is not None else get_settings().tts_request_timeout
+    communicate = edge_tts.Communicate(text, voice)
+    chunks: list[bytes] = []
+
+    async def _collect() -> None:
+        async for item in communicate.stream():
+            if item["type"] == "audio":
+                chunks.append(item["data"])
+
+    try:
+        await asyncio.wait_for(_collect(), timeout=limit)
+    except TimeoutError as exc:
+        raise RuntimeError(f"Edge TTS synthesis timed out after {limit}s") from exc
+    if not chunks:
+        raise RuntimeError(f"Edge TTS produced no audio for voice {voice}")
+    return b"".join(chunks)
+
+
 class TTSService:
     """Service to convert digest markdown into MP3 audio via Edge neural TTS."""
 
@@ -151,21 +261,10 @@ class TTSService:
         Returns:
             Lowercased ShortName set. Empty when the catalogue cannot be fetched.
         """
-        global _EDGE_VOICES
-        if _EDGE_VOICES is None:
-            try:
-                _EDGE_VOICES = await edge_tts.list_voices()
-            except Exception as exc:
-                logger.warning("edge_voices_unavailable", error=str(exc))
-                _EDGE_VOICES = []
-        return {v.get("ShortName", "").lower() for v in _EDGE_VOICES}
+        return await _available_voice_names()
 
     async def _resolve_voice(self, voice: str, language: str) -> str:
-        """Map a configured voice name to a valid Edge neural ShortName.
-
-        Tries an exact Edge catalogue match first, then legacy OmniVoice
-        aliases, and finally a language-based default. The lookup does not
-        require the network when an alias or the language default applies.
+        """Map a configured voice name to a valid Edge voice ShortName.
 
         Args:
             voice: Configured voice name (Edge ShortName, legacy alias, or free text).
@@ -174,20 +273,7 @@ class TTSService:
         Returns:
             A valid Edge voice ShortName.
         """
-        requested = voice.strip().lower()
-        if not requested:
-            return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
-
-        known = await self._available_voice_names()
-        if requested in known:
-            return voice.strip()
-
-        alias = LEGACY_VOICE_ALIASES.get(requested)
-        if alias:
-            return alias
-
-        logger.info("tts_voice_not_matched_falling_back", voice=voice, language=language)
-        return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
+        return await resolve_edge_voice(voice, language)
 
     async def generate_tts(self, payload: TTSIn) -> TTSOut:
         """Generate (or fetch from cache) an MP3 for the given markdown.
@@ -274,26 +360,7 @@ class TTSService:
         Raises:
             RuntimeError: If synthesis yields no audio or times out.
         """
-        if not text.strip():
-            raise RuntimeError("No text to synthesize")
-        communicate = edge_tts.Communicate(text, voice)
-        chunks: list[bytes] = []
-
-        async def _collect() -> None:
-            async for item in communicate.stream():
-                if item["type"] == "audio":
-                    chunks.append(item["data"])
-
-        try:
-            await asyncio.wait_for(_collect(), timeout=self._request_timeout)
-        except TimeoutError as exc:
-            raise RuntimeError(
-                f"Edge TTS synthesis timed out after {self._request_timeout}s"
-            ) from exc
-        if not chunks:
-            raise RuntimeError(f"Edge TTS produced no audio for voice {voice}")
-
-        return b"".join(chunks)
+        return await synthesize_mp3(text, voice, timeout=self._request_timeout)
 
 
 async def list_cached_audios(cache_dir: str | None = None) -> list[str]:

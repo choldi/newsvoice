@@ -9,6 +9,7 @@ from temporalio.service import RPCStatusCode
 
 from src.api.services.temporal_admin import TemporalAdminService
 from src.core.collections import CollectionConfig
+from src.core.config import settings
 from src.workers.schedule import pipeline_config_for, url_summarize_config_for
 
 
@@ -90,6 +91,7 @@ class FakeClient:
         self.created: list[str] = []
         self.executions = executions or []
         self.started: list[str] = []
+        self.started_kwargs: list[dict] = []
         self.workflow_handles: dict[str, FakeWorkflowHandle] = {}
 
     async def list_schedules(self):  # type: ignore[override]
@@ -115,6 +117,7 @@ class FakeClient:
     async def start_workflow(self, *args: object, **kwargs: object) -> FakeWorkflowHandle:
         workflow_id = str(kwargs.get("id") or args[0])
         self.started.append(workflow_id)
+        self.started_kwargs.append(kwargs)
         return FakeWorkflowHandle(workflow_id)
 
     async def list_workflows(self, query: str = "", limit: int = 10):  # type: ignore[override]
@@ -366,3 +369,32 @@ async def test_start_url_summarize_starts_workflow() -> None:
 
     assert workflow_id.startswith("url-summary-tech-")
     assert fake.started == [workflow_id]
+
+
+@pytest.mark.asyncio
+async def test_start_document_tts_uses_the_dedicated_queue() -> None:
+    """The document workflow is scheduled on the doc-tts queue, not the digest one."""
+    from src.api.services.temporal_admin import new_document_run_id
+    from src.workers.doc_tts_workflows import DocTTSConfig
+
+    fake = FakeClient()
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+    workflow_id = new_document_run_id()
+
+    returned = await service.start_document_tts(
+        DocTTSConfig(source_path="/data/doc_tts/uploads/x.pdf", filename="x.pdf"),
+        workflow_id,
+    )
+
+    assert returned == workflow_id
+    assert fake.started == [workflow_id]
+    assert fake.started_kwargs[-1]["task_queue"] == settings.doc_tts_task_queue
+
+
+def test_new_document_run_id_is_unique_and_prefixed() -> None:
+    """Ids are unique (uploads and job rows key on them) and recognizable."""
+    from src.api.services.temporal_admin import new_document_run_id
+
+    ids = {new_document_run_id() for _ in range(50)}
+    assert len(ids) == 50
+    assert all(i.startswith("doc-tts-") for i in ids)

@@ -487,10 +487,47 @@ verificación rechazada bloquea la entrega (`verification_failed`).
 
 **Effort:** 3-4 hours.
 
-- [ ] **7.11 TTS de documentos largos (PDF/EPUB/TXT/MD)** — worker propio con
-      `pypdf` + `ebooklib`, un solo audio por documento, entrega como URL local
-      (Tailscale) en lugar de adjunto; auth doble: endpoint admin y enlace HMAC
-      firmado. Dependencias nuevas (`pypdf`, `ebooklib`, `python-multipart`).
+- [x] **7.11 TTS de documentos largos (PDF/EPUB/TXT/MD)** — `POST
+      /api/admin/documents/tts` (multipart, tras el middleware de admin) sube el
+      fichero a `data/doc_tts/uploads/`, abre la fila en `audio_jobs`
+      (`kind='doc_tts'`, sin migración: 008 ya indexa `UNIQUE(run_id, kind)`) y
+      arranca `DocumentTtsWorkflow` en la cola propia
+      `news-engine-doc-tts-queue`, servida por el contenedor `doc-tts-worker`
+      (nuevo en compose): un render de 300 páginas no puede ocupar los slots del
+      worker de digest. El workflow `extract → synthesize` es orquestación pura;
+      `extract_document_activity` baja el texto a `data/doc_tts/text/<id>.txt`
+      (los payloads de Temporal nunca cargan el libro entero) y
+      `synthesize_document_activity` llama al servicio con heartbeat por trozo
+      y `start_to_close_timeout` de 6 h. Extracción con `pypdf` (páginas en
+      orden, rechazo explícito de PDF escaneados sin texto), `ebooklib` (orden
+      del spine, sin la nav) y decodificado UTF-8/latin-1 para TXT; el Markdown
+      pasa por el mismo `markdown_to_speech_text` que el digest — para eso
+      `tts.py` expone ahora `resolve_edge_voice`/`synthesize_mp3`/
+      `estimate_duration_seconds` como funciones públicas (mismo código, los
+      tests de la Fase 7 siguen verdes). El servicio trocea en
+      párrafos→frases→palabras (`doc_tts_chunk_chars`, sin perder una sola
+      palabra), sintetiza `doc_tts_concurrency` trozos en paralelo con reintentos
+      por trozo y une los MP3 en orden: cada trozo se cachea por hash y el
+      fichero final por `(voz, idioma, texto)`, de modo que un reinicio retoma
+      donde estaba. La entrega es la URL: `GET
+      /api/admin/documents/tts/{id}` devuelve el estado y, si está
+      `FINISHED_OK`, un enlace `GET /api/audio/doc/{id}?exp=&sig=` firmado con
+      HMAC-SHA256 (`doc_tts_link_secret`, TTL de `doc_tts_link_ttl_seconds`),
+      que es el único endpoint **no** protegido por el middleware de admin: el
+      enlace se abre desde el móvil sin token, expira y no se puede forjar; sin
+      secreto configurado el submit responde 503 en lugar de generar un trabajo
+      inútil. Kill switches `DOC_TTS_ENABLED` y el secreto; límites
+      `DOC_TTS_MAX_FILE_BYTES` (413) y `DOC_TTS_MAX_SOURCE_CHARS` (error
+      explícito, nunca un libro truncado en silencio).
+
+**Success criteria:** `873 passed` con `ruff` limpio; el registro de activities
+del worker nuevo espeja al de digest (`test_run_doc_tts_worker.py`), una
+subida sin token da 401, un `.docx` da 415, el archivo gigante da 413, un PDF
+escaneado falla con `FINISHED_ERROR` y su motivo, el segundo `synthesize`
+entero golpea la caché sin tocar el motor, un enlace válido sirve el MP3 sin
+token de admin y uno manipulado/expirado da 403.
+
+**Effort:** 5-6 hours.
 
 - [ ] **7.12 Worker profesor de idiomas** — subes apuntes (fichero) → el LLM
       genera la clase → TTS con la misma voz clonada. Tres modos: mixto, dual

@@ -22,6 +22,19 @@ logger = structlog.get_logger(__name__)
 
 SCHEDULE_PREFIX = "daily-digest-"
 WORKFLOW_PREFIX = "digest-pipeline-"
+DOC_TTS_WORKFLOW_PREFIX = "doc-tts-"
+
+
+def new_document_run_id() -> str:
+    """Return a fresh workflow id for a document TTS run (Phase 7.11).
+
+    The submitting API needs the id *before* starting the workflow because the
+    upload file, the metadata file and the audio_jobs row are all keyed by it.
+
+    Returns:
+        Id like ``doc-tts-1a2b3c4d5e6f``.
+    """
+    return f"{DOC_TTS_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
 
 
 class TemporalAdminService:
@@ -200,6 +213,30 @@ class TemporalAdminService:
             collection=collection.name,
             url=url,
         )
+        return workflow_id
+
+    async def start_document_tts(self, config: object, workflow_id: str) -> str:
+        """Start a DocumentTtsWorkflow on the dedicated doc-tts queue (Phase 7.11).
+
+        Args:
+            config: DocTTSConfig with the upload path and voice options.
+            workflow_id: Id assigned by the caller: the upload, the metadata
+                and the audio_jobs row are already keyed by it.
+
+        Returns:
+            The workflow id of the started run.
+        """
+        from src.core.config import settings as app_settings
+        from src.workers.doc_tts_workflows import DocumentTtsWorkflow
+
+        client = await self.client()
+        await client.start_workflow(
+            DocumentTtsWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=app_settings.doc_tts_task_queue,
+        )
+        logger.info("doc_tts_workflow_started", workflow_id=workflow_id)
         return workflow_id
 
     async def is_collection_running(self, collection_name: str) -> bool:
