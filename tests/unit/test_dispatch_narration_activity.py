@@ -211,3 +211,40 @@ async def test_dispatch_cancels_a_stranded_render_when_the_activity_is_cancelled
     handle = fake_client.started_handle
     assert handle is not None
     assert handle.cancelled is True
+
+
+async def test_dispatch_accepts_the_payload_the_digest_workflow_builds(
+    fake_client: FakeClient,
+) -> None:
+    """Round trip: what ``DigestPipelineWorkflow`` builds must dispatch cleanly.
+
+    The unit tests above hand-build the payload, so a drift between the
+    workflow and the activity went unnoticed until a live run reported
+    "dispatch_narration_activity needs a 'spec' payload". Build the payload
+    with the real workflow helper instead.
+    """
+    from src.workers.workflows import DigestPipelineWorkflow, PipelineConfig
+
+    payload = DigestPipelineWorkflow._narration_payload(
+        PipelineConfig(
+            collection="tech",
+            narration={
+                "namespace": settings.temporal_podcast_local_namespace,
+                "task_queue": settings.narration_local_task_queue,
+                "spec": SPEC,
+                "script": SCRIPT,
+                "strategy": "turns",
+            },
+        ),
+        "digest-round-trip",
+    )
+
+    result = await ActivityEnvironment().run(activities.dispatch_narration_activity, payload)
+
+    assert fake_client.namespace == settings.temporal_podcast_local_namespace
+    started = fake_client.started[0]
+    assert started["id"] == "narration-tech-digest-round-trip"
+    assert started["task_queue"] == settings.narration_local_task_queue
+    assert started["config"].run_id == "digest-round-trip"
+    assert started["config"].spec == SPEC
+    assert result == RENDER

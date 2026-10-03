@@ -288,8 +288,11 @@ async def test_digest_dispatches_narration_to_the_podcast_namespace() -> None:
     dispatched = SEEN["dispatch"][0]
     assert dispatched["namespace"] == PODCAST_LOCAL_NAMESPACE
     assert dispatched["task_queue"] == NARRATION_QUEUE
-    assert dispatched["payload"]["run_id"] == "digest-narrated"
-    assert dispatched["payload"]["collection"] == "tech"
+    assert dispatched["run_id"] == "digest-narrated"
+    assert dispatched["collection"] == "tech"
+    # Flat payload: dispatch_narration_activity reads spec/run_id at the top
+    # level, so a nested "payload" key would silently drop the spec.
+    assert dispatched["spec"] == SPEC
     narration_delivery = [d for d in result["delivery_status"] if d.get("channel") == "narration"]
     assert narration_delivery == [
         {"channel": "narration", "status": "ok", "audio_path": RENDERED["audio_path"]}
@@ -328,7 +331,7 @@ async def test_digest_records_the_run_before_dispatching_the_narration() -> None
     assert len(SEEN["record"]) == 1
     assert SEEN["record"][0]["status"] == "ok"
     assert SEEN["record"][0]["collection"] == "tech"
-    assert SEEN["dispatch"][0]["payload"]["run_id"] == "digest-narration-order"
+    assert SEEN["dispatch"][0]["run_id"] == "digest-narration-order"
 
 
 async def test_digest_survives_a_failing_narration() -> None:
@@ -426,7 +429,9 @@ def test_narration_payload_merges_the_opt_in() -> None:
     )
     assert request["namespace"] == PODCAST_LOCAL_NAMESPACE
     assert request["task_queue"] == NARRATION_QUEUE
-    assert request["payload"] == {
+    assert request == {
+        "namespace": PODCAST_LOCAL_NAMESPACE,
+        "task_queue": NARRATION_QUEUE,
         "run_id": "digest-42",
         "collection": "tech",
         "spec": SPEC,
@@ -437,3 +442,37 @@ def test_narration_payload_merges_the_opt_in() -> None:
         "headline_count": 5,
         "prompt_template": "default",
     }
+
+
+def test_narration_payload_matches_the_dispatch_activity_contract() -> None:
+    """The digest hands this dict straight to ``dispatch_narration_activity``.
+
+    That activity reads ``run_id``, ``collection``, ``spec``, ``script``,
+    ``script_id`` and ``strategy`` from the top level, so wrapping them in a
+    nested ``payload`` key made the activity fail with
+    "needs a 'spec' payload" and silently skipped every podcast.
+    """
+    request = DigestPipelineWorkflow._narration_payload(
+        PipelineConfig(
+            collection="ai",
+            narration={
+                "namespace": PODCAST_LOCAL_NAMESPACE,
+                "task_queue": NARRATION_QUEUE,
+                "spec": SPEC,
+                "strategy": "conversations",
+            },
+        ),
+        "digest-flat",
+    )
+    for key in (
+        "namespace",
+        "task_queue",
+        "run_id",
+        "collection",
+        "spec",
+        "script",
+        "script_id",
+        "strategy",
+    ):
+        assert key in request, key
+    assert "payload" not in request

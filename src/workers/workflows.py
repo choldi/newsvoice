@@ -512,8 +512,11 @@ class DigestPipelineWorkflow:
                 and the ``digest_runs.narration_path`` column.
 
         Returns:
-            Dict with the ``namespace`` and ``task_queue`` to dispatch to and
-            the ``payload`` for the dispatch activity.
+            Dict with the ``namespace`` and ``task_queue`` to dispatch to plus
+            the dispatch payload itself, flat. ``dispatch_narration_activity``
+            reads ``spec``, ``run_id`` and friends from the top level, so the
+            namespace and the queue travel as two extra keys of that same dict
+            instead of wrapping it.
 
         Raises:
             ApplicationError: If the opt-in dict lacks a namespace, a task
@@ -532,17 +535,15 @@ class DigestPipelineWorkflow:
         return {
             "namespace": str(namespace),
             "task_queue": str(task_queue),
-            "payload": {
-                "run_id": request.get("run_id") or run_id,
-                "collection": config.collection,
-                "spec": spec,
-                "script": request.get("script"),
-                "script_id": request.get("script_id"),
-                "strategy": request.get("strategy") or "turns",
-                "main_story_count": config.main_story_count,
-                "headline_count": config.headline_count,
-                "prompt_template": config.prompt_template,
-            },
+            "run_id": request.get("run_id") or run_id,
+            "collection": config.collection,
+            "spec": spec,
+            "script": request.get("script"),
+            "script_id": request.get("script_id"),
+            "strategy": request.get("strategy") or "turns",
+            "main_story_count": config.main_story_count,
+            "headline_count": config.headline_count,
+            "prompt_template": config.prompt_template,
         }
 
     async def _deliver_narration_audio(
