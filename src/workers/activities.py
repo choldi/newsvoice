@@ -15,6 +15,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 
 from src.api.db.database import (
+    ArticleRepository,
     AudioJobsRepository,
     RunsRepository,
     SyncStateRepository,
@@ -26,10 +27,11 @@ from src.api.models.tts import TTSIn
 from src.api.models.verification import VerifyDigestIn
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.cluster import ClusterService
-from src.api.services.dedup import DedupService
+from src.api.services.dedup import DedupService, normalize_url
 from src.api.services.digest import DigestService
 from src.api.services.email import EmailService
 from src.api.services.tts import TTSService
+from src.api.services.url_article import UrlArticleService, UrlExtractionError
 from src.api.services.verification import VerificationService
 from src.api.services.whatsapp import (
     WhatsAppConfigError,
@@ -129,6 +131,77 @@ async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
             )
     activity.logger.info(f"RSS fetch completed: {len(articles)} articles")
     return articles
+
+
+@activity.defn
+async def fetch_url_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fetch a single article URL and extract its readable body (Phase 7.10).
+
+    Permanent failures (invalid URL, 4xx, oversized page, no readable body)
+    raise a non-retryable ApplicationError so the workflow does not burn
+    retries on a page that will never be readable; transport failures and 5xx
+    answers retry under the workflow's retry policy.
+
+    Args:
+        payload: Dict with the 'url' to summarize.
+
+    Returns:
+        The extracted article as an ArticleIn dump.
+
+    Raises:
+        ApplicationError: When the URL cannot be fetched or extracted.
+    """
+    url = str(payload.get("url") or "")
+    activity.logger.info(f"Fetching article URL: {url}")
+    try:
+        article = await UrlArticleService().extract_from_url(url)
+    except UrlExtractionError as exc:
+        raise ApplicationError(f"URL extraction failed: {exc}", non_retryable=True) from exc
+    except Exception as exc:
+        raise ApplicationError(f"URL fetch failed: {exc}") from exc
+    return article.model_dump()
+
+
+@activity.defn
+async def save_article_activity(
+    article: dict[str, Any], collection: str = "default"
+) -> dict[str, Any]:
+    """Persist one extracted article so it counts as seen (Phase 7.10).
+
+    Writes the normalized URL into the `articles` table, the same key the RSS
+    deduplication looks up, so a later ingestion of the same story does not
+    duplicate it.
+
+    Args:
+        article: ArticleIn dump returned by fetch_url_activity.
+        collection: Collection the article belongs to.
+
+    Returns:
+        Dict with status and the number of rows written.
+
+    Raises:
+        ApplicationError: When the article is invalid or cannot be written.
+    """
+    validated = _validate_articles([article])
+    if not validated:
+        raise ApplicationError("extracted article does not match ArticleIn", non_retryable=True)
+    item = validated[0]
+    try:
+        await ArticleRepository().save_articles(
+            [
+                {
+                    "url": normalize_url(item.link),
+                    "title": item.title,
+                    "content": item.content,
+                    "source": item.source,
+                }
+            ],
+            collection=collection,
+        )
+    except Exception as exc:
+        raise ApplicationError(f"Storing the article failed: {exc}") from exc
+    activity.logger.info(f"Stored article for collection={collection}: {item.link}")
+    return {"status": "ok", "saved": 1}
 
 
 def _validate_articles(articles: list[dict[str, Any]]) -> list[ArticleIn]:

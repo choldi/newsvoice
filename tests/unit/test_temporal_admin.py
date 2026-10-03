@@ -9,7 +9,7 @@ from temporalio.service import RPCStatusCode
 
 from src.api.services.temporal_admin import TemporalAdminService
 from src.core.collections import CollectionConfig
-from src.workers.schedule import pipeline_config_for
+from src.workers.schedule import pipeline_config_for, url_summarize_config_for
 
 
 class FakeHandle:
@@ -295,3 +295,74 @@ async def test_execution_error_none_on_success() -> None:
     error = await service.execution_error("digest-pipeline-tech-20260101000000")
 
     assert error is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.10: single-URL summary
+# ---------------------------------------------------------------------------
+
+
+def _url_collection(**overrides: object) -> CollectionConfig:
+    """Build a collection exercising every option a URL summary reads."""
+    fields: dict[str, object] = {
+        "name": "tech",
+        "time": "08:00",
+        "feed_urls": ["https://techcrunch.com/feed/"],
+        "language": "en",
+        "prompt_template": "default",
+        "delivery_channels": ["telegram", "email"],
+        "email_recipients": ["me@example.com"],
+        "main_story_count": 7,
+        "headline_count": 3,
+    }
+    fields.update(overrides)
+    return CollectionConfig(**fields)  # type: ignore[arg-type]
+
+
+def test_url_summarize_config_resolves_collection_options() -> None:
+    """url_summarize_config_for carries prompt, counts and destinations."""
+    config = url_summarize_config_for(
+        _url_collection(), url="https://example.com/a", store=True, deliver=False
+    )
+
+    assert config.url == "https://example.com/a"
+    assert config.collection == "tech"
+    assert config.store is True
+    assert config.deliver is False
+    assert config.language == "en"
+    assert config.main_story_count == 7
+    assert config.headline_count == 3
+    assert config.delivery_channels == ["telegram", "email"]
+    assert config.email_recipients == ["me@example.com"]
+
+
+def test_url_summarize_config_verification_is_opt_in() -> None:
+    """Without llm_verify the URL summary runs without the Phase 7.13 gate."""
+    config = url_summarize_config_for(
+        _url_collection(), url="https://example.com/a", store=False, deliver=True
+    )
+    assert config.verify is None
+
+    verified = url_summarize_config_for(
+        _url_collection(llm_verify=True),
+        url="https://example.com/a",
+        store=False,
+        deliver=True,
+    )
+    assert verified.verify is not None
+    assert verified.verify["enabled"] is True
+    assert verified.verify["backend"]
+
+
+@pytest.mark.asyncio
+async def test_start_url_summarize_starts_workflow() -> None:
+    """start_url_summarize starts UrlSummarizeWorkflow with a unique id."""
+    fake = FakeClient()
+    service = TemporalAdminService(client=fake)  # type: ignore[arg-type]
+
+    workflow_id = await service.start_url_summarize(
+        _url_collection(), url="https://example.com/a", store=False, deliver=True
+    )
+
+    assert workflow_id.startswith("url-summary-tech-")
+    assert fake.started == [workflow_id]

@@ -9,6 +9,7 @@ from src.api.routes.cluster import router as cluster_router
 from src.api.routes.ingest import router as ingest_router
 from src.api.routes.mvp import router as mvp_router
 from src.api.routes.summarize import router as summarize_router
+from src.api.routes.summarize_url import router as summarize_url_router
 from src.api.routes.tts import router as tts_router
 from src.api.routes.voice_staging import router as voice_staging_router
 
@@ -22,6 +23,7 @@ __all__ = [
     "ingest_router",
     "mvp_router",
     "summarize_router",
+    "summarize_url_router",
     "tts_router",
     "voice_staging_router",
 ]

@@ -452,11 +452,40 @@ veredicto.
 
 ---
 
-- [ ] **7.10 Resumen de URL (entrada por URL)** — endpoint `POST /api/summarize/url`
-      con `trafilatura` para extraer el cuerpo del artículo, `store = false` por
-      defecto (el texto no se persiste en `articles`) y entrega por los destinos
-      ya configurados de la colección. Pendiente: añadir `trafilatura` a
-      `pyproject.toml` (nueva dependencia, preguntar).
+- [x] **7.10 Resumen de URL (entrada por URL)** — `POST /api/summarize/url`
+      arranca `UrlSummarizeWorkflow` y responde **202** con el `workflow_id`
+      (configuración con workflow, decisión del operador): la descarga, la
+      extracción, la generación y la entrega viven en actividades, así que el
+      run sobrevive a un reinicio de la API y queda en `digest_runs` como
+      cualquier otro (fallos incluidos). El endpoint está tras el middleware de
+      admin: escribe en mis canales y su URL de origen la descarga el servidor,
+      así que no puede quedar público. `src/api/services/url_article.py` baja la
+      página con `httpx` (timeout, `url_fetch_max_bytes`, solo http/https) y
+      extrae el cuerpo con `trafilatura` **en `asyncio.to_thread`** (CPU-bound),
+      con fallback `favor_precision` → `favor_recall` y rechazo permanente de
+      páginas sin cuerpo (muros, apps JS): resumir una shell solo produciría una
+      alucinación a partir de texto de navegación. `UrlSummarizeWorkflow`
+      (`fetch → guardar? → generate → verify → entregar → registrar`) reutiliza
+      las activities del pipeline RSS y, si la colección tiene `llm_verify`,
+      pasa el mismo gate de la Fase 7.13 antes de entregar — la verificación no
+      se puede esquivar usando este endpoint. `store = false` por defecto;
+      con `store = true` se guarda la URL **normalizada** en `articles`
+      (`save_article_activity`), la misma clave que usa el dedup del RSS, así
+      que una ingesta posterior de la misma historia no duplica. Destinos,
+      prompt, counts y payload de verificación se resuelven fuera del workflow
+      en `url_summarize_config_for` (`src/workers/schedule.py`), como
+      `pipeline_config_for`. Nueva dependencia `trafilatura>=1.8` (aprobada por
+      el operador). Configuración en `Deploy.md` §12 y `.env.example`.
+
+**Success criteria:** `784 passed` con `ruff` limpio; `store` llega a `false`
+por defecto y `true` solo cuando se pide
+(`test_url_summary_defaults_are_store_false_and_deliver_true`), una URL no
+http(s) da 422, una colección desconocida da 404 sin arrancar workflow, el
+endpoint exige el token de admin (401 sin él), una página sin cuerpo falla el
+workflow **y** registra el run como `failed` sin entregar nada, y una
+verificación rechazada bloquea la entrega (`verification_failed`).
+
+**Effort:** 3-4 hours.
 
 - [ ] **7.11 TTS de documentos largos (PDF/EPUB/TXT/MD)** — worker propio con
       `pypdf` + `ebooklib`, un solo audio por documento, entrega como URL local

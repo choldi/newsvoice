@@ -40,6 +40,7 @@ from src.workers.workflows import (
     DigestPipelineWorkflow,
     PipelineConfig,
     SystemMonitorWorkflow,
+    UrlSummarizeConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,44 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         main_story_count=collection.main_story_count,
         headline_count=collection.headline_count,
         narration_deliver_audio=collection.narration_deliver_audio,
+        verify=collection.resolve_llm_verify(),
+    )
+
+
+def url_summarize_config_for(
+    collection: CollectionConfig, *, url: str, store: bool, deliver: bool
+) -> UrlSummarizeConfig:
+    """Build the UrlSummarizeConfig for one single-URL summary (Phase 7.10).
+
+    Everything a workflow cannot read (settings, collection options, the Phase
+    7.13 verification payload) is resolved here, outside the workflow.
+
+    Args:
+        collection: Collection supplying the prompt and the delivery
+            destinations.
+        url: Article URL to summarize.
+        store: Persist the extracted article in `articles`.
+        deliver: Deliver to the collection's configured channels.
+
+    Returns:
+        A UrlSummarizeConfig ready to hand to UrlSummarizeWorkflow.
+    """
+    return UrlSummarizeConfig(
+        url=url,
+        collection=collection.name,
+        store=store,
+        deliver=deliver,
+        prompt_template=collection.prompt_template,
+        custom_prompt=collection.custom_prompt,
+        podcast_behavior=collection.podcast_behavior or settings.tts_podcast_behavior,
+        language=collection.language or settings.tts_language,
+        main_story_count=collection.main_story_count,
+        headline_count=collection.headline_count,
+        delivery_channels=collection.delivery_channels,
+        chat_id=collection.chat_id,
+        email_recipients=collection.email_recipients,
+        whatsapp_recipients=collection.whatsapp_recipients,
+        whatsapp_group_id=collection.whatsapp_group_id,
         verify=collection.resolve_llm_verify(),
     )
 

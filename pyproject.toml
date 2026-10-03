@@ -21,6 +21,7 @@ dependencies = [
     "edge-tts>=6.1.0",
     "temporalio>=1.32.0",
     "feedparser>=6.0.10",
+    "trafilatura>=1.8.0",
     "markdown>=3.0.0",
     "bcrypt>=4.1.0",
     "modal>=1.0.0",

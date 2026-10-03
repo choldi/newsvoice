@@ -21,6 +21,7 @@ from src.api.routes import (
     ingest_router,
     mvp_router,
     summarize_router,
+    summarize_url_router,
     tts_router,
     voice_staging_router,
 )
@@ -67,6 +68,7 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 app.include_router(ingest_router, prefix="/api")
 app.include_router(cluster_router, prefix="/api")
 app.include_router(summarize_router, prefix="/api")
+app.include_router(summarize_url_router, prefix="/api")
 app.include_router(mvp_router, prefix="/api")
 app.include_router(tts_router, prefix="/api")
 app.include_router(admin_collections_router, prefix="/api")

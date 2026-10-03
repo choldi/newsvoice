@@ -24,6 +24,7 @@ from src.workers.workflows import (
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
     SystemMonitorWorkflow,
+    UrlSummarizeWorkflow,
 )
 
 logger = structlog.get_logger(__name__)
@@ -43,6 +44,7 @@ def worker_activities() -> list[object]:
     """
     return [
         activities.fetch_rss_activity,
+        activities.fetch_url_activity,
         activities.filter_new_activity,
         activities.cluster_activity,
         activities.generate_digest_activity,
@@ -57,6 +59,7 @@ def worker_activities() -> list[object]:
         activities.deliver_whatsapp_audio_activity,
         activities.deliver_logic_activity,
         activities.record_run_activity,
+        activities.save_article_activity,
         activities.dispatch_narration_activity,
         activities.read_collections_signature_activity,
         activities.get_synced_signature_activity,
@@ -89,6 +92,7 @@ async def run_worker(
             task_queue=queue,
             workflows=[
                 DigestPipelineWorkflow,
+                UrlSummarizeWorkflow,
                 CollectionsMonitorWorkflow,
                 SystemMonitorWorkflow,
             ],

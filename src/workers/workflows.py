@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
         deliver_whatsapp_audio_activity,
         deliver_whatsapp_message_activity,
         fetch_rss_activity,
+        fetch_url_activity,
         filter_new_activity,
         generate_digest_activity,
         generate_logic_activity,
@@ -36,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
         read_collections_signature_activity,
         record_run_activity,
         run_monitor_checks_activity,
+        save_article_activity,
         send_monitor_alert_activity,
         set_monitor_state_activity,
         sync_collections_schedules_activity,
@@ -63,6 +65,9 @@ TTS_TIMEOUT = timedelta(seconds=8100)
 # Local ffmpeg transcode of the synthesized WAV; fast even for long digests.
 COMPRESS_TIMEOUT = timedelta(seconds=600)
 DELIVERY_TIMEOUT = timedelta(seconds=60)
+# Phase 7.10: downloading the article page (bounded by url_fetch_timeout) plus
+# the CPU-bound trafilatura extraction in the activity thread.
+URL_FETCH_TIMEOUT = timedelta(seconds=120)
 # Phase 7.13: claim extraction plus one judge call per batch. A digest yields at
 # most llm_verify_max_claims (40) claims in batches of llm_verify_claims_per_call
 # (5), i.e. up to 8 sequential local LLM calls; judge_llm_timeout (600s) bounds
@@ -138,6 +143,37 @@ class PipelineConfig:
     verify: dict[str, Any] | None = None
     # Whether to deliver the narration audio (default true when narration_enabled)
     narration_deliver_audio: bool = True
+
+
+@dataclass
+class UrlSummarizeConfig:
+    """Input configuration for a single-URL summary run (Phase 7.10).
+
+    The prompt, the delivery destinations and the Phase 7.13 verification
+    payload are resolved from the collection **outside** the workflow, exactly
+    like PipelineConfig, because a workflow cannot read settings.
+    """
+
+    url: str = ""
+    collection: str = "default"
+    # Store the extracted article in `articles` (marks the URL as seen).
+    store: bool = False
+    # Deliver to the collection's channels; False returns the digest to the
+    # caller only (visible in the run row).
+    deliver: bool = True
+    prompt_template: str = "default"
+    custom_prompt: str = ""
+    podcast_behavior: str = ""
+    language: str = ""
+    main_story_count: int = 5
+    headline_count: int = 5
+    delivery_channels: list[str] = field(default_factory=lambda: ["telegram"])
+    chat_id: str | None = None
+    email_recipients: list[str] = field(default_factory=list)
+    whatsapp_recipients: list[str] = field(default_factory=list)
+    whatsapp_group_id: str | None = None
+    # Phase 7.13 verification, resolved outside the workflow; None = no gate.
+    verify: dict[str, Any] | None = None
 
 
 @workflow.defn
@@ -810,6 +846,285 @@ class DigestPipelineWorkflow:
                 non_retryable=True,
             )
         return int(digest["article_count"])
+
+
+@workflow.defn
+class UrlSummarizeWorkflow:
+    """Summarize one article URL and deliver it to a collection (Phase 7.10).
+
+    fetch -> (store) -> generate -> verify -> deliver -> record, mirroring the
+    RSS pipeline: the digest is never delivered before the Phase 7.13 gate and
+    every side effect lives in an activity. The run is recorded in
+    ``digest_runs`` (including failures) so the GUI shows the outcome.
+    """
+
+    @workflow.run
+    async def run(self, config: UrlSummarizeConfig) -> dict[str, Any]:
+        """Execute the single-URL summary pipeline.
+
+        Args:
+            config: UrlSummarizeConfig with the URL and resolved options.
+
+        Returns:
+            Dict with status, digest, delivery status and verification summary.
+
+        Raises:
+            ApplicationError: When the URL cannot be read, the digest cannot be
+                generated or verification rejects it (always non-retryable, the
+                failure is already recorded as a run row).
+        """
+        workflow_id = workflow.info().workflow_id
+        workflow.logger.info(
+            f"URL summary started: {config.url} (collection '{config.collection}')"
+        )
+        try:
+            article = await workflow.execute_activity(
+                fetch_url_activity,
+                {"url": config.url},
+                start_to_close_timeout=URL_FETCH_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+            if config.store:
+                await workflow.execute_activity(
+                    save_article_activity,
+                    args=[article, config.collection],
+                    start_to_close_timeout=RECORD_RUN_TIMEOUT,
+                    retry_policy=NETWORK_RETRY_POLICY,
+                )
+            digest = await workflow.execute_activity(
+                generate_digest_activity,
+                {
+                    "articles": [article],
+                    "podcast_behavior": config.podcast_behavior,
+                    "language": config.language,
+                    "prompt_template": config.prompt_template,
+                    "custom_prompt": config.custom_prompt or None,
+                    "collection": config.collection,
+                    "main_story_count": config.main_story_count,
+                    "headline_count": config.headline_count,
+                },
+                start_to_close_timeout=DIGEST_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+        except (ActivityError, ApplicationError) as exc:
+            detail = str(getattr(exc, "cause", None) or exc)
+            await self._record_failure(config, error=detail)
+            raise ApplicationError(f"URL summary failed: {detail}", non_retryable=True) from exc
+
+        # Shared validation: the digest activities are the same as the RSS
+        # pipeline, so their result contract is checked by the same helpers.
+        digest_markdown = DigestPipelineWorkflow._extract_digest_text(digest)
+        article_count = DigestPipelineWorkflow._extract_article_count(digest)
+
+        # Phase 7.13 hard gate, before anything leaves the system. The article
+        # itself is the only source, so it is offered as a single cluster.
+        verification: dict[str, Any] | None = None
+        if config.verify:
+            verification = await workflow.execute_activity(
+                verify_digest_activity,
+                {
+                    "digest": digest_markdown,
+                    "clusters": [{"articles": [article]}],
+                    "collection": config.collection,
+                    "run_id": workflow_id,
+                    "workflow_id": workflow_id,
+                    "threshold": config.verify.get("threshold"),
+                    "groundedness_threshold": config.verify.get("groundedness_threshold"),
+                    "backend": config.verify.get("backend"),
+                    "model": config.verify.get("model"),
+                    "host_reliability": config.verify.get("host_reliability") or {},
+                },
+                start_to_close_timeout=VERIFY_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+            if not verification.get("passed"):
+                await self._record_failure(
+                    config,
+                    error=str(verification.get("reasons") or "digest verification failed"),
+                    status="verification_failed",
+                    digest_preview=digest_markdown,
+                    article_count=article_count,
+                    cluster_count=1,
+                )
+                raise ApplicationError(
+                    f"Digest verification failed: score={verification.get('score')} "
+                    f"threshold={verification.get('threshold')} "
+                    f"reasons={verification.get('reasons')}",
+                    non_retryable=True,
+                )
+
+        delivery_status = await self._deliver(config, digest_markdown)
+
+        await self._record_run(
+            config,
+            status="ok",
+            article_count=article_count,
+            cluster_count=1,
+            digest_preview=digest_markdown,
+        )
+        workflow.logger.info(f"URL summary completed: {config.url}")
+        return {
+            "status": "ok",
+            "url": config.url,
+            "article_count": article_count,
+            "digest": digest_markdown,
+            "delivery_status": delivery_status,
+            "verification": (
+                {
+                    "verdict": verification.get("verdict"),
+                    "score": verification.get("score"),
+                    "threshold": verification.get("threshold"),
+                    "backend": verification.get("backend"),
+                    "judge_model": verification.get("judge_model"),
+                }
+                if verification
+                else None
+            ),
+        }
+
+    async def _deliver(
+        self, config: UrlSummarizeConfig, digest_markdown: str
+    ) -> list[dict[str, Any]]:
+        """Deliver the digest to the collection's configured channels.
+
+        A channel failure is recorded and never fails the run: the digest text
+        has already been generated and the other channels still get it.
+
+        Args:
+            config: Resolved run configuration.
+            digest_markdown: Generated digest text.
+
+        Returns:
+            One entry per attempted channel.
+        """
+        if not config.deliver:
+            return []
+        channels = config.delivery_channels or ["telegram"]
+        delivery_status: list[dict[str, Any]] = []
+        if "telegram" in channels:
+            try:
+                delivery_status.append(
+                    await workflow.execute_activity(
+                        deliver_telegram_message_activity,
+                        args=[digest_markdown, config.chat_id],
+                        start_to_close_timeout=DELIVERY_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                )
+            except (ActivityError, ApplicationError) as exc:
+                delivery_status.append(self._delivery_failure("telegram", exc))
+        if "email" in channels and config.email_recipients:
+            try:
+                delivery_status.append(
+                    await workflow.execute_activity(
+                        deliver_email_activity,
+                        args=[config.email_recipients, digest_markdown, config.collection],
+                        start_to_close_timeout=EMAIL_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                )
+            except (ActivityError, ApplicationError) as exc:
+                delivery_status.append(self._delivery_failure("email", exc))
+        if "whatsapp" in channels and (config.whatsapp_recipients or config.whatsapp_group_id):
+            try:
+                delivery_status.append(
+                    await workflow.execute_activity(
+                        deliver_whatsapp_message_activity,
+                        args=[
+                            digest_markdown,
+                            config.whatsapp_recipients,
+                            config.whatsapp_group_id,
+                        ],
+                        start_to_close_timeout=WHATSAPP_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                )
+            except (ActivityError, ApplicationError) as exc:
+                delivery_status.append(self._delivery_failure("whatsapp", exc))
+        return delivery_status
+
+    @staticmethod
+    def _delivery_failure(channel: str, exc: Exception) -> dict[str, Any]:
+        """Turn a delivery exception into a status entry.
+
+        Args:
+            channel: Channel name used in the entry.
+            exc: The activity error raised by the channel.
+
+        Returns:
+            Dict with the channel, status 'error' and the underlying reason.
+        """
+        detail = str(getattr(exc, "cause", None) or exc)
+        workflow.logger.warning(f"{channel} delivery failed; digest text kept: {detail}")
+        return {"channel": channel, "status": "error", "error": detail}
+
+    async def _record_run(
+        self,
+        config: UrlSummarizeConfig,
+        *,
+        status: str,
+        article_count: int,
+        cluster_count: int,
+        digest_preview: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Persist the outcome of this run via record_run_activity.
+
+        Args:
+            config: Resolved run configuration (supplies the collection).
+            status: Run status ('ok', 'failed', 'verification_failed').
+            article_count: Number of articles summarized.
+            cluster_count: Number of clusters summarized (always 1 here).
+            digest_preview: Generated digest text, when there is one.
+            error: Error message for failed runs.
+        """
+        await workflow.execute_activity(
+            record_run_activity,
+            {
+                "workflow_id": workflow.info().workflow_id,
+                "collection": config.collection,
+                "status": status,
+                "article_count": article_count,
+                "cluster_count": cluster_count,
+                "digest_preview": digest_preview,
+                "audio_path": None,
+                "error": error,
+            },
+            start_to_close_timeout=RECORD_RUN_TIMEOUT,
+            retry_policy=NETWORK_RETRY_POLICY,
+        )
+
+    async def _record_failure(
+        self,
+        config: UrlSummarizeConfig,
+        *,
+        error: str,
+        status: str = "failed",
+        digest_preview: str | None = None,
+        article_count: int = 0,
+        cluster_count: int = 0,
+    ) -> None:
+        """Record a failed run without letting the record itself mask the error.
+
+        Args:
+            config: Resolved run configuration (supplies the collection).
+            error: Why the run failed.
+            status: Run status to record.
+            digest_preview: Generated digest text, when there is one.
+            article_count: Number of articles summarized.
+            cluster_count: Number of clusters summarized.
+        """
+        try:
+            await self._record_run(
+                config,
+                status=status,
+                article_count=article_count,
+                cluster_count=cluster_count,
+                digest_preview=digest_preview,
+                error=error,
+            )
+        except (ActivityError, ApplicationError) as exc:
+            workflow.logger.warning(f"Could not record the failed run: {exc}")
 
 
 @workflow.defn

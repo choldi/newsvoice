@@ -72,7 +72,9 @@ async def admin_middleware(
         The response, or a redirect (HTML) / 401 (JSON) when unauthorized.
     """
     path = request.url.path
-    protected_api = path.startswith("/api/admin/")
+    # /api/summarize/url is not under /api/admin/ but starts a workflow that
+    # fetches an arbitrary URL and delivers to my channels: same guard.
+    protected_api = path.startswith("/api/admin/") or path == "/api/summarize/url"
     protected_ui = path.startswith("/ui/") and path not in ("/ui/login", "/ui/logout")
     if not (protected_api or protected_ui):
         return await call_next(request)

@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # they are capped; the free groundedness check always uses the full text.
     llm_verify_max_sources: int = Field(default=40, ge=1)
     llm_verify_source_chars: int = Field(default=1200, ge=100)
+    # --- Phase 7.10: single-URL summary -------------------------------------
+    # Kill switch for POST /api/summarize/url (the endpoint stays behind the
+    # admin auth either way; this closes it without a code change).
+    url_summary_enabled: bool = True
+    # Timeout for the HTTP GET of the article page.
+    url_fetch_timeout: int = Field(default=30, ge=1)
+    # Reject any response larger than this (the body is all we need).
+    url_fetch_max_bytes: int = Field(default=5_000_000, ge=10_000)
+    # Body characters handed to the prompt; longer articles are truncated.
+    url_summary_max_chars: int = Field(default=12_000, ge=500)
     # Per-source reliability. A feed without an explicit value scores
     # `source_reliability_default`; below `min_source_reliability` the source is
     # dropped before clustering.

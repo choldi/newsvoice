@@ -831,3 +831,91 @@ docker compose exec worker python -m src.workers.schedule
 Manual runs (`trigger.py`, `POST /admin/collections/{name}/run`) resolve the
 config at request time, so they pick the change up after a restart of the API
 and the worker without re-registering anything.
+
+---
+
+## 12. URL summary (Phase 7.10)
+
+Resumir un solo artículo a partir de su URL, con los mismos prompts, destinos
+y verificación que el digest diario.
+
+### 12.1 Usage
+
+```bash
+curl -X POST http://localhost:8000/api/summarize/url \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://elpais.com/economia/2026/...", "collection": "tech"}'
+```
+
+Respuesta **202**:
+
+```json
+{"status": "ok", "workflow_id": "url-summary-tech-20261003120000-abcd1234",
+ "collection": "tech", "url": "https://elpais.com/..."}
+```
+
+Parámetros del cuerpo:
+
+| Campo | Por defecto | Efecto |
+|---|---|---|
+| `url` | — (obligatorio) | Solo `http`/`https`; cualquier otro esquema da 422 |
+| `collection` | `default` | Colección cuyo prompt y destinos se usan |
+| `store` | `false` | `true` guarda el artículo en `articles` (URL normalizada) |
+| `deliver` | `true` | `false` genera y registra sin entregar a ningún canal |
+
+Errores: `401` sin token, `403` con `URL_SUMMARY_ENABLED=false`, `404` si la
+colección no existe (sin arrancar nada), `422` URL inválida, `502` si Temporal
+no acepta el workflow.
+
+El estado del run es el de siempre: `GET /api/admin/runs` y la tabla del GUI en
+`/ui` (estados `ok`, `failed`, `verification_failed` con el texto del digest
+para auditar).
+
+### 12.2 Pipeline
+
+`UrlSummarizeWorkflow` = `fetch → (store) → generate → verify → deliver → record`:
+
+1. **fetch** — `httpx` descarga la página (`URL_FETCH_TIMEOUT`,
+   `URL_FETCH_MAX_BYTES`, solo http/https) y `trafilatura` extrae el cuerpo en
+   un hilo aparte (CPU-bound). Páginas sin cuerpo legible (muro de pago, apps
+   JS) fallan de forma permanente: se registra el run y no se entrega nada.
+2. **store** — solo con `store = true`. La URL se guarda normalizada (mismas
+   claves de tracking eliminadas que usa el dedup del RSS), de modo que una
+   ingesta posterior de la misma historia no la duplique.
+3. **generate** — la activity `generate_digest_activity` de siempre con el
+   prompt, el idioma y los counts de la colección.
+4. **verify** — si la colección tiene `llm_verify = true` pasa el mismo gate de
+   la Fase 7.13: no hay forma de esquivar la verificación usando este endpoint.
+5. **deliver** — telegram/email/whatsapp según `delivery_channels`. Un fallo de
+   canal se registra y no tumba el run (el texto ya existe).
+6. **record** — la fila en `digest_runs` se escribe siempre, también en fallo.
+
+### 12.3 Settings
+
+```bash
+URL_SUMMARY_ENABLED=true   # kill switch del endpoint
+URL_FETCH_TIMEOUT=30       # segundos por descarga
+URL_FETCH_MAX_BYTES=5000000
+URL_SUMMARY_MAX_CHARS=12000  # cuerpo que llega al prompt (más se trunca)
+```
+
+### 12.4 Notes
+
+- El endpoint está tras el mismo middleware que `/api/admin/*`: quien lo usa
+  ya administra el servidor, y la descarga se hace **desde** el servidor (no
+  desde el cliente). Mantener `ADMIN_USERNAME`/`ADMIN_API_TOKEN` configurado.
+- El resumen es solo texto: no genera audio (TTS/narración siguen siendo cosa
+  del digest diario).
+- Requiere `trafilatura` (ya en `pyproject.toml`); tras cambiar dependencias:
+  `pip install -e .` en el venv y `docker compose build api worker`.
+
+### 12.5 Rollback
+
+```bash
+# .env
+URL_SUMMARY_ENABLED=false
+```
+
+y reinicia la API (`docker compose up -d --force-recreate api`). El endpoint
+responde 403 sin tocar el código; el resto del sistema no se ve afectado.

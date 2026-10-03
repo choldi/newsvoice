@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import structlog
 from temporalio.client import Client, RPCError, ScheduleHandle, ScheduleUpdate
 
 from src.core.collections import CollectionConfig
 from src.workers.run_worker import build_client
-from src.workers.schedule import build_schedule, pipeline_config_for
+from src.workers.schedule import build_schedule, pipeline_config_for, url_summarize_config_for
 
 logger = structlog.get_logger(__name__)
 
@@ -162,6 +163,43 @@ class TemporalAdminService:
             task_queue=settings.temporal_task_queue,
         )
         logger.info("workflow_started", workflow_id=workflow_id, collection=collection.name)
+        return workflow_id
+
+    async def start_url_summarize(
+        self, collection: CollectionConfig, *, url: str, store: bool, deliver: bool
+    ) -> str:
+        """Start a single-URL summary workflow (Phase 7.10).
+
+        Args:
+            collection: Collection supplying the prompt and destinations.
+            url: Article URL to summarize.
+            store: Persist the extracted article in `articles`.
+            deliver: Deliver to the collection's channels.
+
+        Returns:
+            The workflow id of the started run.
+        """
+        from src.core.config import settings as app_settings
+        from src.workers.workflows import UrlSummarizeWorkflow
+
+        config = url_summarize_config_for(collection, url=url, store=store, deliver=deliver)
+        workflow_id = (
+            f"url-summary-{collection.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+            f"-{uuid4().hex[:8]}"
+        )
+        client = await self.client()
+        await client.start_workflow(
+            UrlSummarizeWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=app_settings.temporal_task_queue,
+        )
+        logger.info(
+            "url_summary_workflow_started",
+            workflow_id=workflow_id,
+            collection=collection.name,
+            url=url,
+        )
         return workflow_id
 
     async def is_collection_running(self, collection_name: str) -> bool:
