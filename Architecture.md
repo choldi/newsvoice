@@ -76,19 +76,30 @@ OmniVoice `POST /api/v1/tts` endpoint, and concatenates the resulting WAV files.
 The narration pipeline is a second, independent audio spoke that hangs off the
 same digest. It is generic multi-speaker narration, not a news-only podcast.
 
+Phase 7.9b splits podcast generation into one namespace per backend. A
+Temporal activity always executes in the namespace of the workflow that
+scheduled it, so the digest cannot call the render activities directly any
+more: it calls a single dispatch activity that starts and awaits
+`NarrationWorkflow` in the podcast namespace that owns the backend.
+
 ```
 [generate_tts_activity]  -->  [digest_runs.audio_path]        (single voice, Edge)
      |
      v  (PipelineConfig.narration, filled outside the workflow: per-collection
-     |   opt-in + narration_enabled kill switch + the narration task queue)
+     |   opt-in + narration_enabled kill switch + the podcast namespace and
+     |   task queue)
 [record_run_activity]   -->  [digest_runs]                   (row must exist first)
      |
-     v  dispatched by NAME with ActivityOptions(task_queue=<narration_task_queue>)
-[render_narration_activity]   (src/workers/narration_activities.py)
-     |
-     v
-[narration-worker]      (src/workers/run_narration_worker.py: same image, own
-     |                  queue, only NarrationWorkflow + narration activities)
+     v  in the digest namespace, on the digest queue
+[dispatch_narration_activity]   (src/workers/activities.py: starts the workflow
+     |                           below and awaits it, heartbeating while it renders)
+     |   workflow id = narration-<collection>-<run_id>, so a retry reattaches to the
+     |   render already in flight instead of paying for a second one
+     v  cross-namespace: news-engine-podcast-local | news-engine-podcast-modal
+[narration-worker | narration-modal-worker]
+     |                  (src/workers/run_narration_worker.py | run_modal_worker.py:
+     |                   same image, own namespace and queue, only NarrationWorkflow
+     |                   + narration activities)
      |--> [resolve_narration_script_activity]  inline script or narration_scripts row
      |--> [render_narration_activity]  --> TTS gateway /tts | /conversations
      |                                    (conversations: one request per block,
@@ -97,6 +108,13 @@ same digest. It is generic multi-speaker narration, not a news-only podcast.
      v
 [digest_runs.narration_path]  +  audio_jobs row with kind='narration'
 ```
+
+The audio comes back to the digest through the dispatch activity's result, so
+the delivery of that audio still happens in `DigestPipelineWorkflow`; a
+narration failure is recorded in `delivery_status` and never fails the digest.
+`src/workers/podcast_target.py` is the one place that maps a spec's backend to
+its namespace and queue, shared by the schedule, the API trigger and the CLI
+trigger so all three agree.
 
 `NarrationWorkflow` (`src/workers/narration_workflows.py`) is the same pair of
 activities as a standalone, first-class workflow, started manually with

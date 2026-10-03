@@ -29,9 +29,10 @@ from temporalio.client import (
 )
 
 from src.api.models.monitoring import MonitorRunConfig
-from src.api.models.narration import NarrationSpec, TTSBackend
+from src.api.models.narration import NarrationSpec
 from src.core.collections import CollectionConfig, get_collections
 from src.core.config import settings
+from src.workers.podcast_target import podcast_target
 from src.workers.run_worker import build_client
 from src.workers.workflows import (
     CollectionsMonitorWorkflow,
@@ -59,9 +60,23 @@ def _narration_task_queue(spec: NarrationSpec | None) -> str:
     Returns:
         The task queue name.
     """
-    if spec is not None and spec.tts_backend is not TTSBackend.OMNIVOICE:
-        return settings.narration_modal_task_queue
-    return settings.narration_local_task_queue
+    return podcast_target(spec.model_dump() if spec else None).task_queue
+
+
+def _narration_namespace(spec: NarrationSpec | None) -> str:
+    """Pick the podcast namespace for a collection.
+
+    Phase 7.9b: podcast generation owns one namespace per backend, so the
+    render can never share history with the digest pipeline. The namespace
+    travels in the workflow input because a workflow cannot read settings.
+
+    Args:
+        spec: The collection's narration spec, or None.
+
+    Returns:
+        The namespace name.
+    """
+    return podcast_target(spec.model_dump() if spec else None).namespace
 
 
 def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> PipelineConfig:
@@ -77,6 +92,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
     narration_payload = None
     if collection.narration_enabled and collection.narration_spec:
         narration_payload = {
+            "namespace": _narration_namespace(collection.narration_spec),
             "task_queue": _narration_task_queue(collection.narration_spec),
             "spec": collection.narration_spec.model_dump(),
             "strategy": collection.narration_strategy,

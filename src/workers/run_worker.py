@@ -56,6 +56,7 @@ def worker_activities() -> list[object]:
         activities.deliver_whatsapp_audio_activity,
         activities.deliver_logic_activity,
         activities.record_run_activity,
+        activities.dispatch_narration_activity,
         activities.read_collections_signature_activity,
         activities.get_synced_signature_activity,
         activities.sync_collections_schedules_activity,

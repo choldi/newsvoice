@@ -68,16 +68,18 @@ EMAIL_TIMEOUT = timedelta(seconds=90)
 WHATSAPP_TIMEOUT = timedelta(seconds=120)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
 
-# Phase 7 narration. The digest worker does not register the narration
-# activities, so they are addressed BY NAME and dispatched to the narration
-# task queue via task_queue=...; the name resolves on the narration worker only.
-NARRATION_RENDER_ACTIVITY = "render_narration_activity"
-RESOLVE_SCRIPT_ACTIVITY = "resolve_narration_script_activity"
-# Longest plausible render: the gateway is called once per turn (each bounded by
-# narration_request_timeout, default 300s) before the local mix/encode.
-NARRATION_RENDER_TIMEOUT = timedelta(seconds=7200)
-# Timeout for script resolution (LLM generation + validation).
-NARRATION_SCRIPT_TIMEOUT = timedelta(seconds=300)
+# Phase 7.9b narration. The render no longer runs as an activity of this
+# workflow: a Temporal activity executes in the namespace of the workflow that
+# scheduled it, so podcast generation owns its namespace per backend only if the
+# render is its own workflow. dispatch_narration_activity runs here, on the
+# digest queue, and starts/awaits NarrationWorkflow in the podcast namespace.
+# The audio path comes back through that activity and the delivery below is
+# unchanged.
+DISPATCH_NARRATION_ACTIVITY = "dispatch_narration_activity"
+# The dispatch waits for the whole render (resolve script + render), so it
+# covers both former steps: script resolution alone was 300s and the render up
+# to 7200s.
+NARRATION_DISPATCH_TIMEOUT = timedelta(seconds=8100)
 # A narration failure must never fail the digest: the text already went out.
 NARRATION_RETRY_POLICY = RetryPolicy(maximum_attempts=2)
 
@@ -443,41 +445,24 @@ class DigestPipelineWorkflow:
         )
 
         # Phase 7 narration: a second, independent audio spoke rendered by the
-        # narration worker on its own task queue. The activity is addressed by
-        # name because the digest worker does not register the narration module,
-        # and task_queue comes from the workflow input (a workflow cannot read
-        # settings). Any failure is recorded and never fails the digest: the
-        # text digest, the TTS audio and the deliveries are already done. It
-        # runs AFTER the run row is recorded because the narration worker writes
-        # digest_runs.narration_path, and annotating a row that does not exist
-        # yet would silently lose the path.
+        # podcast workflow in its own namespace (Phase 7.9b). The dispatch
+        # activity runs AFTER the run row is recorded because the narration
+        # worker writes digest_runs.narration_path, and annotating a row that
+        # does not exist yet would silently lose the path. Any failure is
+        # recorded and never fails the digest: the text digest, the TTS audio
+        # and the deliveries are already done.
         if config.narration:
             narration_request = self._narration_payload(config, workflow.info().workflow_id)
-            workflow.logger.info(f"Dispatching narration to '{narration_request['task_queue']}'")
+            workflow.logger.info(
+                f"Dispatching narration to '{narration_request['namespace']}' "
+                f"(queue '{narration_request['task_queue']}')"
+            )
             try:
-                # Step 1: Resolve the narration script (generates from digest if needed)
-                resolved = await workflow.execute_activity(
-                    RESOLVE_SCRIPT_ACTIVITY,
-                    args=[narration_request["payload"]],
-                    task_queue=narration_request["task_queue"],
-                    start_to_close_timeout=NARRATION_SCRIPT_TIMEOUT,
-                    retry_policy=NARRATION_RETRY_POLICY,
-                )
-                if not isinstance(resolved, dict) or not resolved.get("script"):
-                    raise ApplicationError(
-                        "resolve_narration_script_activity returned no script",
-                        non_retryable=True,
-                    )
-                # Step 2: Render the resolved script
-                render_payload = {
-                    **narration_request["payload"],
-                    "script": resolved["script"],
-                }
                 narration = await workflow.execute_activity(
-                    NARRATION_RENDER_ACTIVITY,
-                    args=[render_payload],
-                    task_queue=narration_request["task_queue"],
-                    start_to_close_timeout=NARRATION_RENDER_TIMEOUT,
+                    DISPATCH_NARRATION_ACTIVITY,
+                    args=[narration_request],
+                    start_to_close_timeout=NARRATION_DISPATCH_TIMEOUT,
+                    heartbeat_timeout=NARRATION_DISPATCH_TIMEOUT,
                     retry_policy=NARRATION_RETRY_POLICY,
                 )
                 narration_audio_path = (
@@ -514,7 +499,12 @@ class DigestPipelineWorkflow:
 
     @staticmethod
     def _narration_payload(config: PipelineConfig, run_id: str) -> dict[str, Any]:
-        """Build the narration request and its target queue.
+        """Build the narration request and its target namespace and queue.
+
+        Phase 7.9b: the render runs as its own workflow in the podcast
+        namespace chosen by the backend (see
+        ``src/workers/podcast_target.py``), so the namespace travels in the
+        workflow input, next to the task queue: a workflow cannot read settings.
 
         Args:
             config: PipelineConfig carrying the ``narration`` opt-in dict.
@@ -522,22 +512,25 @@ class DigestPipelineWorkflow:
                 and the ``digest_runs.narration_path`` column.
 
         Returns:
-            Dict with the ``task_queue`` to dispatch to and the activity
-            ``payload``.
+            Dict with the ``namespace`` and ``task_queue`` to dispatch to and
+            the ``payload`` for the dispatch activity.
 
         Raises:
-            ApplicationError: If the opt-in dict lacks a task queue or the
-                spec, which would fail on the narration worker anyway.
+            ApplicationError: If the opt-in dict lacks a namespace, a task
+                queue or the spec, which would fail on the narration worker
+                anyway.
         """
         request = config.narration or {}
+        namespace = request.get("namespace")
         task_queue = request.get("task_queue")
         spec = request.get("spec")
-        if not task_queue or not isinstance(spec, dict):
+        if not namespace or not task_queue or not isinstance(spec, dict):
             raise ApplicationError(
-                "PipelineConfig.narration needs a 'task_queue' and a 'spec'",
+                "PipelineConfig.narration needs a 'namespace', a 'task_queue' and a 'spec'",
                 non_retryable=True,
             )
         return {
+            "namespace": str(namespace),
             "task_queue": str(task_queue),
             "payload": {
                 "run_id": request.get("run_id") or run_id,

@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     # store/status activities and the design activity all live here
     # (see src/workers/run_voice_worker.py).
     temporal_voices_namespace: str = "news-engine-voices"
+    # Phase 7.9b splits the podcast generation by backend, one namespace each:
+    # the digest pipeline stays in ``temporal_namespace`` and no longer owns
+    # the narration render, so local and Modal renders no longer share history
+    # with it (a Temporal activity always executes in the namespace of the
+    # workflow that scheduled it, so the render had to become its own
+    # workflow started from a dispatch activity). See
+    # src/workers/podcast_target.py.
+    temporal_podcast_local_namespace: str = "news-engine-podcast-local"
+    temporal_podcast_modal_namespace: str = "news-engine-podcast-modal"
     voice_design_task_queue: str = "news-engine-voice-design-queue"
     voice_catalog_task_queue: str = "news-engine-voice-catalog-queue"
     # The design worker runs on another box, so a reference reaches the server
@@ -144,7 +153,10 @@ class Settings(BaseSettings):
     # Phase 7.8 splits narration by backend: the local queue serves the
     # self-hosted gateway, the modal queue serves the GPU backends and holds
     # the Modal credentials, so the two scale and restart independently.
-    narration_local_task_queue: str = "news-engine-narration-local-task-queue"
+    # ``narration_task_queue`` is kept as an alias of the local queue: Phase
+    # 7.9b gave the local side its own namespace and a dedicated worker, and
+    # the two names used to point at different queues with only one worker.
+    narration_local_task_queue: str = "news-engine-narration-task-queue"
     narration_modal_task_queue: str = "news-engine-narration-modal-task-queue"
     # Narration audio lives outside tts_cache so WAV/M4A files and their
     # .meta.json sidecars cannot collide with the digest TTS cache.

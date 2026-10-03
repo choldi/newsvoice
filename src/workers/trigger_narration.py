@@ -1,9 +1,10 @@
 """One-shot script to manually render a narration (Phase 7).
 
-Starts a single ``NarrationWorkflow`` on the narration task queue, which is the
-same path the digest pipeline dispatches to. Useful for debugging the renderer
-without waiting for a scheduled digest, and for checking a cast/script before
-enabling narration on a collection.
+Starts a single ``NarrationWorkflow``, which since Phase 7.9b runs in the
+podcast namespace that matches the spec's backend (local or Modal) instead of
+sharing the digest namespace. Useful for debugging the renderer without
+waiting for a scheduled digest, and for checking a cast/script before enabling
+narration on a collection.
 
 The script can be passed inline (--script) or referenced by the id of a row
 already stored by the admin API (--script-id).
@@ -24,6 +25,7 @@ from typing import Any
 
 from src.core.config import settings
 from src.workers.narration_workflows import NarrationConfig, NarrationWorkflow
+from src.workers.podcast_target import podcast_target
 from src.workers.run_worker import build_client
 
 
@@ -97,12 +99,15 @@ async def main() -> None:
         strategy=args.strategy,
     )
     workflow_id = f"narration-{args.collection}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-    client = await build_client()
+    # Phase 7.9b: podcast generation owns one namespace per backend, so a
+    # standalone render is started in the namespace the spec asks for.
+    target = podcast_target(config.spec)
+    client = await build_client(target.namespace)
     result = await client.execute_workflow(
         NarrationWorkflow.run,
         config,
         id=workflow_id,
-        task_queue=settings.narration_task_queue,
+        task_queue=target.task_queue,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

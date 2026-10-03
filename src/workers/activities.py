@@ -12,7 +12,7 @@ import feedparser
 import httpx
 from pydantic import ValidationError
 from temporalio import activity
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 
 from src.api.db.database import AudioJobsRepository, RunsRepository, SyncStateRepository
 from src.api.models.article import ArticleIn, DigestIn
@@ -970,3 +970,149 @@ async def send_monitor_alert_activity(text: str) -> dict[str, Any]:
         "status": "error" if failed else "ok",
         "results": results,
     }
+
+
+#: Seconds between heartbeats while a narration workflow renders.
+NARRATION_POLL_SECONDS = 5
+
+
+def _narration_workflow_id(collection: str, run_id: str) -> str:
+    """Return the deterministic workflow id of a narration render.
+
+    The id ties the standalone narration workflow to the digest run that
+    requested it, so an activity retry after a crash reattaches to the render
+    already in flight instead of paying for a second one.
+
+    Args:
+        collection: Collection the narration belongs to.
+        run_id: Digest run id (or another stable run key).
+
+    Returns:
+        The Temporal workflow id for that narration.
+    """
+    return f"narration-{collection}-{run_id}"
+
+
+@activity.defn
+async def dispatch_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Render one podcast in its own Temporal namespace and wait for the audio.
+
+    Phase 7.9b: a Temporal activity executes in the namespace of the workflow
+    that scheduled it, so the narration render cannot stay an activity of the
+    digest workflow if podcast generation is to own a namespace per backend.
+    This activity runs on the digest queue, starts the standalone
+    ``NarrationWorkflow`` in the namespace the backend asks for (local or
+    Modal), and waits for its result. The digest keeps its current semantics:
+    the audio path comes back through this activity and the delivery of that
+    audio still happens in the digest workflow. A narration failure surfaces
+    here and never fails the digest.
+
+    The workflow id is derived from the digest run, so a retry reattaches to
+    the render already in flight rather than starting a second one.
+
+    Args:
+        payload: Dict with 'run_id', 'collection', 'spec', 'script',
+            'script_id', 'strategy' and, optionally, 'namespace' and
+            'task_queue'. Without them the backend of the spec decides.
+
+    Returns:
+        Dict with 'audio_path' plus the narration metadata, as returned by
+        ``NarrationWorkflow``.
+
+    Raises:
+        ApplicationError: If the payload lacks the spec, or if the narration
+            workflow itself fails.
+    """
+    from src.api.models.narration import NarrationSpec
+    from src.workers.client import build_client
+    from src.workers.narration_workflows import NarrationConfig, NarrationWorkflow
+    from src.workers.podcast_target import podcast_target
+
+    spec = payload.get("spec")
+    if not isinstance(spec, dict):
+        raise ApplicationError(
+            "dispatch_narration_activity needs a 'spec' payload", non_retryable=True
+        )
+
+    # Schedule registration pins the target; when it does not (a manual dispatch,
+    # say) fall back to the same backend selector the standalone starters use, so
+    # both paths agree on where a spec renders.
+    target = podcast_target(spec)
+    namespace = str(payload.get("namespace") or target.namespace)
+    task_queue = str(payload.get("task_queue") or target.task_queue)
+
+    # Validate the cast before spending a workflow on it: a malformed spec is a
+    # configuration error and must not be retried.
+    try:
+        NarrationSpec.model_validate(spec)
+    except ValidationError as exc:
+        raise ApplicationError(f"invalid narration spec: {exc}", non_retryable=True) from exc
+
+    collection = str(payload.get("collection") or "default")
+    run_id = str(payload.get("run_id") or activity.info().workflow_id)
+    config = NarrationConfig(
+        collection=collection,
+        spec=spec,
+        script=payload.get("script"),
+        script_id=payload.get("script_id"),
+        run_id=run_id,
+        strategy=str(payload.get("strategy") or "turns"),
+    )
+    workflow_id = _narration_workflow_id(collection, run_id)
+
+    client = await build_client(namespace)
+    try:
+        handle = await client.start_workflow(
+            NarrationWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=task_queue,
+        )
+    except WorkflowAlreadyStartedError:
+        # An earlier attempt of this activity already started the render.
+        handle = client.get_workflow_handle(workflow_id)
+    activity.logger.info(
+        f"Dispatched narration '{workflow_id}' to namespace '{namespace}' on queue '{task_queue}'"
+    )
+
+    result = await _await_narration(handle, workflow_id)
+    narration = result.get("narration") if isinstance(result, dict) else None
+    return narration if isinstance(narration, dict) else dict(result or {})
+
+
+async def _await_narration(handle: Any, workflow_id: str) -> dict[str, Any]:
+    """Wait for a narration workflow to finish, heartbeating while it renders.
+
+    The render runs in another namespace and can take up to the narration
+    render timeout (2h by default), far past this activity's own budget, so it
+    heartbeats while polling. ``asyncio.wait`` with a timeout never cancels
+    the pending result future, so the workflow failure still surfaces here.
+
+    If this activity is cancelled the render is cancelled too: nothing would
+    ever collect the audio, and on Modal somebody would be billed for it.
+
+    Args:
+        handle: Workflow handle for the narration workflow.
+        workflow_id: Id of the narration workflow, for heartbeats and logs.
+
+    Returns:
+        The workflow result dict.
+
+    Raises:
+        Exception: Whatever the narration workflow failed with.
+    """
+    result_future = asyncio.ensure_future(handle.result())
+    try:
+        while True:
+            activity.heartbeat(workflow_id)
+            done, _pending = await asyncio.wait({result_future}, timeout=NARRATION_POLL_SECONDS)
+            if done:
+                break
+    except asyncio.CancelledError:
+        result_future.cancel()
+        try:
+            await handle.cancel()
+        except Exception:  # noqa: BLE001 - best effort; the original cancel wins
+            activity.logger.warning(f"Could not cancel narration '{workflow_id}'")
+        raise
+    return dict(await result_future)

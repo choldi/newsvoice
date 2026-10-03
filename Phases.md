@@ -385,6 +385,34 @@ no cambia ni audiblemente ni en tests.
 
 ---
 
+- [ ] **7.9b Namespaces de podcast y worker de dispatch** — la generación de
+      podcast pasa a tener namespace propio por backend
+      (`news-engine-podcast-local`, `news-engine-podcast-modal`), porque una
+      actividad Temporal siempre se ejecuta en el namespace de su workflow y el
+      digest ya no puede invocar el render directamente. `DigestPipelineWorkflow`
+      llama a una única `dispatch_narration_activity`
+      (`src/workers/activities.py`) que inicia y espera `NarrationWorkflow` en el
+      namespace destino, con id `narration-<collection>-<run_id>` para que un
+      reintento se reenganche al render en vuelo en lugar de pagar un segundo;
+      el audio sigue volviendo al digest por el resultado de la activity, así que
+      la entrega no cambia y un fallo de narración nunca tumba el digest.
+      `src/workers/podcast_target.py` mapea `tts_backend` → namespace + cola y lo
+      comparten schedule, trigger de API y trigger de CLI; se corrige el hueco
+      heredado `narration_local_task_queue` ≠ `narration_task_queue` (la cola
+      local encolaba para siempre). `scripts/create_namespaces.sh` crea los tres
+      namespaces de forma idempotente (repetir tras cualquier restore de
+      Temporal).
+
+**Success criteria:** `709 passed` con `ruff` limpio, el digest entrega audio vía
+`dispatch_narration_activity` (los renders no se ejecutan en el worker de digest),
+el id del workflow de narración queda fijado por test, y los tres workers se
+conectan a namespaces distintos y verificables con
+`curl http://localhost:8080/api/namespaces`.
+
+**Effort:** 3-4 hours.
+
+---
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable

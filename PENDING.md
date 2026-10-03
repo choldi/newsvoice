@@ -19,9 +19,7 @@ mitades del catálogo (`--role catalog` y `--role design`) se conectan a
 
 ```bash
 cd ~/news-summary
-docker compose exec temporal temporal operator namespace create \
-  --namespace news-engine-voices --address temporal:7233
-docker compose exec temporal temporal operator namespace list --address temporal:7233
+./scripts/create_namespaces.sh   # crea los tres namespaces, idempotente
 ```
 
 Se pierde si se restaura `temporal_pg_data` (vive en Postgres, no en el repo).
@@ -194,8 +192,15 @@ cd ~/news-summary && git checkout main && docker compose up -d
   `ref_segments` intactos.
 - El bind-mount de `collections.toml` (inode `461207`) es el pie known; no
   cambiar de branch sin revisarlo (commit `80a19a5`).
-- **Hueco heredado sin tocar**: `narration_local_task_queue` no lo arranca nadie
-  en docker-compose (solo se resuelve con `--queue`). Cambiar el default de
-  `run_narration_worker` rompería `admin_narration` / `trigger_narration`, que
-  inician `NarrationWorkflow` en `narration_task_queue`. Corregir en una fase
-  propia, no aquí.
+- **Hueco heredado, corregido en la Fase 7.9b**: `narration_local_task_queue` no
+  lo arrancaba nadie en docker-compose (solo se resolvió con `--queue`), así que
+  el worker local escuchaba `narration_task_queue` mientras
+  `admin_narration` / `trigger_narration` apuntaban al otro nombre y la
+  narración local encolaba para siempre. Ahora
+  `narration_local_task_queue == narration_task_queue`
+  (`news-engine-narration-task-queue`), los workers locales y Modal viven además
+  en namespaces propio (`news-engine-podcast-local`,
+  `news-engine-podcast-modal`) y el dispatch cross-namespace lo resuelve
+  `dispatch_narration_activity`. Cubierto por
+  `tests/unit/test_podcast_target.py` y
+  `tests/unit/test_dispatch_narration_activity.py`.

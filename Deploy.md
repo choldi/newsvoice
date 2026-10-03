@@ -422,17 +422,25 @@ The design worker synthesizes with Qwen3-TTS VoiceDesign and returns the audio
 gzipped over the wire, so it never touches `data/voices`: only the catalog
 worker writes `data/voices/refs/*.wav` and `manifest.json`.
 
-### 8.1 One-time: create the namespace
+### 8.1 One-time: create the namespaces
 
 ```bash
-docker compose exec temporal temporal operator namespace create \
-  --namespace news-engine-voices --address temporal:7233
-docker compose exec temporal temporal operator namespace list \
-  --address temporal:7233
+./scripts/create_namespaces.sh
 ```
 
-Re-run it after any Temporal restore: the namespace lives in Postgres, not in
-the repo, so a fresh `temporal_pg_data` comes back with `default` only.
+That creates the three namespaces the workers need and is idempotent:
+
+| Namespace | Owner | Queue |
+| --- | --- | --- |
+| `default` | digest + system monitor | `TEMPORAL_TASK_QUEUE` |
+| `news-engine-voices` | voice catalog + voice design | `VOICE_CATALOG_TASK_QUEUE`, `VOICE_DESIGN_TASK_QUEUE` |
+| `news-engine-podcast-local` | local podcast render | `NARRATION_LOCAL_TASK_QUEUE` |
+| `news-engine-podcast-modal` | Modal podcast render | `NARRATION_MODAL_TASK_QUEUE` |
+
+Re-run it after any Temporal restore: the namespaces live in Postgres, not in
+the repo, so a fresh `temporal_pg_data` comes back with `default` only. A
+missing namespace is silent — the worker polls an empty namespace forever and
+the digest completes without audio.
 
 ### 8.2 Server: the catalog worker
 
@@ -534,3 +542,47 @@ systemctl --user disable --now news-engine-voice-worker   # on the GPU box
 ```
 
 The catalog keeps working from the references already in `data/voices/`.
+---
+
+## 9. Podcast namespaces (Phase 7.9b)
+
+Podcast generation owns one namespace per backend. A Temporal activity always
+executes in the namespace of the workflow that scheduled it, so the digest
+cannot keep calling the render activities directly: it calls a single
+`dispatch_narration_activity` that starts and awaits `NarrationWorkflow` in the
+namespace that owns the backend.
+
+| Role | Namespace | Queue | Registers |
+| --- | --- | --- | --- |
+| `worker` | `default` | `TEMPORAL_TASK_QUEUE` | `DigestPipelineWorkflow` + digest activities + `dispatch_narration_activity` |
+| `narration-worker` | `news-engine-podcast-local` | `NARRATION_LOCAL_TASK_QUEUE` | `NarrationWorkflow` + resolve/render |
+| `narration-modal-worker` | `news-engine-podcast-modal` | `NARRATION_MODAL_TASK_QUEUE` | `NarrationWorkflow` + resolve/render |
+| `voice-catalog-worker` | `news-engine-voices` | `VOICE_CATALOG_TASK_QUEUE` | see §8 |
+
+```bash
+./scripts/create_namespaces.sh   # once, and after any Temporal restore
+docker compose up -d worker narration-worker voice-catalog-worker
+docker compose --profile modal up -d narration-modal-worker   # needs Modal creds
+```
+
+`src/workers/podcast_target.py` maps a spec's `tts_backend` to its namespace
+and queue, and it is shared by the schedule, the API trigger and the CLI
+trigger, so all three agree on where a render happens. `dispatch_narration_activity`
+keys the workflow id as `narration-<collection>-<run_id>`: an activity retry
+reattaches to the render already in flight instead of paying for a second one.
+
+Check that every worker registered where it should:
+
+```bash
+curl -s http://localhost:8080/api/namespaces | python -m json.tool
+docker compose logs worker | grep -i "connected\|namespace"
+```
+
+### 9.1 Rollback
+
+```bash
+docker compose stop worker narration-worker   # renders stop, digests continue
+```
+
+Without the podcast workers the digest still completes and records the
+narration delivery as `error`, so this degrades instead of failing.

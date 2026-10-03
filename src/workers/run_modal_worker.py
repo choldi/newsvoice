@@ -1,9 +1,14 @@
-"""Temporal worker entry point for the Modal narration queue (Phase 7.8).
+"""Temporal worker entry point for the Modal podcast namespace (Phase 7.8/7.9b).
 
-Runs a third worker on its own task queue hosting the same narration
-activities as the local worker, but holding the Modal credentials and doing
-the GPU spend. It is declared in docker-compose behind the ``modal`` profile,
-so it is created but not started until a collection opts into a Modal backend.
+Runs a worker on the Modal narration task queue hosting the same narration
+workflow and activities as the local worker, but holding the Modal credentials
+and doing the GPU spend. It is declared in docker-compose behind the ``modal``
+profile, so it is created but not started until a collection opts into a Modal
+backend.
+
+Since Phase 7.9b it serves its own namespace (``news-engine-podcast-modal``):
+podcast generation is split by backend, so the Modal renders never share
+history with the local ones nor with the digest pipeline.
 
 Example:
     python -m src.workers.run_modal_worker
@@ -63,6 +68,7 @@ async def run_modal_worker(client: Client, task_queue: str | None = None) -> Asy
             "starting_modal_worker",
             task_queue=queue,
             concurrency=settings.narration_max_concurrency,
+            namespace=settings.temporal_podcast_modal_namespace,
         )
         async with worker:
             yield worker
@@ -72,9 +78,14 @@ async def main() -> None:
     """Run DB migrations, start the Modal worker, and run until stopped."""
     configure_logging()
     await run_migrations()
-    client: Client = await build_client()
+    # Phase 7.9b: the Modal side of podcast generation owns its namespace.
+    client: Client = await build_client(settings.temporal_podcast_modal_namespace)
     async with run_modal_worker(client):
-        logger.info("modal_worker_running", task_queue=settings.narration_modal_task_queue)
+        logger.info(
+            "modal_worker_running",
+            task_queue=settings.narration_modal_task_queue,
+            namespace=settings.temporal_podcast_modal_namespace,
+        )
         await asyncio.Event().wait()
 
 

@@ -15,6 +15,7 @@ from src.api.models.narration import NarrationScript, NarrationSpec
 from src.api.services.narration_tts import NarrationTTSService
 from src.core.config import settings
 from src.workers.narration_workflows import NarrationConfig, NarrationWorkflow
+from src.workers.podcast_target import podcast_target
 from src.workers.run_worker import build_client
 
 logger = structlog.get_logger(__name__)
@@ -112,13 +113,16 @@ async def trigger_narration(payload: NarrationTriggerIn) -> NarrationTriggerOut:
         strategy=payload.strategy,
     )
     workflow_id = f"narration-{payload.collection}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-    client = await build_client()
+    # Phase 7.9b: podcast generation owns one namespace per backend, so a
+    # standalone render is started in the namespace the spec asks for.
+    target = podcast_target(payload.spec.model_dump())
+    client = await build_client(target.namespace)
     try:
         await client.execute_workflow(
             NarrationWorkflow.run,
             config,
             id=workflow_id,
-            task_queue=settings.narration_task_queue,
+            task_queue=target.task_queue,
         )
     except Exception as exc:
         logger.error(

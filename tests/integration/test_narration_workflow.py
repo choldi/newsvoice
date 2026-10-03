@@ -1,4 +1,13 @@
-"""Integration tests for the Phase 7 narration workflow and its cross-queue dispatch."""
+"""Integration tests for the podcast workflow and the digest dispatch (Phase 7.9b).
+
+Since Phase 7.9b the digest no longer calls the narration activities itself:
+podcast generation owns a namespace per backend, and a Temporal activity runs
+in the namespace of the workflow that scheduled it, so the digest calls one
+``dispatch_narration_activity`` that starts and awaits the narration workflow
+in the podcast namespace. These tests cover that contract; the cross-namespace
+start itself is unit tested against a fake client in
+``tests/unit/test_dispatch_narration_activity.py``.
+"""
 
 from typing import Any
 
@@ -19,6 +28,8 @@ from src.workers.workflows import DigestPipelineWorkflow, PipelineConfig
 
 NARRATION_QUEUE = "news-engine-narration-task-queue"
 DIGEST_QUEUE = "news-engine-task-queue"
+#: The namespace the local narration worker serves (Phase 7.9b).
+PODCAST_LOCAL_NAMESPACE = "news-engine-podcast-local"
 
 SPEC: dict[str, Any] = {
     "title": "Edicion",
@@ -61,6 +72,7 @@ def _reset(render_error: BaseException | None = None) -> None:
             "render": [],
             "resolve": [],
             "record": [],
+            "dispatch": [],
             "render_error": render_error,
         }
     )
@@ -133,6 +145,20 @@ async def stub_record(run: dict) -> dict:
     return {"status": "ok", "run_id": 1}
 
 
+@activity.defn(name="dispatch_narration_activity")
+async def stub_dispatch(request: dict) -> dict:
+    """Stand-in for the cross-namespace dispatch activity.
+
+    The real one starts the narration workflow in the podcast namespace; here it
+    records the request so the tests can assert the digest targeted the right
+    namespace and queue, and returns the render payload the workflow expects.
+    """
+    SEEN["dispatch"].append(request)
+    if SEEN["render_error"] is not None:
+        raise SEEN["render_error"]
+    return RENDERED
+
+
 def _digest_worker(client: Any, queue: str) -> Worker:
     return Worker(
         client,
@@ -145,6 +171,7 @@ def _digest_worker(client: Any, queue: str) -> Worker:
             stub_digest,
             stub_deliver,
             stub_record,
+            stub_dispatch,
         ],
     )
 
@@ -228,8 +255,8 @@ async def test_narration_workflow_rejects_an_empty_spec() -> None:
     assert SEEN["render"] == []
 
 
-async def test_digest_dispatches_narration_to_the_narration_queue() -> None:
-    """The digest worker must reach the narration activity by name on its queue."""
+async def test_digest_dispatches_narration_to_the_podcast_namespace() -> None:
+    """The digest hands the render to the dispatch activity, namespace included."""
     _reset()
     config = PipelineConfig(
         feed_urls=["https://example.com/rss"],
@@ -237,7 +264,12 @@ async def test_digest_dispatches_narration_to_the_narration_queue() -> None:
         deliver_audio=False,
         collection="tech",
         delivery_channels=["telegram"],
-        narration={"task_queue": NARRATION_QUEUE, "spec": SPEC, "script": SCRIPT},
+        narration={
+            "namespace": PODCAST_LOCAL_NAMESPACE,
+            "task_queue": NARRATION_QUEUE,
+            "spec": SPEC,
+            "script": SCRIPT,
+        },
     )
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with (
@@ -252,9 +284,12 @@ async def test_digest_dispatches_narration_to_the_narration_queue() -> None:
             )
 
     assert result["status"] == "ok"
-    assert len(SEEN["render"]) == 1
-    assert SEEN["render"][0]["run_id"] == "digest-narrated"
-    assert SEEN["render"][0]["collection"] == "tech"
+    assert len(SEEN["dispatch"]) == 1
+    dispatched = SEEN["dispatch"][0]
+    assert dispatched["namespace"] == PODCAST_LOCAL_NAMESPACE
+    assert dispatched["task_queue"] == NARRATION_QUEUE
+    assert dispatched["payload"]["run_id"] == "digest-narrated"
+    assert dispatched["payload"]["collection"] == "tech"
     narration_delivery = [d for d in result["delivery_status"] if d.get("channel") == "narration"]
     assert narration_delivery == [
         {"channel": "narration", "status": "ok", "audio_path": RENDERED["audio_path"]}
@@ -271,7 +306,12 @@ async def test_digest_records_the_run_before_dispatching_the_narration() -> None
         deliver_audio=False,
         collection="tech",
         delivery_channels=["telegram"],
-        narration={"task_queue": NARRATION_QUEUE, "spec": SPEC, "script": SCRIPT},
+        narration={
+            "namespace": PODCAST_LOCAL_NAMESPACE,
+            "task_queue": NARRATION_QUEUE,
+            "spec": SPEC,
+            "script": SCRIPT,
+        },
     )
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with (
@@ -288,7 +328,7 @@ async def test_digest_records_the_run_before_dispatching_the_narration() -> None
     assert len(SEEN["record"]) == 1
     assert SEEN["record"][0]["status"] == "ok"
     assert SEEN["record"][0]["collection"] == "tech"
-    assert SEEN["render"][0]["run_id"] == "digest-narration-order"
+    assert SEEN["dispatch"][0]["payload"]["run_id"] == "digest-narration-order"
 
 
 async def test_digest_survives_a_failing_narration() -> None:
@@ -300,7 +340,12 @@ async def test_digest_survives_a_failing_narration() -> None:
         deliver_audio=False,
         collection="tech",
         delivery_channels=["telegram"],
-        narration={"task_queue": NARRATION_QUEUE, "spec": SPEC, "script": SCRIPT},
+        narration={
+            "namespace": PODCAST_LOCAL_NAMESPACE,
+            "task_queue": NARRATION_QUEUE,
+            "spec": SPEC,
+            "script": SCRIPT,
+        },
     )
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with (
@@ -341,17 +386,26 @@ async def test_digest_without_narration_never_calls_the_narration_queue() -> Non
             )
 
     assert result["status"] == "ok"
-    assert SEEN["render"] == []
+    assert SEEN["dispatch"] == []
     assert [d for d in result["delivery_status"] if d.get("channel") == "narration"] == []
 
 
-def test_narration_payload_requires_a_task_queue_and_spec() -> None:
+def test_narration_payload_requires_namespace_queue_and_spec() -> None:
     """A malformed opt-in fails loudly instead of dispatching nowhere."""
-    with pytest.raises(ApplicationError, match="task_queue"):
+    with pytest.raises(ApplicationError, match="namespace"):
         DigestPipelineWorkflow._narration_payload(PipelineConfig(narration={"spec": SPEC}), "r")
-    with pytest.raises(Exception, match="task_queue"):
+    with pytest.raises(ApplicationError, match="namespace"):
         DigestPipelineWorkflow._narration_payload(
             PipelineConfig(narration={"task_queue": NARRATION_QUEUE}), "r"
+        )
+    with pytest.raises(ApplicationError, match="namespace"):
+        DigestPipelineWorkflow._narration_payload(
+            PipelineConfig(narration={"namespace": PODCAST_LOCAL_NAMESPACE, "spec": SPEC}),
+            "r",
+        )
+    with pytest.raises(ApplicationError, match="task_queue"):
+        DigestPipelineWorkflow._narration_payload(
+            PipelineConfig(narration={"namespace": PODCAST_LOCAL_NAMESPACE}), "r"
         )
 
 
@@ -360,6 +414,7 @@ def test_narration_payload_merges_the_opt_in() -> None:
         PipelineConfig(
             collection="tech",
             narration={
+                "namespace": PODCAST_LOCAL_NAMESPACE,
                 "task_queue": NARRATION_QUEUE,
                 "spec": SPEC,
                 "script": SCRIPT,
@@ -369,6 +424,7 @@ def test_narration_payload_merges_the_opt_in() -> None:
         ),
         "digest-42",
     )
+    assert request["namespace"] == PODCAST_LOCAL_NAMESPACE
     assert request["task_queue"] == NARRATION_QUEUE
     assert request["payload"] == {
         "run_id": "digest-42",

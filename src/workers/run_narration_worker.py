@@ -1,9 +1,14 @@
-"""Temporal worker entry point for the narration pipeline (Phase 7).
+"""Temporal worker entry point for the local podcast namespace (Phase 7.9b).
 
-Runs a second worker on its own task queue (``NARRATION_TASK_QUEUE``) hosting
-only the narration workflow and activities, so a long multi-speaker render can
-never starve the digest pipeline's worker slots and so the narration code
-deploys independently.
+Runs a worker on the local narration task queue hosting the narration workflow
+and activities, so a long multi-speaker render can never starve the digest
+pipeline's worker slots and so the narration code deploys independently.
+
+Since Phase 7.9b it serves its own namespace (``news-engine-podcast-local``)
+rather than the digest one: a Temporal activity executes in the namespace of
+the workflow that scheduled it, so giving podcast generation a namespace per
+backend requires the render to be its own workflow, started by the digest
+through ``dispatch_narration_activity`` or by the standalone starters.
 
 Example:
     python -m src.workers.run_narration_worker
@@ -57,7 +62,7 @@ async def run_narration_worker(
     Yields:
         The running narration Worker instance.
     """
-    queue = task_queue or settings.narration_task_queue
+    queue = task_queue or settings.narration_local_task_queue
     with ThreadPoolExecutor(max_workers=settings.narration_max_concurrency) as activity_executor:
         worker = Worker(
             client,
@@ -70,6 +75,7 @@ async def run_narration_worker(
             "starting_narration_worker",
             task_queue=queue,
             concurrency=settings.narration_max_concurrency,
+            namespace=settings.temporal_podcast_local_namespace,
         )
         async with worker:
             yield worker
@@ -86,11 +92,14 @@ async def main() -> None:
     args = parser.parse_args()
     configure_logging()
     await run_migrations()
-    client: Client = await build_client()
+    # Phase 7.9b: podcast generation owns one namespace per backend. This
+    # worker serves the local one; the Modal side has its own worker.
+    client: Client = await build_client(settings.temporal_podcast_local_namespace)
     async with run_narration_worker(client, task_queue=args.queue):
         logger.info(
             "narration_worker_running",
-            task_queue=args.queue or settings.narration_task_queue,
+            task_queue=args.queue or settings.narration_local_task_queue,
+            namespace=settings.temporal_podcast_local_namespace,
         )
         await asyncio.Event().wait()
 
