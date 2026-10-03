@@ -161,7 +161,7 @@ fails and the error alert fires instead.
 
 ## Observability
 
-The built-in **Temporal Web UI** (docker-compose `temporal-ui`, `http://localhost:8080`) is the
+The built-in **Temporal Web UI** (docker-compose `temporal-ui`, `http://localhost:8081`) is the
 primary debugging surface: worklist, Compact view, and the Timeline view render each workflow's
 event history (activities, timers, retries) without extra tooling.
 
@@ -193,8 +193,8 @@ whole stack:
 component / proprietary desktop app) is an optional interactive graph overlay for exploring parent
 and child workflows. It is **not** a container or a docker-compose overlay: it is a desktop
 (Electron) application that connects to the self-hosted Temporal UI address (e.g.
-`localhost:8080`) and discovers namespaces automatically. It requires no code changes and no new
-service. To use it from a dev machine other than the server, expose `:8080` (or use an SSH tunnel).
+`localhost:8081`) and discovers namespaces automatically. It requires no code changes and no new
+service. To use it from a dev machine other than the server, expose `:8081` (or use an SSH tunnel).
 
 Thoroughly evaluated but deliberately **not** adopted: **zigflow** (CNCF Open Workflow Spec DSL
 that compiles to Temporal workflows with its own Go worker). It would require abandoning the Python

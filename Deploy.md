@@ -59,7 +59,7 @@ This starts:
 - `narration-worker` — Temporal worker polling the narration task queue
   (multi-speaker audio; Phase 7)
 - `temporal` — Temporal server on `:7233`
-- `temporal-ui` — Temporal web UI on `:8080`
+- `temporal-ui` — Temporal web UI on `:8081` (host port; the container listens on 8080)
 - `temporal-postgres` — Postgres backing the Temporal server
 
 Verify service status:
@@ -326,7 +326,8 @@ Expected response:
 
 Check Temporal services:
 ```bash
-curl -s http://localhost:8080/api/namespaces           # Temporal UI/API
+docker compose exec -T temporal temporal operator namespace list \
+  --address temporal:7233   # list namespaces
 docker compose logs -f temporal                        # Temporal server logs
 ```
 
@@ -354,7 +355,20 @@ To cancel/remove a schedule from the CLI or UI:
 ```bash
 docker compose exec worker python -m src.workers.trigger   # manual runs only
 ```
-Delete schedules through the Temporal UI at `http://localhost:8080/namespaces/default/schedules`.
+Delete schedules through the Temporal UI at `http://localhost:8081/namespaces/default/schedules`.
+
+To inspect or clear the ingested news (articles and clusters) while keeping the
+run and delivery history:
+
+```bash
+docker compose exec -T api python - --inspect < scripts/news_reset.py
+docker compose exec -T api python - --purge    < scripts/news_reset.py
+```
+
+`--purge` writes a `data/news.db.pre-purge-<timestamp>` backup first and only
+removes `articles`, `clusters` and `cluster_articles`, so the next digest
+ingests and picks fresh stories. It has to run inside a container: the
+containers write `news.db` as root and the host user can only read it.
 
 ---
 
@@ -463,23 +477,24 @@ echo "VOICE_STAGING_API_KEY=<the value above>" >> ~/news-summary/.env
 docker compose up -d api voice-catalog-worker
 ```
 
-### 8.3 GPU box: the design worker
+### 8.3 The design worker (same box, off by default)
 
-The box (debwk, `100.75.148.68`) runs a **user-level** systemd service, not a
-container: Docker there has no NVIDIA runtime, and the CUDA stack is already
-installed system-wide (`torch 2.14.1+cu130`, `qwen_tts 0.1.1`).
+Since the consolidation the server and the GPU are the **same machine**
+(debwk, `100.75.148.68`), so the design worker is a **user-level** systemd
+service on debwk, not a container and not a second box: Docker there has no
+NVIDIA runtime registered, while the CUDA stack already lives in a venv
+(`torch 2.14.1+cu130`, `qwen_tts 0.1.1`).
 
 One-time setup:
 
 ```bash
-# 1. clone the repo (the worker only needs src/, not the docker image)
-git clone <repo-url> ~/news-summary && cd ~/news-summary
+cd ~/news-summary
 
-# 2. the Temporal client plus httpx for the staging upload, on top of the CUDA
+# 1. the Temporal client plus httpx for the staging upload, on top of the CUDA
 #    stack already in that venv
 ~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings httpx
 
-# 3. worker unit
+# 2. worker unit: same box, so Temporal and the staging API are on localhost
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/news-engine-voice-worker.service <<'UNIT'
 [Unit]
@@ -490,11 +505,10 @@ Wants=network-online.target
 [Service]
 WorkingDirectory=%h/news-summary
 Environment=PYTHONUNBUFFERED=1
-Environment=TEMPORAL_HOST=192.168.5.7:7233
-# The design activity POSTs the WAV here (same key as the server's .env);
-# localhost would be this box, so the server address is explicit.
-Environment=VOICE_STAGING_URL=http://192.168.5.7:8000
-Environment=VOICE_STAGING_API_KEY=<same value as VOICE_STAGING_API_KEY on the server>
+Environment=TEMPORAL_HOST=127.0.0.1:7233
+# The design activity POSTs the WAV to the server API, which is this same box.
+Environment=VOICE_STAGING_URL=http://127.0.0.1:8000
+Environment=VOICE_STAGING_API_KEY=<same value as VOICE_STAGING_API_KEY in .env>
 ExecStart=%h/qwen3-tts/venv/bin/python -m src.workers.run_voice_worker --role design
 Restart=on-failure
 RestartSec=5
@@ -504,16 +518,32 @@ WantedBy=default.target
 UNIT
 
 systemctl --user daemon-reload
-systemctl --user enable --now news-engine-voice-worker
 loginctl enable-linger "$USER"   # keep it up after logout
-journalctl --user -fu news-engine-voice-worker
+```
+
+**The unit is deliberately not enabled.** Voice design needs the whole GPU, and
+so do the TTS gateway and Ollama, so the design worker stays stopped and
+`scripts/design_window.sh` is the only thing that starts it:
+
+```bash
+./scripts/design_window.sh          # stops OmniVoice, unloads Ollama, runs the
+                                    # design worker until the voices namespace
+                                    # has no workflow left, then restores both
+./scripts/design_window.sh 600      # same, with an explicit 600s budget
+```
+
+That way the daily digests and the narration always have the GPU, and the
+design window is the only thing that competes for it. Check the state with:
+
+```bash
+systemctl --user is-active omnivoice-api.service news-engine-voice-worker.service
+journalctl --user -u omnivoice-api.service -f
 ```
 
 `voice_design_task_queue` and `temporal_voices_namespace` keep their defaults,
-so the only values the unit has to set are `TEMPORAL_HOST` and the staging
-pair (`VOICE_STAGING_URL` + `VOICE_STAGING_API_KEY`). The box must reach
-the server: `nc -vz 192.168.5.7 7233` (Tailscale address `100.75.148.68`). The first run downloads
-`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` (~4 GB) into the HuggingFace cache.
+so the unit only has to set `TEMPORAL_HOST` and the staging pair. The first run
+downloads `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` (~4 GB) into the HuggingFace
+cache.
 
 ### 8.4 Generating the voices
 
@@ -574,7 +604,8 @@ reattaches to the render already in flight instead of paying for a second one.
 Check that every worker registered where it should:
 
 ```bash
-curl -s http://localhost:8080/api/namespaces | python -m json.tool
+docker compose exec -T temporal temporal operator namespace list \
+  --address temporal:7233
 docker compose logs worker | grep -i "connected\|namespace"
 ```
 
@@ -586,3 +617,85 @@ docker compose stop worker narration-worker   # renders stop, digests continue
 
 Without the podcast workers the digest still completes and records the
 narration delivery as `error`, so this degrades instead of failing.
+
+## 10. Local TTS gateway (OmniVoice)
+
+The local narration backend is the **OmniVoice gateway** (`~/ov_api`), not the
+API container and not genpod: it is the only one that serves the contract
+news-engine calls (`/api/v1/health`, `/api/v1/voices/stock`,
+`/api/v1/voices/clone`, `/api/v1/tts`, `/api/v1/conversations`). It runs as a
+**user-level** systemd service on the host, because Docker on this box has no
+NVIDIA runtime registered and the clones are rendered on CPU anyway.
+
+| Piece | Value |
+|-------|-------|
+| Unit | `omnivoice-api.service` (user level, enabled, port `8001`) |
+| Venv | `~/ov_api/venv-omnivoice` (do not touch `~/ov_api/.venv`) |
+| Config | `~/ov_api/.env` (read by pydantic-settings from the working dir) |
+| News-engine | `TTS_API_BASE_URL` and `NARRATION_API_BASE_URL` → `http://host.docker.internal:8001/api/v1` |
+
+```bash
+systemctl --user status omnivoice-api.service
+curl -s http://localhost:8001/api/v1/health
+docker compose exec -T api python -c "import httpx; print(httpx.get('http://host.docker.internal:8001/api/v1/health').json())"
+```
+
+### 10.1 Engine: `routed` → `pocket_tts`
+
+The cloned voices carry `engine='pocket_tts'` in the gateway's database
+(MichaelScott, Dwight), and the API refuses a clone whose tag does not match
+the active engine. So `.env` routes by language instead of pinning one engine:
+
+```bash
+TTS_ENGINE=routed
+TTS_ENGINES={"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
+PORT=8001
+```
+
+`routed` initializes every engine named in the map, so `edge-tts` has to be
+installed too. It also means the 2.1 GB OmniVoice model stays unloaded while
+narration runs, leaving the GPU to Ollama.
+
+One-time install of the venv:
+
+```bash
+cd ~/ov_api
+python3 -m venv venv-omnivoice
+venv-omnivoice/bin/pip install torch==2.11.0+cu130 torchaudio==2.11.0+cu130 \
+  --index-url https://download.pytorch.org/whl/cu130
+venv-omnivoice/bin/pip install 'git+https://github.com/k2-fsa/OmniVoice.git' pocket-tts edge-tts
+venv-omnivoice/bin/pip install fastapi 'uvicorn[standard]' pydantic pydantic-settings \
+  python-multipart loguru soundfile pydub lameenc sqlalchemy alembic aiosqlite \
+  structlog prometheus-fastapi-instrumentator slowapi httpx numpy
+```
+
+`torchaudio` tops out at 2.11 on the cu130 index, so torch and torchaudio have
+to be pinned to the same 2.11.0 pair. The project itself pins Python `<3.13`
+and the box only has 3.13, so the app is **not** installed as a package: run it
+from the working directory, where pydantic-settings picks up `.env`.
+
+### 10.2 Verifying a clone by hand
+
+```bash
+curl -s http://localhost:8001/api/v1/voices/cloned          # the clone ids
+curl -s -X POST http://localhost:8001/api/v1/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Prueba de audio.","voice_id":"3e47fbcc-53a8-4551-be91-48f93d62a19f","language":"en"}' \
+  -o /tmp/clone.wav -w '%{http_code} %{size_download}\n'
+file /tmp/clone.wav     # RIFF (little-endian) data, WAVE audio
+```
+
+A `404 voice_not_found (stock)` here means the engine cannot serve that clone:
+either the voice is tagged for another engine or the cast is wrong. Stock ids
+(`en-us-male`, `es-mx-male`, ...) live in `/api/v1/voices/stock`.
+
+### 10.3 Rollback
+
+```bash
+systemctl --user stop omnivoice-api.service
+```
+
+`NarrationTTSService` degrades instead of failing: the digest still completes
+and records the narration as `error`. To move the clones back onto the
+`omnivoice` engine instead, re-clone them there so their `engine` tag changes,
+then set `TTS_ENGINE=omnivoice` and drop `TTS_ENGINES`.

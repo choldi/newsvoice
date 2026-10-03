@@ -245,7 +245,7 @@ code.
 (its YAML DSL compiles to a separate Go worker, incompatible with the Python SDK
 workflows + `WorkflowEnvironment` tests). Temporal Flow is an optional desktop
 (graph) viewer, not a container overlay: it connects to the existing
-`temporal-ui` at `:8080` with no code or compose changes. Default debugging stays
+`temporal-ui` at `:8081` with no code or compose changes. Default debugging stays
 on the built-in Temporal UI (Compact + Timeline views). See Architecture.md →
 Observability.
 
@@ -385,7 +385,7 @@ no cambia ni audiblemente ni en tests.
 
 ---
 
-- [ ] **7.9b Namespaces de podcast y worker de dispatch** — la generación de
+- [x] **7.9b Namespaces de podcast y worker de dispatch** — la generación de
       podcast pasa a tener namespace propio por backend
       (`news-engine-podcast-local`, `news-engine-podcast-modal`), porque una
       actividad Temporal siempre se ejecuta en el namespace de su workflow y el
@@ -403,11 +403,11 @@ no cambia ni audiblemente ni en tests.
       namespaces de forma idempotente (repetir tras cualquier restore de
       Temporal).
 
-**Success criteria:** `709 passed` con `ruff` limpio, el digest entrega audio vía
+**Success criteria:** `713 passed` con `ruff` limpio, el digest entrega audio vía
 `dispatch_narration_activity` (los renders no se ejecutan en el worker de digest),
 el id del workflow de narración queda fijado por test, y los tres workers se
 conectan a namespaces distintos y verificables con
-`curl http://localhost:8080/api/namespaces`.
+`docker compose exec -T temporal temporal operator namespace list --address temporal:7233`.
 
 **Effort:** 3-4 hours.
 
