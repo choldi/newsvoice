@@ -416,8 +416,14 @@ def test_voice_clone_invalid_base64_422() -> None:
 
 
 def test_voice_catalog_status_lists_profiles() -> None:
-    """GET /admin/voices/catalog returns the catalog and its status."""
-    response = client.get("/api/admin/voices/catalog")
+    """GET /admin/voices/catalog returns the catalog and its status.
+
+    The manifest is patched empty: the host's ``data/voices/manifest.json``
+    holds the migrated designed voices (state that differs per machine), and
+    this test must pin the no-manifest behaviour deterministically.
+    """
+    with patch("src.api.routes.admin_voices.load_manifest", return_value={}):
+        response = client.get("/api/admin/voices/catalog")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"

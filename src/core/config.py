@@ -221,7 +221,11 @@ class Settings(BaseSettings):
     # Empty disables the docker_containers check.
     monitor_docker_socket: str = "/var/run/docker.sock"
     tts_cache_dir: str = "data/tts_cache"
-    tts_api_base_url: str = "http://debwk.elver-exponential.ts.net:8000/api/v1"
+    # OmniVoice gateway endpoint (Phase 7.9/7.12): voices catalog, cloning and
+    # the narration/lesson renderer all talk to it. Port 8001 is the gateway's
+    # own port; :8000 used to be the legacy news-engine API reverse-proxy and
+    # is dead since the cutover (fetches failed with "connection refused").
+    tts_api_base_url: str = "http://debwk.elver-exponential.ts.net:8001/api/v1"
     tts_api_key: str = ""
     # Kill switch for the admin TTS HTTP endpoint (POST /api/admin/tts). The
     # Temporal activities call the service directly, so setting this to false

@@ -31,6 +31,10 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
      `nemotron-cascade-2`). Fallback si debwk cae:
      `http://192.168.5.4:9000/v1` (Qwen3.5-4B en winsrv, verificado).
      **No uses `localhost:8080` en esta caja: ahí vive qBittorrent.**
+   - `TTS_API_BASE_URL` — endpoint del gateway OmniVoice (voces, clonado y
+     render de narración/lecciones): `http://debwk.elver-exponential.ts.net:8001/api/v1`.
+     **No uses el `:8000` antiguo** (API vieja, ya parada): con él la GUI de
+     voces sale vacía y los renders no encuentran el gateway.
    - `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`
    - `RSS_FEED_URLS` — JSON list of feed URLs (fallback for the implicit default
      collection when no `collections.toml` is present)
@@ -577,6 +581,17 @@ from `data/voices/.staging/`. Only the sha256 crosses the workflow history, so
 a full 24-voice batch no longer trips the server's history size limit. An
 upload to Modal is attempted **once**: it fails on configuration, not on
 flakiness, and an endless retry would wedge the workflow.
+
+#### Recovery after a migration
+
+`data/voices/` is git-ignored, so a new machine has no designed references.
+Copy them from wherever the design ran and register them in the gateway
+(idempotent; trims the refs that exceed the gateway's 30 s limit):
+
+```bash
+rsync -a <old-host>:/path/to/news-summary/data/voices/ ./data/voices/
+.venv/bin/python scripts/clone_designed_voices.py
+```
 
 ### 8.5 Rollback
 
