@@ -42,6 +42,7 @@ with workflow.unsafe.imports_passed_through():
         set_monitor_state_activity,
         sync_collections_schedules_activity,
         verify_digest_activity,
+        verify_tts_audio_activity,
     )
 
 # Reasonable per-step timeouts for activity execution.
@@ -68,6 +69,10 @@ DELIVERY_TIMEOUT = timedelta(seconds=60)
 # Phase 7.10: downloading the article page (bounded by url_fetch_timeout) plus
 # the CPU-bound trafilatura extraction in the activity thread.
 URL_FETCH_TIMEOUT = timedelta(seconds=120)
+# Phase 7.14: ffmpeg decode + Whisper transcription on CPU. The first run of a
+# host also downloads the model (~150 MB) into data/whisper, so the ceiling
+# covers that one-off cost; every later run is minutes at most.
+AUDIO_VERIFY_TIMEOUT = timedelta(seconds=3600)
 # Phase 7.13: claim extraction plus one judge call per batch. A digest yields at
 # most llm_verify_max_claims (40) claims in batches of llm_verify_claims_per_call
 # (5), i.e. up to 8 sequential local LLM calls; judge_llm_timeout (600s) bounds
@@ -141,6 +146,10 @@ class PipelineConfig:
     # the judge backend and the host -> reliability map. None means the
     # collection does not verify and the gate is skipped entirely.
     verify: dict[str, Any] | None = None
+    # Phase 7.14 audio verification (ASR/WER). Same rules: resolved outside
+    # the workflow; None means the collection does not verify its audio and
+    # the audio-only gate never triggers.
+    audio_verify: dict[str, Any] | None = None
     # Whether to deliver the narration audio (default true when narration_enabled)
     narration_deliver_audio: bool = True
 
@@ -349,6 +358,7 @@ class DigestPipelineWorkflow:
         # (AAC) file; if ffmpeg fails the original WAV is used as a fallback so
         # audio delivery is never blocked by the compression step.
         audio: dict[str, Any] | None = None
+        audio_verification: dict[str, Any] | None = None
         if config.tts_enabled:
             workflow.logger.info("Generating TTS audio")
             try:
@@ -364,7 +374,49 @@ class DigestPipelineWorkflow:
                     start_to_close_timeout=TTS_TIMEOUT,
                     retry_policy=NETWORK_RETRY_POLICY,
                 )
-                if config.deliver_audio and audio.get("audio_path"):
+                # Phase 7.14: audio-only gate. The text digest has already been
+                # delivered above (it is the primary deliverable and must never
+                # wait for audio), so a failing WER withholds the audio only:
+                # setting `audio` to None makes every later audio delivery and
+                # the run's audio_path skip it, while the verdict lands in the
+                # verifications ledger through the activity.
+                if config.audio_verify and audio.get("audio_path"):
+                    audio_verification = await workflow.execute_activity(
+                        verify_tts_audio_activity,
+                        {
+                            "run_id": workflow.info().workflow_id,
+                            "audio_path": audio["audio_path"],
+                            "digest": digest_markdown,
+                            "collection": config.collection,
+                            "threshold": config.audio_verify.get("threshold"),
+                        },
+                        start_to_close_timeout=AUDIO_VERIFY_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                    if not audio_verification.get("passed"):
+                        workflow.logger.warning(
+                            f"Audio verification failed "
+                            f"(WER={audio_verification.get('score')}, "
+                            f"threshold={audio_verification.get('threshold')}); "
+                            f"withholding audio"
+                        )
+                        delivery_status.append(
+                            {
+                                "channel": "audio_verification",
+                                "status": "verification_failed",
+                                "score": audio_verification.get("score"),
+                                "threshold": audio_verification.get("threshold"),
+                                "verdict": audio_verification.get("verdict"),
+                                "audio_path": audio_verification.get("audio_path"),
+                            }
+                        )
+                        audio = None
+
+                # `audio` may now be None (Phase 7.14 withheld it): the later
+                # consumers all guard with `if audio and ...`, and these two
+                # branches must too, or a withheld run raises a deterministic
+                # AttributeError inside the workflow task.
+                if config.deliver_audio and audio and audio.get("audio_path"):
                     try:
                         compressed = await workflow.execute_activity(
                             compress_audio_activity,
@@ -378,7 +430,7 @@ class DigestPipelineWorkflow:
                         workflow.logger.warning(
                             f"Audio compression failed; delivering WAV instead: {detail}"
                         )
-                elif config.deliver_audio and not audio.get("audio_path"):
+                elif config.deliver_audio and audio is not None and not audio.get("audio_path"):
                     delivery_status.append({"status": "error", "error": "no audio generated"})
             except (ActivityError, ApplicationError) as exc:
                 detail = getattr(exc, "cause", None) or exc
@@ -568,6 +620,31 @@ class DigestPipelineWorkflow:
                         "audio_path": narration_audio_path,
                     }
                 )
+                # Phase 7.14: the narration render verified itself on its own
+                # worker (same audio-only rule): a failing WER withholds the
+                # narration audio but never the digest, which was delivered
+                # long before this dispatch.
+                narration_verification = (
+                    narration.get("verification") if isinstance(narration, dict) else None
+                )
+                if narration_audio_path and narration_verification:
+                    if not narration_verification.get("passed"):
+                        workflow.logger.warning(
+                            f"Narration audio verification failed "
+                            f"(WER={narration_verification.get('score')}); "
+                            f"withholding narration audio"
+                        )
+                        delivery_status.append(
+                            {
+                                "channel": "narration_audio_verification",
+                                "status": "verification_failed",
+                                "score": narration_verification.get("score"),
+                                "threshold": narration_verification.get("threshold"),
+                                "verdict": narration_verification.get("verdict"),
+                                "audio_path": narration_audio_path,
+                            }
+                        )
+                        narration_audio_path = None
                 # Deliver narration audio to configured channels if enabled
                 if narration_audio_path and config.narration_deliver_audio:
                     await self._deliver_narration_audio(
@@ -588,6 +665,7 @@ class DigestPipelineWorkflow:
             "cluster_count": len(clusters),
             "digest": digest_markdown,
             "delivery_status": delivery_status,
+            "audio_verification": audio_verification,
             "verification": (
                 {
                     "verdict": verification.get("verdict"),
@@ -643,6 +721,8 @@ class DigestPipelineWorkflow:
             "collection": config.collection,
             "spec": spec,
             "script": request.get("script"),
+            # Phase 7.14: the render activity verifies the audio it produced.
+            "audio_verify": request.get("audio_verify"),
             "script_id": request.get("script_id"),
             "strategy": request.get("strategy") or "turns",
             "main_story_count": config.main_story_count,

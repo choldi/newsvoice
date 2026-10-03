@@ -51,6 +51,7 @@ def worker_activities() -> list[object]:
         activities.generate_logic_activity,
         activities.verify_digest_activity,
         activities.generate_tts_activity,
+        activities.verify_tts_audio_activity,
         activities.compress_audio_activity,
         activities.deliver_telegram_message_activity,
         activities.deliver_telegram_audio_activity,

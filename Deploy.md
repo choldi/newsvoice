@@ -1139,3 +1139,106 @@ TEACHER_ENABLED=false
 y reinicia la API (`docker compose up -d --force-recreate api`): 403 sin tocar
 código. Para retirar la cola: `docker compose stop teacher-worker` (los jobs
 en vuelo quedan `GENERATING`; borra sus filas en `audio_jobs` si no te importan).
+
+---
+
+## 15. Audio verification with Whisper (Phase 7.14)
+
+Antes de entregar un audio, se transcribe con `faster-whisper` (CPU) y se
+compara con el texto que lo generó mediante **WER** (`jiwer`, word error rate:
+cuanto más bajo, mejor). Si el WER supera el umbral, **se retiene solo el
+audio** — el texto del digest ya entregado no se toca (es primario) — y el
+veredicto queda en el ledger `verifications`.
+
+- **TTS del digest**: el texto esperado es exactamente lo que recibió el motor
+  (`speech_text_for_digest`: truncado + Markdown → habla).
+- **Narración**: el texto esperado es el script en orden (+ divulgación de IA
+  audible si la spec la pide).
+- Opt-in por colección (`audio_verify = true`); solo se verifica si la
+  colección entregaría audio (`deliver_audio` / `narration_deliver_audio`).
+
+### 15.1 One-time setup
+
+```bash
+docker compose up -d --build api worker narration-worker
+```
+
+`faster-whisper`, `jiwer`, `ctranslate2` y `av` van en la imagen. **Primera
+verificación**: el modelo se descarga de HuggingFace (~150 MB para `base`) a
+`AUDIO_VERIFY_MODEL_DIR=data/whisper` (volumen compartido, se descarga una sola
+vez y sobrevive a los rebuilds). Sin salida a internet, la verificación responde
+`verdict=error` y el audio se retiene (fail-closed).
+
+### 15.2 Enable
+
+```toml
+[[collections]]
+name = "tech"
+audio_verify = true            # opt-in de la colección
+audio_verify_threshold = 0.30  # opcional; vacío = AUDIO_VERIFY_WER_THRESHOLD
+```
+
+Kill switch global: `AUDIO_VERIFY_ENABLED=false` (apaga todas las colecciones).
+
+### 15.3 Qué se mide
+
+El audio se decodifica a 16 kHz mono con ffmpeg, se trocea en bloques de
+`AUDIO_VERIFY_BLOCK_SECONDS` (cada bloque se transcribe con
+`condition_on_previous_text=False` para que un bucle de repetición no contamine
+al resto) y se comparan los textos **normalizados** (minúsculas, sin puntuación
+ni tags de emoción: `3,5%` y `3.5%` tokenizan igual). El resultado incluye
+`wer`, `similarity = 1 - WER`, el transcript y los transcripts por bloque.
+
+### 15.4 Cuando falla (gate solo de audio)
+
+| Caso | Qué pasa |
+|---|---|
+| `wer > umbral` | Veredicto `invalid`, audio **no** entregado; el texto sigue saliendo |
+| ASR imposible (sin muestras, modelo caído) | Veredicto `error`, audio retenido (fail-closed) |
+| Sin opt-in | El gate no se ejecuta; el audio fluye como siempre |
+
+Queda registrado en `delivery_status` con `channel: "audio_verification"`
+(TTS) o `"narration_audio_verification"` (narración), y una fila por capa en el
+ledger:
+
+```sql
+SELECT target, method, verdict, score, threshold, passed, created_at
+FROM verifications WHERE method = 'asr_wer' ORDER BY id DESC LIMIT 10;
+```
+
+### 15.5 Settings
+
+```bash
+AUDIO_VERIFY_ENABLED=true       # kill switch global
+AUDIO_VERIFY_MODEL=base         # tiny/base/small/medium/large-v3
+AUDIO_VERIFY_DEVICE=cpu
+AUDIO_VERIFY_COMPUTE_TYPE=int8
+AUDIO_VERIFY_MODEL_DIR=data/whisper
+AUDIO_VERIFY_WER_THRESHOLD=0.30 # techo de WER (0 = estricto, 1 = inútil)
+AUDIO_VERIFY_BLOCK_SECONDS=60
+AUDIO_VERIFY_LANGUAGE=          # p.ej. 'es'; vacío = auto-detección
+```
+
+### 15.6 Calibration
+
+1. Con `audio_verify = true` en una colección de prueba, deja pasar 10-15
+   digests/narraciones conocidos.
+2. Lee los valores: `SELECT score FROM verifications WHERE method='asr_wer' AND passed=1`
+   y coloca el umbral **por encima del peor aceptado** con margen (~0.05).
+3. Ten en cuenta dos sesgos del ASR observados en el smoke test: números mal
+   leídos (`2027` → `2017`, +0.08 de WER en una frase de 12 palabras) y la
+   música de fondo de la narración, que infla el WER: para narración con music
+   bed sube el modelo (`small`) o el umbral, no bajes la barra del TTS.
+4. El umbral solo afecta a colecciones con `audio_verify = true`, así que
+   calibrar es reversible y no toca al resto.
+
+### 15.7 Rollback
+
+```bash
+# .env
+AUDIO_VERIFY_ENABLED=false
+```
+
+o `audio_verify = false` por colección; reinicia los workers
+(`docker compose up -d --build worker narration-worker`). El modelo ya descargado
+puedes borrarlo con `rm -rf data/whisper` cuando no lo necesites.

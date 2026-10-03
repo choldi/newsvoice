@@ -578,10 +578,50 @@ enlace de audio se sirve sin token pero un `sig` alterado da 403.
 
 **Effort:** 6-8 hours.
 
-- [ ] **7.14 Verificación de audio por bloques con Whisper** — `faster-whisper`
-      en CPU para transcribir la narración/TTS, `jiwer` para el WER y similitud
-      contra el script esperado, gate de entrega como 7.13. Dependencias nuevas
-      (`faster-whisper`, `jiwer`).
+- [x] **7.14 Verificación de audio por bloques con Whisper** — dos capas de
+      verificación ASR sobre el audio **a punto de entregarse**, con
+      `faster-whisper` (CPU, int8) + `jiwer`: el audio se decodifica con ffmpeg
+      a 16 kHz, se trocea en bloques de `AUDIO_VERIFY_BLOCK_SECONDS`
+      (`condition_on_previous_text=False` por bloque, heartbeat entre bloques)
+      y el transcript se compara con el texto esperado **normalizado**
+      (minúsculas, sin puntuación ni tags de emoción, así `3,5%` = `3.5%`).
+      Texto esperado exacto: para el TTS del digest usa el MISMO helper de
+      síntesis (`tts.speech_text_for_digest`, refactorizado para que
+      `generate_tts` y la verificación no puedan divergir); para la narración,
+      el script en orden + la divulgación de IA audible cuando la spec la pide
+      (`_expected_narration_text`). Opt-in por colección (`audio_verify` +
+      `audio_verify_threshold`, con round-trip en API/GUI y kill switch global
+      `AUDIO_VERIFY_ENABLED`), resuelto **fuera** del workflow en
+      `pipeline_config_for` (`PipelineConfig.audio_verify`) y en el dict de
+      narración; solo se verifica si la colección entregaría audio. Gate
+      **solo de audio** (decisión del operador): en `DigestPipelineWorkflow`
+      una verificación fallida pone `audio = None` —el texto ya se entregó, es
+      primario y nunca espera al audio— con lo que compresión, adjuntos,
+      `sendAudio` y el `audio_path` de la run se saltan, dejando una entrada
+      `channel: audio_verification / verification_failed` en `delivery_status`;
+      para la narración, `render_narration_activity` se verifica a sí mismo en
+      su propio worker y `NarrationWorkflow` devuelve `verification`, que el
+      digest consulta antes de `_deliver_narration_audio` (una narración
+      rechazada nunca tumba el digest, convención intacta). Ambas capas
+      escriben en el ledger `verifications` (`method='asr_wer'`,
+      `target='tts_audio' | 'narration_audio'`, `score=WER` —¡menor, mejor—,
+      `passed` explícito y detalles con transcript, bloques y similitud);
+      fallos imposibles de transcribir dan `verdict=error` y retienen el audio
+      (fail-closed). Nuevas dependencias `faster-whisper>=1.1` y `jiwer>=3`
+      (aprobadas); modelo en `data/whisper` (volumen, descarga única ~150 MB).
+      Configuración y calibración en `Deploy.md` §15.
+
+**Success criteria:** `965 passed` con `ruff` limpio; smoke real
+(edge-tts → WER 0,083 con umbral 0,30, detectó `2027`→`2017`); los 16 tests de
+`test_audio_verify.py` cubren normalización/troceado/umbral/audio silencioso;
+`test_audio_verification_failure_withholds_only_the_audio` demuestra que el
+texto se entrega igual y ningún canal recibe el audio; el hook de narración
+(`test_narration_audio_verify.py`) verifica, persiste el ledger y devuelve el
+veredicto sin opt-in no gasta CPU; y el bug de `audio=None` sobre la rama de
+compresión (excepción determinista → reintento infinito del workflow task) está
+cubierto por el propio gate.
+
+**Effort:** 5-6 hours.
 
 ---
 

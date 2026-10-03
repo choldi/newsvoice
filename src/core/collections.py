@@ -195,6 +195,18 @@ class CollectionConfig(BaseModel):
         default=None,
         description="Judge backend for this collection: 'local', 'modal' or 'api'",
     )
+    # --- Phase 7.14: audio verification (ASR) -------------------------------
+    audio_verify: bool = Field(
+        default=False,
+        description="Transcribe the delivered audio and withhold it when the "
+        "WER against the script exceeds the threshold",
+    )
+    audio_verify_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="WER ceiling for this collection; empty = global setting",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     @field_validator("name")
@@ -468,6 +480,27 @@ class CollectionConfig(BaseModel):
             "min_reliability": settings.min_source_reliability,
         }
         return payload
+
+    def resolve_audio_verify(self) -> dict[str, object] | None:
+        """Return the Phase 7.14 audio-verification payload for this collection.
+
+        Resolved outside the workflow (a workflow cannot read settings), like
+        ``resolve_llm_verify``. ``None`` means the collection does not verify
+        its audio and the gate is skipped.
+
+        Returns:
+            The payload (enabled + threshold), or None when audio verification
+            is off for this collection.
+        """
+        settings = get_settings()
+        if not settings.audio_verify_enabled or not self.audio_verify:
+            return None
+        threshold = (
+            self.audio_verify_threshold
+            if self.audio_verify_threshold is not None
+            else settings.audio_verify_wer_threshold
+        )
+        return {"enabled": True, "threshold": threshold}
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

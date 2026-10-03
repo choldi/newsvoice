@@ -26,11 +26,12 @@ from src.api.models.cluster import ClusterIn, ClusterItem
 from src.api.models.tts import TTSIn
 from src.api.models.verification import VerifyDigestIn
 from src.api.services.audio_compress import AudioCompressService
+from src.api.services.audio_verify import AudioVerifyError, verify_audio
 from src.api.services.cluster import ClusterService
 from src.api.services.dedup import DedupService, normalize_url
 from src.api.services.digest import DigestService
 from src.api.services.email import EmailService
-from src.api.services.tts import TTSService
+from src.api.services.tts import TTSService, speech_text_for_digest
 from src.api.services.url_article import UrlArticleService, UrlExtractionError
 from src.api.services.verification import VerificationService
 from src.api.services.whatsapp import (
@@ -557,6 +558,143 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
         elapsed_seconds=round(time.monotonic() - started, 2),
     )
     return result.model_dump()
+
+
+async def _record_audio_verification(
+    run_id: str,
+    collection: str,
+    target: str,
+    *,
+    verdict: str,
+    score: float | None,
+    threshold: float,
+    passed: bool,
+    details: dict[str, Any],
+    model: str = "",
+    elapsed_seconds: float = 0.0,
+) -> None:
+    """Persist one ASR/WER verdict in the Phase 7.13 verification ledger.
+
+    Args:
+        run_id: Digest or narration workflow id the audio belongs to.
+        collection: Collection the run belongs to.
+        target: 'tts_audio' or 'narration_audio'.
+        verdict: 'valid', 'invalid' or 'error'.
+        score: Word error rate (lower is better), or None on error.
+        threshold: The WER ceiling that was applied.
+        passed: Whether the audio may be delivered.
+        details: Full breakdown (transcript, blocks, similarity, ...).
+        model: Whisper model name.
+        elapsed_seconds: Wall-clock seconds the check took.
+    """
+    await VerificationsRepository().record(
+        run_id=run_id,
+        collection=collection,
+        target=target,
+        method="asr_wer",
+        verdict=verdict,
+        score=score,
+        threshold=threshold,
+        passed=passed,
+        details=details,
+        model=model,
+        duration_seconds=round(elapsed_seconds, 2),
+    )
+
+
+@activity.defn
+async def verify_tts_audio_activity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Transcribe a digest TTS file and score it against the digest (Phase 7.14).
+
+    The expected text is rebuilt through the exact same helpers the synthesis
+    used (``speech_text_for_digest``: truncation + markdown stripping), so the
+    comparison is against what the engine actually received. The verdict lands
+    in the ``verifications`` ledger (``target='tts_audio'``, ``method='asr_wer'``)
+    and the workflow withholds the audio when it fails; the text digest has
+    already been delivered by then and is never touched.
+
+    A permanent extraction problem (no samples, no expected text) is recorded
+    as verdict ``error`` and returned as a failure instead of raised: the gate
+    is fail-closed and tomorrow's run retries naturally.
+
+    Args:
+        payload: Dict with 'run_id', 'audio_path', 'digest', 'collection' and
+            optional 'threshold'.
+
+    Returns:
+        Dict with 'passed', 'verdict', 'score' (WER), 'threshold', 'similarity',
+        'model', 'language', 'block_count' and 'reason'.
+
+    Raises:
+        ApplicationError: When the payload lacks an id or the audio path.
+    """
+    run_id = str(payload.get("run_id") or "")
+    audio_path = str(payload.get("audio_path") or "")
+    collection = str(payload.get("collection") or "default")
+    digest = str(payload.get("digest") or "")
+    settings = get_settings()
+    threshold = float(payload.get("threshold") or settings.audio_verify_wer_threshold)
+    if not run_id or not audio_path:
+        raise ApplicationError(
+            "verify_tts_audio_activity needs run_id and audio_path", non_retryable=True
+        )
+    activity.logger.info(f"Verifying TTS audio for {run_id}: {audio_path}")
+    expected = speech_text_for_digest(digest)
+    started = time.monotonic()
+
+    def _progress(done: int, total: int) -> None:
+        activity.heartbeat(done, total)
+
+    try:
+        result = await verify_audio(
+            audio_path, expected, threshold=threshold, on_progress=_progress
+        )
+    except AudioVerifyError as exc:
+        elapsed = round(time.monotonic() - started, 2)
+        await _record_audio_verification(
+            run_id,
+            collection,
+            "tts_audio",
+            verdict="error",
+            score=None,
+            threshold=threshold,
+            passed=False,
+            details={"reason": str(exc), "expected_chars": len(expected)},
+            elapsed_seconds=elapsed,
+        )
+        activity.logger.warning(f"Audio verification error: {exc}")
+        return {
+            "passed": False,
+            "verdict": "error",
+            "score": None,
+            "threshold": threshold,
+            "reason": str(exc),
+        }
+
+    elapsed = round(time.monotonic() - started, 2)
+    await _record_audio_verification(
+        run_id,
+        collection,
+        "tts_audio",
+        verdict=result.verdict,
+        score=result.wer,
+        threshold=result.threshold,
+        passed=result.passed,
+        details=result.to_dict(),
+        model=result.model,
+        elapsed_seconds=elapsed,
+    )
+    return {
+        "passed": result.passed,
+        "verdict": result.verdict,
+        "score": result.wer,
+        "threshold": result.threshold,
+        "similarity": result.similarity,
+        "model": result.model,
+        "language": result.language,
+        "block_count": result.block_count,
+        "reason": None,
+    }
 
 
 @activity.defn
@@ -1294,6 +1432,9 @@ async def dispatch_narration_activity(payload: dict[str, Any]) -> dict[str, Any]
         prompt_template=str(payload.get("prompt_template") or "default"),
         main_story_count=int(payload.get("main_story_count") or 5),
         headline_count=int(payload.get("headline_count") or 5),
+        audio_verify=payload.get("audio_verify")
+        if isinstance(payload.get("audio_verify"), dict)
+        else None,
     )
     workflow_id = _narration_workflow_id(collection, run_id)
 

@@ -156,6 +156,33 @@ def _markdown_to_speech_text(text: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def speech_text_for_digest(markdown: str, max_chars: int | None = None) -> str:
+    """Return the exact plain text ``generate_tts`` hands to the engine.
+
+    Phase 7.14 verifies audio against what was *actually* synthesized, so the
+    truncation and the markdown stripping must be the same code path, not a
+    copy of it.
+
+    Args:
+        markdown: Digest markdown.
+        max_chars: Truncation limit; defaults to ``settings.tts_max_chars``.
+
+    Returns:
+        Speech-ready plain text.
+    """
+    limit = settings_tts_max_chars() if max_chars is None else max_chars
+    return _markdown_to_speech_text(_truncate_for_tts(markdown, limit))
+
+
+def settings_tts_max_chars() -> int:
+    """Return the configured digest truncation limit.
+
+    Returns:
+        ``settings.tts_max_chars``.
+    """
+    return get_settings().tts_max_chars
+
+
 def markdown_to_speech_text(text: str) -> str:
     """Public entry point for markdown-to-speech conversion (Phase 7.11).
 
@@ -291,8 +318,7 @@ class TTSService:
         """
         voice = payload.voice or self._default_voice
         language = payload.language or self._default_language
-        text = _truncate_for_tts(payload.markdown, self._max_chars)
-        speech_text = _markdown_to_speech_text(text)
+        speech_text = speech_text_for_digest(payload.markdown, self._max_chars)
         audio_path = self._cache_dir / _audio_filename(payload.collection)
         sidecar = sidecar_path(audio_path)
 

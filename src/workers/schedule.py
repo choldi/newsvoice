@@ -100,6 +100,12 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
             "task_queue": _narration_task_queue(collection.narration_spec),
             "spec": collection.narration_spec.model_dump(),
             "strategy": collection.narration_strategy,
+            # Phase 7.14: resolved here (workflow-safe) and consumed by the
+            # render activity on the narration worker; only when the narration
+            # audio would actually be delivered.
+            "audio_verify": (
+                collection.resolve_audio_verify() if collection.narration_deliver_audio else None
+            ),
         }
 
     # Phase 7.13: drop feeds the operator does not trust before they reach the
@@ -135,6 +141,9 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
             collection.logic_delivery.model_dump() if collection.logic_delivery else None
         ),
         narration=narration_payload,
+        # Phase 7.14: verification protects delivery, so it only runs when the
+        # collection would deliver audio at all.
+        audio_verify=(collection.resolve_audio_verify() if collection.deliver_audio else None),
         main_story_count=collection.main_story_count,
         headline_count=collection.headline_count,
         narration_deliver_audio=collection.narration_deliver_audio,

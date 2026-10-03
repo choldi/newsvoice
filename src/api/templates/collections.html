@@ -196,7 +196,25 @@
               </select>
             </div>
           </div>
-          <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
+          <div class="row">
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="audio_verify" {{ 'checked' if c.audio_verify else '' }}><label>Verificar audio con Whisper (retiene el audio mal transcrito)</label></div>
+            </div>
+            <div class="col">
+              <label>Umbral WER máximo (vacío = global, 0.30)</label>
+              <input type="number" name="audio_verify_threshold" value="{{ c.audio_verify_threshold if c.audio_verify_threshold is not none else '' }}" min="0" max="1" step="0.05">
+            </div>
+          </div>
+          <div class="row">
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="audio_verify"><label>Verificar audio con Whisper (retiene el audio mal transcrito)</label></div>
+          </div>
+          <div class="col">
+            <label>Umbral WER máximo (vacío = global, 0.30)</label>
+            <input type="number" name="audio_verify_threshold" min="0" max="1" step="0.05">
+          </div>
+        </div>
+        <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
           <textarea name="source_reliability" rows="3">{% for url, score in c.source_reliability.items() %}{{ url }}={{ score }}
 {% endfor %}</textarea>
           <label>Hosts extra por feed (URL=host1,host2, una por línea)</label>

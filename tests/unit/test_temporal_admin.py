@@ -398,3 +398,52 @@ def test_new_document_run_id_is_unique_and_prefixed() -> None:
     ids = {new_document_run_id() for _ in range(50)}
     assert len(ids) == 50
     assert all(i.startswith("doc-tts-") for i in ids)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.14: audio verification resolution
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_config_carries_audio_verify_when_audio_is_delivered() -> None:
+    """The gate payload reaches the workflow only if the audio would ship."""
+    delivering = CollectionConfig(
+        name="tech",
+        feed_urls=["https://a.com/rss"],
+        tts_enabled=True,
+        deliver_audio=True,
+        audio_verify=True,
+        audio_verify_threshold=0.2,
+    )
+    config = pipeline_config_for(delivering, tts_flag=None)
+    assert config.audio_verify == {"enabled": True, "threshold": 0.2}
+
+
+def test_pipeline_config_skips_audio_verify_without_delivery() -> None:
+    """No audio delivery means nothing to protect: the payload stays None."""
+    silent = CollectionConfig(
+        name="tech",
+        feed_urls=["https://a.com/rss"],
+        tts_enabled=True,
+        deliver_audio=False,
+        audio_verify=True,
+    )
+    config = pipeline_config_for(silent, tts_flag=None)
+    assert config.audio_verify is None
+
+
+def test_narration_payload_carries_audio_verify() -> None:
+    """The narration dict forwards the gate to the render activity."""
+    from src.api.models.narration import NarrationSpec, SpeakerRole
+
+    collection = CollectionConfig(
+        name="tech",
+        feed_urls=["https://a.com/rss"],
+        narration_enabled=True,
+        narration_spec=NarrationSpec(roles=[SpeakerRole(name="anchor", voice_id="es-mx-male")]),
+        narration_deliver_audio=True,
+        audio_verify=True,
+    )
+    config = pipeline_config_for(collection, tts_flag=None)
+    assert config.narration is not None
+    assert config.narration["audio_verify"] == {"enabled": True, "threshold": 0.30}

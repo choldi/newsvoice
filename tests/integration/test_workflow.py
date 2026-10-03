@@ -92,11 +92,29 @@ async def stub_deliver_message(text: str, chat_id: str | None = None) -> dict:
     return DELIVERY
 
 
+AUDIO_DELIVERED: list[str] = []
+AUDIO_VERIFY_PASSED = True
+
+
 @activity.defn(name="deliver_telegram_audio_activity")
 async def stub_deliver_audio(
     audio_path: str, caption: str | None = None, chat_id: str | None = None
 ) -> dict:
+    AUDIO_DELIVERED.append(audio_path)
     return DELIVERY
+
+
+@activity.defn(name="verify_tts_audio_activity")
+async def stub_verify_tts_audio(payload: dict) -> dict:
+    verdict = "valid" if AUDIO_VERIFY_PASSED else "invalid"
+    return {
+        "passed": AUDIO_VERIFY_PASSED,
+        "verdict": verdict,
+        "score": 0.05 if AUDIO_VERIFY_PASSED else 0.9,
+        "threshold": 0.3,
+        "audio_path": payload.get("audio_path"),
+        "reason": None if AUDIO_VERIFY_PASSED else "WER 0.9 above threshold 0.3",
+    }
 
 
 @activity.defn(name="deliver_email_activity")
@@ -206,6 +224,7 @@ async def _run_workflow(config: PipelineConfig) -> dict:
                 stub_generate_logic,
                 stub_deliver_logic,
                 stub_verify_digest,
+                stub_verify_tts_audio,
                 stub_record_run,
             ],
         ):
@@ -1582,3 +1601,73 @@ async def test_pipeline_with_verification_failure_blocks_delivery() -> None:
                 )
     cause = str(excinfo.value.cause)
     assert "verification failed" in cause.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.14: audio-only WER gate
+# ---------------------------------------------------------------------------
+
+
+async def test_audio_verification_failure_withholds_only_the_audio() -> None:
+    """A failing WER keeps the text digest flowing and drops the audio."""
+    global AUDIO_VERIFY_PASSED, AUDIO_DELIVERED
+    AUDIO_VERIFY_PASSED = False
+    AUDIO_DELIVERED = []
+    config = PipelineConfig(
+        feed_urls=["https://feed.example/rss"],
+        tts_enabled=True,
+        deliver_audio=True,
+        audio_verify={"threshold": 0.3},
+    )
+
+    result = await _run_workflow(config)
+
+    assert result["status"] == "ok", "the text digest must never be withheld"
+    assert result["audio_verification"]["passed"] is False
+    assert result["audio_verification"]["verdict"] == "invalid"
+    withheld = [
+        entry for entry in result["delivery_status"] if entry.get("channel") == "audio_verification"
+    ]
+    assert withheld and withheld[0]["status"] == "verification_failed"
+    assert withheld[0]["score"] == 0.9
+    assert AUDIO_DELIVERED == [], "no channel may receive an unverified audio"
+    # The text still went out: the digest itself is in the result untouched.
+    assert result["digest"] == DIGEST["digest"]
+    AUDIO_VERIFY_PASSED = True
+
+
+async def test_audio_verification_pass_delivers_audio_normally() -> None:
+    """A passing WER behaves exactly like an unverified run."""
+    global AUDIO_VERIFY_PASSED, AUDIO_DELIVERED
+    AUDIO_VERIFY_PASSED = True
+    AUDIO_DELIVERED = []
+    config = PipelineConfig(
+        feed_urls=["https://feed.example/rss"],
+        tts_enabled=True,
+        deliver_audio=True,
+        audio_verify={"threshold": 0.3},
+    )
+
+    result = await _run_workflow(config)
+
+    assert result["status"] == "ok"
+    assert result["audio_verification"]["passed"] is True
+    assert result["audio_verification"]["score"] == 0.05
+    assert not any(
+        entry.get("status") == "verification_failed" for entry in result["delivery_status"]
+    )
+    assert AUDIO_DELIVERED and AUDIO_DELIVERED[0].endswith(".m4a")
+
+
+async def test_audio_verification_skipped_without_the_opt_in() -> None:
+    """No opt-in (audio_verify=None) means the gate never runs at all."""
+    global AUDIO_DELIVERED
+    AUDIO_DELIVERED = []
+    config = PipelineConfig(
+        feed_urls=["https://feed.example/rss"], tts_enabled=True, deliver_audio=True
+    )
+
+    result = await _run_workflow(config)
+
+    assert result["audio_verification"] is None
+    assert AUDIO_DELIVERED, "audio flows as before when the collection opts out"

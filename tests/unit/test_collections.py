@@ -541,3 +541,56 @@ def test_resolve_llm_verify_uses_global_threshold_when_not_set() -> None:
     payload = config.resolve_llm_verify()
     assert payload is not None
     assert payload["threshold"] == 0.9  # global default
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.14: audio verification (opt-in)
+# ---------------------------------------------------------------------------
+
+
+def test_audio_verify_is_opt_in() -> None:
+    """By default a collection does not verify its audio."""
+    config = CollectionConfig(name="ai", feed_urls=["https://a.com/rss"])
+    assert config.resolve_audio_verify() is None
+
+
+def test_audio_verify_uses_the_global_threshold() -> None:
+    """Opting in without a threshold inherits audio_verify_wer_threshold."""
+    config = CollectionConfig(name="ai", feed_urls=["https://a.com/rss"], audio_verify=True)
+    payload = config.resolve_audio_verify()
+    assert payload is not None
+    assert payload["enabled"] is True
+    assert payload["threshold"] == 0.30
+
+
+def test_audio_verify_honours_a_collection_threshold() -> None:
+    """A per-collection WER ceiling overrides the global one."""
+    config = CollectionConfig(
+        name="ai",
+        feed_urls=["https://a.com/rss"],
+        audio_verify=True,
+        audio_verify_threshold=0.15,
+    )
+    payload = config.resolve_audio_verify()
+    assert payload is not None
+    assert payload["threshold"] == 0.15
+
+
+def test_audio_verify_respects_the_global_kill_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """audio_verify_enabled=false turns every collection off at once."""
+    monkeypatch.setattr("src.core.config.settings.audio_verify_enabled", False)
+    config = CollectionConfig(name="ai", feed_urls=["https://a.com/rss"], audio_verify=True)
+    assert config.resolve_audio_verify() is None
+
+
+def test_audio_verify_threshold_is_validated() -> None:
+    """A WER ceiling outside [0, 1] is a configuration error."""
+    with pytest.raises(ValidationError):
+        CollectionConfig(
+            name="ai",
+            feed_urls=["https://a.com/rss"],
+            audio_verify=True,
+            audio_verify_threshold=1.5,
+        )

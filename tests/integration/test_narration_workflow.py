@@ -474,6 +474,8 @@ def test_narration_payload_merges_the_opt_in() -> None:
         "main_story_count": 5,
         "headline_count": 5,
         "prompt_template": "default",
+        # Phase 7.14: resolved with the rest of the opt-in, off by default.
+        "audio_verify": None,
     }
 
 

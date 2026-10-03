@@ -23,8 +23,10 @@ from src.api.db.database import (
     ModalSpendRepository,
     NarrationRepository,
     RunsRepository,
+    VerificationsRepository,
 )
 from src.api.models.narration import NarrationScript, NarrationSpec, TTSBackend
+from src.api.services.audio_verify import AudioVerifyError, verify_audio
 from src.api.services.narration_tts import (
     NarrationError,
     NarrationTTSService,
@@ -193,6 +195,27 @@ async def resolve_narration_script_activity(payload: dict[str, Any]) -> dict[str
     }
 
 
+def _expected_narration_text(spec: NarrationSpec, script: NarrationScript) -> str:
+    """Return everything the render is supposed to say (Phase 7.14).
+
+    Mirrors what ``NarrationTTSService`` synthesizes: the optional audible AI
+    disclosure is prepended when the spec and the settings ask for it, then
+    every segment in order.
+
+    Args:
+        spec: The cast/delivery spec used for the render.
+        script: The script that was rendered.
+
+    Returns:
+        Plain text of the expected narration.
+    """
+    parts: list[str] = []
+    if spec.ai_disclosure and settings.narration_ai_disclosure_text:
+        parts.append(settings.narration_ai_disclosure_text)
+    parts.extend(segment.text for segment in script.segments)
+    return " ".join(parts)
+
+
 @activity.defn
 async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Render a narration script into a cached M4A and attach it to the run.
@@ -271,8 +294,76 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
         activity.logger.info(
             f"narration_run_without_digest_row run_id={run_id} audio_path={result.audio_path}"
         )
+    # Phase 7.14: verify the audio this render just produced (audio-only gate:
+    # the digest workflow withholds the narration delivery when this fails, and
+    # it never touches the digest itself). Fail-closed: an unusable file or an
+    # empty script scores as an error and withholds the audio too.
+    verification: dict[str, Any] | None = None
+    audio_verify = payload.get("audio_verify")
+    if isinstance(audio_verify, dict) and audio_verify.get("enabled"):
+        verify_threshold = audio_verify.get("threshold")
+        expected = _expected_narration_text(spec, script)
+        verify_started = time.monotonic()
+
+        def _progress(done: int, total: int) -> None:
+            activity.heartbeat(done, total)
+
+        try:
+            score = await verify_audio(
+                result.audio_path,
+                expected,
+                threshold=float(verify_threshold) if verify_threshold is not None else None,
+                on_progress=_progress,
+            )
+            verification = {
+                "passed": score.passed,
+                "verdict": score.verdict,
+                "score": score.wer,
+                "threshold": score.threshold,
+                "similarity": score.similarity,
+                "model": score.model,
+                "language": score.language,
+                "block_count": score.block_count,
+                "audio_path": result.audio_path,
+                "reason": None,
+            }
+            details: dict[str, Any] = {**score.to_dict(), "audio_path": result.audio_path}
+        except AudioVerifyError as exc:
+            fallback = (
+                settings.audio_verify_wer_threshold
+                if verify_threshold is None
+                else float(verify_threshold)
+            )
+            verification = {
+                "passed": False,
+                "verdict": "error",
+                "score": None,
+                "threshold": fallback,
+                "audio_path": result.audio_path,
+                "reason": str(exc),
+            }
+            details = {"reason": str(exc), "expected_chars": len(expected)}
+        await VerificationsRepository().record(
+            run_id=run_id,
+            collection=collection,
+            target="narration_audio",
+            method="asr_wer",
+            verdict=verification["verdict"],
+            score=verification["score"],
+            threshold=float(verification["threshold"]),
+            passed=bool(verification["passed"]),
+            details=details,
+            model=str(verification.get("model") or ""),
+            duration_seconds=round(time.monotonic() - verify_started, 2),
+        )
+        activity.logger.info(
+            f"Narration audio verified: passed={verification['passed']} "
+            f"WER={verification['score']} threshold={verification['threshold']}"
+        )
+
     payload = result.model_dump()
     payload["run_attached"] = bool(updated)
+    payload["verification"] = verification
     return payload
 
 

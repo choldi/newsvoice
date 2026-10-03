@@ -753,6 +753,12 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
                 else None
             ),
             llm_verify_backend=fields.get("llm_verify_backend", "").strip() or None,
+            audio_verify=fields.get("audio_verify") == "on",
+            audio_verify_threshold=(
+                float(fields["audio_verify_threshold"])
+                if fields.get("audio_verify_threshold", "").strip()
+                else None
+            ),
         ).to_config()
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
@@ -822,6 +828,12 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
                 else None
             ),
             llm_verify_backend=fields.get("llm_verify_backend", "").strip() or None,
+            audio_verify=fields.get("audio_verify") == "on",
+            audio_verify_threshold=(
+                float(fields["audio_verify_threshold"])
+                if fields.get("audio_verify_threshold", "").strip()
+                else None
+            ),
             enabled=fields.get("enabled") == "on",
         ).to_config()
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]

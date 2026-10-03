@@ -124,6 +124,16 @@ class CollectionIn(BaseModel):
         default=None,
         description="Judge backend for this collection: 'local', 'modal' or 'api'",
     )
+    audio_verify: bool = Field(
+        default=False,
+        description="Withhold the delivered audio when its WER exceeds the threshold",
+    )
+    audio_verify_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="WER ceiling for this collection; empty = global setting",
+    )
     enabled: bool = Field(default=True, description="Pause a collection without deleting it")
 
     def to_config(self) -> CollectionConfig:

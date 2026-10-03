@@ -71,6 +71,8 @@ class NarrationConfig:
     script_id: int | None = None
     run_id: str = ""
     strategy: str = "turns"
+    audio_verify: dict[str, Any] | None = None
+    """Phase 7.14 ASR/WER payload, resolved outside the workflow (None = off)."""
     prompt_template: str = "default"
     main_story_count: int = 5
     headline_count: int = 5
@@ -136,6 +138,7 @@ class NarrationWorkflow:
                 "spec": config.spec,
                 "script": script,
                 "strategy": config.strategy,
+                "audio_verify": config.audio_verify,
             },
             start_to_close_timeout=NARRATION_RENDER_TIMEOUT,
             retry_policy=NARRATION_RENDER_RETRY_POLICY,

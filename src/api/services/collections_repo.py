@@ -58,6 +58,8 @@ _COLLECTION_KEYS = (
     "llm_verify",
     "llm_verify_threshold",
     "llm_verify_backend",
+    "audio_verify",
+    "audio_verify_threshold",
     "enabled",
 )
 
