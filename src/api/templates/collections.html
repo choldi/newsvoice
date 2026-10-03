@@ -173,9 +173,79 @@
               <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" {{ 'checked' if c.narration_deliver_audio else '' }}><label>Entregar audio de narración</label></div>
             </div>
           </div>
-          <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
-          <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px">{{ c.narration_spec|tojson(indent=2) if c.narration_spec else '' }}</textarea>
-          <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+          <label>Cast — roles que dan la clase</label>
+          <table>
+            <thead>
+              <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+            </thead>
+            <tbody>
+            {% set roles = c.narration_spec.roles if c.narration_spec else [] %}
+            {% set rows = roles|length + 1 if roles|length < 8 else 8 %}
+            {% set rows = rows if rows > 1 else 2 %}
+            {% for i in range(rows) %}
+              {% set r = roles[i] if roles|length > i else None %}
+              <tr>
+                <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
+                <td><input name="role{{ i }}_voice" list="cast-voices" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
+                <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+                <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+                <td>
+                  <select name="role{{ i }}_emotion">
+                    <option value="">(ninguna)</option>
+                    {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if r and r.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+                  </select>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          <div class="row">
+            <div class="col">
+              <label>Título del programa</label>
+              <input name="narr_title" value="{{ c.narration_spec.title if c.narration_spec else '' }}">
+            </div>
+            <div class="col">
+              <label>Idioma del spec</label>
+              <input name="narr_language" list="lang-list" value="{{ c.narration_spec.language if c.narration_spec else 'es' }}">
+            </div>
+            <div class="col">
+              <label>Pausa entre turnos (ms)</label>
+              <input type="number" name="narr_pause_ms" min="0" max="5000" value="{{ c.narration_spec.pause_ms if c.narration_spec else 400 }}">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label>Velocidad por defecto</label>
+              <input type="number" name="narr_speed" min="0.5" max="2" step="0.1" value="{{ c.narration_spec.speed if c.narration_spec else 1.0 }}">
+            </div>
+            <div class="col">
+              <label>Emoción por defecto</label>
+              <select name="narr_emotion">
+                <option value="">(ninguna)</option>
+                {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if c.narration_spec and c.narration_spec.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col">
+              <label>Backend TTS</label>
+              {% set backend = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
+              <select name="narr_backend">
+                <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+                <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
+                <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <div class="check"><input type="checkbox" name="narr_disclosure" {{ 'checked' if c.narration_spec and c.narration_spec.ai_disclosure else '' }}><label>Divulgación de IA audible</label></div>
+            </div>
+          </div>
+          <details style="margin-top:8px">
+            <summary class="muted" style="cursor:pointer">JSON avanzado (solo se usa si el cast de arriba está vacío)</summary>
+            <label>Spec de narración (JSON — música, límites y opciones no expuestas arriba)</label>
+            <textarea name="narration_spec" rows="8" style="font-family:monospace;font-size:12px">{{ c.narration_spec.model_dump(mode='json')|tojson(indent=2) if c.narration_spec else '' }}</textarea>
+            <p class="muted" style="font-size:12px">Voces: <a href="/admin/narration/voices" target="_blank">catálogo</a>. Guardar el cast de arriba tiene prioridad; campos del JSON como <code>music</code> o <code>max_chars_per_request</code> se conservan al editar.</p>
+          </details>
           <hr>
           <h3>Verificación LLM (Fase 7.13)</h3>
           <div class="row">
@@ -223,6 +293,10 @@
           <p class="muted" style="font-size:12px">Las fuentes con fiabilidad inferior a <code>min_source_reliability</code> se excluyen antes del clustering. Los hosts extra cubren agregadores (p. ej. Google News publica artículos de otros dominios).</p>
         </div>
       </details>
+    </form>
+    <form method="post" action="/ui/collections/{{ c.name }}/narrate" style="margin-top:10px">
+      <button type="submit" class="primary">🎙 Generar podcast ahora</button>
+      <span class="muted" style="font-size:12px">usa el cast de arriba y el último digesto de la colección</span>
     </form>
   </div>
 </details>
@@ -366,9 +440,78 @@
             <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" checked><label>Entregar audio de narración</label></div>
           </div>
         </div>
-        <label>Spec de narración (JSON — cast, música, pausas, defaults)</label>
-        <textarea name="narration_spec" rows="10" style="font-family:monospace;font-size:12px"></textarea>
-        <p class="muted" style="font-size:12px">Ver <a href="/admin/narration/voices" target="_blank">voces disponibles</a> para el campo <code>voice_id</code> de cada rol. Estructura: <code>{"title":"","language":"es","roles":[{"name":"anchor","voice_id":"es-mx-male","speed":1.0}],"pause_ms":400,"music":null}</code></p>
+        <label>Cast — roles que dan la clase</label>
+        <table>
+          <thead>
+            <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+          </thead>
+          <tbody>
+          {% set roles = [] %}
+          {% set rows = 2 %}
+          {% for i in range(rows) %}
+            {% set r = roles[i] if roles|length > i else None %}
+            <tr>
+              <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
+              <td><input name="role{{ i }}_voice" list="cast-voices" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
+              <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+              <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+              <td>
+                <select name="role{{ i }}_emotion">
+                <option value="">(ninguna)</option>
+                {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if r and r.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+                </select>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <div class="row">
+          <div class="col">
+            <label>Título del programa</label>
+            <input name="narr_title" value="{{ '' }}">
+          </div>
+          <div class="col">
+            <label>Idioma del spec</label>
+            <input name="narr_language" list="lang-list" value="es">
+          </div>
+          <div class="col">
+            <label>Pausa entre turnos (ms)</label>
+            <input type="number" name="narr_pause_ms" min="0" max="5000" value="400">
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Velocidad por defecto</label>
+            <input type="number" name="narr_speed" min="0.5" max="2" step="0.1" value="1.0">
+          </div>
+          <div class="col">
+            <label>Emoción por defecto</label>
+            <select name="narr_emotion">
+              <option value="">(ninguna)</option>
+              {% for e in emotion_tags %}<option value="{{ e }}" >{{ e }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col">
+            <label>Backend TTS</label>
+            {% set backend = 'omni_voice' %}
+            <select name="narr_backend">
+              <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+              <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
+              <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <div class="check"><input type="checkbox" name="narr_disclosure" ><label>Divulgación de IA audible</label></div>
+          </div>
+        </div>
+        <details style="margin-top:8px">
+          <summary class="muted" style="cursor:pointer">JSON avanzado (solo se usa si el cast de arriba está vacío)</summary>
+          <label>Spec de narración (JSON — música, límites y opciones no expuestas arriba)</label>
+          <textarea name="narration_spec" rows="8" style="font-family:monospace;font-size:12px"></textarea>
+          <p class="muted" style="font-size:12px">Voces: <a href="/admin/narration/voices" target="_blank">catálogo</a>. Guardar el cast de arriba tiene prioridad; campos del JSON como <code>music</code> o <code>max_chars_per_request</code> se conservan al editar.</p>
+        </details>
         <hr>
         <h3>Verificación LLM (Fase 7.13)</h3>
         <div class="row">
@@ -397,4 +540,12 @@
     </details>
   </form>
 </div>
+
+<datalist id="cast-voices">
+  {% for v in omni.voices %}<option value="{{ v.get('voice_id') or v.get('name') }}">{% endfor %}
+</datalist>
+<datalist id="lang-list">
+  {% for l in omni.languages %}<option value="{{ l }}">{% endfor %}
+  <option value="es"><option value="en">
+</datalist>
 {% endblock %}

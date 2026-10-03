@@ -1,73 +1,31 @@
 """Document TTS routes (Phase 7.11): submit a document and poll its job.
 
-Submitting stores the upload on the shared ``./data`` volume, records the job
-and starts ``DocumentTtsWorkflow`` on the dedicated doc-tts queue. The
-synthesis itself runs in the worker; this file never touches the TTS engine.
+The submit rules live in ``src.api.services.doc_tts.submit_document`` so the
+GUI (``/ui/tools``) applies exactly the same validation; this file only maps
+:class:`SubmitError` onto HTTP codes and shapes the JSON responses.
 
 Both endpoints live under ``/api/admin/`` so the admin middleware guards them.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import structlog
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
 from src.api.db.database import AudioJobsRepository
 from src.api.models.doc_tts import DocTTSJobOut, DocTTSSubmitOut
-from src.api.services.audio_files import atomic_write
-from src.api.services.doc_tts import read_job_meta, validate_job_id, write_job_meta
-from src.api.services.document_text import DocumentExtractionError, sniff_kind
+from src.api.services.doc_tts import (
+    JOB_KIND,
+    read_job_meta,
+    submit_document,
+    validate_job_id,
+)
 from src.api.services.signed_links import SignedLinkError, build_signed_path
-from src.api.services.temporal_admin import TemporalAdminService, new_document_run_id
-from src.core.config import settings
+from src.api.services.submit import SubmitError
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["documents"])
-
-#: audio_jobs.collection value grouping every document job in the GUI listing.
-JOB_COLLECTION = "documents"
-JOB_KIND = "doc_tts"
-
-
-def _uploads_dir() -> Path:
-    """Return the directory holding uploaded documents (created on demand).
-
-    Returns:
-        Path of ``<doc_tts_dir>/uploads``.
-    """
-    path = Path(settings.doc_tts_dir) / "uploads"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-async def _read_upload(upload: UploadFile) -> bytes:
-    """Read the upload bounded by ``doc_tts_max_file_bytes``.
-
-    Args:
-        upload: The multipart file part.
-
-    Returns:
-        The raw bytes.
-
-    Raises:
-        HTTPException: 422 when the body is empty, 413 when it is too large.
-    """
-    limit = settings.doc_tts_max_file_bytes
-    data = await upload.read(limit + 1)
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="uploaded file is empty",
-        )
-    if len(data) > limit:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"file larger than {limit} bytes (doc_tts_max_file_bytes)",
-        )
-    return data
 
 
 @router.post(
@@ -102,102 +60,25 @@ async def submit_document_tts(
         DocTTSSubmitOut with the workflow id and the status URL.
 
     Raises:
-        HTTPException: 403 when disabled, 413 when too large, 415 for an
-            unsupported type, 422 for an empty file, 502 when Temporal cannot
-            start the workflow, 503 when no link secret is configured.
+        HTTPException: Any failure the shared submit service reports (403,
+            413, 415, 422, 502 or 503).
     """
-    if not settings.doc_tts_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Document TTS is disabled (DOC_TTS_ENABLED=false)",
-        )
-    if not settings.doc_tts_link_secret.strip():
-        # The whole point is a URL the operator can open: without a secret the
-        # link cannot be signed, so fail here instead of after 10 minutes.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="DOC_TTS_LINK_SECRET is not configured; signed audio links are off",
-        )
-    declared = request.headers.get("content-length", "")
-    overhead = 1_000_000  # multipart framing and the other form fields
-    if declared.isdigit() and int(declared) > settings.doc_tts_max_file_bytes + overhead:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"request larger than {settings.doc_tts_max_file_bytes} bytes",
-        )
-
-    filename = Path(file.filename or "").name.strip()
-    if not filename:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="file part has no filename",
-        )
     try:
-        kind = sniff_kind(filename)
-    except DocumentExtractionError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=str(exc),
-        ) from exc
-    data = await _read_upload(file)
-
-    workflow_id = new_document_run_id()
-    upload_path = _uploads_dir() / f"{workflow_id}{Path(filename).suffix.lower()}"
-    atomic_write(upload_path, data)
-    clean_title = (title or "").strip() or Path(filename).stem
-    write_job_meta(
-        workflow_id,
-        {
-            "title": clean_title,
-            "filename": filename,
-            "kind": kind,
-            "voice": (voice or "").strip(),
-            "language": (language or "").strip(),
-        },
-    )
-
-    repo = AudioJobsRepository()
-    await repo.start_job(workflow_id, collection=JOB_COLLECTION, kind=JOB_KIND)
-    try:
-        from src.workers.doc_tts_workflows import DocTTSConfig
-
-        await TemporalAdminService().start_document_tts(
-            DocTTSConfig(
-                source_path=str(upload_path),
-                filename=filename,
-                title=(title or "").strip(),
-                voice=(voice or "").strip(),
-                language=(language or "").strip(),
-            ),
-            workflow_id,
+        result = await submit_document(
+            upload=file,
+            content_length=request.headers.get("content-length", ""),
+            voice=voice,
+            language=language,
+            title=title,
         )
-    except Exception as exc:
-        logger.error("doc_tts_start_failed", workflow_id=workflow_id, error=str(exc), exc_info=True)
-        await repo.finish_job(
-            workflow_id,
-            status="FINISHED_ERROR",
-            error=f"could not start the workflow: {exc}",
-            kind=JOB_KIND,
-        )
-        upload_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not start the document TTS workflow",
-        ) from exc
-
-    logger.info(
-        "doc_tts_submitted",
-        workflow_id=workflow_id,
-        filename=filename,
-        kind=kind,
-        bytes=len(data),
-    )
+    except SubmitError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     return DocTTSSubmitOut(
         status="ok",
-        workflow_id=workflow_id,
-        title=clean_title,
-        filename=filename,
-        status_url=f"/api/admin/documents/tts/{workflow_id}",
+        workflow_id=result["workflow_id"],
+        title=result["title"],
+        filename=result["filename"],
+        status_url=result["status_url"],
     )
 
 

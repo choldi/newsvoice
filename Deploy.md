@@ -1242,3 +1242,90 @@ AUDIO_VERIFY_ENABLED=false
 o `audio_verify = false` por colección; reinicia los workers
 (`docker compose up -d --build worker narration-worker`). El modelo ya descargado
 puedes borrarlo con `rm -rf data/whisper` cuando no lo necesites.
+
+---
+
+## 16. GUI de operación (herramientas, cast, verificaciones y ajustes)
+
+La GUI (`/ui`) cubre ahora todas las fases 7.10-7.14 sin tocar la API REST.
+
+### 16.1 Herramientas (`/ui/tools`)
+
+Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`):
+
+| Pestaña | Acción | Estado |
+|---|---|---|
+| Resumen de URL | `POST /ui/tools/url` (url, colección, store, deliver) | últimos `url-summary-*` en `digest_runs` |
+| TTS de documentos | `POST /ui/tools/doc-tts` (PDF/EPUB/TXT/MD) | jobs `kind='doc_tts'` + enlace firmado |
+| Clase de idiomas | `POST /ui/tools/lessons` (apuntes, modo, idiomas, cast) | jobs `kind='lesson'` + enlace/texto |
+| Podcast | `POST /ui/tools/podcast` (colección) | jobs `kind='narration'` + enlace firmado |
+
+- Los submits delegan en los **mismos servicios** que la REST
+  (`submit_document`, `submit_lesson`, `start_narration_render`): una misma
+  validación para ambos caminos, traducida a flash en la GUI y a código HTTP
+  en la API.
+- El podcast se genera a partir del **último digesto** de la colección (el LLM
+  escribe el guion) y usa su `NarrationSpec`/estrategia; si no hay ejecuciones
+  o falta el spec, la GUI lo explica sin lanzar nada.
+- Enlaces firmados: `/api/audio/doc/...`, `/api/audio/lesson/...` y
+  `/api/audio/narration/...` (nuevo) — mismos secretos y TTL, sin token.
+
+### 16.2 Cast de narración (`/ui/collections`)
+
+- El textarea JSON se sustituyó por un **editor de cast**: filas rol
+  (nombre, voz con `datalist` del catálogo, idioma, velocidad, emoción) + campos
+  del spec (título, idioma, pausas, velocidad, emoción, backend, divulgación de
+  IA). Las filas vacías se ignoran; nombre sin voz (o al revés) rechaza el
+  guardado con mensaje.
+- El **JSON avanzado** sigue disponible en un `<details>`: se usa solo si el
+  cast de arriba está vacío, y los campos que el editor no expone (`music`,
+  `max_chars_per_request`...) se **conservan** del spec existente.
+- Botón **«Generar podcast ahora»** por colección →
+  `POST /ui/collections/{name}/narrate` → estado en la pestaña Podcast de
+  Herramientas.
+- Corregidos dos bugs preexistentes de este flujo: `narration_spec|tojson`
+  reventaba la página con cualquier spec (500), y el serializador TOML
+  descartaba la lista `roles` al guardar (**borraba el cast**). `collections.toml`
+  ya no se puede corromper desde la GUI.
+
+### 16.3 Verificaciones en Ejecuciones
+
+- El detalle de cualquier ejecución muestra la tabla de
+  `verifications` (`target`, `method`, veredicto, score, umbral, apto) con los
+  detalles JSON plegables — incluye `groundedness`/`faithfulness` (7.13) y
+  `asr_wer` (7.14, con la nota «menor es mejor»).
+- Los runs bloqueados por verificación llevan el chip ámbar
+  `verification_failed` (ya etiquetado en la lista).
+
+### 16.4 Editor de configuración (`/ui/settings`)
+
+- **Esquema derivado de `Settings`**: las ~159 variables, agrupadas por sección
+  (LLM, verificaciones por fase, documentos, profesor, entregas, temporal...),
+  con tipo, rango y default. Añadir un setting en `config.py` lo añade solo.
+- **Validación de todo-o-nada**: se construye `Settings` con los valores
+  enviados; si algo no valida (tipo, rango, JSON, `LLM_VERIFY_BACKEND`...),
+  **no se escribe nada** y la página vuelve con el error por campo y el valor
+  tecleado para corregirlo.
+- **Solo cambian las líneas modificadas**: comentarios, orden y
+  `KEY=value  # nota` intactos; claves nuevas al final bajo un marcador;
+  copia previa en `.env.bak`; escritura atómica.
+- **Secretos** (🔒): su input va siempre vacío con placeholder
+  «déjalo vacío para conservar»; jamás se reflejan en el HTML (ni siquiera el
+  valor tecleado).
+- **Reinicio obligatorio**: los settings viven cacheados en cada proceso
+  (`get_settings()`), así que la página recuerda el comando:
+  `docker compose restart api worker narration-worker doc-tts-worker teacher-worker voice-catalog-worker`.
+- **Límites conocidos**:
+  - Solo añade/actualiza: no borra claves del `.env`.
+  - Las variables que Docker fuerza en `environment:` (p.ej.
+    `TEMPORAL_HOST=temporal:7233`) las pisan el compose, no el `.env`; la
+    página las muestra con su valor efectivo, pero escribirlas no las cambia en
+    los contenedores hasta retirarlas del compose.
+  - Valores «válidos pero tontos» (p.ej. un límite enorme) pasan: la
+    validación es de tipo y rango, no de criterio.
+
+### 16.5 Rollback
+
+La GUI no cambia datos de negocio: para volver a un `.env` anterior, restaura
+`.env.bak` y reinicia. Para retirar el editor entero no hay flag: es UI
+protegida por el middleware de admin (junto al resto de `/ui`).

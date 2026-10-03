@@ -623,6 +623,44 @@ cubierto por el propio gate.
 
 **Effort:** 5-6 hours.
 
+- [x] **GUI de operación (extensión de 7.10-7.14)** — toda la funcionalidad
+      reciente queda operable desde `/ui` sin tocar la API REST. **Herramientas**
+      (`/ui/tools`,4 pestañas con polling htmx): resumen de URL, TTS de
+      documentos, clases de idiomas y podcast, cada uno con su formulario y su
+      tabla de trabajos con enlaces firmados (`/api/audio/{doc,lesson,narration}/...`,
+      esta última ruta nueva). Los submits delegan en los **mismos servicios**
+      que la REST (`submit_document`, `submit_lesson`, `start_narration_render`,
+      extraídos de las rutas en este commit): una sola validación, dos caras
+      (flash en la GUI, código HTTP en la API). **Cast de narración** en
+      Colecciones: editor estructurado de filas rol (voz con `datalist` del
+      catálogo) + campos del spec, con el JSON avanzado como fallback y
+      conservación de `music`/`max_chars_per_request` al guardar, más el botón
+      «Generar podcast ahora» (`/ui/collections/{name}/narrate`, guion a partir
+      del último digesto). **Verificaciones** visibles en el detalle de cada
+      ejecución (tabla `verifications` con score/umbral/apto y detalles
+      plegables; nota «menor es mejor» para `asr_wer`) y chip ámbar
+      `verification_failed`. **Editor de `.env`** (`/ui/settings`): esquema
+      derivado de `Settings.model_fields` (~159 variables agrupadas por
+      sección), validación **de todo-o-nada** construyendo `Settings` con lo
+      enviado (tipo, rango, JSON, reglas extra como `LLM_VERIFY_BACKEND`),
+      reescritura de solo las líneas cambiadas preservando comentarios y orden
+      con copia `.env.bak` y escritura atómica, secretos nunca reflejados en el
+      HTML (input vacío = conservar) y aviso de reinicio (los settings están
+      cacheados por proceso). En el camino se corrigieron dos bugs
+      preexistentes: `narration_spec|tojson` hacía 500 la página Colecciones con
+      cualquier spec, y el serializador TOML descartaba la lista `roles` al
+      guardar (**borraba el cast** de la colección).
+
+**Success criteria:** `1023 passed` con `ruff` limpio; los4 submits de
+Herramientas mapean errores a flashes (`test_ui_tools.py`, 16), el cast
+hace round-trip completo sin perder campos del spec (`test_ui_cast_editor.py`,
+9), el editor de `.env` valida de todo-o-nada dejando el fichero intacto si algo
+falla y nunca filtra un secreto (`test_env_editor.py`22 +
+`test_ui_settings.py` 6), y el panel de verificaciones pinta cada veredicto
+(`test_ui_endpoints.py`, 30).
+
+**Effort:** 6-8 hours.
+
 ---
 
 ## ANTI-PATTERNS TO AVOID

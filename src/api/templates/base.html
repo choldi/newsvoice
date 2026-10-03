@@ -81,6 +81,7 @@
     .badge.terminated { background: rgba(229,181,60,.15); color: var(--warn); }
     .badge.canceled { background: rgba(229,181,60,.15); color: var(--warn); }
     .badge.timed_out { background: rgba(239,97,97,.15); color: var(--err); }
+    .badge.verification_failed { background: rgba(229,181,60,.15); color: var(--warn); }
     .badge.no_new_articles { background: rgba(139,147,163,.15); color: var(--muted); }
     .muted { color: var(--muted); }
     .tags { margin-bottom: 16px; }
@@ -100,7 +101,9 @@
       <a class="nav {{ 'active' if active == 'collections' else '' }}" href="/ui/collections">Colecciones</a>
       <a class="nav {{ 'active' if active == 'calendar' else '' }}" href="/ui/calendar">Calendario</a>
       <a class="nav {{ 'active' if active == 'runs' else '' }}" href="/ui/runs">Ejecuciones</a>
+      <a class="nav {{ 'active' if active == 'tools' else '' }}" href="/ui/tools">Herramientas</a>
       <a class="nav {{ 'active' if active == 'voices' else '' }}" href="/ui/voices">Voces</a>
+      <a class="nav {{ 'active' if active == 'settings' else '' }}" href="/ui/settings">Ajustes</a>
       <form method="post" action="/ui/logout" style="margin-top:24px">
         <button type="submit" class="danger">Cerrar sesión</button>
       </form>

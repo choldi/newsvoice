@@ -14,15 +14,22 @@ from pathlib import Path
 
 import structlog
 from pydantic import ValidationError
+from starlette.datastructures import UploadFile
 
+from src.api.db.database import AudioJobsRepository
 from src.api.models.lesson import LessonContent, LessonMode
-from src.api.models.narration import NarrationScript, NarrationSpec
+from src.api.models.narration import NarrationScript, NarrationSpec, SpeakerRole
 from src.api.services.audio_files import atomic_write
 from src.api.services.signed_links import LESSON_AUDIO_LINK_PREFIX, build_signed_path
+from src.api.services.submit import SubmitError, check_content_length, read_upload
 from src.core.config import get_settings
 from src.core.prompts import LESSON_USER_PROMPT_TEMPLATE, build_lesson_system_prompt
 
 logger = structlog.get_logger(__name__)
+
+#: ``audio_jobs.kind`` discriminator of this feature.
+JOB_KIND = "lesson"
+_LANGUAGE_RE = re.compile(r"[a-z]{2}")
 
 LESSON_EXTENSIONS = {".md": "md", ".txt": "txt"}
 # Workflow ids are ours ("lesson-<hex>"); they become file paths, so anything
@@ -431,3 +438,240 @@ def save_lesson(workflow_id: str, content: LessonContent, script: NarrationScrip
         segments=len(content.segments),
     )
     return str(text_path)
+
+
+# ---------------------------------------------------------------------------
+# Submit (shared by the REST endpoint and the GUI, Phase 7.12)
+# ---------------------------------------------------------------------------
+
+
+def language_code(value: str, field_name: str) -> str:
+    """Validate a two-letter ISO 639-1 code coming from a form field.
+
+    Args:
+        value: Raw form value.
+        field_name: Field name used in the error message.
+
+    Returns:
+        The trimmed, lowercase code.
+
+    Raises:
+        SubmitError: 422 when the code is not ISO 639-1.
+    """
+    cleaned = (value or "").strip().lower()
+    if not _LANGUAGE_RE.fullmatch(cleaned):
+        raise SubmitError(
+            f"{field_name} must be a two-letter ISO 639-1 code (e.g. 'es')",
+            status_code=422,
+        )
+    return cleaned
+
+
+def resolve_cast(raw_spec: str | None, voice: str | None, target_language: str) -> NarrationSpec:
+    """Resolve the cast that will voice the class (spec JSON or one voice).
+
+    Args:
+        raw_spec: Optional NarrationSpec JSON from the form.
+        voice: Optional single voice id for a default one-role cast.
+        target_language: Language used as the spec default.
+
+    Returns:
+        The validated spec.
+
+    Raises:
+        SubmitError: 422 when the spec JSON or the voice is unusable.
+    """
+    if raw_spec and raw_spec.strip():
+        try:
+            return NarrationSpec.model_validate_json(raw_spec.strip())
+        except ValidationError as exc:
+            raise SubmitError(
+                f"invalid spec JSON: {exc.errors()[0].get('msg', str(exc))}",
+                status_code=422,
+            ) from exc
+    voice_id = (voice or "").strip() or get_settings().tts_voice
+    try:
+        return NarrationSpec(
+            language=target_language,
+            roles=[SpeakerRole(name="teacher", voice_id=voice_id)],
+        )
+    except ValidationError as exc:
+        raise SubmitError(
+            f"invalid default cast: {exc.errors()[0].get('msg', str(exc))}",
+            status_code=422,
+        ) from exc
+
+
+def collection_delivery(collection_name: str) -> tuple[list[str], str | None, list[str]]:
+    """Resolve where a lesson is delivered for a collection (Phase 7.12).
+
+    Unknown collections fall back to Telegram with the global chat id, which
+    is what the digest pipeline does for the implicit default collection.
+
+    Args:
+        collection_name: Name of the configured collection.
+
+    Returns:
+        Tuple of (delivery_channels, chat_id, email_recipients).
+    """
+    from src.api.services.collections_repo import CollectionsRepository
+
+    collection = CollectionsRepository().get(collection_name)
+    if collection is None:
+        return ["telegram"], None, []
+    return (
+        list(collection.delivery_channels) or ["telegram"],
+        collection.chat_id,
+        list(collection.email_recipients),
+    )
+
+
+async def submit_lesson(
+    *,
+    upload: UploadFile,
+    target_language: str,
+    native_language: str,
+    content_length: str = "",
+    mode: str = "mixed",
+    collection: str = "default",
+    title: str = "",
+    spec: str | None = None,
+    voice: str | None = None,
+) -> dict[str, str]:
+    """Validate, store and start a lesson job (Phase 7.12).
+
+    The REST endpoint and the ``/ui`` form both land here so the rules (kill
+    switch, link secret, notes, mode, languages, cast) can never drift.
+
+    Args:
+        upload: Multipart file part carrying the notes.
+        target_language: ISO 639-1 language being taught.
+        native_language: ISO 639-1 student language.
+        content_length: Raw ``Content-Length`` header, for the early 413.
+        mode: Lesson mode: mixed, dual or native.
+        collection: Collection whose channels receive the lesson.
+        title: Optional lesson title (defaults to the filename stem).
+        spec: Optional NarrationSpec JSON.
+        voice: Optional single voice for a default cast.
+
+    Returns:
+        Dict with workflow_id, collection, title, mode and status_url.
+
+    Raises:
+        SubmitError: 403 disabled, 413 too large, 415 unsupported type, 422
+            invalid input, 502 Temporal failure, 503 no link secret.
+    """
+    settings = get_settings()
+    if not settings.teacher_enabled:
+        raise SubmitError("Lessons are disabled (TEACHER_ENABLED=false)", status_code=403)
+    if not settings.doc_tts_link_secret.strip():
+        # A lesson longer than the audio limit must ship a signed URL: without
+        # a secret the result would be unusable, so refuse it up front.
+        raise SubmitError(
+            "DOC_TTS_LINK_SECRET is not configured; signed audio links are off",
+            status_code=503,
+        )
+    check_content_length(content_length, settings.teacher_max_file_bytes)
+
+    filename = Path(upload.filename or "").name.strip()
+    if not filename:
+        raise SubmitError("file part has no filename", status_code=422)
+    target = language_code(target_language, "target_language")
+    native = language_code(native_language, "native_language")
+    try:
+        lesson_mode = LessonMode((mode or "mixed").strip().lower())
+    except ValueError as exc:
+        raise SubmitError(
+            f"mode must be one of {[m.value for m in LessonMode]}: {mode!r}",
+            status_code=422,
+        ) from exc
+
+    data = await read_upload(upload, settings.teacher_max_file_bytes)
+    try:
+        notes = validate_notes(data, filename)
+    except LessonError as exc:
+        detail = str(exc)
+        if "unsupported file type" in detail:
+            code = 415
+        elif "too long" in detail:
+            code = 413
+        else:
+            code = 422
+        raise SubmitError(detail, status_code=code) from exc
+
+    cast = resolve_cast(spec, voice, target)
+    try:
+        validate_mode(lesson_mode, cast)
+    except LessonError as exc:
+        raise SubmitError(str(exc), status_code=422) from exc
+
+    from src.api.services.temporal_admin import new_lesson_run_id
+
+    workflow_id = new_lesson_run_id()
+    upload_path = lesson_upload_path(workflow_id, filename)
+    atomic_write(upload_path, data)
+    clean_title = (title or "").strip() or Path(filename).stem
+    collection_name = (collection or "").strip() or "default"
+    channels, chat_id, email_recipients = collection_delivery(collection_name)
+    update_lesson_meta(
+        workflow_id,
+        {
+            "title": clean_title,
+            "filename": filename,
+            "mode": lesson_mode.value,
+            "target_language": target,
+            "native_language": native,
+            "collection": collection_name,
+            "notes_chars": notes.char_count,
+        },
+    )
+
+    repo = AudioJobsRepository()
+    await repo.start_job(workflow_id, collection=collection_name, kind=JOB_KIND)
+    try:
+        from src.api.services.temporal_admin import TemporalAdminService
+        from src.workers.lesson_workflows import LessonConfig
+
+        await TemporalAdminService().start_lesson(
+            LessonConfig(
+                notes_path=str(upload_path),
+                filename=filename,
+                mode=lesson_mode.value,
+                spec=cast.model_dump(mode="json"),
+                target_language=target,
+                native_language=native,
+                title=(title or "").strip(),
+                collection=collection_name,
+                delivery_task_queue=settings.temporal_task_queue,
+                delivery_channels=channels,
+                chat_id=chat_id,
+                email_recipients=email_recipients,
+            ),
+            workflow_id,
+        )
+    except Exception as exc:
+        logger.error("lesson_start_failed", workflow_id=workflow_id, error=str(exc), exc_info=True)
+        await repo.finish_job(
+            workflow_id,
+            status="FINISHED_ERROR",
+            error=f"could not start the workflow: {exc}",
+            kind=JOB_KIND,
+        )
+        upload_path.unlink(missing_ok=True)
+        raise SubmitError("Could not start the lesson workflow", status_code=502) from exc
+
+    logger.info(
+        "lesson_submitted",
+        workflow_id=workflow_id,
+        filename=filename,
+        mode=lesson_mode.value,
+        collection=collection_name,
+        notes_chars=notes.char_count,
+    )
+    return {
+        "workflow_id": workflow_id,
+        "collection": collection_name,
+        "title": clean_title,
+        "mode": lesson_mode.value,
+        "status_url": f"/api/admin/lessons/{workflow_id}",
+    }

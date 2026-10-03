@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, status
 from src.api.models.summarize_url import UrlSummarizeIn, UrlSummarizeOut
 from src.api.services.collections_repo import CollectionsRepository
 from src.api.services.temporal_admin import TemporalAdminService
-from src.core.collections import default_collection
 from src.core.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -38,9 +37,7 @@ def _resolve_collection(name: str) -> object:
     Raises:
         HTTPException: 404 when the named collection does not exist.
     """
-    collection = CollectionsRepository().get(name)
-    if collection is None and name.casefold() == "default".casefold():
-        collection = default_collection()
+    collection = CollectionsRepository().resolve(name)
     if collection is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

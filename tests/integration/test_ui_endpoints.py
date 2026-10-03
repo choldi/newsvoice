@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from src.api.routes_ui import STATUS_LABELS
 from src.core.config import settings
 
 TOKEN = "secret-admin-token"
@@ -693,3 +694,72 @@ def test_logout_clears_cookie() -> None:
     client.post("/ui/logout", follow_redirects=False)
 
     assert client.get("/ui/collections", follow_redirects=False).status_code == 302
+
+
+def test_run_detail_shows_the_verification_ledger() -> None:
+    """Every verification verdict (7.13/7.14) is auditable from the run detail."""
+    import asyncio
+
+    from src.api.db.database import VerificationsRepository
+
+    async def _seed() -> int:
+        from src.api.db.database import RunsRepository
+
+        run_id = await RunsRepository().record_run(
+            workflow_id="digest-pipeline-tech-verify",
+            collection="tech",
+            status="verification_failed",
+            article_count=5,
+            cluster_count=2,
+            digest_preview="# Digest",
+            error="Digest verification failed",
+        )
+        repo = VerificationsRepository()
+        await repo.record(
+            run_id="digest-pipeline-tech-verify",
+            collection="tech",
+            target="digest",
+            method="faithfulness",
+            verdict="invalid",
+            score=0.5,
+            threshold=0.9,
+            passed=False,
+            details={"reason": "claim contradicted"},
+        )
+        await repo.record(
+            run_id="digest-pipeline-tech-verify",
+            collection="tech",
+            target="tts_audio",
+            method="asr_wer",
+            verdict="invalid",
+            score=0.9,
+            threshold=0.3,
+            passed=False,
+            details={"wer": 0.9, "reason": "transcription diverges"},
+            model="base",
+        )
+        return run_id
+
+    run_id = asyncio.run(_seed())
+    client = _ui_client()
+    _login(client)
+    response = client.get(
+        f"/ui/fragments/run_detail?workflow_id=digest-pipeline-tech-verify&run_id={run_id}"
+    )
+
+    assert response.status_code == 200
+    body = response.text
+    assert "Verificaciones" in body
+    assert "faithfulness" in body
+    assert "asr_wer" in body
+    assert "0.500" in body
+    assert "0.900" in body
+    assert "WER ↓" in body
+    assert "claim contradicted" in body
+
+
+def test_verification_failed_status_is_labelled_and_styled() -> None:
+    """The GUI both labels and colour-codes a run blocked by verification."""
+    assert STATUS_LABELS["verification_failed"] == "verificación fallida"
+    base = (Path("src/api/templates") / "base.html").read_text(encoding="utf-8")
+    assert ".badge.verification_failed" in base

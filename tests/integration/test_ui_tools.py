@@ -1,0 +1,441 @@
+"""Integration tests for the tools page (Phase 7.10-7.12 GUI)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.api.db.database import RunsRepository
+from src.api.main import app
+from src.api.services.submit import SubmitError
+from src.core.config import settings
+
+TOKEN = "secret-admin-token"
+
+
+@pytest.fixture(autouse=True)
+def _ui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Isolate collections, storage and auth; keep the gateway out of tests."""
+    monkeypatch.setattr(settings, "collections_file", str(tmp_path / "collections.toml"))
+    monkeypatch.setattr(settings, "admin_api_token", TOKEN)
+    monkeypatch.setattr(settings, "doc_tts_dir", str(tmp_path / "doc_tts"))
+    monkeypatch.setattr(settings, "teacher_dir", str(tmp_path / "lessons"))
+    monkeypatch.setattr(settings, "narration_cache_dir", str(tmp_path / "narration"))
+    monkeypatch.setattr(settings, "doc_tts_link_secret", "unit-test-secret")
+    monkeypatch.setattr(settings, "teacher_enabled", True)
+    monkeypatch.setattr(settings, "doc_tts_enabled", True)
+    from src.api.services.voices import VoicesService
+
+    monkeypatch.setattr(VoicesService, "list_languages", AsyncMock(return_value=["en", "es"]))
+    monkeypatch.setattr(
+        VoicesService,
+        "list_stock",
+        AsyncMock(return_value=[{"voice_id": "es-mx-male", "language": "es"}]),
+    )
+    monkeypatch.setattr(
+        VoicesService,
+        "list_cloned",
+        AsyncMock(return_value=[{"voice_id": "clone-1", "language": "es"}]),
+    )
+    return tmp_path / "collections.toml"
+
+
+def _client() -> TestClient:
+    """Build a client and authenticate it through the login endpoint."""
+    client = TestClient(app)
+    response = client.post("/ui/login", data={"token": TOKEN}, follow_redirects=False)
+    assert response.status_code == 302
+    return client
+
+
+def _write_collection(path: Path, *, narration: bool = False) -> None:
+    """Write a 'tech' collection, optionally with a NarrationSpec."""
+    lines = [
+        "[[collections]]",
+        'name = "tech"',
+        'time = "08:00"',
+        'feed_urls = ["https://example.com/rss"]',
+        'language = "en"',
+        'delivery_channels = ["telegram"]',
+    ]
+    if narration:
+        lines += [
+            "narration_enabled = true",
+            'narration_strategy = "turns"',
+            "[collections.narration_spec]",
+            'language = "en"',
+            "[[collections.narration_spec.roles]]",
+            'name = "anchor"',
+            'voice_id = "es-mx-male"',
+        ]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _flash_of(location: str) -> str:
+    """Decode the flash message carried by a redirect location."""
+    from urllib.parse import unquote
+
+    return unquote(location)
+
+
+# ---------------------------------------------------------------------------
+# Page
+# ---------------------------------------------------------------------------
+
+
+def test_tools_requires_login() -> None:
+    """Without a cookie the tools page redirects to the login."""
+    client = TestClient(app)
+    response = client.get("/ui/tools", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/ui/login"
+
+
+def test_tools_page_renders_the_four_tabs() -> None:
+    """The page shows every implemented tool and its polling container."""
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    for needle in (
+        "Resumen de URL",
+        "TTS de documentos",
+        "Clase de idiomas",
+        "Podcast de una colección",
+        'id="jobs-url"',
+        'id="jobs-doc_tts"',
+        'id="jobs-lesson"',
+        'id="jobs-narration"',
+        'action="/ui/tools/url"',
+        'action="/ui/tools/doc-tts"',
+        'action="/ui/tools/lessons"',
+        'action="/ui/tools/podcast"',
+    ):
+        assert needle in response.text, needle
+    assert '<a class="nav active" href="/ui/tools">Herramientas</a>' in response.text
+
+
+# ---------------------------------------------------------------------------
+# URL summary
+# ---------------------------------------------------------------------------
+
+
+def test_url_submit_requires_a_url() -> None:
+    """An empty URL flashes an error and starts nothing."""
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_url_summarize",
+        new_callable=AsyncMock,
+    ) as start:
+        response = client.post("/ui/tools/url", data={}, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "URL es obligatoria" in _flash_of(response.headers["location"])
+    start.assert_not_called()
+
+
+def test_url_submit_starts_the_workflow(_ui_env: Path) -> None:
+    """A valid URL forwards collection and flags to the shared starter."""
+    _write_collection(_ui_env)
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_url_summarize",
+        new_callable=AsyncMock,
+        return_value="url-summary-tech-1",
+    ) as start:
+        response = client.post(
+            "/ui/tools/url",
+            data={"url": "https://example.com/a", "collection": "tech", "store": "on"},
+            follow_redirects=False,
+        )
+
+    assert "url-summary-tech-1" in _flash_of(response.headers["location"])
+    args, kwargs = start.call_args
+    assert args[0].name == "tech"
+    assert kwargs["url"] == "https://example.com/a"
+    assert kwargs["store"] is True
+    assert kwargs["deliver"] is False, "an unchecked box must not deliver"
+
+
+def test_url_submit_unknown_collection_fails() -> None:
+    """An unknown (non-default) collection is rejected before Temporal."""
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_url_summarize",
+        new_callable=AsyncMock,
+    ) as start:
+        response = client.post(
+            "/ui/tools/url",
+            data={"url": "https://example.com/a", "collection": "nope"},
+            follow_redirects=False,
+        )
+
+    assert "no encontrada" in _flash_of(response.headers["location"])
+    start.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Documents and lessons (shared submit services)
+# ---------------------------------------------------------------------------
+
+
+def test_doc_submit_calls_the_shared_service() -> None:
+    """The form delegates to submit_document with the typed fields."""
+    client = _client()
+    result = {
+        "workflow_id": "doc-tts-abc",
+        "title": "Mi libro",
+        "filename": "libro.pdf",
+        "kind": "pdf",
+        "status_url": "/api/admin/documents/tts/doc-tts-abc",
+    }
+    with patch(
+        "src.api.routes_ui.submit_document",
+        new_callable=AsyncMock,
+        return_value=result,
+    ) as submit:
+        response = client.post(
+            "/ui/tools/doc-tts",
+            files={"file": ("libro.pdf", b"%PDF-fake", "application/pdf")},
+            data={"title": "Mi libro", "voice": "es-MX-JorgeNeural"},
+            follow_redirects=False,
+        )
+
+    assert "doc-tts-abc" in _flash_of(response.headers["location"])
+    kwargs = submit.call_args.kwargs
+    assert kwargs["title"] == "Mi libro"
+    assert kwargs["voice"] == "es-MX-JorgeNeural"
+    assert kwargs["upload"].filename == "libro.pdf"
+    assert kwargs["content_length"], "the size guard must receive the header"
+
+
+def test_doc_submit_maps_submit_errors_to_flashes() -> None:
+    """A SubmitError (413/415/503...) is flashed as-is, not as a 500."""
+    client = _client()
+    with patch(
+        "src.api.routes_ui.submit_document",
+        new_callable=AsyncMock,
+        side_effect=SubmitError("file larger than 1024 bytes", status_code=413),
+    ):
+        response = client.post(
+            "/ui/tools/doc-tts",
+            files={"file": ("libro.pdf", b"x", "application/pdf")},
+            follow_redirects=False,
+        )
+
+    assert "file larger than 1024 bytes" in _flash_of(response.headers["location"])
+
+
+def test_lesson_submit_requires_the_notes_file() -> None:
+    """A multipart body without the file part flashes an error."""
+    client = _client()
+    response = client.post(
+        "/ui/tools/lessons",
+        data={"target_language": "en", "native_language": "es"},
+        follow_redirects=False,
+    )
+    assert "Falta el fichero" in _flash_of(response.headers["location"])
+
+
+def test_lesson_submit_calls_the_shared_service() -> None:
+    """The lesson form forwards mode, languages and destination collection."""
+    client = _client()
+    result = {
+        "workflow_id": "lesson-abc",
+        "collection": "tech",
+        "title": "Subjuntivo",
+        "mode": "dual",
+        "status_url": "/api/admin/lessons/lesson-abc",
+    }
+    with patch(
+        "src.api.routes_ui.submit_lesson",
+        new_callable=AsyncMock,
+        return_value=result,
+    ) as submit:
+        response = client.post(
+            "/ui/tools/lessons",
+            files={"file": ("apuntes.md", b"# Clase\n\nHola.", "text/markdown")},
+            data={
+                "mode": "dual",
+                "target_language": "en",
+                "native_language": "es",
+                "collection": "tech",
+                "title": "Subjuntivo",
+            },
+            follow_redirects=False,
+        )
+
+    assert "lesson-abc" in _flash_of(response.headers["location"])
+    kwargs = submit.call_args.kwargs
+    assert kwargs["mode"] == "dual"
+    assert kwargs["target_language"] == "en"
+    assert kwargs["native_language"] == "es"
+    assert kwargs["collection"] == "tech"
+
+
+# ---------------------------------------------------------------------------
+# Podcast
+# ---------------------------------------------------------------------------
+
+
+def test_podcast_needs_a_narration_spec(_ui_env: Path) -> None:
+    """A collection without a NarrationSpec explains what is missing."""
+    _write_collection(_ui_env, narration=False)
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_narration_render",
+        new_callable=AsyncMock,
+    ) as start:
+        response = client.post(
+            "/ui/tools/podcast", data={"collection": "tech"}, follow_redirects=False
+        )
+
+    assert "NarrationSpec" in _flash_of(response.headers["location"])
+    start.assert_not_called()
+
+
+def test_podcast_needs_a_previous_run(_ui_env: Path) -> None:
+    """With a spec but no runs, the render cannot source its script."""
+    _write_collection(_ui_env, narration=True)
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_narration_render",
+        new_callable=AsyncMock,
+    ) as start:
+        response = client.post(
+            "/ui/tools/podcast", data={"collection": "tech"}, follow_redirects=False
+        )
+
+    assert "genera un digesto" in _flash_of(response.headers["location"])
+    start.assert_not_called()
+
+
+async def test_podcast_renders_from_the_latest_digest(_ui_env: Path) -> None:
+    """The render attaches to the collection's digest run and its strategy."""
+    _write_collection(_ui_env, narration=True)
+    await RunsRepository().record_run(
+        workflow_id="digest-pipeline-tech-20261003120000",
+        collection="tech",
+        status="ok",
+        article_count=2,
+        cluster_count=1,
+    )
+    client = _client()
+    with patch(
+        "src.api.routes_ui.TemporalAdminService.start_narration_render",
+        new_callable=AsyncMock,
+        return_value={"workflow_id": "narration-tech-1", "collection": "tech", "status": "started"},
+    ) as start:
+        response = client.post(
+            "/ui/tools/podcast", data={"collection": "tech"}, follow_redirects=False
+        )
+
+    flash = _flash_of(response.headers["location"])
+    assert "narration-tech-1" in flash
+    assert "digest-pipeline-tech-20261003120000" in flash
+    kwargs = start.call_args.kwargs
+    assert kwargs["collection"] == "tech"
+    assert kwargs["run_id"] == "digest-pipeline-tech-20261003120000"
+    assert kwargs["strategy"] == "turns"
+    assert kwargs["spec"].roles[0].voice_id == "es-mx-male"
+
+
+# ---------------------------------------------------------------------------
+# Job fragments
+# ---------------------------------------------------------------------------
+
+
+def test_job_fragment_renders_empty_states() -> None:
+    """Every kind answers with its own empty state instead of an error."""
+    client = _client()
+    doc = client.get("/ui/fragments/tool_jobs?kind=doc_tts")
+    assert doc.status_code == 200
+    assert "Sin trabajos" in doc.text
+
+    url = client.get("/ui/fragments/tool_jobs?kind=url")
+    assert "Sin resúmenes" in url.text
+
+    bad = client.get("/ui/fragments/tool_jobs?kind=nope")
+    assert "tipo desconocido" in bad.text
+
+
+def test_job_fragment_lists_url_runs(_ui_env: Path) -> None:
+    """URL summary runs recorded in digest_runs appear under kind=url."""
+    _write_collection(_ui_env)
+    client = _client()
+
+    async def _record() -> None:
+        await RunsRepository().record_run(
+            workflow_id="url-summary-tech-20261003120000-abcd",
+            collection="tech",
+            status="ok",
+            article_count=1,
+            cluster_count=1,
+            digest_preview="# Resumen",
+        )
+
+    import asyncio
+
+    asyncio.run(_record())
+
+    response = client.get("/ui/fragments/tool_jobs?kind=url")
+    assert "url-summary-tech-20261003120000-abcd" in response.text
+    assert "Resumen" in response.text
+
+
+def test_job_fragment_shows_the_signed_lesson_link(_ui_env: Path) -> None:
+    """A finished lesson exposes its HMAC link and metadata in the table."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+    from src.api.services.lesson import update_lesson_meta
+
+    async def _job() -> None:
+        await AudioJobsRepository().start_job("lesson-done1", collection="tech", kind="lesson")
+        await AudioJobsRepository().finish_job(
+            "lesson-done1",
+            status="FINISHED_OK",
+            audio_path=str(Path(settings.narration_cache_dir) / "clase.m4a"),
+            kind="lesson",
+        )
+
+    audio = Path(settings.narration_cache_dir)
+    audio.mkdir(parents=True, exist_ok=True)
+    (audio / "clase.m4a").write_bytes(b"ID3" + b"\x00" * 8)
+    asyncio.run(_job())
+    update_lesson_meta("lesson-done1", {"title": "Subjuntivo", "mode": "dual"})
+
+    client = _client()
+    response = client.get("/ui/fragments/tool_jobs?kind=lesson")
+
+    assert "Subjuntivo" in response.text
+    assert "/api/audio/lesson/lesson-done1?exp=" in response.text
+    assert "dual" in response.text
+
+
+def test_job_fragment_marks_failed_jobs(_ui_env: Path) -> None:
+    """FINISHED_ERROR jobs show their reason and no link."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+
+    async def _job() -> None:
+        await AudioJobsRepository().start_job("doc-bad", collection="documents", kind="doc_tts")
+        await AudioJobsRepository().finish_job(
+            "doc-bad",
+            status="FINISHED_ERROR",
+            error="unreadable PDF",
+            kind="doc_tts",
+        )
+
+    asyncio.run(_job())
+
+    client = _client()
+    response = client.get("/ui/fragments/tool_jobs?kind=doc_tts")
+
+    assert "error" in response.text
+    assert "unreadable PDF" in response.text
+    assert "Descargar" not in response.text

@@ -1,0 +1,71 @@
+{% if error %}
+<div class="empty">{{ error }}</div>
+{% elif kind == 'url' %}
+  {% if not url_rows %}
+  <div class="empty">Sin resúmenes de URL todavía.</div>
+  {% else %}
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Inicio</th><th>Colección</th><th>Estado</th><th>Resumen</th><th>Workflow</th></tr>
+      </thead>
+      <tbody>
+        {% for r in url_rows %}
+        <tr>
+          <td class="muted">{{ fmt_iso(r.started_at) }}</td>
+          <td>{{ r.collection }}</td>
+          <td><span class="badge {{ run_badges.get(r.status, r.status) }}">{{ run_labels.get(r.status, r.status) }}</span></td>
+          <td>{{ (r.digest_preview or '')[:70] }}</td>
+          <td class="muted">{{ r.workflow_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% else %}
+  {% if not jobs %}
+  <div class="empty">Sin trabajos de audio todavía.</div>
+  {% else %}
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>Inicio</th><th>Colección</th><th>Título</th><th>Estado</th><th>Duración</th><th>Audio</th></tr>
+      </thead>
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td class="muted">{{ fmt_iso(j.started_at) }}</td>
+          <td>{{ j.collection }}</td>
+          <td>
+            {{ j.title or '—' }}
+            {% if j.mode %}<span class="badge running">{{ j.mode }}</span>{% endif %}
+            {% if j.char_count %}<span class="muted">({{ j.char_count }} car.)</span>{% endif %}
+          </td>
+          <td>
+            <span class="badge {{ status_badges.get(j.status, '') }}">{{ status_labels.get(j.status, j.status) }}</span>
+            {% if j.status == 'FINISHED_ERROR' and j.error %}
+            <div class="muted" style="font-size:12px">{{ j.error[:90] }}</div>
+            {% endif %}
+          </td>
+          <td>
+            {% if j.duration %}{{ '%.0f'|format(j.duration) }}s
+            {% elif j.elapsed_seconds %}{{ j.elapsed_seconds }}s
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if j.audio_url %}
+            <a class="btn" style="margin:0;padding:2px 8px;font-size:11px" href="{{ j.audio_url }}">Descargar</a>
+            {% elif j.status == 'FINISHED_OK' %}
+            <span class="muted" title="Sin secreto de enlaces firmados no hay URL">—</span>
+            {% else %}
+            <span class="muted">…</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endif %}

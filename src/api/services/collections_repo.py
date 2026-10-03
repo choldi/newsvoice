@@ -115,7 +115,10 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, str):
         return _toml_string(value)
     if isinstance(value, list):
-        items = ", ".join(_toml_string(item) for item in value if isinstance(item, str))
+        # Elements go through the same serializer: a list of dicts (the
+        # NarrationSpec roles, a music bed) must not be silently dropped, which
+        # is exactly what string-only handling did (saving a cast wiped it).
+        items = ", ".join(_toml_value(item) for item in value if item is not None)
         return f"[{items}]"
     if isinstance(value, dict):
         _empty_values = ("", [], {})
@@ -171,6 +174,26 @@ class CollectionsRepository:
             The matching CollectionConfig or None.
         """
         return next((c for c in self._load() if c.name.casefold() == name.casefold()), None)
+
+    def resolve(self, name: str) -> CollectionConfig | None:
+        """Return the named collection, falling back to the implicit default.
+
+        The implicit ``default`` collection (built from the global settings
+        when no collections.toml exists) answers only when the caller asks for
+        ``default``: any other unknown name stays unknown.
+
+        Args:
+            name: Collection name from a request.
+
+        Returns:
+            The collection, or None when the name is unknown.
+        """
+        found = self.get(name)
+        if found is None and (name or "").strip().casefold() == "default":
+            from src.core.collections import default_collection
+
+            return default_collection()
+        return found
 
     def exists(self, name: str) -> bool:
         """Return whether a collection with this name already exists.

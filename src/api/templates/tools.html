@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Herramientas{% endblock %}
+{% block app %}
+<h1>Herramientas</h1>
+<div class="card">
+  <p class="muted">
+    Trabajos puntuales fuera del digest diario: resumir una URL, pasar un documento
+    a audio, generar una clase de idiomas o renderizar el podcast de una colección.
+    Cada tabla se actualiza sola cada 10&nbsp;s.
+  </p>
+</div>
+
+<details class="card" id="tool-url" open>
+  <summary><strong>🔗 Resumen de URL (Fase 7.10)</strong></summary>
+  <form method="post" action="/ui/tools/url">
+    <label>URL del artículo</label>
+    <input type="url" name="url" required placeholder="https://elpais.com/...">
+    <div class="row">
+      <div class="col">
+        <label>Colección (prompt y destinos)</label>
+        <select name="collection">
+          {% for c in collections %}<option value="{{ c.name }}">{{ c.name }}</option>
+          {% else %}<option value="default">default</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <div class="check" style="margin-top:26px"><input type="checkbox" name="store"><label>Guardar el artículo en la DB</label></div>
+      </div>
+      <div class="col">
+        <div class="check" style="margin-top:26px"><input type="checkbox" name="deliver" checked><label>Entregar a los canales</label></div>
+      </div>
+    </div>
+    <button type="submit" class="primary">Resumir</button>
+  </form>
+  <div id="jobs-url" hx-get="/ui/fragments/tool_jobs?kind=url" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
+</details>
+
+<details class="card" id="tool-doc">
+  <summary><strong>📄 TTS de documentos — PDF/EPUB/TXT/MD (Fase 7.11)</strong></summary>
+  <form method="post" action="/ui/tools/doc-tts" enctype="multipart/form-data">
+    <label>Fichero</label>
+    <input type="file" name="file" accept=".pdf,.epub,.txt,.md" required>
+    <div class="row">
+      <div class="col">
+        <label>Título (opcional)</label>
+        <input type="text" name="title" placeholder="Se usa el nombre del fichero">
+      </div>
+      <div class="col">
+        <label>Voz</label>
+        {% if omni_voices %}
+        <select name="voice">
+          <option value="">(por defecto)</option>
+          {% for v in omni_voices %}
+          <option value="{{ v.get('voice_id') or v.get('name') }}">{{ v.get('voice_id') or v.get('name') }} ({{ v.get('language', '—') }})</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="text" name="voice" list="voice-list" placeholder="(por defecto)">
+        {% endif %}
+      </div>
+      <div class="col">
+        <label>Idioma</label>
+        <input type="text" name="language" list="lang-list" placeholder="es">
+      </div>
+    </div>
+    <button type="submit" class="primary">Convertir a audio</button>
+    <p class="muted" style="font-size:12px">
+      Un MP3 por documento; el estado incluye el enlace firmado para abrirlo desde el móvil.
+    </p>
+  </form>
+  <div id="jobs-doc_tts" hx-get="/ui/fragments/tool_jobs?kind=doc_tts" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
+</details>
+
+<details class="card" id="tool-lesson">
+  <summary><strong>🎓 Clase de idiomas — profesor (Fase 7.12)</strong></summary>
+  <form method="post" action="/ui/tools/lessons" enctype="multipart/form-data">
+    <label>Apuntes (.md / .txt)</label>
+    <input type="file" name="file" accept=".md,.txt" required>
+    <div class="row">
+      <div class="col">
+        <label>Modo</label>
+        <select name="mode">
+          <option value="mixed">mixed — nativa + ejemplos en objetivo</option>
+          <option value="dual">dual — dos voces, dos idiomas</option>
+          <option value="native">native — todo en la lengua nativa</option>
+        </select>
+      </div>
+      <div class="col">
+        <label>Idioma objetivo (se enseña)</label>
+        <input type="text" name="target_language" list="lang-list" value="en" required>
+      </div>
+      <div class="col">
+        <label>Lengua nativa (del alumno)</label>
+        <input type="text" name="native_language" list="lang-list" value="es" required>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Colección (destinos)</label>
+        <select name="collection">
+          {% for c in collections %}<option value="{{ c.name }}">{{ c.name }}</option>
+          {% else %}<option value="default">default</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label>Título (opcional)</label>
+        <input type="text" name="title" placeholder="Se usa el nombre del fichero">
+      </div>
+      <div class="col">
+        <label>Voz (modo mixed/native)</label>
+        {% if omni_voices %}
+        <select name="voice">
+          <option value="">(por defecto)</option>
+          {% for v in omni_voices %}
+          <option value="{{ v.get('voice_id') or v.get('name') }}">{{ v.get('voice_id') or v.get('name') }} ({{ v.get('language', '—') }})</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="text" name="voice" list="voice-list" placeholder="(por defecto)">
+        {% endif %}
+      </div>
+    </div>
+    <details>
+      <summary class="muted" style="cursor:pointer">Cast avanzado (spec JSON — obligatorio en modo dual)</summary>
+      <label>NarrationSpec JSON</label>
+      <textarea name="spec" rows="8" style="font-family:monospace;font-size:12px" placeholder='{"language":"en","roles":[{"name":"profe_es","voice_id":"...","language":"es"},{"name":"profe_en","voice_id":"...","language":"en"}]}'></textarea>
+      <p class="muted" style="font-size:12px">Las voces clonadas están en <a href="/ui/voices">Voces</a>. Sin spec, se usa la voz de arriba con un solo rol.</p>
+    </details>
+    <button type="submit" class="primary">Generar clase</button>
+  </form>
+  <div id="jobs-lesson" hx-get="/ui/fragments/tool_jobs?kind=lesson" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
+</details>
+
+<details class="card" id="tool-podcast">
+  <summary><strong>🎙 Podcast de una colección (narración, Fase 7)</strong></summary>
+  <form method="post" action="/ui/tools/podcast">
+    <div class="row">
+      <div class="col">
+        <label>Colección (usa su NarrationSpec y estrategia)</label>
+        <select name="collection">
+          {% for c in collections %}
+          <option value="{{ c.name }}">{{ c.name }}{{ ' — sin NarrationSpec' if not c.narration_spec else '' }}</option>
+          {% else %}<option value="default">default — sin NarrationSpec</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <p class="muted" style="font-size:12px;margin-top:26px">
+          El guion lo genera el LLM a partir del <strong>último digesto</strong> de la colección;
+          el cast se configura en Colecciones → Narración.
+        </p>
+      </div>
+    </div>
+    <button type="submit" class="primary">Generar podcast ahora</button>
+  </form>
+  <div id="jobs-narration" hx-get="/ui/fragments/tool_jobs?kind=narration" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
+</details>
+
+<datalist id="lang-list">
+  {% for l in omni_languages %}<option value="{{ l }}">{% endfor %}
+  <option value="es"><option value="en">
+</datalist>
+<datalist id="voice-list">
+  {% for v in omni_voices %}<option value="{{ v.get('voice_id') or v.get('name') }}">{% endfor %}
+</datalist>
+{% endblock %}

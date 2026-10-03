@@ -14,7 +14,10 @@ from uuid import uuid4
 import structlog
 from temporalio.client import Client, RPCError, ScheduleHandle, ScheduleUpdate
 
+from src.api.models.narration import NarrationScript, NarrationSpec
+from src.api.services.submit import SubmitError
 from src.core.collections import CollectionConfig
+from src.core.config import get_settings
 from src.workers.run_worker import build_client
 from src.workers.schedule import build_schedule, pipeline_config_for, url_summarize_config_for
 
@@ -276,6 +279,88 @@ class TemporalAdminService:
         )
         logger.info("lesson_workflow_started", workflow_id=workflow_id)
         return workflow_id
+
+    async def start_narration_render(
+        self,
+        *,
+        collection: str,
+        spec: NarrationSpec,
+        script: NarrationScript | None = None,
+        script_id: int | None = None,
+        strategy: str = "turns",
+        run_id: str = "",
+        force: bool = False,
+    ) -> dict[str, str]:
+        """Start a NarrationWorkflow manually (REST trigger + GUI, Phase 7.12).
+
+        The script is optional: with neither ``script`` nor ``script_id`` the
+        workflow generates one from ``run_id``'s digest, which is what the GUI
+        "render the latest run" button relies on.
+
+        Args:
+            collection: Collection the render belongs to.
+            spec: The cast/delivery spec that will be rendered.
+            script: Inline script, when the caller has one.
+            script_id: Id of a stored script (looked up here, so a missing one
+                fails before a workflow is started).
+            strategy: 'turns' or 'conversations'.
+            run_id: Digest run the script is generated from / attached to.
+            force: Render even when NARRATION_ENABLED is false.
+
+        Returns:
+            Dict with workflow_id, collection and status.
+
+        Raises:
+            SubmitError: 409 when narration is disabled, 404 when the stored
+                script does not exist, 502 when Temporal cannot start it.
+        """
+        settings = get_settings()
+        if not settings.narration_enabled and not force:
+            raise SubmitError(
+                "Narration is disabled (NARRATION_ENABLED=false)",
+                status_code=409,
+            )
+        resolved = script
+        if script_id is not None:
+            from src.api.db.database import NarrationRepository
+
+            stored = await NarrationRepository().get_script(script_id)
+            if stored is None:
+                raise SubmitError(f"Script {script_id} not found", status_code=404)
+            resolved = stored
+
+        from src.workers.narration_workflows import NarrationConfig, NarrationWorkflow
+        from src.workers.podcast_target import podcast_target
+
+        config = NarrationConfig(
+            collection=collection,
+            spec=spec.model_dump(),
+            script=resolved.model_dump() if resolved else None,
+            script_id=script_id,
+            run_id=run_id,
+            strategy=strategy,
+        )
+        workflow_id = f"narration-{collection}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        # Phase 7.9b: podcast generation owns one namespace per backend, so a
+        # standalone render is started in the namespace the spec asks for.
+        target = podcast_target(spec.model_dump())
+        client = await build_client(target.namespace)
+        try:
+            await client.execute_workflow(
+                NarrationWorkflow.run,
+                config,
+                id=workflow_id,
+                task_queue=target.task_queue,
+            )
+        except Exception as exc:
+            logger.error(
+                "start_narration_render_failed",
+                collection=collection,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise SubmitError(f"Failed to start narration: {exc}", status_code=502) from exc
+        return {"workflow_id": workflow_id, "collection": collection, "status": "started"}
 
     async def is_collection_running(self, collection_name: str) -> bool:
         """Check if a collection already has a running digest workflow.

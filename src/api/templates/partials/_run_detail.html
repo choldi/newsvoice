@@ -19,6 +19,45 @@
   </div>
   {% endif %}
 
+  {% if verifications %}
+  <hr style="margin:12px 0;border-color:var(--border)">
+  <div class="muted" style="margin-bottom:6px">🧪 Verificaciones</div>
+  <table style="width:100%;font-size:12px">
+    <thead>
+      <tr><th>Capa</th><th>Veredicto</th><th>Score</th><th>Umbral</th><th>Apto</th></tr>
+    </thead>
+    <tbody>
+      {% for v in verifications %}
+      <tr>
+        <td>{{ v.target }}
+          <div class="muted" style="font-size:11px">{{ v.method }}</div>
+        </td>
+        <td><span class="badge {{ 'ok' if v.verdict == 'valid' else ('running' if v.verdict == 'error' else 'failed') }}">{{ v.verdict }}</span></td>
+        <td>
+          {{ '%.3f'|format(v.score) if v.score is not none else '—' }}
+          {% if v.method == 'asr_wer' %}<span class="muted" title="Word Error Rate: cuanto más bajo, mejor">WER ↓</span>{% endif %}
+        </td>
+        <td>{{ '%.3f'|format(v.threshold) if v.threshold is not none else '—' }}</td>
+        <td>{{ 'sí' if v.passed else 'no' }}</td>
+      </tr>
+      {% if v.details %}
+      <tr>
+        <td colspan="5" style="padding-left:8px">
+          <details>
+            <summary class="muted" style="cursor:pointer;font-size:11px">detalles</summary>
+            <pre style="white-space:pre-wrap;font-size:11px">{{ v.details | tojson(indent=2) }}</pre>
+          </details>
+        </td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if verifications|selectattr('method', 'equalto', 'asr_wer')|list %}
+  <div class="muted" style="font-size:11px;margin-top:4px">WER: menor es mejor (transcripción vs. guion).</div>
+  {% endif %}
+  {% endif %}
+
   {% if narration_path or narration_job %}
   <hr style="margin:12px 0;border-color:var(--border)">
   <div class="muted" style="margin-bottom:6px">🎙 Narración multi-hablante</div>

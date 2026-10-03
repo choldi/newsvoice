@@ -99,7 +99,7 @@ def test_submit_starts_the_workflow_with_channels_and_cast(
         }
     )
     with patch(
-        "src.api.routes.admin_lessons.TemporalAdminService.start_lesson",
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
         new_callable=AsyncMock,
     ) as start:
         response = _submit(
@@ -142,7 +142,7 @@ def test_submit_starts_the_workflow_with_channels_and_cast(
 def test_submit_builds_a_default_cast_from_voice(_lesson_env: Path) -> None:
     """Without a spec, the single voice field becomes a one-role cast."""
     with patch(
-        "src.api.routes.admin_lessons.TemporalAdminService.start_lesson",
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
         new_callable=AsyncMock,
     ) as start:
         response = _submit(target_language="en", native_language="es", voice="es-MX-JorgeNeural")
@@ -215,7 +215,7 @@ def test_submit_requires_a_link_secret(_lesson_env: Path, monkeypatch) -> None:
 def test_submit_temporal_failure_is_502_and_marks_the_job(_lesson_env: Path) -> None:
     """A Temporal outage leaves an explained job row and no orphan upload."""
     with patch(
-        "src.api.routes.admin_lessons.TemporalAdminService.start_lesson",
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
         new_callable=AsyncMock,
         side_effect=RuntimeError("temporal unreachable"),
     ):

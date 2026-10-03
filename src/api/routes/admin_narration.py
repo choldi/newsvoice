@@ -4,8 +4,6 @@ Provides endpoints to manually render a narration and to list available voices
 for the cast editor.
 """
 
-from datetime import UTC, datetime
-
 import structlog
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
@@ -13,10 +11,9 @@ from pydantic import BaseModel, Field
 from src.api.db.database import AudioJobsRepository, NarrationRepository, RunsRepository
 from src.api.models.narration import NarrationScript, NarrationSpec
 from src.api.services.narration_tts import NarrationTTSService
+from src.api.services.submit import SubmitError
+from src.api.services.temporal_admin import TemporalAdminService
 from src.core.config import settings
-from src.workers.narration_workflows import NarrationConfig, NarrationWorkflow
-from src.workers.podcast_target import podcast_target
-from src.workers.run_worker import build_client
 
 logger = structlog.get_logger(__name__)
 
@@ -92,53 +89,21 @@ async def trigger_narration(payload: NarrationTriggerIn) -> NarrationTriggerOut:
             detail="Either script or script_id must be provided.",
         )
 
-    if payload.script_id is not None:
-        repo = NarrationRepository()
-        stored = await repo.get_script(payload.script_id)
-        if not stored:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Script {payload.script_id} not found",
-            )
-        script = stored
-    else:
-        script = payload.script
-
-    config = NarrationConfig(
-        collection=payload.collection,
-        spec=payload.spec.model_dump(),
-        script=script.model_dump() if script else None,
-        script_id=payload.script_id,
-        run_id=payload.run_id,
-        strategy=payload.strategy,
-    )
-    workflow_id = f"narration-{payload.collection}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-    # Phase 7.9b: podcast generation owns one namespace per backend, so a
-    # standalone render is started in the namespace the spec asks for.
-    target = podcast_target(payload.spec.model_dump())
-    client = await build_client(target.namespace)
+    # The start itself lives in the service (Phase 7.12): the GUI calls the
+    # same code path with script=None, generating from a digest run instead.
     try:
-        await client.execute_workflow(
-            NarrationWorkflow.run,
-            config,
-            id=workflow_id,
-            task_queue=target.task_queue,
-        )
-    except Exception as exc:
-        logger.error(
-            "trigger_narration_failed",
+        result = await TemporalAdminService().start_narration_render(
             collection=payload.collection,
-            error=str(exc),
-            exc_info=True,
+            spec=payload.spec,
+            script=payload.script,
+            script_id=payload.script_id,
+            strategy=payload.strategy,
+            run_id=payload.run_id,
+            force=payload.force,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to start narration: {exc}",
-        ) from exc
-
-    return NarrationTriggerOut(
-        workflow_id=workflow_id, collection=payload.collection, status="started"
-    )
+    except SubmitError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return NarrationTriggerOut(**result)
 
 
 class NarrationScriptSaveIn(BaseModel):
@@ -167,7 +132,6 @@ async def save_narration_script(payload: NarrationScriptSaveIn) -> NarrationScri
     Returns:
         NarrationScriptSaveOut with the saved script id.
     """
-    from src.api.db.database import NarrationRepository
 
     repo = NarrationRepository()
     script_id = await repo.save_script(payload.run_id, payload.script, payload.collection)
@@ -217,7 +181,6 @@ async def get_narration_script(script_id: int) -> dict:
     Raises:
         HTTPException: 404 if the script does not exist.
     """
-    from src.api.db.database import NarrationRepository
 
     repo = NarrationRepository()
     script = await repo.get_script(script_id)

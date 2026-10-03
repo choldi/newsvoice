@@ -21,12 +21,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
+from starlette.datastructures import UploadFile
 
+from src.api.db.database import AudioJobsRepository
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
+from src.api.services.document_text import DocumentExtractionError, sniff_kind
+from src.api.services.submit import SubmitError, check_content_length, read_upload
 from src.api.services.tts import estimate_duration_seconds, resolve_edge_voice, synthesize_mp3
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
+
+#: ``audio_jobs.collection`` grouping every document job in the GUI listing.
+JOB_COLLECTION = "documents"
+#: ``audio_jobs.kind`` discriminator of this feature.
+JOB_KIND = "doc_tts"
 
 # Schema version of the audio sidecar, so a future change of the hashing inputs
 # invalidates cached files instead of serving audio built from other text.
@@ -413,3 +422,127 @@ def update_job_meta(workflow_id: str, **fields: object) -> None:
         **fields: Fields to merge into the stored metadata.
     """
     write_job_meta(workflow_id, dict(fields))
+
+
+# ---------------------------------------------------------------------------
+# Submit (shared by the REST endpoint and the GUI, Phase 7.11)
+# ---------------------------------------------------------------------------
+
+
+def _uploads_dir() -> Path:
+    """Return the directory holding uploaded documents (created on demand).
+
+    Returns:
+        Path of ``<doc_tts_dir>/uploads``.
+    """
+    path = Path(get_settings().doc_tts_dir) / "uploads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+async def submit_document(
+    *,
+    upload: UploadFile,
+    content_length: str = "",
+    voice: str | None = None,
+    language: str | None = None,
+    title: str | None = None,
+) -> dict[str, str]:
+    """Validate, store and start a document TTS job (Phase 7.11).
+
+    The REST endpoint and the ``/ui`` form both land here so the rules (kill
+    switch, link secret, size, extension, Temporal start) can never drift.
+
+    Args:
+        upload: Multipart file part of the request.
+        content_length: Raw ``Content-Length`` header, for the early 413.
+        voice: Optional Edge voice override.
+        language: Optional ISO 639-1 override.
+        title: Optional title override (defaults to the filename stem).
+
+    Returns:
+        Dict with workflow_id, title, filename, kind and status_url.
+
+    Raises:
+        SubmitError: 403 disabled, 413 too large, 415 unsupported type, 422
+            empty/unnamed file, 502 Temporal failure, 503 no link secret.
+    """
+    settings = get_settings()
+    if not settings.doc_tts_enabled:
+        raise SubmitError("Document TTS is disabled (DOC_TTS_ENABLED=false)", status_code=403)
+    if not settings.doc_tts_link_secret.strip():
+        # The whole point is a URL the operator can open: without a secret the
+        # link cannot be signed, so fail here instead of after 10 minutes.
+        raise SubmitError(
+            "DOC_TTS_LINK_SECRET is not configured; signed audio links are off",
+            status_code=503,
+        )
+    check_content_length(content_length, settings.doc_tts_max_file_bytes)
+
+    filename = Path(upload.filename or "").name.strip()
+    if not filename:
+        raise SubmitError("file part has no filename", status_code=422)
+    try:
+        kind = sniff_kind(filename)
+    except DocumentExtractionError as exc:
+        raise SubmitError(str(exc), status_code=415) from exc
+    data = await read_upload(upload, settings.doc_tts_max_file_bytes)
+
+    from src.api.services.temporal_admin import new_document_run_id
+
+    workflow_id = new_document_run_id()
+    upload_path = _uploads_dir() / f"{workflow_id}{Path(filename).suffix.lower()}"
+    atomic_write(upload_path, data)
+    clean_title = (title or "").strip() or Path(filename).stem
+    write_job_meta(
+        workflow_id,
+        {
+            "title": clean_title,
+            "filename": filename,
+            "kind": kind,
+            "voice": (voice or "").strip(),
+            "language": (language or "").strip(),
+        },
+    )
+
+    repo = AudioJobsRepository()
+    await repo.start_job(workflow_id, collection=JOB_COLLECTION, kind=JOB_KIND)
+    try:
+        from src.api.services.temporal_admin import TemporalAdminService
+        from src.workers.doc_tts_workflows import DocTTSConfig
+
+        await TemporalAdminService().start_document_tts(
+            DocTTSConfig(
+                source_path=str(upload_path),
+                filename=filename,
+                title=(title or "").strip(),
+                voice=(voice or "").strip(),
+                language=(language or "").strip(),
+            ),
+            workflow_id,
+        )
+    except Exception as exc:
+        logger.error("doc_tts_start_failed", workflow_id=workflow_id, error=str(exc), exc_info=True)
+        await repo.finish_job(
+            workflow_id,
+            status="FINISHED_ERROR",
+            error=f"could not start the workflow: {exc}",
+            kind=JOB_KIND,
+        )
+        upload_path.unlink(missing_ok=True)
+        raise SubmitError("Could not start the document TTS workflow", status_code=502) from exc
+
+    logger.info(
+        "doc_tts_submitted",
+        workflow_id=workflow_id,
+        filename=filename,
+        kind=kind,
+        bytes=len(data),
+    )
+    return {
+        "workflow_id": workflow_id,
+        "title": clean_title,
+        "filename": filename,
+        "kind": kind,
+        "status_url": f"/api/admin/documents/tts/{workflow_id}",
+    }

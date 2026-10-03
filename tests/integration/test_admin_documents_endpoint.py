@@ -63,7 +63,7 @@ def test_submit_requires_the_admin_token(_doc_tts_env: Path) -> None:
 def test_submit_starts_the_workflow_and_records_the_job(_doc_tts_env: Path) -> None:
     """A valid upload answers 202, stores the file and opens the job row."""
     with patch(
-        "src.api.routes.admin_documents.TemporalAdminService.start_document_tts",
+        "src.api.services.temporal_admin.TemporalAdminService.start_document_tts",
         new_callable=AsyncMock,
     ) as start:
         response = _upload(
@@ -145,7 +145,7 @@ def test_submit_temporal_failure_is_502_and_marks_the_job(
 ) -> None:
     """A Temporal outage leaves an explained job row and no orphan upload."""
     with patch(
-        "src.api.routes.admin_documents.TemporalAdminService.start_document_tts",
+        "src.api.services.temporal_admin.TemporalAdminService.start_document_tts",
         new_callable=AsyncMock,
         side_effect=RuntimeError("temporal unreachable"),
     ):

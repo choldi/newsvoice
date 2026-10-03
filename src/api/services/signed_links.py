@@ -22,6 +22,7 @@ _WORKFLOW_ID_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 
 AUDIO_LINK_PREFIX = "/api/audio/doc"
 LESSON_AUDIO_LINK_PREFIX = "/api/audio/lesson"
+NARRATION_AUDIO_LINK_PREFIX = "/api/audio/narration"
 
 
 class SignedLinkError(Exception):
