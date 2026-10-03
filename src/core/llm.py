@@ -29,7 +29,8 @@ async def generate_completion(
         model: LLM model name. Defaults to settings.llm_model.
         api_base: LLM endpoint base URL. Defaults to settings.llm_api_base.
         api_key: Credential for a hosted provider. Defaults to settings.llm_api_key;
-            omitted entirely when empty so local endpoints keep working.
+            an empty key becomes the conventional "EMPTY" placeholder, which
+            litellm requires even for a local OpenAI-compatible endpoint.
         max_tokens: Response budget for this call. Defaults to settings.llm_max_tokens.
         response_format: 'text' (default), 'json_object' or 'json_schema'. The
             judge passes 'json_object' so the reply can be parsed instead of
@@ -49,6 +50,11 @@ async def generate_completion(
     target_temp = temperature if temperature is not None else settings.llm_temperature
     target_max_tokens = max_tokens or settings.llm_max_tokens
     target_timeout = timeout or settings.llm_timeout_seconds
+    # litellm's OpenAI-compatible path refuses to run without a key even when
+    # the target is a local llama.cpp server (seen with litellm 1.103), so an
+    # empty key becomes the conventional placeholder. A configured key —
+    # argument or LLM_API_KEY — is always passed verbatim.
+    target_api_key = (api_key if api_key is not None else settings.llm_api_key) or "EMPTY"
 
     logger.info(
         "calling_llm",
@@ -57,7 +63,7 @@ async def generate_completion(
         temperature=target_temp,
         max_tokens=target_max_tokens,
         response_format=response_format or "text",
-        authenticated=bool(api_key),
+        authenticated=bool(target_api_key) and target_api_key != "EMPTY",
     )
 
     try:
@@ -69,8 +75,7 @@ async def generate_completion(
             "timeout": target_timeout,
             "max_tokens": target_max_tokens,
         }
-        if api_key:
-            request_kwargs["api_key"] = api_key
+        request_kwargs["api_key"] = target_api_key
         if response_format == "json_object":
             request_kwargs["response_format"] = {"type": "json_object"}
         elif response_format == "json_schema" and json_schema is not None:
