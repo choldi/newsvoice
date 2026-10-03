@@ -48,14 +48,17 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
    - **Preferred**: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt). The login
      form will use username/password instead of the token. Generate the hash
      with: `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"`
-   Nota de topología (tras el cutover): **esta caja es la instancia
-   autoritativa** del pack (la que despliega `scripts/deploy.sh`). En debwk
-   (`100.75.148.68`) la copia anterior del pack sigue **parada** para evitar
-   digestos duplicados: solo corren allí Ollama (el backend de `LLM_API_BASE`)
-   y los servicios ajenos (`litellm-proxy`, `filestash`, ...). Para revivir esa
-   copia: `docker start news_engine_api news_engine_worker news_engine_narration_worker`
-   (y devolverles el arranque automático con
-   `docker update --restart=unless-stopped <nombre>`).
+   Nota de topología: **debwk (`100.75.148.68`,
+   `debwk.elver-exponential.ts.net`) es la instancia autoritativa** del pack:
+   UI, workers, Temporal y datos viven allí desde la migración (desde cualquier
+   caja de la tailnet: `http://debwk.elver-exponential.ts.net:8000/ui`).
+   La copia de vm-ubuntu quedó **parada** para evitar digestos duplicados
+   (`docker compose stop` + `restart=no`); para revertir la migración y
+   volver a ejecutarla desde vm-ubuntu:
+   `cd ~/aider_projects/news_sumary && docker compose start && for n in $(docker ps -aq --filter name=news_engine_); do docker update --restart=unless-stopped $n; done`
+   (y parar la de debwk con `ssh debwk 'cd ~/news-summary && docker compose stop'`).
+   El `data/` de debwk es root-owned: las copias de estado se hacen con
+   `rsync` a `~/news-transfer/` y un `docker run ... cp -a` (sin sudo).
 
 4. Copy `collections.toml.example` to `collections.toml` and define your
    collections (names, feed URLs, per-collection schedule `time`, TTS flags,
@@ -101,13 +104,23 @@ full list):
 
 ### Admin GUI
 
+**URL desplegada (producción):** `http://debwk.elver-exponential.ts.net:8000/ui`
+(Tailscale MagicDNS, accesible desde el móvil; en LAN `http://debwk:8000/ui` si
+tienes el nombre local resuelto). La GUI solo es remota cuando la caja expone
+`:8000` en la interfaz elegida.
+
 Log in at `http://<host>:8000/ui/login` with `ADMIN_API_TOKEN`. From there you
 can, without touching code or `collections.toml` by hand:
 
-- Create / edit / delete collections (feeds, time, TTS, podcast identity)
+- Create / edit / delete collections (feeds, time, TTS, podcast identity,
+  narration cast editor, verification options)
 - See the weekly schedule calendar and resync Temporal schedules
-- Browse run history and launch an immediate run
+- Browse run history (with the verification ledger per run) and launch an
+  immediate run
 - Manage voices (stock voices and cloning new ones from an audio reference)
+- **Herramientas** (`/ui/tools`): URL summary, document TTS, language lessons
+  and manual podcast renders, with live job tables
+- **Ajustes** (`/ui/settings`): validated editor for the whole `.env`
 
 ---
 
