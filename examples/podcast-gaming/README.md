@@ -82,7 +82,7 @@ python examples/podcast-gaming/check_feeds.py
 
 ```bash
 NARRATION_ENABLED=true
-NARRATION_API_BASE_URL=http://debwk.elver-exponential.ts.net:8000/api/v1
+NARRATION_API_BASE_URL=  # Empty = reuse TTS_API_BASE_URL (gateway, :8001). Never :8000
 NARRATION_TASK_QUEUE=news-engine-narration-task-queue
 NARRATION_FALLBACK_TO_EDGE=true  # General (single-voice) fallback stays enabled
 NARRATIONS_DIALOG_FALLBACK_TO_EDGE=false  # Important: prevents silent substitution of cloned voices in dialogs

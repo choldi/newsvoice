@@ -187,6 +187,14 @@ The narration worker uses the same TTS gateway as the digest TTS
 audio to `NARRATION_CACHE_DIR` (`data/narration/`), separate from the digest
 TTS cache.
 
+> **The narration gateway is OmniVoice on port 8001, not the news-engine API
+> on 8000.** Leave `NARRATION_API_BASE_URL` empty (it then reuses
+> `TTS_API_BASE_URL`); if you set it, use `:8001`. Pointing it at `:8000`
+> makes the worker POST `/api/v1/tts` to the news-engine API, which has no such
+> route, and every render dies with `NarrationGatewayError: Not Found`.
+> `Settings` refuses to start with that misconfiguration (see
+> `narration_base_url` in `src/core/config.py`).
+
 ### Narration delivery (Phase 7.6)
 
 When a collection has `narration_enabled = true` and `narration_deliver_audio = true`

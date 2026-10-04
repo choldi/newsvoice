@@ -2,9 +2,25 @@
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _url_port(url: str) -> int | None:
+    """Return the explicit port of a URL, or None when it has none.
+
+    Args:
+        url: Absolute URL to inspect.
+
+    Returns:
+        The port as an integer, or None when the URL has no explicit port.
+    """
+    try:
+        return urlsplit(url).port
+    except ValueError:
+        return None
 
 
 class Settings(BaseSettings):
@@ -378,6 +394,29 @@ class Settings(BaseSettings):
                 "narration_conversation_max_turns_per_block"
             )
         return self
+
+    @model_validator(mode="after")
+    def _narration_gateway_is_not_self(self) -> "Settings":
+        """Reject a narration gateway that points at our own API port.
+
+        The narration cast is served by the OmniVoice gateway (port 8001). The
+        news-engine API (port `api_port`) has no `/tts` route, so a
+        `NARRATION_API_BASE_URL` aimed at it makes every render fail with
+        `NarrationGatewayError: Not Found` instead of a configuration error.
+        Failing at startup turns a silent runtime 404 into an obvious one.
+        """
+        if not self.narration_api_base_url.strip():
+            return self
+        if _url_port(self.narration_api_base_url) != self.api_port:
+            return self
+        if _url_port(self.tts_api_base_url) == self.api_port:
+            return self
+        raise ValueError(
+            "narration_api_base_url points at the news-engine API port "
+            f"({self.api_port}); the narration cast is served by the TTS "
+            f"gateway ({self.tts_api_base_url}). Leave narration_api_base_url "
+            "empty to reuse tts_api_base_url."
+        )
 
     @property
     def data_dir(self) -> Path:

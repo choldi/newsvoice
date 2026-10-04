@@ -1,5 +1,8 @@
 """Unit tests for src/core/config.py."""
 
+import pytest
+from pydantic import ValidationError
+
 from src.core.config import Settings
 
 
@@ -24,3 +27,43 @@ def test_monitor_settings_defaults() -> None:
     assert settings.monitor_disk_threshold_percent == 20
     assert settings.monitor_docker_socket == "/var/run/docker.sock"
     assert settings.monitor_tts_disk_path == "disk"
+
+
+def test_narration_base_url_falls_back_to_tts_gateway() -> None:
+    """An empty narration URL reuses the TTS gateway, never our own API."""
+    settings = Settings(
+        narration_api_base_url="",
+        tts_api_base_url="http://gateway.example:8001/api/v1",
+    )
+    assert settings.narration_base_url == "http://gateway.example:8001/api/v1"
+
+
+def test_narration_base_url_accepts_explicit_gateway() -> None:
+    """An explicit narration URL on the gateway port is allowed."""
+    settings = Settings(
+        narration_api_base_url="http://gateway.example:8001/api/v1",
+        tts_api_base_url="http://gateway.example:8001/api/v1",
+    )
+    assert settings.narration_base_url == "http://gateway.example:8001/api/v1"
+
+
+def test_narration_base_url_rejects_own_api_port() -> None:
+    """Pointing the narration cast at the API port fails at startup.
+
+    The news-engine API has no /tts route, so this misconfiguration used to
+    surface as a runtime `NarrationGatewayError: Not Found` on every render.
+    """
+    with pytest.raises(ValidationError, match="news-engine API port"):
+        Settings(
+            narration_api_base_url="http://debwk.elver-exponential.ts.net:8000/api/v1",
+            tts_api_base_url="http://debwk.elver-exponential.ts.net:8001/api/v1",
+        )
+
+
+def test_narration_base_url_allows_shared_port_when_tts_also_there() -> None:
+    """A shared port is legitimate when TTS and narration use the same host:port."""
+    settings = Settings(
+        narration_api_base_url="http://gateway.example:8000/api/v1",
+        tts_api_base_url="http://gateway.example:8000/api/v1",
+    )
+    assert settings.narration_base_url == "http://gateway.example:8000/api/v1"
