@@ -39,6 +39,15 @@ from src.core.config import settings
 #: keeps ``'tts'`` so the two audio paths never overwrite each other.
 NARRATION_JOB_KIND = "narration"
 
+#: A whole podcast script is thousands of tokens of JSON, so 4k output tokens
+#: is the bare minimum for a local model; going higher keeps it from truncating
+#: mid-structure.
+_SCRIPT_MAX_TOKENS = 8192
+#: Formatting failures (prose around the JSON, truncation, empty answer) are
+#: retried inside the activity: a fresh sample usually fixes them, and it is
+#: much cheaper than failing the workflow and paying Temporal's backoff.
+_SCRIPT_FORMAT_ATTEMPTS = 3
+
 
 def _validated_pair(payload: dict[str, Any]) -> tuple[NarrationSpec, NarrationScript]:
     """Validate the spec/script pair carried by an activity payload.
@@ -439,33 +448,54 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
         f"Generating narration script via LLM collection={collection} "
         f"run_id={run_id} template={prompt_template}"
     )
-    try:
-        content = await generate_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.7,
+
+    # A small model asked for a whole podcast script in one shot is unreliable:
+    # it may wrap the JSON in prose, truncate it mid-structure, or return
+    # nothing. Those are transport/formatting failures, so retrying with a
+    # fresh sample can fix them; an unknown role or a bad voice cannot, and is
+    # still raised as non-retryable below.
+    last_error: str = ""
+    script_data: dict[str, Any] | None = None
+    for attempt in range(1, _SCRIPT_FORMAT_ATTEMPTS + 1):
+        try:
+            content = await generate_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7 if attempt == 1 else 0.5,
+                max_tokens=_SCRIPT_MAX_TOKENS,
+            )
+        except Exception as exc:
+            last_error = f"LLM call failed: {exc}"
+            activity.logger.warning(
+                f"narration_script_llm_retry attempt={attempt} reason={last_error}"
+            )
+            continue
+
+        activity.logger.info(
+            f"LLM narration script response length: {len(content)} attempt={attempt}"
         )
-    except Exception as exc:
-        raise ApplicationError(f"LLM call for narration script failed: {exc}") from exc
+        json_match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not json_match:
+            last_error = f"no JSON object in response: {content[:200]}"
+            activity.logger.warning(f"narration_script_llm_retry attempt={attempt} reason=no_json")
+            continue
+        try:
+            script_data = json.loads(json_match.group(0))
+        except json.JSONDecodeError as exc:
+            # Usually a truncated response: the script is long and the model
+            # ran out of tokens mid-structure.
+            last_error = f"invalid JSON: {exc}"
+            activity.logger.warning(f"narration_script_llm_retry attempt={attempt} reason=bad_json")
+            continue
+        break
 
-    activity.logger.info(f"LLM narration script response length: {len(content)}")
-
-    # Extract JSON from the response (LLM may wrap in markdown code fences)
-
-    json_match = re.search(r"\{.*\}", content, re.DOTALL)
-    if not json_match:
+    if script_data is None:
         raise ApplicationError(
-            f"LLM did not return a JSON object for narration script: {content[:200]}",
-            non_retryable=True,
+            f"LLM did not return a valid narration script after "
+            f"{_SCRIPT_FORMAT_ATTEMPTS} attempts: {last_error}"
         )
-    try:
-        script_data = json.loads(json_match.group(0))
-    except json.JSONDecodeError as exc:
-        raise ApplicationError(
-            f"LLM returned invalid JSON for narration script: {exc}", non_retryable=True
-        ) from exc
 
     # Validate the script against the spec
     try:
