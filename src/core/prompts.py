@@ -393,6 +393,14 @@ NARRATION_SCRIPT_USER_PROMPT_TEMPLATE = """Digest to narrate (Markdown):
 Narration Spec (JSON):
 {spec_json}
 
+FOLLOW THE EXAMPLE GIVEN IN THE SYSTEM PROMPT EXACTLY. CRITICAL: ZERO INVENTIONS. You may
+ONLY use proper nouns that appear EXACTLY as written in the provided digest Markdown. Do NOT
+invent any game titles, series, franchises, developers, publishers, characters, DLCs, patches,
+tournaments, platforms, or product names. For any headline that does not name a specific
+title present in the digest, refer to it generically using only words from that headline or
+neutral words. If you cannot narrate without inventing names, do NOT invent them — narrate
+only what can be stated using only the digest's exact names. Output ONLY valid JSON
+matching the schema. Do not add markdown fences or explanations.
 Generate the NarrationScript JSON now.
 """
 
@@ -413,9 +421,18 @@ Gaming podcast style:
 - Use gaming terminology naturally (patch, meta, nerf, speedrun, NPC, grind, etc.).
 - Keep segments tight: 2-3 sentences max per turn.
 - Total target: ~10-12 minutes for 5 extended stories + 10 headlines.
-- STRICTLY adhere to the digest: never invent game titles, patches, DLCs, records,
-  controversies, developers, platforms, numbers, or events not explicitly named in
-  the provided digest.
+- STRICTLY adhere to the digest. The script MUST only mention facts, titles, characters,
+  companies, numbers, dates, patches, DLCs, events, platforms, or any other details that
+  are EXPLICITLY present in the provided digest text. NEVER invent, fabricate, extrapolate,
+  or fill in missing information. Do NOT create filler stories/headlines. If the digest has
+  only 1 main story and 3 headlines, your script
+  must cover EXACTLY those 1+3 items and nothing more. Output segments array with AT LEAST
+  those segments (one per item) — do not return an empty segments list. Treat the digest
+  as the ONLY source of truth. You MUST NOT mention ANY game title, series, character name,
+  developer name, publisher name, DLC name, patch name, or product name that is NOT
+  explicitly written in the digest. Do NOT use placeholder names. For headlines like
+  "Patch Notes Released: ..." and "Free Weekend: ...", narrate them GENERICALLY without
+  adding unmentioned names. Do NOT add specific fictional titles.
 - If there are fewer than {main_story_count} main stories in the digest, cover ONLY
   those present. Do NOT create filler stories. For quick headlines, cover ONLY those
   present (0–{headline_count}).
@@ -630,3 +647,7 @@ def build_lesson_system_prompt(
         native_language=native_language,
         mode_instructions=instructions,
     )
+
+
+# EXAMPLE (MANDATORY FORMAT FOR SPARSE DIGESTS):
+# See narrative instructions above for the example content.
