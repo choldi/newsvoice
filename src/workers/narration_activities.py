@@ -463,7 +463,7 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.7 if attempt == 1 else 0.5,
+                temperature=0.4 if attempt == 1 else 0.5,
                 max_tokens=_SCRIPT_MAX_TOKENS,
             )
         except Exception as exc:

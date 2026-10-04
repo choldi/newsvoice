@@ -355,7 +355,15 @@ NARRATION_SCRIPT_SYSTEM_PROMPT = (
     "      allows it and the content calls for it)\n"
     "    - pause_ms: Optional override of the default pause (ms)\n\n"
     "RULES:\n"
-    "1. The script must cover ALL main stories and ALL headlines present in the digest, in order.\n"
+    "0. FACTUALITY: Do NOT invent, add, or infer facts not present in the digest. "
+    "Use only names, numbers, dates, companies, games, titles, or details that "
+    "appear in the provided digest. If uncertain, omit rather than guess.\n"
+    "1. The script must cover ALL main stories and ALL headlines that ARE PRESENT "
+    "in the digest, in the order they appear. If the digest contains fewer items "
+    "than {main_story_count} or {headline_count}, cover ONLY what exists — DO NOT "
+    "invent additional stories, headlines, or details. If there are no main stories "
+    "present beyond any intro, do not fabricate filler main stories; cover only the "
+    "headlines that exist.\n"
     "2. Distribute speaking time across the available roles as naturally as possible.\n"
     "   If only 1 role exists, that role speaks everything.\n"
     "3. For TURNS strategy: each segment is one turn. Aim for ~2-4 turns per story.\n"
@@ -367,8 +375,16 @@ NARRATION_SCRIPT_SYSTEM_PROMPT = (
     "6. Text must be spoken-form: no markdown, no bullet points, no URLs, no\n"
     "   bracketed source citations. Convert to natural speech.\n"
     "7. Keep each segment's text under the spec's max_chars_per_request limit.\n"
-    "8. The total script should render to roughly 8-14 minutes of audio.\n"
-    "9. Output ONLY the JSON object. No markdown, no explanation, no extra keys."
+    "8. Target length: ~8–14 minutes when the digest is full. If the digest is sparse "
+    "(fewer stories/headlines than the requested counts), target ~2–6 minutes and DO "
+    "NOT pad with invented content.\n"
+    "9. Output ONLY the JSON object. No markdown, no explanation, no extra keys.\n"
+    "10. AVOID REPETITION AND CROSS-REFERENCES: Do not repeat the same story or "
+    "headline twice. Do not reference a main story again when narrating its "
+    'corresponding quick headline. Do not use phrases like "as we mentioned earlier" '
+    "unless that earlier mention exists in the SAME script and refers solely to "
+    "information actually present in the digest. Each item appears once and is "
+    "narrated in its own place."
 )
 
 NARRATION_SCRIPT_USER_PROMPT_TEMPLATE = """Digest to narrate (Markdown):
@@ -397,6 +413,15 @@ Gaming podcast style:
 - Use gaming terminology naturally (patch, meta, nerf, speedrun, NPC, grind, etc.).
 - Keep segments tight: 2-3 sentences max per turn.
 - Total target: ~10-12 minutes for 5 extended stories + 10 headlines.
+- STRICTLY adhere to the digest: never invent game titles, patches, DLCs, records,
+  controversies, developers, platforms, numbers, or events not explicitly named in
+  the provided digest.
+- If there are fewer than {main_story_count} main stories in the digest, cover ONLY
+  those present. Do NOT create filler stories. For quick headlines, cover ONLY those
+  present (0–{headline_count}).
+- When the digest has only 1 main story and 10 headlines (or fewer items overall),
+  keep the conversation tight and factual; do not extrapolate or fabricate additional
+  stories to reach the target counts.
 """
     ),
     "ai": (
