@@ -173,6 +173,34 @@ def is_modal(backend: TTSBackend) -> bool:
     return backend in (TTSBackend.QWEN3_TTS, TTSBackend.ZONOS2)
 
 
+def wall_seconds_for(backend: TTSBackend, char_count: float) -> float:
+    """Estimate the serial wall-clock seconds a synthesis of this size takes.
+
+    Edge and the gateway are network engines measured directly in characters
+    per second. Modal is modeled the way the Phase 7.8 budget already models it
+    (``estimate_gpu_seconds``): audio seconds from the same throughput figure,
+    then scaled by the measured real-time factor, so the time estimate and the
+    cost estimate can never disagree about how long a call runs.
+
+    Args:
+        backend: Engine that will synthesize.
+        char_count: Characters of speech text to synthesize.
+
+    Returns:
+        Seconds at concurrency 1; the caller divides by its parallelism.
+    """
+    if char_count <= 0:
+        return 0.0
+    settings = get_settings()
+    if backend is TTSBackend.EDGE:
+        return char_count / settings.tts_edge_chars_per_second
+    if backend is TTSBackend.OMNIVOICE:
+        return char_count / settings.tts_gateway_chars_per_second
+    from src.core.budget import estimate_gpu_seconds
+
+    return estimate_gpu_seconds(int(char_count))
+
+
 # --- gateway plumbing --------------------------------------------------------
 
 

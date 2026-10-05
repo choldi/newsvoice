@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     doc_tts_chunk_chars: int = Field(default=4000, ge=500)
     # Chunks synthesized concurrently inside a single activity.
     doc_tts_concurrency: int = Field(default=4, ge=1, le=16)
+    # Minimum seconds between two writes of the in-flight progress into the job
+    # metadata (Phase 8.5): that progress is what the status endpoint turns into
+    # a live ETA, and writing it on every heartbeat would be a pointless fsync.
+    doc_tts_progress_every_seconds: float = Field(default=30.0, ge=1.0)
     # Uploads, extracted text, chunk cache and finished audio (shared ./data
     # volume, so the API and the doc-tts worker see the same files).
     doc_tts_dir: str = "data/doc_tts"
@@ -275,6 +279,16 @@ class Settings(BaseSettings):
     # api_request_timeout (120 s) for edge, which a gateway render of
     # tts_max_chars cannot fit in, so the slower engines get their own ceiling.
     tts_backend_timeout_seconds: int = Field(default=900, ge=1)
+    # --- Phase 8.5: wall-clock synthesis estimate ------------------------------
+    # Characters of *speech text* an engine turns into audio per wall-clock
+    # second. Calibrate against audio_jobs.elapsed_seconds: they only decide how
+    # long a render is expected to take, never what it sounds like.
+    tts_edge_chars_per_second: float = Field(default=40.0, gt=0.0)
+    tts_gateway_chars_per_second: float = Field(default=8.0, gt=0.0)
+    # Fixed cost of starting one chunk (semaphore, content hash, fsync) and of
+    # joining every finished chunk into the final file.
+    tts_chunk_overhead_seconds: float = Field(default=0.05, ge=0.0)
+    tts_join_overhead_seconds: float = Field(default=2.0, ge=0.0)
     # --- Phase 8.1: TTS engine lease ----------------------------------------
     # Serializes synthesis across processes: the digest worker and the doc-tts
     # worker are separate containers, so an asyncio.Semaphore inside either one

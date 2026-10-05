@@ -213,3 +213,29 @@ async def test_synthesize_failure_marks_the_job_error(
     job = await _job()
     assert job["status"] == "FINISHED_ERROR"
     assert "edge down" in (job["error"] or "")
+
+
+async def test_extract_records_the_wall_clock_forecast(
+    environment: ActivityEnvironment, tmp_path: Path
+) -> None:
+    """Phase 8.5: the ETA is priced before any audio exists, and is persisted."""
+    await _start_job()
+    upload = tmp_path / "largolargo.txt"
+    upload.write_text("\n\n".join(f"Frase numero {i} con suficiente texto." for i in range(40)))
+
+    result = await environment.run(
+        extract_document_activity,
+        {
+            "run_id": RUN_ID,
+            "source_path": str(upload),
+            "filename": "largolargo.txt",
+            "title": "Largo",
+            "voice": "es-MX-JorgeNeural",
+            "language": "es",
+        },
+    )
+
+    assert result["estimate"] is not None, "the forecast must survive the await"
+    assert result["estimate"]["wall_seconds"] > 0
+    assert result["estimate"]["audio_duration_seconds"] > 0
+    assert read_job_meta(RUN_ID)["estimate"]["wall_seconds"] == result["estimate"]["wall_seconds"]

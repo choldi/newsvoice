@@ -52,6 +52,14 @@
             {% if j.duration %}{{ '%.0f'|format(j.duration) }}s
             {% elif j.elapsed_seconds %}{{ j.elapsed_seconds }}s
             {% else %}—{% endif %}
+            {# Phase 8.5: forecast before the first chunk, measured ETA after it #}
+            {% if j.status in ['STARTING', 'GENERATING', 'PAUSED'] and (j.eta is not none or j.estimate) %}
+            <div class="muted" style="font-size:12px">
+              {% if j.eta is not none %}⏳ quedan ~{{ '%.0f'|format(j.eta) }}s
+              {% else %}~{{ '%.0f'|format(j.estimate) }}s estimados{% endif %}
+              {%- if j.chunks_total %} ({{ j.chunks_done }}/{{ j.chunks_total }} trozos){% endif %}
+            </div>
+            {% endif %}
           </td>
           <td>
             {% if j.audio_url %}

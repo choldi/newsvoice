@@ -36,6 +36,7 @@ from src.api.services.tts_backends import (
 from src.api.services.tts_backends import (
     synthesize as synthesize_with_backend,
 )
+from src.api.services.tts_estimate import estimate_synthesis
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -473,9 +474,20 @@ class TTSService:
             audio_path=str(prepared.audio_path),
         )
 
+        # Phase 8.5: how long this *would* have taken. A cache hit costs zero,
+        # and a fallback run already knows it spent edge-time, not engine-time.
+        wall_seconds = (
+            0.0
+            if cached
+            else estimate_synthesis(
+                [prepared.speech_text], backend=prepared.backend, concurrency=1
+            ).wall_seconds
+        )
+
         return TTSOut(
             audio_path=str(prepared.audio_path),
             duration_estimate=_estimate_duration(len(prepared.speech_text)),
+            estimate_wall_seconds=wall_seconds,
             cached=cached,
             voice=payload.voice or self._default_voice,
             backend=str(TTSBackend.EDGE if used_fallback else prepared.backend),

@@ -36,6 +36,28 @@ class DocTTSJobOut(BaseModel):
     duration_estimate: float | None = Field(
         default=None, description="Estimated audio duration in seconds"
     )
+    estimate_wall_seconds: float | None = Field(
+        default=None,
+        description=(
+            "Phase 8.5: estimated wall-clock seconds the whole synthesis needs "
+            "(0 when the audio is already cached). Written by the extraction "
+            "step, before any audio exists; the submit response cannot carry it "
+            "because the file has not been read yet."
+        ),
+    )
+    eta_seconds: float | None = Field(
+        default=None,
+        description=(
+            "Phase 8.5: seconds remaining, extrapolated from the measured "
+            "rate of the chunks already finished. Null before the first chunk."
+        ),
+    )
+    chunks_done: int = Field(default=0, description="Chunks synthesized so far")
+    chunks_total: int = Field(default=0, description="Chunks the document split into")
+    paused: bool = Field(
+        default=False,
+        description="True while the render has yielded the engine to a scheduled digest",
+    )
     chunk_count: int = Field(default=0, description="Number of synthesized chunks")
     audio_url: str | None = Field(
         default=None,

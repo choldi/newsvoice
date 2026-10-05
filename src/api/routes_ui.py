@@ -36,6 +36,7 @@ from src.api.services.signed_links import (
 )
 from src.api.services.submit import SubmitError
 from src.api.services.temporal_admin import TemporalAdminService
+from src.api.services.tts_estimate import eta_seconds
 from src.api.services.voices import VoicesService
 from src.core.collections import LogicDeliveryConfig
 from src.core.prompts import EMOTION_TAGS
@@ -1385,6 +1386,13 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
         row["mode"] = str(meta.get("mode") or "")
         row["char_count"] = meta.get("char_count")
         row["duration"] = meta.get("duration_seconds")
+        # Phase 8.5: forecast + live remaining time for the running renders.
+        estimate = meta.get("estimate") if isinstance(meta.get("estimate"), dict) else {}
+        progress = meta.get("progress") if isinstance(meta.get("progress"), dict) else {}
+        row["estimate"] = (estimate or {}).get("wall_seconds")
+        row["eta"] = eta_seconds(estimate, progress)
+        row["chunks_done"] = int((progress or {}).get("done") or 0)
+        row["chunks_total"] = int((progress or {}).get("total") or 0)
         row["audio_url"] = None
         if job.get("status") == "FINISHED_OK" and job.get("audio_path"):
             run_id = str(job.get("run_id") or "")

@@ -30,10 +30,12 @@ import structlog
 from starlette.datastructures import UploadFile
 
 from src.api.db.database import AudioJobsRepository
+from src.api.models.narration import TTSBackend
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
 from src.api.services.document_text import DocumentExtractionError, sniff_kind
 from src.api.services.submit import SubmitError, check_content_length, read_upload
 from src.api.services.tts import estimate_duration_seconds, resolve_edge_voice, synthesize_mp3
+from src.api.services.tts_estimate import SynthesisEstimate, estimate_synthesis
 from src.api.services.tts_lease import RenderGate
 from src.core.config import get_settings
 
@@ -170,6 +172,56 @@ class DocTTSService:
         self._chunk_chars = settings.doc_tts_chunk_chars
         self._concurrency = settings.doc_tts_concurrency
         self._request_timeout = settings.tts_request_timeout
+
+    async def estimate(
+        self, *, text: str, voice: str = "", language: str = "", title: str = ""
+    ) -> SynthesisEstimate:
+        """Price one synthesis without performing any of it (Phase 8.5).
+
+        Runs exactly the bookkeeping ``synthesize_document`` runs — voice
+        resolution, chunking, cache lookups — and stops before the first
+        network call, so the number it returns is the same one the render would
+        discover for itself: how many chunks are missing, and how long those
+        take at the configured concurrency.
+
+        Args:
+            text: Speech-ready plain text (already markdown-stripped).
+            voice: Requested voice; empty uses the configured default.
+            language: ISO 639-1 language; empty uses the configured default.
+            title: Document title (part of the finished file's cache key).
+
+        Returns:
+            The estimate for this exact text, voice and cache state.
+
+        Raises:
+            RuntimeError: When the text is empty.
+        """
+        settings = get_settings()
+        language = language or settings.tts_language
+        resolved_voice = await resolve_edge_voice(voice or settings.tts_voice, language)
+        speech_text = text.strip()
+        if not speech_text:
+            raise RuntimeError("No text to estimate")
+
+        digest = _hash(resolved_voice, language, speech_text)
+        audio_path = self._audio_dir / f"doc_{slugify(title)}_{digest[:12]}.mp3"
+        finished = (
+            audio_path.exists()
+            and (read_sidecar(sidecar_path(audio_path)) or {}).get("sha256") == digest
+        )
+        chunks = chunk_speech_text(speech_text, self._chunk_chars)
+
+        def _cached(chunk: str) -> bool:
+            if finished:
+                return True
+            return (self._chunk_dir / f"{_hash(resolved_voice, language, chunk)[:16]}.mp3").exists()
+
+        return estimate_synthesis(
+            chunks,
+            backend=TTSBackend.EDGE,
+            concurrency=self._concurrency,
+            is_cached=_cached,
+        )
 
     async def synthesize_document(
         self,

@@ -709,12 +709,20 @@ synthesis will take.
       5 s con heartbeats → re-adquiere → `GENERATING`; los trozos en vuelo no se
       interrumpen; join format-aware (`concat_wavs` para `.wav`, el `b"".join`
       actual solo vale para MP3)
-- [ ] **8.5 Estimación de tiempo de síntesis** — `src/api/services/tts_estimate.py`
-      (`SynthesisEstimate.wall_seconds = (Σ chars_sin_caché / cps) / concurrencia
-      + trozos × overhead + join`), `cps` por backend en settings, expuesto en
-      `GET /api/admin/documents/tts/{id}` (`estimated_wall_seconds`,
-      `eta_seconds`, `paused`) y en `/ui/tools`; los trozos cacheados cuestan 0,
-      que es lo que hace correcto el número en una reanudación
+- [x] **8.5 Estimación de tiempo de síntesis** — `src/api/services/tts_estimate.py`
+      (`SynthesisEstimate.wall_seconds = wall_seconds_for(backend, chars_sin_caché)
+      / concurrencia + trozos × overhead + join`; Modal reutiliza
+      `budget.estimate_gpu_seconds` para que tiempo y coste no se contradigan),
+      tasas por backend en settings, expuesto en
+      `GET /api/admin/documents/tts/{id}` (`estimate_wall_seconds`, `eta_seconds`,
+      `chunks_done`, `chunks_total`, `paused`) y en `/ui/tools`. El `eta_seconds`
+      deja de creerle al modelo en cuanto hay medición: `elapsed / done × restantes`.
+      **Decisión:** el submit (202) NO lleva estimación — el texto aún no se ha
+      extraído, así que una cifra ahí sería una mentira; la fuente de verdad es
+      la primera consulta de estado, que la escribe `extract_document_activity`.
+      `TTSOut.estimate_wall_seconds` cubre el digest (0 cuando la caché acierta).
+      Los trozos cacheados cuestan 0, que es lo que hace correcto el número en
+      una reanudación.
 - [ ] **8.6 Docs y calibración** — `Architecture.md` (diagrama con lease y
       enrutado), `CONVENTIONS.md` (sección «TTS engines & engine lease»),
       `Deploy.md` §10 (motor por colección, operación del lease, calibración de

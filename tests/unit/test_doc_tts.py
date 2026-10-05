@@ -399,3 +399,45 @@ async def test_a_fully_cached_render_never_consults_the_gate(
     assert synth.await_count == 1
     assert states == [], "a cache hit must not pause anything"
     await lease.remove_waiter("digest-run")
+
+
+# --- Phase 8.5: wall-clock forecast ------------------------------------------
+
+
+async def test_estimate_prices_the_render_without_synthesizing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """estimate() resolves voice + chunks and stops before any network call."""
+    _reset_settings(monkeypatch, tmp_path)
+    voice = _mock_voice(monkeypatch)
+    synth = _mock_synth(monkeypatch)
+    text = "\n\n".join(
+        f"Oracion numero {i} con texto suficiente para partir el limite." for i in range(6)
+    )
+
+    estimate = await DocTTSService().estimate(text=text, title="Doc")
+
+    assert voice.await_count == 1, "the voice must be resolved the same way"
+    assert synth.await_count == 0, "a forecast must never reach the engine"
+    assert estimate.chunk_count > 1
+    assert estimate.uncached_chunks == estimate.chunk_count
+    assert estimate.wall_seconds > 0
+    assert estimate.audio_duration_seconds > 0
+
+
+async def test_estimate_is_zero_once_the_audio_is_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A finished render is free, which is the number a retry needs to see."""
+    _reset_settings(monkeypatch, tmp_path)
+    _mock_voice(monkeypatch)
+    _mock_synth(monkeypatch)
+    text = "Texto estable que no cambia entre llamadas del documento."
+    service = DocTTSService()
+
+    await service.synthesize_document(text=text, title="Doc")
+    estimate = await service.estimate(text=text, title="Doc")
+
+    assert estimate.cached_chunks == estimate.chunk_count
+    assert estimate.wall_seconds == 0.0
+    assert estimate.audio_duration_seconds > 0

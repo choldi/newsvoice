@@ -22,6 +22,7 @@ from src.api.services.doc_tts import (
 )
 from src.api.services.signed_links import SignedLinkError, build_signed_path
 from src.api.services.submit import SubmitError
+from src.api.services.tts_estimate import eta_seconds
 
 logger = structlog.get_logger(__name__)
 
@@ -114,6 +115,8 @@ async def get_document_tts(workflow_id: str) -> DocTTSJobOut:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document job not found")
     meta = read_job_meta(workflow_id)
+    estimate = meta.get("estimate") if isinstance(meta.get("estimate"), dict) else {}
+    progress = meta.get("progress") if isinstance(meta.get("progress"), dict) else {}
     audio_url: str | None = None
     if job["status"] == "FINISHED_OK" and job.get("audio_path"):
         try:
@@ -133,6 +136,11 @@ async def get_document_tts(workflow_id: str) -> DocTTSJobOut:
         voice=str(meta.get("voice") or ""),
         language=str(meta.get("language") or ""),
         duration_estimate=meta.get("duration_estimate"),
+        estimate_wall_seconds=estimate.get("wall_seconds"),
+        eta_seconds=eta_seconds(estimate, progress),
+        chunks_done=int(progress.get("done") or 0),
+        chunks_total=int(progress.get("total") or 0),
+        paused=job["status"] == "PAUSED",
         chunk_count=int(meta.get("chunk_count") or 0),
         audio_url=audio_url,
         error=job.get("error"),

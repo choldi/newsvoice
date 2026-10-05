@@ -310,3 +310,49 @@ def _finished_job(workflow_id: str) -> Path:
         )
     )
     return audio_path
+
+
+# --- Phase 8.5: wall-clock forecast, live ETA and the PAUSED state -----------
+
+
+def test_status_exposes_the_forecast_and_a_measured_eta(_doc_tts_env: Path) -> None:
+    """The estimate arrives with the extraction; the ETA takes over once it moves."""
+    from src.api.services.doc_tts import write_job_meta
+
+    asyncio.run(_job_repo().start_job("doc-tts-eta", collection=JOB_COLLECTION, kind=JOB_KIND))
+    asyncio.run(_job_repo().set_generating("doc-tts-eta", kind=JOB_KIND))
+    write_job_meta(
+        "doc-tts-eta",
+        {
+            "title": "Libro",
+            "kind": "pdf",
+            "char_count": 600_000,
+            "estimate": {"wall_seconds": 3600.0},
+        },
+    )
+
+    cold = client.get("/api/admin/documents/tts/doc-tts-eta").json()
+
+    assert cold["estimate_wall_seconds"] == 3600.0
+    assert cold["eta_seconds"] == 3600.0, "before the first chunk the model is the answer"
+    assert cold["chunks_done"] == 0
+
+    write_job_meta("doc-tts-eta", {"progress": {"done": 10, "total": 100, "elapsed_seconds": 50.0}})
+    warm = client.get("/api/admin/documents/tts/doc-tts-eta").json()
+
+    # 10 chunks in 50 s -> the other 90 take 450 s, which beats the forecast.
+    assert warm["eta_seconds"] == pytest.approx(450.0, abs=0.1)
+    assert warm["chunks_done"] == 10
+    assert warm["chunks_total"] == 100
+
+
+def test_status_reports_a_render_that_yielded_the_engine(_doc_tts_env: Path) -> None:
+    """PAUSED says 'waiting for a digest', which a stalled job cannot."""
+    asyncio.run(_job_repo().start_job("doc-tts-paused", collection=JOB_COLLECTION, kind=JOB_KIND))
+    asyncio.run(_job_repo().set_status("doc-tts-paused", "PAUSED", kind=JOB_KIND))
+
+    body = client.get("/api/admin/documents/tts/doc-tts-paused").json()
+
+    assert body["job_status"] == "PAUSED"
+    assert body["paused"] is True
+    assert body["audio_url"] is None

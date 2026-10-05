@@ -49,10 +49,12 @@ async def extract_document_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payload: Dict with 'run_id' (workflow id), 'source_path' (upload),
-            'filename' (original name) and optional 'title'.
+            'filename' (original name), optional 'title', plus 'voice' and
+            'language' so the Phase 8.5 wall-clock forecast can be priced with
+            the same inputs the synthesis will use.
 
     Returns:
-        Dict with 'text_path', 'title', 'kind' and 'char_count'.
+        Dict with 'text_path', 'title', 'kind', 'char_count' and 'estimate'.
 
     Raises:
         ApplicationError: Non-retryable when the document cannot be read,
@@ -103,19 +105,38 @@ async def extract_document_activity(payload: dict[str, Any]) -> dict[str, Any]:
             f"Cannot store the extracted text: {exc}", non_retryable=True
         ) from exc
 
+    # Phase 8.5: price the render while the operator is still watching the
+    # status endpoint, before a single byte of audio exists.
+    try:
+        forecast = await DocTTSService().estimate(
+            text=document.text,
+            voice=str(payload.get("voice") or ""),
+            language=str(payload.get("language") or ""),
+            title=title,
+        )
+        estimate: dict | None = forecast.as_dict()
+    except Exception as exc:  # noqa: BLE001 - a forecast is never worth failing the job
+        activity.logger.warning(f"document_estimate_failed: {exc}")
+        estimate = None
+
     update_job_meta(
         run_id,
         title=title,
         filename=filename,
         kind=document.kind,
         char_count=document.char_count,
+        estimate=estimate,
     )
-    activity.logger.info(f"Document extracted: kind={document.kind} chars={document.char_count}")
+    activity.logger.info(
+        f"Document extracted: kind={document.kind} chars={document.char_count} "
+        f"eta={estimate.get('wall_seconds') if estimate else '?'}s"
+    )
     return {
         "text_path": str(text_path),
         "title": title,
         "kind": document.kind,
         "char_count": document.char_count,
+        "estimate": estimate,
     }
 
 
@@ -152,8 +173,26 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
     await repo.set_generating(run_id, kind=DOC_TTS_JOB_KIND)
     started = time.monotonic()
 
+    progress_every = get_settings().doc_tts_progress_every_seconds
+    last_progress = [0.0]
+
     def _progress(done: int, total: int) -> None:
         activity.heartbeat(done, total)
+        # Phase 8.5: persist how far along we are, throttled, so the status
+        # endpoint can extrapolate a live ETA from the *measured* rate instead
+        # of trusting the modelled one.
+        now = time.monotonic()
+        if done < total and now - last_progress[0] < progress_every:
+            return
+        last_progress[0] = now
+        update_job_meta(
+            run_id,
+            progress={
+                "done": done,
+                "total": total,
+                "elapsed_seconds": round(now - started, 2),
+            },
+        )
 
     def _tick() -> None:
         # Heartbeat while queued for the engine and while paused so the
@@ -206,6 +245,11 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
         chunk_count=result.chunk_count,
         duration_estimate=result.duration_estimate,
         cached=result.cached,
+        progress={
+            "done": result.chunk_count,
+            "total": result.chunk_count,
+            "elapsed_seconds": elapsed,
+        },
     )
     activity.logger.info(
         f"Document audio ready: {result.audio_path} ({result.chunk_count} chunks, {elapsed}s)"

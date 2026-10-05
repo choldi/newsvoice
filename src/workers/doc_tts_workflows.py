@@ -96,6 +96,11 @@ class DocumentTtsWorkflow:
                     "source_path": config.source_path,
                     "filename": config.filename,
                     "title": config.title,
+                    # Phase 8.5: the estimate is part of the job metadata and
+                    # needs the same voice/language the synthesis will use, so
+                    # extraction resolves them too.
+                    "voice": config.voice,
+                    "language": config.language,
                 },
                 start_to_close_timeout=DOC_TTS_EXTRACT_TIMEOUT,
                 retry_policy=DOC_TTS_RETRY_POLICY,

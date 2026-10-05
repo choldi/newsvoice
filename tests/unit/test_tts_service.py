@@ -359,3 +359,45 @@ async def test_generate_tts_empty_markdown_after_cleanup_raises(
     service = TTSService(cache_dir=str(tmp_path))
     with pytest.raises(RuntimeError, match="No text to synthesize"):
         await service.generate_tts(TTSIn(markdown="####   \n"))
+
+
+# --- Phase 8.5: wall-clock forecast ------------------------------------------
+
+
+async def test_generate_tts_reports_the_wall_clock_estimate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cold synthesis says how long it is expected to take."""
+    _reset_voices_cache(monkeypatch)
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    monkeypatch.setattr(tts_module.get_settings(), "tts_edge_chars_per_second", 40.0)
+    monkeypatch.setattr(tts_module.get_settings(), "tts_chunk_overhead_seconds", 0.0)
+    monkeypatch.setattr(tts_module.get_settings(), "tts_join_overhead_seconds", 0.0)
+    service = TTSService(cache_dir=str(tmp_path))
+
+    result = await service.generate_tts(
+        TTSIn(markdown="hola mundo", voice="es-MX-JorgeNeural", language="es", collection="t")
+    )
+
+    assert result.estimate_wall_seconds is not None
+    assert result.estimate_wall_seconds > 0
+    assert result.estimate_wall_seconds == pytest.approx(len("hola mundo") / 40.0, abs=0.01)
+
+
+async def test_generate_tts_reports_zero_for_a_cache_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cache hit costs no waiting, and must say so instead of re-promising."""
+    _reset_voices_cache(monkeypatch)
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
+    service = TTSService(cache_dir=str(tmp_path))
+    payload = TTSIn(
+        markdown="contenido repetible", voice="es-MX-JorgeNeural", language="es", collection="t"
+    )
+
+    first = await service.generate_tts(payload)
+    second = await service.generate_tts(payload)
+
+    assert first.estimate_wall_seconds > 0
+    assert second.cached is True
+    assert second.estimate_wall_seconds == 0.0
