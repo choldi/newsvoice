@@ -27,6 +27,7 @@ from src.api.services.doc_tts import (
     update_job_meta,
 )
 from src.api.services.document_text import DocumentExtractionError, extract_document
+from src.api.services.tts_lease import PRIORITY_RENDER, RenderGate, TTSLeaseService
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -154,15 +155,30 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
     def _progress(done: int, total: int) -> None:
         activity.heartbeat(done, total)
 
+    def _tick() -> None:
+        # Heartbeat while queued for the engine and while paused so the
+        # 600 s heartbeat_timeout never mistakes a deliberate wait for a stall.
+        activity.heartbeat()
+
+    async def _on_state(paused: bool) -> None:
+        await repo.set_status(run_id, "PAUSED" if paused else "GENERATING", kind=DOC_TTS_JOB_KIND)
+
+    lease = TTSLeaseService()
     try:
         text = Path(text_path).read_text(encoding="utf-8")
-        result = await DocTTSService().synthesize_document(
-            text=text,
-            voice=voice,
-            language=language,
-            title=title,
-            on_progress=_progress,
-        )
+        # Phase 8.1/8.4: the render takes the engine for the whole run and keeps
+        # renewing it; inside the loop the gate hands it over to any scheduled
+        # digest that shows up, and takes it back once the digest is done.
+        async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
+            gate = RenderGate(lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_state=_on_state)
+            result = await DocTTSService().synthesize_document(
+                text=text,
+                voice=voice,
+                language=language,
+                title=title,
+                on_progress=_progress,
+                gate=gate,
+            )
     except Exception as exc:
         await repo.finish_job(
             run_id,

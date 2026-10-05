@@ -7,6 +7,12 @@ joins the MP3 frames in order, so a 300-page book becomes one playable file.
 
 Every chunk is cached by its own content hash, so an interrupted run resumes
 where it stopped instead of re-paying for the whole book.
+
+Phase 8.4 adds the *yield*: a render that holds the engine while a scheduled
+digest is due hands it over between chunks, reports itself as ``PAUSED``, waits
+out the digest's synthesis and resumes. The event that triggers it is the
+digest's lease-waiter row (see :mod:`src.api.services.tts_lease`), never a
+clock, so a paused or disabled collection never pauses a book for nothing.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_pat
 from src.api.services.document_text import DocumentExtractionError, sniff_kind
 from src.api.services.submit import SubmitError, check_content_length, read_upload
 from src.api.services.tts import estimate_duration_seconds, resolve_edge_voice, synthesize_mp3
+from src.api.services.tts_lease import RenderGate
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -172,6 +179,7 @@ class DocTTSService:
         language: str = "",
         title: str = "",
         on_progress: ProgressCallback | None = None,
+        gate: RenderGate | None = None,
     ) -> DocTTSResult:
         """Synthesize the whole document, reusing cached chunks and files.
 
@@ -183,6 +191,12 @@ class DocTTSService:
             title: Document title, only used to name the output file.
             on_progress: Called after every finished chunk with
                 ``(done, total)``; used for activity heartbeats.
+            gate: Optional :class:`~src.api.services.tts_lease.RenderGate`. When
+                present, the service checks it before every chunk and hands the
+                engine over while a scheduled digest is waiting (Phase 8.4).
+                The chunks already in flight are never interrupted: they finish
+                first, so at most one chunk of overlap exists and the cache
+                makes whatever follows cheap.
 
         Returns:
             The finished MP3 path with its metadata.
@@ -233,7 +247,17 @@ class DocTTSService:
             chunk_digest = _hash(resolved_voice, language, chunk)[:16]
             chunk_path = self._chunk_dir / f"{chunk_digest}.mp3"
             if not chunk_path.exists():
+                # Phase 8.4: a cached chunk costs no engine time, so only a real
+                # synthesis checks the yield. The check happens INSIDE the
+                # semaphore, immediately before the call: every coroutine is
+                # dispatched at once by gather, so a check made before waiting
+                # for a slot would run once at t=0 and never observe a digest
+                # that arrives later. Chunks already inside their call finish
+                # first, so at most `doc_tts_concurrency` of them overlap with
+                # the digest, and the cache bounds whatever follows.
                 async with semaphore:
+                    if gate is not None and await gate.should_pause():
+                        await gate.yield_and_wait()
                     data = await _synthesize_with_retries(
                         chunk, resolved_voice, timeout=self._request_timeout
                     )

@@ -703,7 +703,7 @@ synthesis will take.
       elegido (`VoicesService` para el gateway, `load_profiles()` para Modal,
       `edge_tts.list_voices()` para edge); también `podcast_target` trata
       `edge` como destino local (defensivo)
-- [ ] **8.4 Doc-TTS cede y reanuda** — hooks `should_pause` / `on_heartbeat` /
+- [x] **8.4 Doc-TTS cede y reanuda** — hooks `should_pause` / `on_heartbeat` /
       `on_paused` en `DocTTSService.synthesize_document`, comprobados antes de
       cada trozo: libera el lease → `audio_jobs.status='PAUSED'` → sondea cada
       5 s con heartbeats → re-adquiere → `GENERATING`; los trozos en vuelo no se

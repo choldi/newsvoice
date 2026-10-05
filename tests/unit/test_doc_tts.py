@@ -312,3 +312,90 @@ def test_job_paths_use_the_configured_directory(monkeypatch: pytest.MonkeyPatch,
     assert str(meta).startswith(str(tmp_path))
     assert meta.name == "doc-tts-abc123.json"
     assert text.name == "doc-tts-abc123.txt"
+
+
+# --- Phase 8.4: the render yields the engine to a scheduled digest ------------
+
+
+async def _gate_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Reset the settings and return (lease, states, gate) for a yield test."""
+    from src.api.services.tts_lease import PRIORITY_RENDER, RenderGate, TTSLeaseService
+
+    _reset_settings(monkeypatch, tmp_path)
+    _mock_voice(monkeypatch)
+    lease = TTSLeaseService(poll_seconds=0.01)
+    states: list[bool] = []
+    gate = RenderGate(lease, "doc-tts-run", PRIORITY_RENDER, on_state=states.append)
+    return lease, states, gate
+
+
+async def test_render_yields_the_engine_and_resumes_after_the_digest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Between chunks the render lets a queued digest through, then carries on."""
+    import asyncio
+
+    from src.api.services.tts_lease import PRIORITY_DIGEST
+
+    lease, states, gate = await _gate_fixture(monkeypatch, tmp_path)
+    await lease.acquire("doc-tts-run", 0)
+    started = asyncio.Event()
+    original = _mock_synth(monkeypatch)
+
+    async def fake(text: str, voice: str, *, timeout: int | None = None) -> bytes:
+        started.set()
+        await asyncio.sleep(0.01)
+        return await original(text, voice, timeout=timeout)
+
+    monkeypatch.setattr("src.api.services.doc_tts.synthesize_mp3", fake)
+
+    text = "\n\n".join(
+        f"Oracion numero {i} con texto suficiente para partir el limite." for i in range(8)
+    )
+
+    async def _digest_arrives() -> None:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await lease.add_waiter("digest-run", PRIORITY_DIGEST)
+        # The render must hand the engine over: nothing may hold it.
+        for _ in range(500):
+            if await lease.holder() is None:
+                break
+            await asyncio.sleep(0.01)
+        else:  # pragma: no cover - the render never yielded
+            raise AssertionError("the render never released the engine")
+        await lease.acquire("digest-run", PRIORITY_DIGEST)
+        await lease.remove_waiter("digest-run")
+        await lease.release("digest-run")
+
+    digest = asyncio.create_task(_digest_arrives())
+    service = DocTTSService()
+    result = await service.synthesize_document(text=text, title="Doc", gate=gate)
+    await digest
+
+    assert result.chunk_count > 1
+    assert states == [True, False], "one pause and one resume"
+    assert await lease.holder() == "doc-tts-run", "the render keeps the engine at the end"
+
+
+async def test_a_fully_cached_render_never_consults_the_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Cached chunks cost no engine time, so there is nothing to yield."""
+    from src.api.services.tts_lease import PRIORITY_DIGEST
+
+    lease, states, gate = await _gate_fixture(monkeypatch, tmp_path)
+    await lease.acquire("doc-tts-run", 0)
+    synth = _mock_synth(monkeypatch)
+    text = "Texto estable que no cambia entre llamadas del documento."
+
+    service = DocTTSService()
+    first = await service.synthesize_document(text=text, title="Doc")
+    await lease.add_waiter("digest-run", PRIORITY_DIGEST)
+
+    second = await service.synthesize_document(text=text, title="Doc", gate=gate)
+
+    assert first.cached is False
+    assert second.cached is True
+    assert synth.await_count == 1
+    assert states == [], "a cache hit must not pause anything"
+    await lease.remove_waiter("digest-run")

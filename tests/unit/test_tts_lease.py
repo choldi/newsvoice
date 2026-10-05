@@ -9,6 +9,7 @@ from src.api.db.database import get_db
 from src.api.services.tts_lease import (
     PRIORITY_DIGEST,
     PRIORITY_RENDER,
+    RenderGate,
     TTSLeaseService,
     TTSLeaseTimeoutError,
     _iso,
@@ -239,16 +240,26 @@ async def test_wait_for_turn_timeout_raises_through_hold() -> None:
             pytest.fail("the block must not run without the lease")
 
 
-# --- yield protocol ----------------------------------------------------------
+# --- RenderGate: the yield protocol a document render drives ------------------
 
 
-async def test_yield_until_clear_lets_the_digest_through_and_resumes() -> None:
-    """The render releases, waits for the digest, and takes the engine back."""
+async def test_gate_reports_whether_a_digest_is_waiting() -> None:
+    """should_pause() is the predicate the render checks before each chunk."""
     service = _service()
+    gate = RenderGate(service, "render-run", PRIORITY_RENDER)
     await service.acquire("render-run", PRIORITY_RENDER)
-    await service.add_waiter("digest-run", PRIORITY_DIGEST)
 
-    assert await service.waiter_above(PRIORITY_RENDER) is True
+    assert await gate.should_pause() is False
+    await service.add_waiter("digest-run", PRIORITY_DIGEST)
+    assert await gate.should_pause() is True
+
+
+async def test_gate_hands_the_engine_over_and_takes_it_back() -> None:
+    """Release -> report PAUSED -> wait -> re-acquire -> report GENERATING."""
+    service = _service()
+    states: list[bool] = []
+    gate = RenderGate(service, "render-run", PRIORITY_RENDER, on_state=states.append)
+    await service.acquire("render-run", PRIORITY_RENDER)
 
     async def _digest_finishes() -> None:
         await asyncio.sleep(0.05)
@@ -257,20 +268,50 @@ async def test_yield_until_clear_lets_the_digest_through_and_resumes() -> None:
         await service.release("digest-run")
 
     task = asyncio.create_task(_digest_finishes())
-    await service.yield_until_clear("render-run", PRIORITY_RENDER)
+    await gate.yield_and_wait()
     await task
 
+    assert states == [True, False]
     assert await service.holder() == "render-run"
+    assert await service.holder() == "render-run", "the render keeps the engine after resuming"
 
 
-async def test_yield_until_clear_is_a_noop_without_a_queue() -> None:
-    """Nothing waiting means no release/re-acquire round trip is observable."""
+async def test_gate_releases_before_waiting_so_the_digest_never_overlaps() -> None:
+    """The digest must find a free engine, not one still being used."""
     service = _service()
+    gate = RenderGate(service, "render-run", PRIORITY_RENDER)
     await service.acquire("render-run", PRIORITY_RENDER)
+    await service.add_waiter("digest-run", PRIORITY_DIGEST)
 
-    await service.yield_until_clear("render-run", PRIORITY_RENDER)
+    released = asyncio.Event()
 
-    assert await service.holder() == "render-run"
+    async def _observe() -> None:
+        while not released.is_set():
+            if await service.holder() is None:
+                released.set()
+                return
+            await asyncio.sleep(0.01)
+
+    observer = asyncio.create_task(_observe())
+    waiter = asyncio.create_task(gate.yield_and_wait())
+    await asyncio.wait_for(released.wait(), timeout=2)
+    # The engine is free while the render is still waiting: no overlap window.
+    assert await service.holder() is None
+    await service.remove_waiter("digest-run")
+    await waiter
+    await observer
+
+
+async def test_gate_is_a_noop_when_the_lease_is_disabled() -> None:
+    """TTS_LEASE_ENABLED=false means no yield, no state change, no waiting."""
+    service = _service(enabled=False)
+    states: list[bool] = []
+    gate = RenderGate(service, "render-run", on_state=states.append)
+
+    assert await gate.should_pause() is False
+    await gate.yield_and_wait()
+
+    assert states == []
 
 
 # --- hold --------------------------------------------------------------------
@@ -334,7 +375,6 @@ async def test_disabled_lease_is_a_noop() -> None:
     await service.release("run-1")
     assert await service.renew("run-1") is False
     assert await service.wait_for_turn("run-3", PRIORITY_DIGEST) is True
-    assert await service.yield_until_clear("run-1", PRIORITY_RENDER) is True
 
     async with service.hold("run-4", PRIORITY_DIGEST):
         pass

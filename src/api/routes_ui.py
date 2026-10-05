@@ -87,6 +87,10 @@ async def _file_form(request: Request) -> tuple[dict[str, str], UploadFile | Non
 JOB_STATUS_LABELS = {
     "STARTING": "en cola",
     "GENERATING": "generando",
+    # Phase 8.4: a long document render that handed the engine to a scheduled
+    # digest. Shown as its own state so a deliberate wait is never mistaken for
+    # a stalled job.
+    "PAUSED": "en pausa (digest)",
     "FINISHED_OK": "completado",
     "FINISHED_ERROR": "error",
 }
@@ -105,6 +109,7 @@ RUN_BADGES = {
 JOB_STATUS_BADGES = {
     "STARTING": "running",
     "GENERATING": "running",
+    "PAUSED": "paused",
     "FINISHED_OK": "ok",
     "FINISHED_ERROR": "failed",
 }

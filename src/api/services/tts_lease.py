@@ -36,10 +36,12 @@ workflow, which must not do I/O.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 
@@ -414,12 +416,20 @@ class TTSLeaseService:
     ) -> bool:
         """Register as a waiter and block until the lease can be taken.
 
+        By default the wait is bounded only by the caller's own
+        ``start_to_close_timeout``, which is the honest budget: whoever holds
+        the engine may legitimately hold it for as long as its synthesis takes
+        (a gateway render of a full digest is minutes, a book is hours), so any
+        shorter ceiling here would fail a run that was simply queuing behind a
+        live one. ``timeout_seconds`` exists for callers that want a stricter
+        deadline of their own.
+
         Args:
             owner: Stable id of the waiter.
             priority: Priority of the request.
             on_tick: Called once per poll while waiting (activity heartbeat).
-            timeout_seconds: Give up after this long. Defaults to the waiter
-                TTL, so a wedged lease cannot outlive the row that signals it.
+            timeout_seconds: Give up after this long; None waits until the
+                activity's own timeout ends it.
 
         Returns:
             True when the lease is now held by ``owner``.
@@ -429,8 +439,7 @@ class TTSLeaseService:
         """
         if not self._enabled:
             return True
-        budget = self._waiter_ttl if timeout_seconds is None else float(timeout_seconds)
-        deadline = time.monotonic() + budget
+        deadline = None if timeout_seconds is None else time.monotonic() + float(timeout_seconds)
         await self.add_waiter(owner, priority)
         try:
             while True:
@@ -438,45 +447,13 @@ class TTSLeaseService:
                     return True
                 if on_tick is not None:
                     on_tick()
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     return False
                 await asyncio.sleep(self._poll)
         finally:
             # We either hold the lease (the row is no longer needed as a signal)
             # or we gave up (the row must not outlive us). Either way: drop it.
             await self.remove_waiter(owner)
-
-    async def yield_until_clear(
-        self, owner: str, priority: int, *, on_tick: TickCallback | None = None
-    ) -> bool:
-        """Release the lease, wait out any waiter above ``priority``, then re-acquire.
-
-        Used by the long renders: they release on the yield predicate, wait for
-        the digest to finish its synthesis, and re-acquire before the next
-        chunk.
-
-        Args:
-            owner: Current holder id.
-            priority: Priority of the caller (a waiter above it is what makes
-                this method wait).
-            on_tick: Called once per poll while waiting (activity heartbeat).
-
-        Returns:
-            True. The method only returns once this owner holds the lease
-            again (or immediately, when the lease is disabled).
-        """
-        if not self._enabled:
-            return True
-        await self.release(owner)
-        while await self.waiter_above(priority):
-            if on_tick is not None:
-                on_tick()
-            await asyncio.sleep(self._poll)
-        while not await self.acquire(owner, priority):
-            if on_tick is not None:
-                on_tick()
-            await asyncio.sleep(self._poll)
-        return True
 
     @asynccontextmanager
     async def hold(
@@ -499,9 +476,9 @@ class TTSLeaseService:
             Nothing; the lease is held for the duration of the block.
 
         Raises:
-            TTSLeaseTimeoutError: When no turn came within the budget. The caller
-                turns it into a non-retryable activity error so the run records
-                a clear reason instead of hanging.
+            TTSLeaseTimeoutError: When no turn came within ``timeout_seconds``.
+                The caller turns it into a non-retryable activity error so the
+                run records a clear reason instead of hanging.
         """
         if not self._enabled:
             yield
@@ -512,8 +489,7 @@ class TTSLeaseService:
         )
         if not acquired:
             raise TTSLeaseTimeoutError(
-                f"no TTS engine turn for {owner!r} within "
-                f"{timeout_seconds or self._waiter_ttl:.0f}s"
+                f"no TTS engine turn for {owner!r} within {float(timeout_seconds):.0f}s"
             )
 
         stop = asyncio.Event()
@@ -537,6 +513,11 @@ class TTSLeaseService:
     async def _renew_loop(self, owner: str, stop: asyncio.Event, interval: float) -> None:
         """Keep a held lease alive until the hold block ends.
 
+        While a render is yielding, it has released the lease on purpose, so an
+        absent lease is expected and must not be reported as a problem. A lease
+        that exists but belongs to somebody else is a genuine loss of ownership
+        and is warned about.
+
         Args:
             owner: Holder id to renew.
             stop: Set by the owner when the block finishes.
@@ -549,7 +530,129 @@ class TTSLeaseService:
             except TimeoutError:
                 pass
             try:
-                if not await self.renew(owner):
+                if await self.renew(owner):
+                    continue
+                if await self.holder() is not None:
                     logger.warning("tts_lease_renew_lost", scope=self._scope, owner=owner)
             except Exception as exc:  # noqa: BLE001 - a transient DB error must not kill the hold
                 logger.warning("tts_lease_renew_failed", owner=owner, error=str(exc))
+
+
+class RenderGate:
+    """The slice of the lease protocol a long render drives from inside its loop.
+
+    A document render holds the engine for hours, so it cannot simply block
+    until its turn (that is the digest's job): it has to *hand the engine over*
+    the moment somebody outranking it shows up, wait out the whole synthesis,
+    and take it back. That sequence is the yield protocol, and it lives here so
+    the service only has to ask two questions — "should I pause?" and "pause
+    then" — and to report the two states the GUI displays.
+
+    The gate assumes the caller already holds the lease (via
+    :meth:`TTSLeaseService.hold`); it releases and re-acquires the *same* owner,
+    so the surrounding hold block still releases correctly at the end.
+    """
+
+    def __init__(
+        self,
+        lease: TTSLeaseService,
+        owner: str,
+        priority: int = PRIORITY_RENDER,
+        *,
+        on_tick: TickCallback | None = None,
+        on_state: Callable[[bool], Any] | None = None,
+    ) -> None:
+        """Initialize the gate.
+
+        Args:
+            lease: Lease service the gate drives.
+            owner: Id that holds the lease (the workflow id).
+            priority: Priority of the holder; a waiter *above* it is what makes
+                the render yield.
+            on_tick: Called once per poll while waiting (activity heartbeat).
+            on_state: Called with True when the render pauses and False when it
+                resumes (``audio_jobs.status`` follows it). It may be sync or
+                async; an awaitable result is awaited.
+        """
+        self._lease = lease
+        self._owner = owner
+        self._priority = priority
+        self._on_tick = on_tick
+        self._on_state = on_state
+        self._paused = False
+        self._back: asyncio.Event | None = None
+
+    async def should_pause(self) -> bool:
+        """Report whether somebody outranking this render is waiting.
+
+        Returns:
+            True when the engine must be handed over before the next chunk.
+        """
+        return await self._lease.waiter_above(self._priority)
+
+    async def _notify(self, paused: bool) -> None:
+        """Report a pause/resume transition to the caller.
+
+        Args:
+            paused: True when the engine was handed over, False when it came
+                back.
+
+        Raises:
+            Exception: Whatever the callback raises; a failed status update must
+                surface instead of leaving the GUI on the wrong state.
+        """
+        if self._on_state is None:
+            return
+        outcome = self._on_state(paused)
+        if inspect.isawaitable(outcome):
+            await outcome
+
+    async def yield_and_wait(self) -> None:
+        """Release the engine, wait out the priority waiter, then take it back.
+
+        The lease is released *before* the wait starts, which is what makes the
+        hand-over non-overlapping: the digest acquires an engine nobody is
+        synthesizing with, and the render resumes only after the digest has
+        released it again. The loop is bounded only by the activity's own
+        ``start_to_close_timeout``, because the digest may legitimately hold the
+        engine for as long as its synthesis takes.
+
+        Chunks run concurrently, so only the first one to notice the queue
+        performs the hand-over; the others wait on it and resume together. That
+        keeps ``on_state`` a pair of transitions (PAUSED, then GENERATING)
+        instead of one event per chunk, which is what the GUI shows.
+
+        Raises:
+            asyncio.CancelledError: Propagates when the caller is cancelled.
+        """
+        if not self._lease.enabled:
+            return
+        if self._paused:
+            # Another chunk is already handing the engine over: wait it out so
+            # no chunk starts synthesizing while the digest owns the engine.
+            if self._back is not None:
+                await self._back.wait()
+            return
+        self._back = asyncio.Event()
+        self._paused = True
+        logger.info("tts_engine_yielding", owner=self._owner, priority=self._priority)
+        await self._lease.release(self._owner)
+        await self._notify(True)
+        try:
+            while await self._lease.waiter_above(self._priority):
+                if self._on_tick is not None:
+                    self._on_tick()
+                await asyncio.sleep(self._lease.poll_seconds)
+            while not await self._lease.acquire(self._owner, self._priority):
+                if self._on_tick is not None:
+                    self._on_tick()
+                await asyncio.sleep(self._lease.poll_seconds)
+            await self._notify(False)
+            logger.info("tts_engine_yielded", owner=self._owner, priority=self._priority)
+        finally:
+            # Always unblock the sibling chunks, even if the wait failed: they
+            # re-check should_pause() and decide for themselves from there.
+            self._paused = False
+            waiting, self._back = self._back, None
+            if waiting is not None:
+                waiting.set()

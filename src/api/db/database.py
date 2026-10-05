@@ -655,6 +655,24 @@ class AudioJobsRepository:
             await db.execute(query, ("GENERATING", run_id, kind))
             await db.commit()
 
+    async def set_status(self, run_id: str, status: str, kind: str = "tts") -> None:
+        """Move a job to an arbitrary non-terminal status (Phase 8.4).
+
+        Used for the PAUSED state a long document render enters while a
+        scheduled digest owns the engine: the GUI must be able to tell
+        "stalled" from "deliberately waiting", and only the activity in the
+        middle of the synthesis knows which one it is.
+
+        Args:
+            run_id: Workflow id of the run the job belongs to.
+            status: New status ('GENERATING', 'PAUSED', ...).
+            kind: Audio job kind ('tts', 'narration', 'doc_tts', ...).
+        """
+        query = "UPDATE audio_jobs SET status = ? WHERE run_id = ? AND kind = ?"
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (status, run_id, kind))
+            await db.commit()
+
     async def finish_job(
         self,
         run_id: str,

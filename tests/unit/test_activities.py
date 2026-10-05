@@ -1,5 +1,6 @@
 """Unit tests for Temporal activities."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +12,7 @@ from src.api.db.database import AudioJobsRepository
 from src.api.models.article import ArticleIn, DigestOut
 from src.api.models.cluster import ClusterItem
 from src.api.models.tts import TTSOut
+from src.api.services.tts_lease import PRIORITY_RENDER, TTSLeaseService
 from src.workers.activities import (
     cluster_activity,
     compress_audio_activity,
@@ -590,3 +592,81 @@ async def test_deliver_logic_activity_records_channel_failure() -> None:
     assert any(
         entry["channel"] == "whatsapp" and entry["status"] == "ok" for entry in result["deliveries"]
     )
+
+
+# --- Phase 8.1/8.4: the digest queues for the engine -------------------------
+
+
+async def test_generate_tts_activity_holds_the_engine_lease_while_synthesizing() -> None:
+    """The digest takes the engine for the whole synthesis and gives it back."""
+    lease = TTSLeaseService(poll_seconds=0.01)
+    seen: list[str | None] = []
+
+    async def _synth(payload: object) -> TTSOut:
+        seen.append(await lease.holder())
+        return TTSOut(
+            status="ok",
+            audio_path="data/tts_cache/abc.wav",
+            duration_estimate=10.0,
+            cached=False,
+            voice="es-mx-male",
+            char_count=150,
+        )
+
+    with patch(
+        "src.workers.activities.TTSService.generate_tts",
+        new_callable=AsyncMock,
+        side_effect=_synth,
+    ):
+        await ActivityEnvironment().run(
+            generate_tts_activity,
+            {"digest": "# Hola", "run_id": "lease-run", "collection": "tech"},
+        )
+
+    assert seen == ["lease-run"], "the engine must be held for the whole synthesis"
+    assert await lease.holder() is None, "the lease must not outlive the activity"
+
+
+async def test_generate_tts_activity_queues_behind_a_document_render() -> None:
+    """A running book render keeps the engine until the digest is queued."""
+    lease = TTSLeaseService(poll_seconds=0.01)
+    await lease.acquire("doc-tts-run", PRIORITY_RENDER)
+    order: list[str] = []
+
+    async def _synth(payload: object) -> TTSOut:
+        order.append("digest-synthesis")
+        return TTSOut(
+            status="ok",
+            audio_path="data/tts_cache/abc.wav",
+            duration_estimate=10.0,
+            cached=False,
+            voice="es-mx-male",
+            char_count=150,
+        )
+
+    async def _render_yields_when_queued() -> None:
+        # The digest writes its waiter row before asking for the engine; that
+        # row is the only event a render needs in order to let go.
+        for _ in range(500):
+            if await lease.waiter_above(PRIORITY_RENDER):
+                break
+            await asyncio.sleep(0.01)
+        else:  # pragma: no cover - the activity never queued
+            raise AssertionError("the digest never queued for the engine")
+        order.append("render-yielded")
+        await lease.release("doc-tts-run")
+
+    releaser = asyncio.create_task(_render_yields_when_queued())
+    with patch(
+        "src.workers.activities.TTSService.generate_tts",
+        new_callable=AsyncMock,
+        side_effect=_synth,
+    ):
+        await ActivityEnvironment().run(
+            generate_tts_activity,
+            {"digest": "# Hola", "run_id": "queued-run", "collection": "tech"},
+        )
+    await releaser
+
+    assert order == ["render-yielded", "digest-synthesis"]
+    assert await lease.holder() is None

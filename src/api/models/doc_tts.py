@@ -22,7 +22,10 @@ class DocTTSJobOut(BaseModel):
     workflow_id: str = Field(..., description="Temporal workflow id of the job")
     job_status: str = Field(
         ...,
-        description="STARTING, GENERATING, FINISHED_OK or FINISHED_ERROR",
+        description=(
+            "STARTING, GENERATING, PAUSED (yielded the engine to a scheduled "
+            "digest), FINISHED_OK or FINISHED_ERROR"
+        ),
     )
     title: str = Field(default="", description="Document title")
     filename: str = Field(default="", description="Original uploaded filename")

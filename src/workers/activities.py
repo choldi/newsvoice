@@ -32,6 +32,7 @@ from src.api.services.dedup import DedupService, normalize_url
 from src.api.services.digest import DigestService
 from src.api.services.email import EmailService
 from src.api.services.tts import TTSService, speech_text_for_digest
+from src.api.services.tts_lease import PRIORITY_DIGEST, TTSLeaseService
 from src.api.services.url_article import UrlArticleService, UrlExtractionError
 from src.api.services.verification import VerificationService
 from src.api.services.whatsapp import (
@@ -550,8 +551,13 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
             collection=collection,
             backend=digest.get("backend") or None,
         )
-        await audio_repo.set_generating(run_id)
-        result = await TTSService().generate_tts(tts_in)
+        # Phase 8.1/8.4: the waiter row is written before the queueing begins,
+        # which is the event that makes a running document render let go of the
+        # engine. The job stays in STARTING until the turn actually arrives, so
+        # the GUI shows "en cola" rather than a synthesis that has not started.
+        async with TTSLeaseService().hold(run_id, PRIORITY_DIGEST):
+            await audio_repo.set_generating(run_id)
+            result = await TTSService().generate_tts(tts_in)
     except Exception as exc:
         await audio_repo.finish_job(
             run_id,
