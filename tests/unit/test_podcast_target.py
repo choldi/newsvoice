@@ -85,3 +85,13 @@ def test_the_local_queue_alias_matches_the_worker_queue() -> None:
     forever. They must stay in sync.
     """
     assert settings.narration_local_task_queue == settings.narration_task_queue
+
+
+def test_edge_backend_targets_the_local_namespace_and_queue() -> None:
+    """edge needs no gateway and no GPU, so it must never reach the Modal side."""
+    spec = LOCAL_SPEC.model_copy(update={"tts_backend": TTSBackend.EDGE})
+    target = podcast_target(spec.model_dump())
+
+    assert target.namespace == settings.temporal_podcast_local_namespace
+    assert target.task_queue == settings.narration_local_task_queue
+    assert target.modal is False

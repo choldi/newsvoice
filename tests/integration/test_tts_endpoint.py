@@ -130,3 +130,61 @@ def test_public_generate_tts_is_gone() -> None:
     response = client.post("/api/generate_tts", json={"markdown": "hola"})
     assert response.status_code == 410
     assert "/api/admin/tts" in response.json()["detail"]
+
+
+# --- Phase 8.2: engine selection ---------------------------------------------
+
+
+def test_tts_endpoint_accepts_a_gateway_backend(
+    fake_edge_tts: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """backend=omni_voice routes the synthesis to the tts-api gateway."""
+    from src.api.services import tts_backends
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        assert voice_id == "es-mx-male"
+        return b"RIFFwav-bytes"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    response = client.post(
+        "/api/admin/tts",
+        json={
+            "markdown": "hola",
+            "voice": "es-mx-male",
+            "language": "es",
+            "backend": "omni_voice",
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["backend"] == "omni_voice"
+    assert body["audio_path"].endswith(".wav")
+
+
+def test_tts_endpoint_rejects_an_unknown_backend(fake_edge_tts: None) -> None:
+    """An engine news-engine cannot drive is a client error, not a 500."""
+    response = client.post(
+        "/api/admin/tts",
+        json={"markdown": "hola", "backend": "siri"},
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail[0]["loc"] == ["body", "backend"]
+    assert "omni_voice" in detail[0]["msg"]
+
+
+def test_tts_endpoint_defaults_to_the_configured_engine(
+    fake_edge_tts: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No backend in the payload means TTS_DEFAULT_BACKEND (edge by default)."""
+    response = client.post("/api/admin/tts", json={"markdown": "hola"}, headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["backend"] == "edge"
+    assert response.json()["audio_path"].endswith(".mp3")

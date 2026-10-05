@@ -1225,7 +1225,7 @@ async def test_render_falls_back_per_turn_and_counts_it(
     monkeypatch.setattr(settings, "narrations_dialog_fallback_to_edge", True)
     service, _ = _service(tmp_path, handler)
 
-    async def fake_edge(text: str, voice: str) -> bytes:
+    async def fake_edge(text: str, voice: str, *, speed: float = 1.0) -> bytes:
         assert voice == "es-MX-DaliaNeural", "legacy names map through the alias table"
         return _wav(frames=2400)
 
@@ -1837,3 +1837,111 @@ async def test_music_track_cannot_escape_the_music_directory(
     with pytest.raises(NarrationRenderError, match="music track not found"):
         await service.render(spec, _script(spec))
     await service.aclose()
+
+
+# --- Phase 8.2: edge as a first-class narration backend ----------------------
+
+
+async def test_synthesize_turn_dispatches_to_edge_for_the_edge_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """backend=edge calls Edge directly instead of the gateway or Modal."""
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    seen: dict[str, Any] = {}
+
+    async def fake_edge(text: str, voice: str, *, speed: float = 1.0) -> bytes:
+        seen.update(text=text, voice=voice, speed=speed)
+        return b"RIFF"
+
+    monkeypatch.setattr(service, "_edge_synthesize", fake_edge)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Hola", "es-mx-male", "es", speed=1.25, backend=TTSBackend.EDGE
+    )
+
+    assert audio == b"RIFF"
+    assert used_edge is False
+    assert seen == {"text": "Hola", "voice": "es-MX-JorgeNeural", "speed": 1.25}
+    await service.aclose()
+
+
+async def test_edge_backend_never_reaches_the_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gateway answer must not be consumed when edge is the engine."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the gateway must not be called for backend=edge")
+
+    async def fake_edge(text: str, voice: str, *, speed: float = 1.0) -> bytes:
+        return _wav()
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(service, "_edge_synthesize", fake_edge)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Hola", "es-mx-male", "es", backend=TTSBackend.EDGE
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert used_edge is False
+    await service.aclose()
+
+
+async def test_edge_synthesize_translates_speed_into_a_rate_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 1.25x narration must not come out at 1.0x just because the engine changed."""
+    captured: dict[str, Any] = {}
+
+    class _Fake:
+        def __init__(self, text: str, voice: str, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        async def stream(self):
+            if False:  # noqa: SIM114 - probe the no-audio path, ffmpeg never runs
+                yield {"type": "audio", "data": b""}
+
+    monkeypatch.setattr(narration_module.edge_tts, "Communicate", _Fake)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    with pytest.raises(NarrationGatewayError, match="no audio"):
+        await service._edge_synthesize("Hola", "es-MX-JorgeNeural", speed=1.25)
+
+    assert captured["rate"] == "+25%"
+    await service.aclose()
+
+
+async def test_edge_synthesize_omits_the_rate_hint_at_normal_speed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """speed=1.0 is edge's own tempo, so no hint is sent."""
+    captured: dict[str, Any] = {}
+
+    class _Fake:
+        def __init__(self, text: str, voice: str, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        async def stream(self):
+            if False:  # noqa: SIM114 - probe the no-audio path, ffmpeg never runs
+                yield {"type": "audio", "data": b""}
+
+    monkeypatch.setattr(narration_module.edge_tts, "Communicate", _Fake)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    with pytest.raises(NarrationGatewayError, match="no audio"):
+        await service._edge_synthesize("Hola", "es-MX-JorgeNeural")
+
+    assert "rate" not in captured
+    await service.aclose()
+
+
+async def test_narration_spec_accepts_the_edge_backend() -> None:
+    """edge became a legal narration engine in Phase 8, not only a fallback."""
+    spec = NarrationSpec(
+        roles=[{"name": "anchor", "voice_id": "es-mx-male"}],
+        tts_backend=TTSBackend.EDGE,
+    )
+
+    assert spec.tts_backend is TTSBackend.EDGE

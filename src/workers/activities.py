@@ -507,7 +507,7 @@ async def deliver_logic_activity(
 
 @activity.defn
 async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
-    """Convert the digest markdown into MP3 audio.
+    """Convert the digest markdown into audio with the collection's engine (Phase 8).
 
     Records the generation progress in the audio_jobs table so clients can
     query STARTING/GENERATING/FINISHED_OK/FINISHED_ERROR status, the error
@@ -515,14 +515,19 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         digest: Dict containing the digest text under the 'digest' key, optional
-            'language'/'voice' overrides for this podcast, plus 'run_id' and
+            'language'/'voice' overrides for this podcast, optional 'backend'
+            (edge | omni_voice | qwen3_tts | zonos2), plus 'run_id' and
             'collection' used to key the audio job status.
 
     Returns:
-        Dict with audio_path, duration_estimate, cached, voice, and char_count.
+        Dict with audio_path, duration_estimate, cached, voice, backend and
+        char_count.
 
     Raises:
-        ApplicationError: If the digest text is missing or TTS synthesis fails.
+        ApplicationError: If the digest text is missing, the engine cannot serve
+            the request (unknown backend, voice outside its catalogue) or TTS
+            synthesis fails. Non-retryable: replaying the same payload fails the
+            same way.
     """
     activity.logger.info("Generating TTS audio")
     markdown = digest.get("digest") if isinstance(digest, dict) else None
@@ -539,7 +544,11 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
         language = digest.get("language") or settings.tts_language
         voice = digest.get("voice") or settings.tts_voice
         tts_in = TTSIn(
-            markdown=str(markdown), language=language, voice=voice, collection=collection
+            markdown=str(markdown),
+            language=language,
+            voice=voice,
+            collection=collection,
+            backend=digest.get("backend") or None,
         )
         await audio_repo.set_generating(run_id)
         result = await TTSService().generate_tts(tts_in)
@@ -557,6 +566,7 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
         audio_path=result.audio_path,
         elapsed_seconds=round(time.monotonic() - started, 2),
     )
+    activity.logger.info(f"TTS audio ready on {result.backend}: {result.audio_path}")
     return result.model_dump()
 
 

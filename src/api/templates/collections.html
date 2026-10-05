@@ -58,8 +58,7 @@
         {% set tts_enabled = c.tts_enabled %}
         {% set current_language = c.language %}
         {% set current_voice = c.voice %}
-        {% set omni_languages = omni.languages %}
-        {% set omni_voices = omni.voices %}
+        {% set current_backend = c.tts_backend or 'edge' %}
         <div id="tts-options-{{ c.name }}" style="display:contents">
           {% include "partials/_tts_options.html" %}
         </div>
@@ -325,8 +324,7 @@
       {% set tts_enabled = false %}
       {% set current_language = 'es' %}
       {% set current_voice = '' %}
-      {% set omni_languages = omni.languages %}
-      {% set omni_voices = omni.voices %}
+      {% set current_backend = 'edge' %}
       <div id="tts-options-nueva" style="display:contents">
         {% include "partials/_tts_options.html" %}
       </div>

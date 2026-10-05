@@ -594,3 +594,35 @@ def test_audio_verify_threshold_is_validated() -> None:
             audio_verify=True,
             audio_verify_threshold=1.5,
         )
+
+
+# --- Phase 8.2: per-collection TTS engine ------------------------------------
+
+
+def test_tts_backend_defaults_to_edge() -> None:
+    """A collection that says nothing keeps the current behaviour."""
+    collection = CollectionConfig(name="tech", feed_urls=["https://x/rss"])
+
+    assert collection.tts_backend == "edge"
+
+
+def test_tts_backend_accepts_every_engine_and_canonicalizes_aliases() -> None:
+    """Operator spellings of the gateway collapse onto one canonical id."""
+    assert CollectionConfig(name="a", tts_backend="omni_voice").tts_backend == "omni_voice"
+    assert CollectionConfig(name="b", tts_backend="gateway").tts_backend == "omni_voice"
+    assert CollectionConfig(name="c", tts_backend="QWEN3_TTS").tts_backend == "qwen3_tts"
+    assert CollectionConfig(name="d", tts_backend="zonos2").tts_backend == "zonos2"
+    assert CollectionConfig(name="e", tts_backend="edgetts").tts_backend == "edge"
+
+
+def test_tts_backend_empty_falls_back_to_the_global_default() -> None:
+    """An empty value is allowed so a shared default can be inherited."""
+    collection = CollectionConfig(name="tech", tts_backend="")
+
+    assert collection.tts_backend == ""
+
+
+def test_tts_backend_rejects_an_unknown_engine() -> None:
+    """A typo fails when the file is loaded, not at 08:00 during a run."""
+    with pytest.raises(ValidationError, match="tts_backend must be one of"):
+        CollectionConfig(name="tech", tts_backend="siri")

@@ -1,24 +1,41 @@
-"""Text-to-Speech service using Microsoft Edge neural voices (edge-tts).
+"""Text-to-Speech service for the digest audio (Phase 8: multi-engine).
 
 The digest markdown is converted to speech-friendly plain text and synthesized
-with ``edge_tts`` into a single MP3 file. Edge neural voices read the text
-verbatim, eliminating the hallucination/repetition artifacts seen with the
-previous LLM-based OmniVoice backend. The MP3 is later transcoded to M4A (AAC)
-before delivery (see ``AudioCompressService``).
+by the engine the collection asks for (``tts_backend``): client-side
+``edge-tts`` (the default), the ``tts-api`` gateway, or a Modal backend. The
+dispatch itself lives in :mod:`src.api.services.tts_backends`; this module owns
+everything around it — truncation, markdown stripping, the content-addressed
+cache and the per-backend output extension.
+
+Edge neural voices read the text verbatim, eliminating the hallucination /
+repetition artifacts seen with the previous LLM-based OmniVoice backend; the
+WAV/MP3 is later transcoded to M4A (AAC) before delivery (see
+``AudioCompressService``), which is why the stored extension only has to be
+something ffmpeg can read.
 """
 
 import asyncio
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import edge_tts
 import structlog
 
+from src.api.models.narration import TTSBackend
 from src.api.models.tts import TTSIn, TTSOut
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
+from src.api.services.tts_backends import (
+    ext_for,
+    resolve_backend,
+    voice_for,
+)
+from src.api.services.tts_backends import (
+    synthesize as synthesize_with_backend,
+)
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -69,40 +86,52 @@ async def _available_voice_names() -> set[str]:
 
 # Schema version stored in the cache sidecar, so a future change of the hashing
 # inputs invalidates every cached file instead of reusing a wrong audio.
-SIDECAR_VERSION = 1
+# v2: the backend is part of the hash, so flipping a collection from edge to the
+# gateway regenerates the audio instead of serving Edge bytes under a gateway
+# voice. The hash itself changed too, which is what actually invalidates old
+# sidecars (the version is recorded, not compared).
+SIDECAR_VERSION = 2
 
 
-def _content_hash(speech_text: str, voice: str, language: str) -> str:
+def _content_hash(
+    speech_text: str, voice: str, language: str, backend: TTSBackend = TTSBackend.EDGE
+) -> str:
     """Hash the inputs that fully determine a synthesis.
 
     Args:
         speech_text: Speech-friendly text handed to the TTS engine.
-        voice: Resolved Edge voice ShortName.
+        voice: Resolved voice id, in the backend's own vocabulary.
         language: ISO 639-1 language code.
+        backend: Engine that will synthesize (different engines, different audio).
 
     Returns:
         Hex SHA-256 digest.
     """
-    return hashlib.sha256("\x1f".join((voice, language, speech_text)).encode()).hexdigest()
+    return hashlib.sha256(
+        "\x1f".join((str(backend), voice, language, speech_text)).encode()
+    ).hexdigest()
 
 
-def _audio_filename(collection: str, day: datetime | None = None) -> str:
-    """Build the delivery filename news_<collection>_<yymmdd>.mp3.
+def _audio_filename(collection: str, day: datetime | None = None, ext: str = ".mp3") -> str:
+    """Build the delivery filename news_<collection>_<yymmdd><ext>.
 
     The collection is sanitized to [a-z0-9_-] (falling back to 'default') so
     arbitrary collection names never leak into filesystem paths. The date is
-    the UTC day of the run, formatted as yymmdd.
+    the UTC day of the run, formatted as yymmdd. The stem is the Phase 5.2
+    contract; only the extension follows the engine (``.mp3`` for edge,
+    ``.wav`` for the gateway and the Modal backends).
 
     Args:
         collection: Collection name owning this digest audio.
         day: Optional datetime driving the date stamp. Defaults to now (UTC).
+        ext: Extension including the dot, from :func:`tts_backends.ext_for`.
 
     Returns:
         Filename like 'news_health_260921.mp3'.
     """
     name = re.sub(r"[^a-z0-9_-]+", "_", collection.strip().lower()).strip("_-") or "default"
     stamp = (day or datetime.now(UTC)).strftime("%y%m%d")
-    return f"news_{name}_{stamp}.mp3"
+    return f"news_{name}_{stamp}{ext}"
 
 
 def estimate_duration_seconds(char_count: int) -> float:
@@ -264,8 +293,26 @@ async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -
     return b"".join(chunks)
 
 
+@dataclass(frozen=True)
+class _Prepared:
+    """Everything a synthesis or a cache probe needs, resolved once."""
+
+    speech_text: str
+    """Plain text handed to the engine (truncated and markdown-stripped)."""
+    backend: TTSBackend
+    """Engine that will synthesize (or did, for a cache hit)."""
+    voice: str
+    """Voice id in the engine's own vocabulary."""
+    language: str
+    """ISO 639-1 language code."""
+    audio_path: Path
+    """Destination file, with the backend's extension."""
+    digest: str
+    """Content hash stored in the sidecar."""
+
+
 class TTSService:
-    """Service to convert digest markdown into MP3 audio via Edge neural TTS."""
+    """Convert digest markdown into a cached audio file with the chosen engine."""
 
     def __init__(self, cache_dir: str | None = None) -> None:
         """Initialize the TTSService with an optional cache directory.
@@ -302,91 +349,185 @@ class TTSService:
         """
         return await resolve_edge_voice(voice, language)
 
-    async def generate_tts(self, payload: TTSIn) -> TTSOut:
-        """Generate (or fetch from cache) an MP3 for the given markdown.
-
-        The cache is keyed by the content of the synthesis: the speech text
-        plus the resolved voice and language. The digest is stored in a JSON
-        sidecar next to the audio file, so editing the digest, changing the
-        voice or upgrading the cache schema always regenerates the audio.
+    async def _prepare(self, payload: TTSIn) -> _Prepared:
+        """Resolve the engine, the voice and the cache key for one request.
 
         Args:
-            payload: TTSIn model containing the markdown text and optional voice/language.
+            payload: TTSIn model containing the markdown text and options.
 
         Returns:
-            TTSOut model with the audio file path, duration estimate, and cache status.
+            The resolved inputs, ready for a cache check or a synthesis.
+
+        Raises:
+            TTSBackendError: When the backend is unknown or has no usable voice
+                for this configuration.
         """
-        voice = payload.voice or self._default_voice
         language = payload.language or self._default_language
+        backend = resolve_backend(payload.backend)
+        resolved_voice = await voice_for(backend, payload.voice or self._default_voice, language)
         speech_text = speech_text_for_digest(payload.markdown, self._max_chars)
-        audio_path = self._cache_dir / _audio_filename(payload.collection)
-        sidecar = sidecar_path(audio_path)
+        audio_path = self._cache_dir / _audio_filename(payload.collection, ext=ext_for(backend))
+        return _Prepared(
+            speech_text=speech_text,
+            backend=backend,
+            voice=resolved_voice,
+            language=language,
+            audio_path=audio_path,
+            digest=_content_hash(speech_text, resolved_voice, language, backend),
+        )
+
+    async def cache_probe(self, payload: TTSIn) -> bool:
+        """Report whether this exact synthesis is already on disk.
+
+        A cache hit is free, so callers that charge for synthesis (the Modal
+        budget guard) must consult this first: an exhausted budget must never
+        block audio that already exists.
+
+        Args:
+            payload: TTSIn model containing the markdown text and options.
+
+        Returns:
+            True when a matching audio file and sidecar are present.
+        """
+        prepared = await self._prepare(payload)
+        if not prepared.audio_path.exists():
+            return False
+        sidecar = read_sidecar(sidecar_path(prepared.audio_path)) or {}
+        return sidecar.get("sha256") == prepared.digest
+
+    async def generate_tts(self, payload: TTSIn) -> TTSOut:
+        """Generate (or fetch from cache) the audio for the given markdown.
+
+        The cache is keyed by everything that determines the audio: the speech
+        text, the resolved voice, the language **and the engine**. The digest is
+        stored in a JSON sidecar next to the audio file, so editing the digest,
+        changing the voice, switching the engine or upgrading the cache schema
+        always regenerates the audio instead of serving bytes another engine
+        produced.
+
+        Args:
+            payload: TTSIn model containing the markdown text and optional
+                voice/language/backend.
+
+        Returns:
+            TTSOut with the audio path, the duration estimate and cache status.
+
+        Raises:
+            TTSBackendError: When the configured engine cannot serve this
+                request (unknown backend, voice outside its catalogue).
+        """
+        prepared = await self._prepare(payload)
+        sidecar = sidecar_path(prepared.audio_path)
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-        resolved_voice = await self._resolve_voice(voice, language)
-        digest = _content_hash(speech_text, resolved_voice, language)
-        existed = audio_path.exists()
-        cached = existed and (read_sidecar(sidecar) or {}).get("sha256") == digest
+        existed = prepared.audio_path.exists()
+        cached = existed and (read_sidecar(sidecar) or {}).get("sha256") == prepared.digest
+        used_fallback = False
 
         if not cached:
-            audio_bytes = await self._synthesize(speech_text, resolved_voice)
-            atomic_write(audio_path, audio_bytes)
-            atomic_write(
-                sidecar,
-                json.dumps(
-                    {
-                        "version": SIDECAR_VERSION,
-                        "sha256": digest,
-                        "voice": resolved_voice,
-                        "language": language,
-                        "char_count": len(speech_text),
-                        "generated_at": datetime.now(UTC).isoformat(),
-                    },
-                    indent=2,
-                    sort_keys=True,
-                ).encode(),
-            )
+            audio_bytes, used_fallback = await self._synthesize(prepared)
+            atomic_write(prepared.audio_path, audio_bytes)
+            if used_fallback:
+                # The bytes on disk came from another engine than the one the
+                # cache key names, so the sidecar is deliberately left out: the
+                # next run must retry the requested engine instead of pinning
+                # this degraded audio as its permanent answer.
+                logger.warning(
+                    "tts_fallback_used",
+                    requested_backend=str(prepared.backend),
+                    audio_path=str(prepared.audio_path),
+                )
+            else:
+                atomic_write(
+                    sidecar,
+                    json.dumps(
+                        {
+                            "version": SIDECAR_VERSION,
+                            "sha256": prepared.digest,
+                            "backend": str(prepared.backend),
+                            "voice": prepared.voice,
+                            "language": prepared.language,
+                            "char_count": len(prepared.speech_text),
+                            "generated_at": datetime.now(UTC).isoformat(),
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    ).encode(),
+                )
             logger.info(
                 "tts_cache_regenerated",
                 reason="content_changed" if existed else "missing",
-                voice=resolved_voice,
-                audio_path=str(audio_path),
+                backend=str(prepared.backend),
+                voice=prepared.voice,
+                audio_path=str(prepared.audio_path),
             )
-
-        duration = _estimate_duration(len(speech_text))
 
         logger.info(
             "tts_generate_done",
-            voice=voice,
-            language=language,
-            char_count=len(speech_text),
+            backend=str(prepared.backend),
+            voice=payload.voice,
+            language=prepared.language,
+            char_count=len(prepared.speech_text),
             cached=cached,
-            audio_path=str(audio_path),
+            audio_path=str(prepared.audio_path),
         )
 
         return TTSOut(
-            audio_path=str(audio_path),
-            duration_estimate=duration,
+            audio_path=str(prepared.audio_path),
+            duration_estimate=_estimate_duration(len(prepared.speech_text)),
             cached=cached,
-            voice=voice,
-            char_count=len(speech_text),
+            voice=payload.voice or self._default_voice,
+            backend=str(TTSBackend.EDGE if used_fallback else prepared.backend),
+            char_count=len(prepared.speech_text),
         )
 
-    async def _synthesize(self, text: str, voice: str) -> bytes:
-        """Synthesize text with the Edge neural voice, returning the MP3 bytes.
+    async def _synthesize(self, prepared: _Prepared) -> tuple[bytes, bool]:
+        """Synthesize the prepared text with its engine, optionally degrading to edge.
+
+        A gateway or Modal failure must not cost the digest its audio when the
+        operator opts in (``TTS_FALLBACK_TO_EDGE``). The default is off, on
+        purpose: silently swapping a clone or a designed voice for a stock Edge
+        voice is what ``NARRATIONS_DIALOG_FALLBACK_TO_EDGE=false`` exists to
+        prevent — the voice is part of the product, not an implementation detail.
 
         Args:
-            text: Speech-friendly plain text to synthesize.
-            voice: Valid Edge voice ShortName.
+            prepared: Resolved inputs from :meth:`_prepare`.
 
         Returns:
-            Raw MP3 audio bytes.
+            Tuple of ``(audio_bytes, used_fallback)``. ``used_fallback`` is True
+            when edge produced the bytes instead of the requested engine.
 
         Raises:
             RuntimeError: If synthesis yields no audio or times out.
+            TTSBackendError: If the engine is unavailable or rejects the call and
+                the fallback is disabled or itself fails.
         """
-        return await synthesize_mp3(text, voice, timeout=self._request_timeout)
+        try:
+            audio = await synthesize_with_backend(
+                prepared.backend,
+                prepared.speech_text,
+                prepared.voice,
+                prepared.language,
+                timeout=float(self._request_timeout),
+            )
+            return audio, False
+        except Exception as exc:
+            if prepared.backend is TTSBackend.EDGE or not get_settings().tts_fallback_to_edge:
+                raise
+            logger.warning(
+                "tts_backend_failed_falling_back_to_edge",
+                backend=str(prepared.backend),
+                voice=prepared.voice,
+                error=str(exc),
+            )
+            fallback_voice = await self._resolve_voice("", prepared.language)
+            return (
+                await synthesize_mp3(
+                    prepared.speech_text, fallback_voice, timeout=self._request_timeout
+                ),
+                True,
+            )
 
 
 async def list_cached_audios(cache_dir: str | None = None) -> list[str]:

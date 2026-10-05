@@ -129,6 +129,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         podcast_behavior=collection.podcast_behavior or settings.tts_podcast_behavior,
         language=collection.language or settings.tts_language,
         voice=collection.voice or settings.tts_voice,
+        tts_backend=collection.tts_backend or settings.tts_default_backend,
         collection=collection.name,
         prompt_template=collection.prompt_template,
         custom_prompt=collection.custom_prompt,

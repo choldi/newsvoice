@@ -179,3 +179,32 @@ async def test_ensure_monitor_schedules_creates_both(monkeypatch: pytest.MonkeyP
     ids = await ensure_monitor_schedules(object())  # type: ignore[arg-type]
 
     assert ids == [MONITOR_SCHEDULE_ID, SYSTEM_MONITOR_SCHEDULE_ID]
+
+
+# --- Phase 8.2: engine travels with the run ----------------------------------
+
+
+def test_pipeline_config_carries_the_collection_backend() -> None:
+    """The schedule payload must tell the activity which engine to use."""
+    collection = _collection(tts_backend="omni_voice")
+
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.tts_backend == "omni_voice"
+
+
+def test_pipeline_config_backend_defaults_to_edge() -> None:
+    """An unset collection backend keeps edge, whatever the engine default is."""
+    collection = _collection()
+
+    assert pipeline_config_for(collection, tts_flag=None).tts_backend == "edge"
+
+
+def test_pipeline_config_backend_honours_the_global_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty collection backend inherits TTS_DEFAULT_BACKEND."""
+    monkeypatch.setattr(settings, "tts_default_backend", "qwen3_tts")
+    collection = _collection(tts_backend="")
+
+    assert pipeline_config_for(collection, tts_flag=None).tts_backend == "qwen3_tts"

@@ -667,8 +667,9 @@ class NarrationTTSService:
                 ShortName) for OmniVoice; reference voice name for the Modal
                 backends.
             language: ISO 639-1 language of the text.
-            speed: Speaking rate in [0.5, 2.0]. Honored by OmniVoice; passed
-                through for the Modal backends, which post-process it.
+            speed: Speaking rate in [0.5, 2.0]. Honored by OmniVoice and, as a
+                native ``rate`` hint, by Edge; the Modal backends post-process
+                it (atempo / native control).
             emotion: Optional emotion tag (honored by OmniVoice only).
             allow_edge_fallback: Explicitly allow/disallow Edge fallback. ``None``
                 (default) means use the instance default
@@ -677,12 +678,17 @@ class NarrationTTSService:
 
         Returns:
             Tuple of ``(wav_bytes, used_edge_fallback)``. The fallback flag is
-            always False for the Modal backends: they have no Edge path.
+            always False for the direct backends (edge and Modal): only the
+            OmniVoice gateway path can degrade to Edge.
 
         Raises:
             NarrationGatewayError: When the gateway fails and the fallback is
                 disabled or itself fails, or when the Modal call fails.
         """
+        if backend is TTSBackend.EDGE:
+            return await self._edge_synthesize(
+                text, edge_voice_for(voice_id, language), speed=speed
+            ), False
         if backend is not TTSBackend.OMNIVOICE:
             return (
                 await self._post_modal_tts(
@@ -716,7 +722,7 @@ class NarrationTTSService:
                 error=str(exc),
             )
             try:
-                return await self._edge_synthesize(text, edge_voice), True
+                return await self._edge_synthesize(text, edge_voice, speed=speed), True
             except Exception as edge_exc:
                 raise NarrationGatewayError(
                     f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
@@ -803,12 +809,18 @@ class NarrationTTSService:
                 )
         raise NarrationGatewayError(f"conversation block {index} failed")
 
-    async def _edge_synthesize(self, text: str, voice: str) -> bytes:
+    async def _edge_synthesize(self, text: str, voice: str, *, speed: float = 1.0) -> bytes:
         """Synthesize text with edge-tts and convert the MP3 to canonical WAV.
+
+        Edge reads the speaking rate as a percentage offset of the voice's
+        natural tempo, so ``speed`` is translated instead of ignored: a
+        narration that asks for 1.2x must not come out at 1.0x just because the
+        engine changed.
 
         Args:
             text: Speech text.
             voice: Valid Edge neural ShortName.
+            speed: Speaking rate in [0.5, 2.0].
 
         Returns:
             Canonical WAV bytes.
@@ -816,7 +828,10 @@ class NarrationTTSService:
         Raises:
             NarrationGatewayError: If Edge yields no audio or times out.
         """
-        communicate = edge_tts.Communicate(text, voice)
+        kwargs: dict[str, Any] = {}
+        if speed != 1.0:
+            kwargs["rate"] = f"{round((speed - 1.0) * 100):+d}%"
+        communicate = edge_tts.Communicate(text, voice, **kwargs)
         chunks: list[bytes] = []
 
         async def _collect() -> None:

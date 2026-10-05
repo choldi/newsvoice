@@ -145,6 +145,141 @@ async def _omni_options() -> dict:
     return {"languages": languages, "voices": voices}
 
 
+#: Engines offered by the per-collection TTS dropdown, in menu order. One label
+#: per value of ``CollectionConfig.tts_backend``; the gateway keeps its old
+#: OmniVoice name because that is what ``TTSBackend`` spells it.
+TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("edge", "edge (local)"),
+    ("omni_voice", "tts-api gateway"),
+    ("qwen3_tts", "Qwen3-TTS (Modal)"),
+    ("zonos2", "ZONOS2 (Modal)"),
+)
+
+
+def _normalize_voice_entries(entries: list[dict]) -> list[dict]:
+    """Reshape engine-specific voice dicts into one template contract.
+
+    Args:
+        entries: Raw voice dicts from an engine (gateway, catalog, Edge).
+
+    Returns:
+        List of ``{'id', 'label', 'language'}`` dicts, sorted for stable HTML.
+    """
+    normalized: list[dict] = []
+    for item in entries:
+        identifier = str(item.get("id") or item.get("voice_id") or item.get("name") or "").strip()
+        if not identifier:
+            continue
+        normalized.append(
+            {
+                "id": identifier,
+                "label": str(item.get("label") or item.get("name") or identifier),
+                "language": str(item.get("language") or ""),
+            }
+        )
+    return sorted(normalized, key=lambda v: (v["language"], v["label"]))
+
+
+async def _edge_voice_options() -> dict:
+    """Fetch the real edge-tts catalogue (ShortNames) for the dropdown.
+
+    This is the default engine, so the operator must be able to pick an actual
+    Edge voice instead of typing one from memory. The catalogue is cached at
+    module level by ``src.api.services.tts``, so the cost is one call per
+    process; a failure degrades to a free-text input rather than breaking the
+    page.
+
+    Returns:
+        Dict with 'languages' (ISO 639-1 codes) and normalized 'voices'.
+    """
+    import asyncio
+
+    from src.api.services import tts as tts_service
+
+    try:
+        # Populates tts_service._EDGE_VOICES; also caches the ShortName set.
+        await asyncio.wait_for(tts_service._available_voice_names(), timeout=15.0)
+    except Exception as exc:
+        logger.warning("edge_voice_options_failed", error=str(exc))
+        return {"languages": [], "voices": []}
+    voices = []
+    locales: set[str] = set()
+    for item in tts_service._EDGE_VOICES or []:
+        short = str(item.get("ShortName") or "")
+        locale = str(item.get("Locale") or "")
+        if not short:
+            continue
+        if locale:
+            locales.add(locale.split("-")[0])
+        voices.append(
+            {
+                "id": short,
+                "label": str(item.get("FriendlyName") or short),
+                "language": locale,
+            }
+        )
+    return {"languages": sorted(locales), "voices": _normalize_voice_entries(voices)}
+
+
+def _modal_voice_options() -> dict:
+    """Fetch the Phase 7.9 voice catalog for the Modal dropdowns.
+
+    Returns:
+        Dict with 'languages' and normalized 'voices', empty when the catalog
+        file is missing (a Modal collection then falls back to a text input).
+    """
+    from src.core.voice_catalog import VoiceCatalogError, load_profiles
+
+    try:
+        profiles = load_profiles()
+    except VoiceCatalogError as exc:
+        logger.warning("modal_voice_options_failed", error=str(exc))
+        return {"languages": [], "voices": []}
+    voices = [{"id": p.name, "label": p.label or p.name, "language": p.language} for p in profiles]
+    return {
+        "languages": sorted({v["language"] for v in voices if v["language"]}),
+        "voices": _normalize_voice_entries(voices),
+    }
+
+
+async def _tts_voice_options(backend: str) -> dict:
+    """Return the language and voice catalogue of one TTS engine.
+
+    Each engine has its own voice vocabulary (Edge ShortNames, tts-api stock ids
+    or clone UUIDs, Modal catalog names), so the form must offer the ids that
+    engine actually accepts: showing an Edge voice while the gateway is selected
+    would only fail at 08:00 during the run.
+
+    Args:
+        backend: Canonical engine id ('edge', 'omni_voice', 'qwen3_tts', ...).
+
+    Returns:
+        Dict with 'languages' and normalized 'voices'; both empty when the
+        catalogue is unavailable (the partial then renders text inputs).
+    """
+    if backend == "edge":
+        return await _edge_voice_options()
+    if backend in ("qwen3_tts", "zonos2"):
+        return _modal_voice_options()
+    gateway = await _omni_options()
+    return {
+        "languages": gateway["languages"],
+        "voices": _normalize_voice_entries(gateway["voices"]),
+    }
+
+
+async def _tts_options_by_backend(backends: set[str]) -> dict[str, dict]:
+    """Fetch the voice catalogue of every engine the page has to render.
+
+    Args:
+        backends: Canonical engine ids in use by the collections on the page.
+
+    Returns:
+        Mapping of engine id to its catalogue.
+    """
+    return {backend: await _tts_voice_options(backend) for backend in sorted(backends)}
+
+
 def _split_list(raw: str) -> list[str]:
     """Split a textarea value into a cleaned, de-duplicated list.
 
@@ -473,12 +608,26 @@ async def ui_collections(request: Request) -> HTMLResponse:
         if any(c.tts_enabled or c.narration_spec for c in collections)
         else {"languages": [], "voices": []}
     )
+    # Phase 8: the engine selects the voice vocabulary, so the page fetches the
+    # catalogue of every engine its collections actually use (at most four) —
+    # and only when some collection would synthesize at all.
+    from src.api.services.tts_backends import resolve_backend
+
+    tts_options = (
+        await _tts_options_by_backend(
+            {resolve_backend(c.tts_backend or None).value for c in collections} or {"edge"}
+        )
+        if any(c.tts_enabled for c in collections)
+        else {}
+    )
     return _render(
         request,
         "collections.html",
         {
             "collections": collections,
             "omni": omni,
+            "tts_backends": TTS_BACKEND_CHOICES,
+            "tts_options": tts_options,
             "emotion_tags": EMOTION_TAGS,
         },
     )
@@ -733,31 +882,44 @@ async def ui_terminate_run(workflow_id: str) -> RedirectResponse:
 
 @router.get("/ui/fragments/tts_options", response_class=HTMLResponse, include_in_schema=False)
 async def ui_fragment_tts_options(
-    request: Request, tts_enabled: str = "", language: str = "", voice: str = ""
+    request: Request,
+    tts_enabled: str = "",
+    tts_backend: str = "",
+    language: str = "",
+    voice: str = "",
 ) -> HTMLResponse:
-    """Render the language/voice fields for a collection form (TTS on/off).
+    """Render the engine/language/voice fields for a collection form (Phase 8).
 
-    When ``tts_enabled`` is truthy and OmniVoice is reachable, renders selects
-    populated with real voices; otherwise renders free-text inputs. Used by the
-    collections form via an HTMX swap on the TTS checkbox.
+    The partial is re-fetched both when the TTS checkbox toggles and when the
+    engine select changes, because each engine has its own voice vocabulary:
+    the list must follow the engine, not stay pinned to whatever was rendered
+    first. When ``tts_enabled`` is falsy the catalogues are not fetched at all.
 
     Args:
         request: Incoming request.
         tts_enabled: 'on' when TTS is enabled for the collection.
+        tts_backend: Current engine ('edge', 'omni_voice', ...).
         language: Current language value to keep selected.
         voice: Current voice value to keep selected.
 
     Returns:
         HTMLResponse with the _tts_options partial.
     """
-    omni = await _omni_options() if tts_enabled else {"languages": [], "voices": []}
+    from src.api.services.tts_backends import resolve_backend
+
+    try:
+        engine = str(resolve_backend(tts_backend or None).value)
+    except Exception:  # noqa: BLE001 - an unknown engine renders as the default
+        engine = "edge"
+    options = await _tts_voice_options(engine) if tts_enabled else {"languages": [], "voices": []}
     return _render(
         request,
         "partials/_tts_options.html",
         {
             "tts_enabled": bool(tts_enabled),
-            "omni_languages": omni["languages"],
-            "omni_voices": omni["voices"],
+            "tts_backends": TTS_BACKEND_CHOICES,
+            "current_backend": engine,
+            "tts_options": {engine: options},
             "current_language": language,
             "current_voice": voice,
         },
@@ -895,6 +1057,7 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             podcast_behavior=fields.get("podcast_behavior", ""),
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
+            tts_backend=fields.get("tts_backend") or "edge",
             prompt_template=fields.get("prompt_template") or "default",
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
@@ -968,6 +1131,7 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             podcast_behavior=fields.get("podcast_behavior", ""),
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
+            tts_backend=fields.get("tts_backend") or current.tts_backend,
             prompt_template=fields.get("prompt_template") or "default",
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,

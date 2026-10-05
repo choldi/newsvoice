@@ -311,15 +311,14 @@ async def test_resolve_voice_empty_returns_default(monkeypatch: pytest.MonkeyPat
 
 
 async def test_synthesize_streams_mp3_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_synthesize collects the audio chunks into MP3 bytes."""
+    """synthesize_mp3 collects the audio chunks into MP3 bytes."""
     monkeypatch.setattr(tts_module.edge_tts, "Communicate", _FakeCommunicate)
-    service = TTSService()
-    data = await service._synthesize("hola", "es-MX-JorgeNeural")
+    data = await tts_module.synthesize_mp3("hola", "es-MX-JorgeNeural")
     assert data == _FAKE_MP3
 
 
 async def test_synthesize_empty_audio_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_synthesize raises when no audio chunks arrive."""
+    """synthesize_mp3 raises when no audio chunks arrive."""
 
     class EmptyCommunicate:
         def __init__(self, text: str, voice: str, **kwargs: object) -> None:
@@ -330,13 +329,12 @@ async def test_synthesize_empty_audio_raises(monkeypatch: pytest.MonkeyPatch) ->
                 yield {"type": "audio", "data": _FAKE_MP3}
 
     monkeypatch.setattr(tts_module.edge_tts, "Communicate", EmptyCommunicate)
-    service = TTSService()
     with pytest.raises(RuntimeError, match="produced no audio"):
-        await service._synthesize("hola", "es-MX-JorgeNeural")
+        await tts_module.synthesize_mp3("hola", "es-MX-JorgeNeural")
 
 
 async def test_synthesize_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_synthesize raises a RuntimeError when the stream exceeds the timeout."""
+    """synthesize_mp3 raises a RuntimeError when the stream exceeds the timeout."""
 
     class SlowCommunicate:
         def __init__(self, text: str, voice: str, **kwargs: object) -> None:
@@ -349,10 +347,8 @@ async def test_synthesize_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
             yield {"type": "audio", "data": _FAKE_MP3}
 
     monkeypatch.setattr(tts_module.edge_tts, "Communicate", SlowCommunicate)
-    service = TTSService()
-    service._request_timeout = 0.05
     with pytest.raises(RuntimeError, match="timed out"):
-        await service._synthesize("hola", "es-MX-JorgeNeural")
+        await tts_module.synthesize_mp3("hola", "es-MX-JorgeNeural", timeout=0)
 
 
 async def test_generate_tts_empty_markdown_after_cleanup_raises(

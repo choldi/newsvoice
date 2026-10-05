@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.api.routes_ui import STATUS_LABELS
+from src.api.services.collections_repo import CollectionsRepository
 from src.core.config import settings
 
 TOKEN = "secret-admin-token"
@@ -28,7 +29,7 @@ _TTS_FRAGMENT_URL = "/ui/fragments/tts_options"
 
 
 def test_tts_options_fragment_renders_selects_when_enabled() -> None:
-    """The TTS fragment renders selects populated from OmniVoice on demand."""
+    """The TTS fragment renders selects populated from the chosen engine."""
     client = _ui_client()
     _login(client)
     with (
@@ -51,14 +52,52 @@ def test_tts_options_fragment_renders_selects_when_enabled() -> None:
             return_value=[],
         ),
     ):
-        fragment = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=on&language=es&voice=es-mx-male")
+        fragment = client.get(
+            f"{_TTS_FRAGMENT_URL}"
+            "?tts_enabled=on&tts_backend=omni_voice&language=es&voice=es-mx-male"
+        )
 
     assert fragment.status_code == 200
+    assert '<select name="tts_backend"' in fragment.text
     assert '<select name="language"' in fragment.text
     assert '<option value="es"' in fragment.text
     assert '<option value="en"' in fragment.text
     assert 'value="es-mx-male"' in fragment.text
     assert "selected" in fragment.text
+
+
+def test_tts_options_fragment_follows_the_selected_engine() -> None:
+    """Each engine brings its own voice vocabulary, so the list must follow it."""
+    client = _ui_client()
+    _login(client)
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_languages",
+            new_callable=AsyncMock,
+            return_value=["es"],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            return_value=[{"voice_id": "es-mx-male", "language": "es"}],
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        gateway = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=on&tts_backend=omni_voice")
+
+    # edge is stubbed offline by the conftest fixture, so it must NOT offer the
+    # gateway's stock ids: a wrong id would only fail at 08:00 during a run.
+    edge = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=on&tts_backend=edge")
+
+    assert gateway.status_code == edge.status_code == 200
+    assert '<option value="es-mx-male"' in gateway.text
+    assert '<select name="voice"' in gateway.text
+    assert '<option value="es-mx-male"' not in edge.text
+    assert '<input type="text" name="voice"' in edge.text
 
 
 def test_tts_options_fragment_renders_text_inputs_when_disabled() -> None:
@@ -76,7 +115,7 @@ def test_tts_options_fragment_renders_text_inputs_when_disabled() -> None:
 
 
 def test_collections_page_shows_omni_selects_for_tts_collection() -> None:
-    """A collection with TTS enabled renders language/voice as OmniVoice selects."""
+    """A gateway collection renders language/voice from the gateway catalogue."""
     client = _ui_client()
     _login(client)
     client.post(
@@ -84,6 +123,7 @@ def test_collections_page_shows_omni_selects_for_tts_collection() -> None:
         data={
             "name": "cast",
             "tts_enabled": "on",
+            "tts_backend": "omni_voice",
             "language": "es",
             "voice": "es-mx-male",
             "feed_urls": "https://a/rss",
@@ -763,3 +803,35 @@ def test_verification_failed_status_is_labelled_and_styled() -> None:
     assert STATUS_LABELS["verification_failed"] == "verificación fallida"
     base = (Path("src/api/templates") / "base.html").read_text(encoding="utf-8")
     assert ".badge.verification_failed" in base
+
+
+def test_collections_gui_round_trips_the_tts_backend() -> None:
+    """The engine chosen in the form survives create, edit and the TOML file."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "motor",
+            "tts_enabled": "on",
+            "tts_backend": "omni_voice",
+            "feed_urls": "https://a/rss",
+        },
+    )
+
+    page = client.get("/ui/collections")
+    assert '<select name="tts_backend"' in page.text
+    assert '<option value="omni_voice" selected>' in page.text
+
+    client.post(
+        "/ui/collections/motor/update",
+        data={
+            "new_name": "motor",
+            "tts_enabled": "on",
+            "tts_backend": "qwen3_tts",
+            "feed_urls": "https://a/rss",
+        },
+    )
+
+    repo = CollectionsRepository()
+    assert repo.get("motor").tts_backend == "qwen3_tts"

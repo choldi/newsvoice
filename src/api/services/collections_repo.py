@@ -39,6 +39,7 @@ _COLLECTION_KEYS = (
     "podcast_behavior",
     "language",
     "voice",
+    "tts_backend",
     "prompt_template",
     "custom_prompt",
     "chat_id",

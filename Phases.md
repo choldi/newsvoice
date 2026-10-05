@@ -688,7 +688,7 @@ synthesis will take.
       prioridad 10 y render de documento = prioridad 0, FIFO en empate, TTL 300 s
       con tarea de renovación (una llamada `synthesize_mp3` de 5000 chars dura
       minutos), kill switch `TTS_LEASE_ENABLED`
-- [ ] **8.2 Enrutado de motor por colección** — `TTSBackend.EDGE`,
+- [x] **8.2 Enrutado de motor por colección** — `TTSBackend.EDGE`,
       `CollectionConfig.tts_backend` resuelto **fuera** del workflow en
       `pipeline_config_for` → `PipelineConfig.tts_backend` → payload de
       `generate_tts_activity`, servicio nuevo `tts_backends.py` (edge→MP3,
@@ -697,7 +697,7 @@ synthesis will take.
       hash de caché + `SIDECAR_VERSION=2`, nombre de fichero con extensión
       según backend, y timeout del endpoint admin backend-aware (hoy 120 s
       haría 504 en cualquier render del gateway)
-- [ ] **8.3 Round-trip de `tts_backend`** — `CollectionIn` (`extra="forbid"`),
+- [x] **8.3 Round-trip de `tts_backend`** — `CollectionIn` (`extra="forbid"`),
       `_COLLECTION_KEYS`, `collections.html` (crear + editar) y
       `partials/_tts_options.html` con el catálogo de voces **del backend**
       elegido (`VoicesService` para el gateway, `load_profiles()` para Modal,

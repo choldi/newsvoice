@@ -45,7 +45,15 @@ class CollectionIn(BaseModel):
         default="", description="Podcaster behavior instruction (empty = off)"
     )
     language: str = Field(default="", description="ISO 639-1 language code for the digest")
-    voice: str = Field(default="", description="OmniVoice voice override")
+    voice: str = Field(default="", description="Voice override, in the backend's vocabulary")
+    tts_backend: str = Field(
+        default="edge",
+        description=(
+            "Engine that synthesizes this collection's digest audio: "
+            "'edge', 'omni_voice' (the tts-api gateway), 'qwen3_tts' or "
+            "'zonos2'. Empty inherits TTS_DEFAULT_BACKEND."
+        ),
+    )
     prompt_template: str = Field(
         default=DEFAULT_PROMPT_TEMPLATE,
         description="Prompt template name from DIGEST_TEMPLATE_ADDITIONS",

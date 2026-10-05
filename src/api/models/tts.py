@@ -2,9 +2,11 @@
 
 from pydantic import BaseModel, Field
 
+from src.api.models.narration import TTSBackend
+
 
 class TTSIn(BaseModel):
-    """Input payload to generate MP3 audio from markdown text."""
+    """Input payload to generate audio from markdown text."""
 
     markdown: str = Field(
         ...,
@@ -17,8 +19,10 @@ class TTSIn(BaseModel):
     voice: str | None = Field(
         default=None,
         description=(
-            "Edge neural voice ShortName (e.g. 'es-MX-JorgeNeural') or a legacy "
-            "alias such as 'es-mx-male'."
+            "Voice in the chosen backend's own vocabulary: an Edge neural "
+            "ShortName (e.g. 'es-MX-JorgeNeural') or legacy alias for edge, a "
+            "tts-api stock id or clone UUID for omni_voice, a voice-catalog "
+            "profile name for the Modal backends."
         ),
     )
     language: str | None = Field(
@@ -29,14 +33,30 @@ class TTSIn(BaseModel):
         description="Collection name used to name the output file "
         "news_<collection>_<yymmdd>.<ext>.",
     )
+    backend: TTSBackend | None = Field(
+        default=None,
+        description="Synthesis engine; empty falls back to TTS_DEFAULT_BACKEND.",
+    )
 
 
 class TTSOut(BaseModel):
     """Response payload containing the audio file location and metadata."""
 
     status: str = Field(default="ok", description="Execution status: ok or error")
-    audio_path: str = Field(..., description="Path to the generated MP3 file")
+    audio_path: str = Field(..., description="Path to the generated audio file")
     duration_estimate: float = Field(..., description="Estimated audio duration in seconds")
+    estimate_wall_seconds: float | None = Field(
+        default=None,
+        description="Estimated wall-clock seconds this synthesis needs (Phase 8.5)",
+    )
     cached: bool = Field(..., description="Whether the audio was served from cache")
-    voice: str = Field(..., description="TTS voice used for synthesis")
+    voice: str = Field(
+        ...,
+        description=(
+            "Voice as configured for this run. The id actually handed to the "
+            "engine (which may differ: aliases are resolved per backend) is "
+            "recorded in the cache sidecar."
+        ),
+    )
+    backend: str = Field(default="", description="Engine that produced the audio")
     char_count: int = Field(..., description="Number of characters synthesized")

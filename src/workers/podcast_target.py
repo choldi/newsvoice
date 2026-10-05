@@ -53,7 +53,8 @@ def podcast_target(spec: dict[str, Any] | None) -> PodcastTarget:
     """Resolve the namespace and task queue for a narration spec.
 
     Modal backends go to the Modal namespace and queue (the worker holding the
-    Modal credentials); every other backend stays local.
+    Modal credentials); everything else — including the direct ``edge`` backend,
+    which needs no gateway at all — stays local.
 
     Args:
         spec: Serialized ``NarrationSpec`` payload, or None.
@@ -61,7 +62,7 @@ def podcast_target(spec: dict[str, Any] | None) -> PodcastTarget:
     Returns:
         The PodcastTarget for this render.
     """
-    if backend_from_spec(spec) != "omni_voice":
+    if backend_from_spec(spec) not in ("omni_voice", "edge"):
         return PodcastTarget(
             namespace=settings.temporal_podcast_modal_namespace,
             task_queue=settings.narration_modal_task_queue,

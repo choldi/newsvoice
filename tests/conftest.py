@@ -2,7 +2,9 @@
 
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import edge_tts
 import pytest
 import pytest_asyncio
 
@@ -18,6 +20,18 @@ async def setup_test_database(tmp_path: Path) -> AsyncGenerator[None, None]:
     settings.database_path = test_db
     await run_migrations(test_db)
     yield
+
+
+@pytest.fixture(autouse=True)
+def offline_edge_voices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never reach Microsoft's voice catalogue from the test suite.
+
+    ``edge_tts.list_voices()`` is the one network call the GUI and the digest
+    voice resolution make without a mock around them (Phase 8 renders a real
+    Edge voice dropdown). Tests that care about a specific catalogue patch
+    ``src.api.services.tts._EDGE_VOICES`` themselves, which overrides this.
+    """
+    monkeypatch.setattr(edge_tts, "list_voices", AsyncMock(return_value=[]))
 
 
 @pytest.fixture(autouse=True)

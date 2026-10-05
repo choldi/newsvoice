@@ -260,6 +260,21 @@ class Settings(BaseSettings):
     # Android, and iPhone. ffmpeg is installed in the Docker image.
     ffmpeg_path: str = "ffmpeg"
     tts_audio_bitrate_kbps: int = Field(default=48, ge=16, le=320)
+    # --- Phase 8.2: digest TTS engine routing --------------------------------
+    # Engine a collection inherits when it declares no `tts_backend`. Collections
+    # override it per entry in collections.toml; this only sets the floor.
+    # 'edge' (client-side edge-tts) | 'omni_voice' (tts-api gateway) |
+    # 'qwen3_tts' | 'zonos2' (both on Modal, see modal_enabled).
+    tts_default_backend: str = "edge"
+    # Degrade to edge when the gateway or Modal fails. Off by default: a clone
+    # or a designed voice silently replaced by a stock Edge voice is a product
+    # change, not a retry, so a failing engine must surface as "no audio" until
+    # the operator opts in. Never applies when edge itself is the engine.
+    tts_fallback_to_edge: bool = False
+    # Budget for a non-edge synthesis of a whole digest. The admin endpoint uses
+    # api_request_timeout (120 s) for edge, which a gateway render of
+    # tts_max_chars cannot fit in, so the slower engines get their own ceiling.
+    tts_backend_timeout_seconds: int = Field(default=900, ge=1)
     # --- Phase 8.1: TTS engine lease ----------------------------------------
     # Serializes synthesis across processes: the digest worker and the doc-tts
     # worker are separate containers, so an asyncio.Semaphore inside either one

@@ -113,7 +113,15 @@ class CollectionConfig(BaseModel):
         default="", description="Podcaster behavior instruction (empty = off)"
     )
     language: str = Field(default="", description="ISO 639-1 language code for the digest")
-    voice: str = Field(default="", description="OmniVoice voice override")
+    voice: str = Field(default="", description="Voice override, in the backend's vocabulary")
+    tts_backend: str = Field(
+        default="edge",
+        description=(
+            "Engine that synthesizes this collection's digest audio: 'edge', "
+            "'omni_voice' (the tts-api gateway), 'qwen3_tts' or 'zonos2'. "
+            "Empty falls back to TTS_DEFAULT_BACKEND."
+        ),
+    )
     prompt_template: str = Field(
         default=DEFAULT_PROMPT_TEMPLATE,
         description="Prompt template name from src/core/prompts.py"
@@ -378,6 +386,33 @@ class CollectionConfig(BaseModel):
         if val not in allowed:
             raise ValueError(f"narration_strategy must be one of {allowed}: {value!r}")
         return val
+
+    @field_validator("tts_backend")
+    @classmethod
+    def _tts_backend_is_known(cls, value: str) -> str:
+        """Accept only engines the digest synthesis can actually drive.
+
+        A typo here would otherwise surface as a failed run at 08:00 instead of
+        a rejected config save, so it is caught at load time.
+
+        Args:
+            value: Engine name from collections.toml.
+
+        Returns:
+            The canonical engine id; empty keeps TTS_DEFAULT_BACKEND.
+
+        Raises:
+            ValueError: If the name is not an engine news-engine can call.
+        """
+        from src.api.services.tts_backends import ALLOWED_BACKENDS, BACKEND_ALIASES
+
+        raw = (value or "").strip().lower()
+        if not raw:
+            return ""
+        canonical = BACKEND_ALIASES.get(raw, raw)
+        if canonical not in ALLOWED_BACKENDS:
+            raise ValueError(f"tts_backend must be one of {list(ALLOWED_BACKENDS)}: {value!r}")
+        return canonical
 
     def resolved_feed_sources(self) -> list[FeedSource]:
         """Return each configured feed with its reliability and extra hosts.

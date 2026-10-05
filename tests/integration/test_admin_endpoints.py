@@ -473,3 +473,43 @@ def test_voice_catalog_generate_wraps_failures(
     response = client.post("/api/admin/voices/catalog/generate", json={})
     assert response.status_code == 502
     assert "temporal down" in response.json()["detail"]
+
+
+# --- Phase 8.2: per-collection TTS engine -------------------------------------
+
+
+def test_tts_backend_round_trips_through_the_api() -> None:
+    """The engine survives create, read and update without being dropped."""
+    created = client.post(
+        "/api/admin/collections", json=_collection_payload(tts_backend="omni_voice")
+    )
+    assert created.status_code == 201
+    assert created.json()["collection"]["tts_backend"] == "omni_voice"
+
+    fetched = client.get("/api/admin/collections/tech").json()["collection"]
+    assert fetched["tts_backend"] == "omni_voice"
+
+    updated = client.put(
+        "/api/admin/collections/tech", json=_collection_payload(tts_backend="qwen3_tts")
+    )
+    assert updated.status_code == 200
+    assert updated.json()["collection"]["tts_backend"] == "qwen3_tts"
+
+    reloaded = client.get("/api/admin/collections/tech").json()["collection"]
+    assert reloaded["tts_backend"] == "qwen3_tts"
+
+
+def test_tts_backend_rejects_an_unknown_engine() -> None:
+    """A typo is refused at the API instead of failing at 08:00."""
+    response = client.post("/api/admin/collections", json=_collection_payload(tts_backend="siri"))
+
+    assert response.status_code == 422
+    assert "tts_backend" in response.json()["detail"]
+
+
+def test_tts_backend_defaults_to_edge() -> None:
+    """A payload without the field keeps the current behaviour."""
+    created = client.post("/api/admin/collections", json=_collection_payload())
+
+    assert created.status_code == 201
+    assert created.json()["collection"]["tts_backend"] == "edge"

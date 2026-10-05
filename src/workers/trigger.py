@@ -109,6 +109,7 @@ async def main() -> None:
             podcast_behavior=args.podcast_behavior or settings.tts_podcast_behavior,
             language=args.language or settings.tts_language,
             voice=args.voice or settings.tts_voice,
+            tts_backend=settings.tts_default_backend,
             collection="default",
             prompt_template="default",
             main_story_count=args.main_stories,

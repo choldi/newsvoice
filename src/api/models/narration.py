@@ -30,16 +30,21 @@ SCRIPT_SOURCES = ("llm", "manual", "api")
 
 
 class TTSBackend(StrEnum):
-    """Which engine synthesizes a narration.
+    """Which engine synthesizes a narration or a digest.
 
     Attributes:
-        OMNIVOICE: The self-hosted TTS gateway (OmniVoice/Edge). Local, no
-            spend, honors per-turn speed and emotion.
+        EDGE: Client-side ``edge-tts`` (Microsoft neural voices). No gateway,
+            no spend, no GPU. This is the digest default and the fallback the
+            other engines degrade to.
+        OMNIVOICE: The self-hosted TTS gateway (rebranded ``tts-api``, port
+            8001): OmniVoice / pocket_tts / edge-tts routed per language. Local,
+            no spend, honors per-turn speed and emotion.
         QWEN3_TTS: Qwen3-TTS on Modal. Synthetic voices from the catalog; no
             emotion or speed control (speed is post-processed with atempo).
         ZONOS2: ZONOS2 on Modal. Adds native speed and emotion control.
     """
 
+    EDGE = "edge"
     OMNIVOICE = "omni_voice"
     QWEN3_TTS = "qwen3_tts"
     ZONOS2 = "zonos2"
