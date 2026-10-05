@@ -8,7 +8,7 @@
 #
 # Uso:  ./scripts/design_window.sh [timeout_s]
 # Env:  DESIGN_WINDOW_POLL    segundos entre comprobaciones (15)
-#       OMNIVOICE_WAS_ACTIVE  1|0  fuerza si OmniVoice debe restaurarse
+#       TTS_WAS_ACTIVE  1|0  fuerza si OmniVoice debe restaurarse
 set -euo pipefail
 
 NAMESPACE="${VOICE_NAMESPACE:-news-engine-voices}"
@@ -41,11 +41,11 @@ pollers() {
     python3 -c 'import json, sys; print(len(json.load(sys.stdin).get("pollers") or []))'
 }
 
-if [[ -z "${OMNIVOICE_WAS_ACTIVE:-}" ]]; then
-  if systemctl --user is-active omnivoice-api.service >/dev/null 2>&1; then
-    OMNIVOICE_WAS_ACTIVE=1
+if [[ -z "${TTS_WAS_ACTIVE:-}" ]]; then
+  if systemctl --user is-active tts-api.service >/dev/null 2>&1; then
+    TTS_WAS_ACTIVE=1
   else
-    OMNIVOICE_WAS_ACTIVE=0
+    TTS_WAS_ACTIVE=0
   fi
 fi
 
@@ -53,16 +53,16 @@ cleanup() {
   local rc=$?
   log "cerrando la ventana (exit=$rc)"
   systemctl --user stop news-engine-voice-worker.service || true
-  if [[ "$OMNIVOICE_WAS_ACTIVE" == "1" ]]; then
+  if [[ "$TTS_WAS_ACTIVE" == "1" ]]; then
     log "restaurando OmniVoice"
-    systemctl --user start omnivoice-api.service || true
+    systemctl --user start tts-api.service || true
   fi
   log "Ollama sigue como servicio; sus modelos quedan descargados de VRAM"
 }
 trap cleanup EXIT
 
 log "1/5 parando OmniVoice para liberar VRAM"
-systemctl --user stop omnivoice-api.service || true
+systemctl --user stop tts-api.service || true
 
 if command -v ollama >/dev/null 2>&1; then
   log "2/5 descargando modelos cargados de Ollama"

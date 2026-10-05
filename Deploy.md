@@ -575,8 +575,8 @@ That way the daily digests and the narration always have the GPU, and the
 design window is the only thing that competes for it. Check the state with:
 
 ```bash
-systemctl --user is-active omnivoice-api.service news-engine-voice-worker.service
-journalctl --user -u omnivoice-api.service -f
+systemctl --user is-active tts-api.service news-engine-voice-worker.service
+journalctl --user -u tts-api.service -f
 ```
 
 `voice_design_task_queue` and `temporal_voices_namespace` keep their defaults,
@@ -679,13 +679,13 @@ NVIDIA runtime registered and the clones are rendered on CPU anyway.
 
 | Piece | Value |
 |-------|-------|
-| Unit | `omnivoice-api.service` (user level, enabled, port `8001`) |
+| Unit | `tts-api.service` (user level, enabled, port `8001`) |
 | Venv | `~/ov_api/venv-omnivoice` (do not touch `~/ov_api/.venv`) |
 | Config | `~/ov_api/.env` (read by pydantic-settings from the working dir) |
 | News-engine | `TTS_API_BASE_URL` and `NARRATION_API_BASE_URL` → `http://host.docker.internal:8001/api/v1` |
 
 ```bash
-systemctl --user status omnivoice-api.service
+systemctl --user status tts-api.service
 curl -s http://localhost:8001/api/v1/health
 docker compose exec -T api python -c "import httpx; print(httpx.get('http://host.docker.internal:8001/api/v1/health').json())"
 ```
@@ -742,7 +742,7 @@ either the voice is tagged for another engine or the cast is wrong. Stock ids
 ### 10.3 Rollback
 
 ```bash
-systemctl --user stop omnivoice-api.service
+systemctl --user stop tts-api.service
 ```
 
 `NarrationTTSService` degrades instead of failing: the digest still completes
