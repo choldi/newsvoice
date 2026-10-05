@@ -681,7 +681,7 @@ synthesis will take.
 | 5 | «Duración» | **Tiempo de síntesis en wall-clock** (el `duration_estimate` de longitud de audio se queda como está) |
 
 **Scope:**
-- [ ] **8.1 Lease de motor con prioridad** — migración `011_tts_lease.sql`
+- [x] **8.1 Lease de motor con prioridad** — migración `011_tts_lease.sql`
       (`tts_leases` + `tts_lease_waiters` en el SQLite ya compartido por todos los
       contenedores), `src/api/services/tts_lease.py` (`TTSLeaseService`:
       `acquire/release/renew/add_waiter/has_priority_waiter/hold`), digest =

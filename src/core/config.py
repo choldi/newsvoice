@@ -260,6 +260,24 @@ class Settings(BaseSettings):
     # Android, and iPhone. ffmpeg is installed in the Docker image.
     ffmpeg_path: str = "ffmpeg"
     tts_audio_bitrate_kbps: int = Field(default=48, ge=16, le=320)
+    # --- Phase 8.1: TTS engine lease ----------------------------------------
+    # Serializes synthesis across processes: the digest worker and the doc-tts
+    # worker are separate containers, so an asyncio.Semaphore inside either one
+    # (doc_tts_concurrency, narration_max_concurrency) coordinates nothing. The
+    # lease lives in the shared SQLite file every container already mounts.
+    tts_lease_enabled: bool = True
+    # Singleton row name. One scope = one contended resource.
+    tts_lease_scope: str = "engine"
+    # Holder must renew within this window or the lease is considered abandoned
+    # (a killed container must not block tomorrow's digest forever).
+    tts_lease_ttl_seconds: int = Field(default=300, ge=10)
+    # How often a waiter polls for its turn, and how often a yielded doc-TTS
+    # render re-checks that the digest is done.
+    tts_lease_poll_seconds: int = Field(default=5, ge=1)
+    # A waiter row expires after this long. Without it, a digest that dies
+    # before synthesizing would pause every document render for the TTL of the
+    # waiter, i.e. forever in the worst case.
+    tts_lease_waiter_ttl_seconds: int = Field(default=900, ge=30)
     admin_api_token: str = ""
     # --- Admin GUI authentication ---
     # When admin_username is set, the login form uses username/password instead
