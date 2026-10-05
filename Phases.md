@@ -663,6 +663,82 @@ falla y nunca filtra un secreto (`test_env_editor.py`22 +
 
 ---
 
+## PHASE 8 — TTS engine routing, engine leasing and synthesis-time estimation
+
+**Goal:** adapt news-engine to the rebranded, multi-engine `tts-api` gateway so
+each collection can pick its own engine, so a long document render and the daily
+digests never fight over that engine, and so the operator can see how long a
+synthesis will take.
+
+**Decision record (2026-10-05, operador):**
+
+| # | Pregunta | Decisión |
+|---|----------|----------|
+| 1 | Alcance | **Fase 8 nueva** (la 7 sigue con 7.8 / 7.9 abiertas) |
+| 2 | Motores por colección | **edge + tts-api gateway + Modal** (los tres) |
+| 3 | ¿Qué se encola? | **Solo el paso TTS** — un lease con prioridad |
+| 4 | ¿Cómo cede el doc-TTS? | **Event-driven** — el digest levanta un flag de prioridad antes de pedir el lease |
+| 5 | «Duración» | **Tiempo de síntesis en wall-clock** (el `duration_estimate` de longitud de audio se queda como está) |
+
+**Scope:**
+- [ ] **8.1 Lease de motor con prioridad** — migración `011_tts_lease.sql`
+      (`tts_leases` + `tts_lease_waiters` en el SQLite ya compartido por todos los
+      contenedores), `src/api/services/tts_lease.py` (`TTSLeaseService`:
+      `acquire/release/renew/add_waiter/has_priority_waiter/hold`), digest =
+      prioridad 10 y render de documento = prioridad 0, FIFO en empate, TTL 300 s
+      con tarea de renovación (una llamada `synthesize_mp3` de 5000 chars dura
+      minutos), kill switch `TTS_LEASE_ENABLED`
+- [ ] **8.2 Enrutado de motor por colección** — `TTSBackend.EDGE`,
+      `CollectionConfig.tts_backend` resuelto **fuera** del workflow en
+      `pipeline_config_for` → `PipelineConfig.tts_backend` → payload de
+      `generate_tts_activity`, servicio nuevo `tts_backends.py` (edge→MP3,
+      gateway→WAV vía el cliente extraído de `NarrationTTSService._post_audio`,
+      Modal→WAV con el guard de presupuesto de la 7.8), backend incluido en el
+      hash de caché + `SIDECAR_VERSION=2`, nombre de fichero con extensión
+      según backend, y timeout del endpoint admin backend-aware (hoy 120 s
+      haría 504 en cualquier render del gateway)
+- [ ] **8.3 Round-trip de `tts_backend`** — `CollectionIn` (`extra="forbid"`),
+      `_COLLECTION_KEYS`, `collections.html` (crear + editar) y
+      `partials/_tts_options.html` con el catálogo de voces **del backend**
+      elegido (`VoicesService` para el gateway, `load_profiles()` para Modal,
+      `edge_tts.list_voices()` para edge); también `podcast_target` trata
+      `edge` como destino local (defensivo)
+- [ ] **8.4 Doc-TTS cede y reanuda** — hooks `should_pause` / `on_heartbeat` /
+      `on_paused` en `DocTTSService.synthesize_document`, comprobados antes de
+      cada trozo: libera el lease → `audio_jobs.status='PAUSED'` → sondea cada
+      5 s con heartbeats → re-adquiere → `GENERATING`; los trozos en vuelo no se
+      interrumpen; join format-aware (`concat_wavs` para `.wav`, el `b"".join`
+      actual solo vale para MP3)
+- [ ] **8.5 Estimación de tiempo de síntesis** — `src/api/services/tts_estimate.py`
+      (`SynthesisEstimate.wall_seconds = (Σ chars_sin_caché / cps) / concurrencia
+      + trozos × overhead + join`), `cps` por backend en settings, expuesto en
+      `GET /api/admin/documents/tts/{id}` (`estimated_wall_seconds`,
+      `eta_seconds`, `paused`) y en `/ui/tools`; los trozos cacheados cuestan 0,
+      que es lo que hace correcto el número en una reanudación
+- [ ] **8.6 Docs y calibración** — `Architecture.md` (diagrama con lease y
+      enrutado), `CONVENTIONS.md` (sección «TTS engines & engine lease»),
+      `Deploy.md` §10 (motor por colección, operación del lease, calibración de
+      `cps`), `collections.toml.example` y `.env.example`
+
+**Not in scope (decisión explícita):**
+- Narración y clases **no** toman el lease en esta fase (ya llevan su propio
+  semáforo de gateway); es una línea por activity si se quiere un gate global.
+- El **id fijo** del schedule (`digest-pipeline-<collection>`) no cambia: 8.1
+  serializa el **paso TTS**, no el run. Un start de schedule que llega con el
+  run anterior vivo sigue siendo descartado por Temporal → eso sería Fase 9.
+- El doc-TTS **sigue en Edge**; hacerlo apuntar al gateway es un cambio aparte
+  (el gateway no trocea y `doc_tts_chunk_chars` habría que re-tunearlo).
+
+**Success criteria:** ~`1080 passed` con `ruff` limpio; cambiar
+`tts_backend` en una colección regenera el audio con el motor nuevo (la caché
+anterior no se sirve); un render de documento en curso se pone en `PAUSED`,
+espera a que el digest termine su síntesis y termina sin perder trozos; la
+estimación de wall-clock devuelve 0 s para los trozos ya cacheados.
+
+**Effort:** 23-32 hours.
+
+---
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable
