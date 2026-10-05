@@ -186,7 +186,10 @@ def test_status_reports_generation_progress(_doc_tts_env: Path) -> None:
 
 def test_status_returns_a_signed_link_when_finished(_doc_tts_env: Path) -> None:
     """A finished job answers FINISHED_OK with a signed URL."""
+    from urllib.parse import parse_qs, urlparse
+
     from src.api.services.doc_tts import write_job_meta
+    from src.api.services.signed_links import verify_signed_link
 
     audio_path = _finished_job("doc-tts-done1")
     write_job_meta(
@@ -198,7 +201,11 @@ def test_status_returns_a_signed_link_when_finished(_doc_tts_env: Path) -> None:
 
     assert body["job_status"] == "FINISHED_OK"
     assert body["audio_url"].startswith("/api/audio/doc/doc-tts-done1?exp=")
-    assert body["audio_url"] == build_signed_path("doc-tts-done1")
+    # The expiry is anchored on the current unix second, so rebuilding the
+    # expected link here can land on the next second and differ by a digit.
+    # Verify the signature instead: that is the property being asserted.
+    query = parse_qs(urlparse(body["audio_url"]).query)
+    verify_signed_link("doc-tts-done1", query["exp"][0], query["sig"][0])
     assert body["duration_estimate"] == 288.0
     assert audio_path.is_file()
 
