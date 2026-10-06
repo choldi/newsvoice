@@ -55,7 +55,7 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 [generate_digest_activity]      --> [llama.cpp → 5+5 markdown, per-collection template]
     |
     v
-[generate_tts_activity] (opt.)  --> [OmniVoice API → fragmentado → .wav]
+[generate_tts_activity] (opt.)  --> [engine lease → tts_backends → .mp3/.wav]
     |
     v
 [deliver_telegram_*_activity]   --> [text + audio]  (per-collection chat_id optional)
@@ -66,10 +66,53 @@ the workflow is fully deterministic, so Temporal can resume it after any crash.
 Article dedup, event clusters, and delivery history are all keyed by collection
 in the shared SQLite database, so the same URL may appear in several digests.
 
-The TTS step converts the digest markdown to plain text (keeping inline OmniVoice
-emotion tags such as `[happy]`), fragments it into small paragraphs (default
-400 chars) to avoid long-input hallucinations, synthesizes each chunk via the
-OmniVoice `POST /api/v1/tts` endpoint, and concatenates the resulting WAV files.
+### TTS engine routing (Phase 8)
+
+The digest markdown becomes plain text (inline emotion tags such as `[happy]`
+kept), truncated to `TTS_MAX_CHARS`, and is handed to **the engine the collection
+asked for** (`tts_backend`, resolved outside the workflow by
+`pipeline_config_for`):
+
+| backend | call | output |
+|---------|------|--------|
+| `edge` (default) | client-side `edge_tts.Communicate` | `.mp3` |
+| `omni_voice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
+| `qwen3_tts` / `zonos2` | `modal_client.modal_tts()` / `_zonos2()` | `.wav` |
+
+`src/api/services/tts_backends.py` owns the dispatch, the per-engine voice
+resolution and the output extension. The engine is part of the cache hash
+(`SIDECAR_VERSION = 2`), so switching engines regenerates instead of serving
+another engine's bytes, and a `TTS_FALLBACK_TO_EDGE` degradation is written
+**without** a sidecar so the next run retries the requested engine. Everything
+downstream (M4A transcode, Whisper verification, Telegram) is ffmpeg-based and
+extension-driven.
+
+### The engine lease (Phase 8.1)
+
+The digest worker and the doc-tts worker are separate containers sharing one
+`data/` volume, so synthesis is serialized by a **priority lease in SQLite**
+(migration `011_tts_lease.sql`, service `src/api/services/tts_lease.py`):
+
+```
+generate_tts_activity (priority 10)          DocumentTtsWorkflow (priority 0)
+-------------------                          --------------------------------
+INSERT waiter row  ────────────────────┐     holds the lease for the whole
+queue for the lease                   │     render, renewing every ttl/3
+                                      └──►  before each chunk: waiter_above(0)?
+acquire → synthesize → release                    yes → release, status=PAUSED,
+                                                  wait for the digest to finish,
+                                                  re-acquire, status=GENERATING
+```
+
+The waiter row written *before* the acquire is the yield signal, which is what
+makes the hand-over non-overlapping: no clock, no timezone, and a paused or
+disabled collection never pauses a book. A live lease is never stolen; the TTL
+(300 s, renewed while a synthesis runs) is only the safety net for a holder that
+died. `TTS_LEASE_ENABLED=false` turns the whole protocol off.
+
+`GET /api/admin/documents/tts/{id}` reports `estimate_wall_seconds` (the Phase
+8.5 forecast, written by the extraction step) and `eta_seconds` (extrapolated
+from the measured rate of the chunks already finished), plus `paused`.
 
 ### Narration branch (Phase 7, in progress)
 

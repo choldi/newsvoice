@@ -723,7 +723,7 @@ synthesis will take.
       `TTSOut.estimate_wall_seconds` cubre el digest (0 cuando la caché acierta).
       Los trozos cacheados cuestan 0, que es lo que hace correcto el número en
       una reanudación.
-- [ ] **8.6 Docs y calibración** — `Architecture.md` (diagrama con lease y
+- [x] **8.6 Docs y calibración** — `Architecture.md` (diagrama con lease y
       enrutado), `CONVENTIONS.md` (sección «TTS engines & engine lease»),
       `Deploy.md` §10 (motor por colección, operación del lease, calibración de
       `cps`), `collections.toml.example` y `.env.example`
@@ -737,13 +737,38 @@ synthesis will take.
 - El doc-TTS **sigue en Edge**; hacerlo apuntar al gateway es un cambio aparte
   (el gateway no trocea y `doc_tts_chunk_chars` habría que re-tunearlo).
 
-**Success criteria:** ~`1080 passed` con `ruff` limpio; cambiar
-`tts_backend` en una colección regenera el audio con el motor nuevo (la caché
-anterior no se sirve); un render de documento en curso se pone en `PAUSED`,
-espera a que el digest termine su síntesis y termina sin perder trozos; la
-estimación de wall-clock devuelve 0 s para los trozos ya cacheados.
+**Success criteria:** `1134 passed` con `ruff` limpio. Verificado por tests:
 
-**Effort:** 23-32 hours.
+- cambiar `tts_backend` en una colección regenera el audio con el motor nuevo y
+  con la extensión que ese motor produce (`test_switching_backend_regenerates_and_changes_the_extension`);
+  la caché anterior jamás se sirve porque el backend está en el hash
+  (`SIDECAR_VERSION=2`).
+- el lease serializa: el digest no sintetiza hasta que el render cede
+  (`test_generate_tts_activity_queues_behind_a_document_render`) y el render se
+  pone en `PAUSED`, espera y reanuda sin perder trozos
+  (`test_render_yields_the_engine_and_resumes_after_the_digest`); un render
+  íntegramente cacheado no consulta el gate.
+- la estimación devuelve 0 s cuando todo está cacheado y un `eta_seconds`
+  medido en cuanto termina el primer trozo (`test_eta_uses_the_measured_rate_once_chunks_finish`).
+- el round-trip completo de `tts_backend` sobrevive TOML ↔ API ↔ GUI
+  (`test_tts_backend_round_trips_through_the_api`,
+  `test_collections_gui_round_trips_the_tts_backend`).
+
+**Effort:** real, sobre 23-32 estimadas — los cuatro patrones, 7 commits y 109
+tests nuevos (1027 → 1134).
+
+**Desviaciones respecto al plan** (decisiones tomadas en la implementación):
+
+- Los pasos 2 y 3 se commitearon juntos: `test_collection_keys_cover_every_model_field`
+  (la guarda de CONVENTIONS) exige que `CollectionConfig`, `CollectionIn`,
+  `_COLLECTION_KEYS` y el GUI viajen en el mismo commit.
+- El submit (202) no devuelve `estimated_wall_seconds`: el texto aún no se ha
+  extraído. Lo escribe `extract_document_activity` y lo sirve el GET de estado.
+- No hay `doc_tts_max_pause_seconds`: la pausa la acota
+  `start_to_close_timeout` (6 h) de la activity y la caché de trozos hace
+  barato cualquier reintento; un ajuste extra que no aporta sería ruido.
+- Narración y clases no toman el lease (ya llevan su propio semáforo de
+  gateway); añadirlo es una línea por activity.
 
 ---
 

@@ -92,10 +92,12 @@
   `TELEGRAM_BOT_TOKEN`, `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE`,
   `TEMPORAL_TASK_QUEUE`, `RSS_FEED_URLS`
 - No hardcoded secrets; no default prod values
-- `tts_*` is Edge-specific and owned by the digest TTS service; the Phase 7
-  narration pipeline uses its own `narration_*` namespace (separate gateway URL,
-  cache dir, task queue) and never repoints `tts_api_base_url`, which
-  `VoicesService` still uses for the GUI voice catalog
+- `tts_*` is the digest audio namespace: it talks to edge-tts directly by
+  default and, since Phase 8, to `tts_api_base_url` whenever a collection picks
+  `tts_backend = "omni_voice"` — which is also what `VoicesService` uses for the
+  GUI voice catalog. The Phase 7 narration pipeline keeps its own `narration_*`
+  namespace (separate gateway URL, cache dir, task queue) and never repoints
+  `tts_api_base_url`, so moving the digest's gateway never moves the cast's.
 
 ## Narration (Phase 7)
 - Domain models live in `src/api/models/narration.py`; they carry no I/O and
@@ -159,6 +161,76 @@
     propagates and triggers the error-alert delivery. This prevents two cloned
     voices from collapsing to the same stock Edge voice. The dialog setting
     overrides the general one for dialog renders.
+
+## TTS engines and the engine lease (Phase 8)
+
+- One vocabulary for engines across the project: `TTSBackend`
+  (`src/api/models/narration.py`) = `edge` | `omni_voice` (the rebranded
+  `tts-api` gateway) | `qwen3_tts` | `zonos2`. `TTSBackend.EDGE` was added in
+  Phase 8; `podcast_target` must map it to the **local** namespace/queue, never
+  to Modal.
+- The digest engine is a per-collection choice (`tts_backend` in
+  `collections.toml`) resolved **outside** the workflow in `pipeline_config_for`
+  → `PipelineConfig.tts_backend` → the `generate_tts_activity` payload. A
+  workflow cannot read settings, and the schedule/trigger are what know the
+  collection — same rule as `verify`, `audio_verify` and `narration`.
+- **Round-trip rule** (same as any new collection field): `CollectionIn`
+  (`extra="forbid"`), `_COLLECTION_KEYS`, `collections.html` (create + edit) and
+  `partials/_tts_options.html` + `routes_ui.py::ui_fragment_tts_options` in one
+  commit. `tests/unit/test_collections_repo.py::test_collection_keys_cover_every_model_field`
+  is the guard; it fails the build if the model and the serializer drift.
+- `voice` means different things per engine. `tts_backends.voice_for` resolves
+  it: edge via `resolve_edge_voice`, gateway via the Edge→stock alias table,
+  Modal against `voice_profiles.json`. A **foreign** id (an Edge ShortName left
+  over after switching engines) resolves to the language default and logs;
+  a real typo raises `TTSBackendError`, which activities turn into a
+  non-retryable `ApplicationError` and HTTP turns into 422.
+- The engine is part of the cache key (`_content_hash(..., backend)`,
+  `SIDECAR_VERSION = 2`), so flipping a collection never serves another engine's
+  bytes. **Fallback audio is never cached**: `TTS_FALLBACK_TO_EDGE` writes the
+  file but skips the sidecar, so the next run retries the requested engine
+  instead of pinning the degraded answer.
+- Output follows the engine: `.mp3` for edge, `.wav` for the gateway and Modal.
+  Everything downstream (`AudioCompressService`, `verify_audio`, the Telegram
+  sender) is ffmpeg/extension-driven; only the cache filename and the doc-TTS
+  chunk join ever had to care.
+
+### The engine lease
+
+- `src/api/services/tts_lease.py` + migration `011_tts_lease.sql`. The lease
+  lives in the shared SQLite file because the digest worker and the doc-tts
+  worker are **different containers**: an `asyncio.Semaphore` inside either one
+  coordinates nothing.
+- Priorities: `PRIORITY_RENDER = 0` (documents, lessons, narration) and
+  `PRIORITY_DIGEST = 10`. A **live lease is never stolen** — hand-over goes
+  through the yield protocol, and the TTL is only the safety net for a holder
+  that stopped renewing.
+- The digest writes its row into `tts_lease_waiters` **before** asking for the
+  engine. That row *is* the event: a render polling `waiter_above(0)` lets go
+  the moment it appears, so the two never synthesize concurrently. The waiter
+  has its own TTL so a digest that dies cannot pause books forever.
+- Holders renew every third of `TTS_LEASE_TTL_SECONDS` inside `hold()`; a
+  single `synthesize_mp3` of a 5000-char digest is one long call and would look
+  abandoned otherwise. Never import this module from a workflow.
+- Long renders use `RenderGate`: `should_pause()` before each chunk (inside the
+  semaphore, right before the call — a check made earlier runs once at t=0 and
+  never sees a digest arriving later), then `yield_and_wait()` releases, reports
+  `PAUSED`, waits, re-acquires and reports `GENERATING`. Chunks already in
+  flight are never interrupted; at most `doc_tts_concurrency` of them overlap.
+- `TTS_LEASE_ENABLED=false` restores the previous, unserialized behaviour on
+  every path (all methods become no-ops).
+
+### Wall-clock estimate (Phase 8.5)
+
+- `src/api/services/tts_estimate.py` answers "how long will I wait", which is a
+  different question from `duration_estimate` ("how long is the audio").
+  Cached chunks cost **0** — that is what makes the number right on a resumed run.
+- Rates live in settings (`TTS_EDGE_CHARS_PER_SECOND`,
+  `TTS_GATEWAY_CHARS_PER_SECOND`); Modal reuses `budget.estimate_gpu_seconds` so
+  the time and the cost models can never disagree. Calibrate them from
+  `audio_jobs.elapsed_seconds`.
+- `eta_seconds(estimate, progress)` prefers the **measured** rate as soon as one
+  chunk has finished; the model is only the answer before the first one.
 
 ## Collections (Phase 5)
 - Collections live in `collections.toml` (see `collections.toml.example`),

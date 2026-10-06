@@ -750,6 +750,68 @@ and records the narration as `error`. To move the clones back onto the
 `omnivoice` engine instead, re-clone them there so their `engine` tag changes,
 then set `TTS_ENGINE=omnivoice` and drop `TTS_ENGINES`.
 
+### 10.4 Per-collection engine, the engine lease and the ETA (Phase 8)
+
+Since Phase 8 the digest does not have to use edge: each collection picks its
+own engine in `collections.toml`, and every synthesis in the stack goes through
+one priority lease so a book render and a daily digest never hit the gateway at
+the same time.
+
+**Engine per collection**
+
+```toml
+[[collections]]
+name = "ai"
+tts_backend = "omni_voice"   # edge | omni_voice | qwen3_tts | zonos2
+voice = "es-mx-male"         # id in THAT engine's vocabulary
+```
+
+`/ui → Colecciones` shows the voice list of whichever engine you select, so you
+never type an Edge ShortName into a field the gateway will reject. Global floor
+in `.env`:
+
+```bash
+TTS_DEFAULT_BACKEND=edge
+TTS_FALLBACK_TO_EDGE=false     # never silently swap a clone for a stock voice
+TTS_BACKEND_TIMEOUT_SECONDS=900  # POST /api/admin/tts uses 120s only for edge
+```
+
+The gateway backends store `.wav`, edge stores `.mp3`; the M4A transcode, the
+Whisper check and every delivery are format-agnostic, so nothing downstream
+changes.
+
+**The lease** (`tts_leases` + `tts_lease_waiters`, migration `011`)
+
+```bash
+# Is anything holding the engine right now, and until when?
+sqlite3 data/news.db 'SELECT owner, priority, expires_at FROM tts_leases;'
+# Who is queued for it (highest priority first)?
+sqlite3 data/news.db 'SELECT owner, priority, requested_at FROM tts_lease_waiters ORDER BY priority DESC;'
+```
+
+A document render shows `PAUSED` / «en pausa (digest)» in `/ui/tools` while it
+has let go, and `GENERATING` again once the digest is done — that is the feature
+working, not a stall. If a worker is killed mid-render the lease expires after
+`TTS_LEASE_TTL_SECONDS` (300 s) and the next run proceeds on its own; the chunk
+cache makes that retry cheap. `TTS_LEASE_ENABLED=false` restores the old
+behaviour with no other change.
+
+**Calibrating the ETA** (`/api/admin/documents/tts/{id}` → `estimate_wall_seconds`)
+
+The forecast is only as good as its rate. The measured truth is already in the
+DB for every finished job:
+
+```bash
+sqlite3 data/news.db "SELECT run_id, elapsed_seconds FROM audio_jobs \
+WHERE kind='doc_tts' AND status='FINISHED_OK';"
+```
+
+Then `cps = (document chars still uncached) / (elapsed_seconds − 2)` (the `2` is
+`TTS_JOIN_OVERHEAD_SECONDS`) and set `TTS_EDGE_CHARS_PER_SECOND` to it. While a
+job runs the endpoint stops trusting the model and reports `eta_seconds`
+extrapolated from the chunks already finished, so a wrong rate only shows up in
+the first seconds of a run.
+
 ---
 
 ## 11. LLM verification (Phase 7.13)

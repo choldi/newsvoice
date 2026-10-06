@@ -24,6 +24,14 @@
 #   recipients / group).
 # - `deliver_audio = true` attaches the generated audio to Telegram AND to the
 #   email and WhatsApp deliveries (when those channels are active).
+# - `tts_backend` picks the engine that synthesizes this collection's audio
+#   (Phase 8): "edge" (client-side edge-tts, default), "omni_voice" (the
+#   tts-api gateway on TTS_API_BASE_URL), "qwen3_tts" or "zonos2" (Modal, needs
+#   MODAL_ENABLED). Empty inherits TTS_DEFAULT_BACKEND. `voice` is then read in
+#   that engine's own vocabulary: an Edge ShortName, a tts-api stock id or clone
+#   UUID, or a voice_profiles.json name — the /ui form offers the right list for
+#   the engine you pick, and an Edge ShortName left over from another engine
+#   resolves to the language default instead of failing the run.
 # - Configurable story counts (Phase 7.6):
 #   `main_story_count` (1-20, default 5) — number of main stories in the digest.
 #   `headline_count` (1-40, default 5) — number of quick headlines in the digest.
@@ -40,6 +48,7 @@
 [collection_defaults]
 tts_enabled = false
 deliver_audio = false
+tts_backend = "edge"
 language = "es"
 voice = "es-mx-male"
 narration_enabled = false
@@ -84,4 +93,5 @@ feed_urls = [
 ]
 prompt_template = "finance"
 # chat_id = "optional_per_collection_chat_id"
+# tts_backend = "omni_voice"   # this digest is spoken by the tts-api gateway
 enabled = false
