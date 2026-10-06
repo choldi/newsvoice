@@ -31,7 +31,7 @@ if [ -z "$HEALTH_OK" ]; then
 fi
 echo "==> API healthy."
 
-echo "==> Registering daily schedule (08:00 UTC)..."
-docker compose exec -T worker python -m src.workers.schedule --hour 8 --minute 0 $SCHEDULE_TTS
+echo "==> Registering the per-collection schedules (each HH:MM comes from collections.toml)..."
+docker compose exec -T worker python -m src.workers.schedule $SCHEDULE_TTS
 
 echo "==> Deployment successful."
