@@ -82,7 +82,7 @@ def test_page_renders_the_structured_cast_for_a_spec_collection(_ui_env: Path) -
     # Two existing roles + one free row (cap is 8).
     card = body.split('<details class="card" id="d-gaming"')[1].split("</details>")[0]
     assert 'name="role0_name" value="michael"' in card
-    assert 'name="role0_voice" list="cast-voices" value="clone-1"' in card
+    assert 'name="role0_voice" list="cast-voices-gaming" value="clone-1"' in card
     assert 'name="role1_name" value="dwight"' in card
     assert 'value="excited"' in card
     assert 'name="narr_title" value="Game Over"' in card

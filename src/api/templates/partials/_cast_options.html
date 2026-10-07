@@ -1,0 +1,5 @@
+{# <option> rows of a cast voice datalist (Phase 9.2).
+   Shared by the collections page (initial content) and
+   GET /ui/fragments/cast_voices (engine changes). Autoescaped by the
+   Jinja environment, so ids/labels are safe. #}
+{% for v in voices or [] %}<option value="{{ v.id }}">{{ v.label }} ({{ v.language or '—' }})</option>{% endfor %}

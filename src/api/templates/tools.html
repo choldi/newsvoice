@@ -48,16 +48,16 @@
         <input type="text" name="title" placeholder="Se usa el nombre del fichero">
       </div>
       <div class="col">
-        <label>Voz</label>
-        {% if omni_voices %}
+        <label>Voz (solo Edge)</label>
+        {% if edge_voices %}
         <select name="voice">
           <option value="">(por defecto)</option>
-          {% for v in omni_voices %}
+          {% for v in edge_voices %}
           <option value="{{ v.id }}">{{ v.label }} ({{ v.language or '—' }})</option>
           {% endfor %}
         </select>
         {% else %}
-        <input type="text" name="voice" list="voice-list" placeholder="(por defecto)">
+        <input type="text" name="voice" placeholder="(por defecto)">
         {% endif %}
       </div>
       <div class="col">
@@ -127,7 +127,7 @@
       <textarea name="spec" rows="8" style="font-family:monospace;font-size:12px" placeholder='{"language":"en","roles":[{"name":"profe_es","voice_id":"...","language":"es"},{"name":"profe_en","voice_id":"...","language":"en"}]}'></textarea>
       <p class="muted" style="font-size:12px">Las voces clonadas están en <a href="/ui/voices">Voces</a>. Sin spec, se usan las voces seleccionadas arriba (una en mixed/native, dos en dual).</p>
     </details>
-    <button type="submit" class="primary">Generar clase</button>
+    <div id="lesson-submit"><button type="submit" class="primary">Generar clase</button></div>
   </form>
   <div id="jobs-lesson" hx-get="/ui/fragments/tool_jobs?kind=lesson" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="empty">Cargando…</div>

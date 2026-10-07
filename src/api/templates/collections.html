@@ -185,7 +185,7 @@
               {% set r = roles[i] if roles|length > i else None %}
               <tr>
                 <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
-                <td><input name="role{{ i }}_voice" list="cast-voices" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
+                <td><input name="role{{ i }}_voice" list="cast-voices-{{ c.name }}" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
                 <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
                 <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
                 <td>
@@ -198,6 +198,8 @@
             {% endfor %}
             </tbody>
           </table>
+          {% set cast_engine = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
+          <datalist id="cast-voices-{{ c.name }}">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices %}{% include "partials/_cast_options.html" %}{% endwith %}</datalist>
           <div class="row">
             <div class="col">
               <label>Título del programa</label>
@@ -227,7 +229,11 @@
             <div class="col">
               <label>Backend TTS</label>
               {% set backend = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
-              <select name="narr_backend">
+              <select name="narr_backend"
+                      hx-get="/ui/fragments/cast_voices"
+                      hx-trigger="change"
+                      hx-target="#cast-voices-{{ c.name }}"
+                      hx-swap="innerHTML">
                 <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
                 <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
                 <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
@@ -450,7 +456,7 @@
             {% set r = roles[i] if roles|length > i else None %}
             <tr>
               <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
-              <td><input name="role{{ i }}_voice" list="cast-voices" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
+              <td><input name="role{{ i }}_voice" list="cast-voices-nueva" value="{{ r.voice_id if r else '' }}" placeholder="voice_id"></td>
               <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
               <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
               <td>
@@ -463,6 +469,7 @@
           {% endfor %}
           </tbody>
         </table>
+        <datalist id="cast-voices-nueva">{% with voices = cast_options.get('omni_voice', {"voices": []}).voices %}{% include "partials/_cast_options.html" %}{% endwith %}</datalist>
         <div class="row">
           <div class="col">
             <label>Título del programa</label>
@@ -492,7 +499,11 @@
           <div class="col">
             <label>Backend TTS</label>
             {% set backend = 'omni_voice' %}
-            <select name="narr_backend">
+            <select name="narr_backend"
+                    hx-get="/ui/fragments/cast_voices"
+                    hx-trigger="change"
+                    hx-target="#cast-voices-nueva"
+                    hx-swap="innerHTML">
               <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
               <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
               <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
@@ -539,9 +550,6 @@
   </form>
 </div>
 
-<datalist id="cast-voices">
-  {% for v in omni.voices %}<option value="{{ v.id }}">{% endfor %}
-</datalist>
 <datalist id="lang-list">
   {% for l in omni.languages %}<option value="{{ l }}">{% endfor %}
   <option value="es"><option value="en">

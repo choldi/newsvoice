@@ -490,7 +490,10 @@ def test_tts_backend_round_trips_through_the_api() -> None:
     assert fetched["tts_backend"] == "omni_voice"
 
     updated = client.put(
-        "/api/admin/collections/tech", json=_collection_payload(tts_backend="qwen3_tts")
+        "/api/admin/collections/tech",
+        # Phase 9.2: the voice must belong to the chosen engine, so the modal
+        # update clears the gateway stock id instead of mixing engines.
+        json=_collection_payload(tts_backend="qwen3_tts", voice=""),
     )
     assert updated.status_code == 200
     assert updated.json()["collection"]["tts_backend"] == "qwen3_tts"

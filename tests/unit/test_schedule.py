@@ -80,6 +80,8 @@ def _narration_spec(**overrides: object) -> dict[str, object]:
         "roles": [{"name": "anchor", "voice_id": "es-mx-male"}],
     }
     payload.update(overrides)
+    if str(payload.get("tts_backend", "")) in {"qwen3_tts", "zonos2"} and "roles" not in overrides:
+        payload["roles"] = [{"name": "anchor", "voice_id": "anchor_neutral_m"}]
     return payload
 
 

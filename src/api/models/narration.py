@@ -250,6 +250,37 @@ class NarrationSpec(BaseModel):
             raise ValueError(f"duplicate role names: {duplicates}")
         return self
 
+    @model_validator(mode="after")
+    def _cast_matches_the_backend(self) -> NarrationSpec:
+        """Reject a cast the selected engine could never synthesize.
+
+        Each role voice must belong to ``tts_backend``'s vocabulary and every
+        known voice must share an engine (Phase 9.2): a Modal catalog name
+        read by the gateway, or a mixed cast, would otherwise fall back to
+        another voice or fail at 08:00 during the run.
+
+        Returns:
+            The validated spec.
+
+        Raises:
+            ValueError: If the cast and the engine do not line up. The guard
+                lives in :mod:`src.api.services.voice_engine`, imported lazily
+                so this model keeps pulling no service at module load.
+        """
+        from src.api.services.voice_engine import (
+            VoiceEngineError,
+            assert_same_engine,
+            assert_voice_engine,
+        )
+
+        try:
+            assert_same_engine([role.voice_id for role in self.roles], field="roles")
+            for role in self.roles:
+                assert_voice_engine(role.voice_id, str(self.tts_backend), field="voice_id")
+        except VoiceEngineError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
     def role(self, name: str) -> SpeakerRole:
         """Look up a role by name.
 

@@ -555,6 +555,20 @@ async def submit_document(
         )
     check_content_length(content_length, settings.doc_tts_max_file_bytes)
 
+    # Phase 9.2: document TTS synthesizes through Edge only, so a voice from
+    # another engine's vocabulary (a clone UUID, a Modal catalog name) would be
+    # silently swapped for the language default. Reject it before storing data.
+    requested_voice = (voice or "").strip()
+    if requested_voice:
+        from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
+
+        try:
+            assert_voice_engine(requested_voice, TTSBackend.EDGE, field="voice")
+        except VoiceEngineError as exc:
+            raise SubmitError(
+                f"document TTS only accepts edge voices: {exc}", status_code=422
+            ) from exc
+
     filename = Path(upload.filename or "").name.strip()
     if not filename:
         raise SubmitError("file part has no filename", status_code=422)

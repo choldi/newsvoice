@@ -825,7 +825,7 @@ local).
       `_tts_voice_options`/`_edge_voice_options`/`_modal_voice_options`/
       `_omni_options` propagan `engine`+`category` con degradación a `[]`.
       Verificado 2026-10-07: ruff limpio, suite completa 1162 passed.
-- [ ] **9.2 Guard multi-engine** — `src/api/services/voice_engine.py`
+- [x] **9.2 Guard multi-engine** — `src/api/services/voice_engine.py`
       (`engines_for_voice()` síncrono sin red: patrones Edge, alias/patrón/UUID
       gateway, nombres del catálogo Modal, unión de engines válidos;
       desconocido = permitir) + `assert_voice_engine`/`assert_same_engine`
@@ -836,6 +836,7 @@ local).
       inline: opciones filtradas por motor (`cast_voices` datalist re-fetch,
       `_tts_options` ya por motor, doc-TTS solo edge) y fragmento de lecciones
       que deshabilita el botón si hay mezcla.
+      Verificado 2026-10-07: ruff limpio, suite completa 1200 passed.
 - [ ] **9.3 Voz nueva personalizada** — `load_profiles()` fusiona
       `data/voices/custom_profiles.json` (atómico, gitignored, **sin** aplicar
       el bloque `languages` a los custom, duplicado = error) +

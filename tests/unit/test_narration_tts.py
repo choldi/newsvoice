@@ -84,12 +84,16 @@ def _wav(frames: int = 4800, fmt: object = CANONICAL_FORMAT) -> bytes:
 
 
 def _spec(**overrides: object) -> NarrationSpec:
-    """Build a two-role spec using gateway stock voices."""
+    """Build a two-role spec; Modal backends get catalog voices (Phase 9.2)."""
+    modal = str(overrides.get("tts_backend", "")) in {"qwen3_tts", "zonos2"}
+    anchor, guest = (
+        ("anchor_neutral_m", "anchor_neutral_f") if modal else ("es-mx-male", "es-mx-female")
+    )
     payload: dict[str, object] = {
         "title": "Edicion",
         "roles": [
-            {"name": "anchor", "voice_id": "es-mx-male"},
-            {"name": "guest", "voice_id": "es-mx-female", "speed": 1.1},
+            {"name": "anchor", "voice_id": anchor},
+            {"name": "guest", "voice_id": guest, "speed": 1.1},
         ],
         "pause_ms": 500,
     }

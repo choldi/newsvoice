@@ -22,6 +22,7 @@ from src.api.models.narration import NarrationScript, NarrationSpec, SpeakerRole
 from src.api.services.audio_files import atomic_write
 from src.api.services.signed_links import LESSON_AUDIO_LINK_PREFIX, build_signed_path
 from src.api.services.submit import SubmitError, check_content_length, read_upload
+from src.api.services.voice_engine import VoiceEngineError, infer_backend
 from src.core.config import get_settings
 from src.core.prompts import LESSON_USER_PROMPT_TEMPLATE, build_lesson_system_prompt
 
@@ -541,8 +542,19 @@ def resolve_cast(
     else:
         voice_id = (voice or "").strip() or get_settings().tts_voice
         roles = [SpeakerRole(name="teacher", voice_id=voice_id)]
+    # Phase 9.2: the spec engine follows the voices that will actually speak
+    # (network voices keep the gateway default, catalog names pick Modal), and
+    # a selection no single engine can voice is rejected here, before any job.
     try:
-        return NarrationSpec(language=target_language, roles=roles)
+        backend = infer_backend([role.voice_id for role in roles])
+    except VoiceEngineError as exc:
+        raise SubmitError(str(exc), status_code=422) from exc
+    try:
+        return NarrationSpec(
+            language=target_language,
+            roles=roles,
+            **({"tts_backend": backend} if backend else {}),
+        )
     except ValidationError as exc:
         raise SubmitError(
             f"invalid default cast: {exc.errors()[0].get('msg', str(exc))}",

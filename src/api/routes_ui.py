@@ -20,11 +20,12 @@ import structlog
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
 from src.api.models.lesson import LessonMode
-from src.api.models.narration import NarrationSpec
+from src.api.models.narration import NarrationSpec, TTSBackend
 from src.api.services import env_editor
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
@@ -38,6 +39,7 @@ from src.api.services.signed_links import (
 from src.api.services.submit import SubmitError
 from src.api.services.temporal_admin import TemporalAdminService
 from src.api.services.tts_estimate import eta_seconds
+from src.api.services.voice_engine import engines_for_voice
 from src.api.services.voice_registry import edge_options, gateway_options, modal_options
 from src.api.services.voices import VoicesService
 from src.core.collections import LogicDeliveryConfig
@@ -148,11 +150,37 @@ async def _omni_options() -> dict:
     return _registry_options(languages, voices)
 
 
+def _mixed_engine_message(voice: str, voice2: str) -> str:
+    """Explain a two-voice selection that mixes two engines (Phase 9.2).
+
+    Args:
+        voice: Native/single voice id from the form.
+        voice2: Target voice id (dual mode only).
+
+    Returns:
+        Empty when the selection is safe (or fewer than two voices are set),
+        otherwise a human-readable reason the submit button stays disabled.
+    """
+    first, second = (voice or "").strip(), (voice2 or "").strip()
+    if not first or not second:
+        return ""
+    engines_first, engines_second = engines_for_voice(first), engines_for_voice(second)
+    if engines_first and engines_second and not (engines_first & engines_second):
+        return (
+            f"Voces de motores distintos: {first} ({', '.join(sorted(engines_first))}) "
+            f"y {second} ({', '.join(sorted(engines_second))}). "
+            "Elige voces del mismo motor."
+        )
+    return ""
+
+
 def _lesson_voice_context(
     voices: list[dict],
     mode: str = "mixed",
     voice: str = "",
     voice2: str = "",
+    *,
+    fragment: bool = False,
 ) -> dict:
     """Build the template context of the lesson voice selector(s) (Phase 7.12).
 
@@ -166,6 +194,8 @@ def _lesson_voice_context(
         mode: Lesson mode from the form ('mixed', 'dual' or 'native').
         voice: Voice id currently selected for the native/single role.
         voice2: Voice id currently selected for the target role (dual only).
+        fragment: True when rendering the htmx fragment, which additionally
+            carries the out-of-band submit button (Phase 9.2 guard).
 
     Returns:
         Context keys for ``partials/_lesson_voices.html``.
@@ -178,6 +208,8 @@ def _lesson_voice_context(
         "lesson_voices": _normalize_voice_entries(voices),
         "current_voice": (voice or "").strip(),
         "current_voice2": (voice2 or "").strip(),
+        "mixed_message": _mixed_engine_message(voice, voice2),
+        "fragment": fragment,
     }
 
 
@@ -640,6 +672,13 @@ async def ui_collections(request: Request) -> HTMLResponse:
         if any(c.tts_enabled for c in collections)
         else {}
     )
+    # Phase 9.2: the cast datalists follow the narration engine of each form,
+    # so the page also fetches the catalogue of every engine in narration use.
+    cast_engines = {
+        str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice" for c in collections
+    }
+    cast_engines.add("omni_voice")  # the create form defaults to the gateway
+    cast_options = await _tts_options_by_backend(cast_engines)
     return _render(
         request,
         "collections.html",
@@ -648,6 +687,7 @@ async def ui_collections(request: Request) -> HTMLResponse:
             "omni": omni,
             "tts_backends": TTS_BACKEND_CHOICES,
             "tts_options": tts_options,
+            "cast_options": cast_options,
             "emotion_tags": EMOTION_TAGS,
         },
     )
@@ -946,6 +986,30 @@ async def ui_fragment_tts_options(
     )
 
 
+@router.get("/ui/fragments/cast_voices", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_cast_voices(request: Request, narr_backend: str = "") -> HTMLResponse:
+    """Options of the cast voice datalist for one narration engine (Phase 9.2).
+
+    The cast editor's engine select re-fetches this fragment so the datalist
+    only offers ids the selected engine accepts; a Modal name in a gateway
+    cast (or the reverse) is what the multi-engine guard would reject anyway.
+
+    Args:
+        request: Incoming request.
+        narr_backend: Engine chosen in the form ('omni_voice', 'qwen3_tts', ...).
+
+    Returns:
+        HTMLResponse with the ``<option>`` rows of the datalist.
+    """
+    from src.api.services.tts_backends import ALLOWED_BACKENDS
+
+    engine = (narr_backend or "").strip().lower()
+    if engine not in ALLOWED_BACKENDS:
+        engine = TTSBackend.OMNIVOICE.value
+    options = await _tts_voice_options(engine)
+    return _render(request, "partials/_cast_options.html", {"voices": options["voices"]})
+
+
 @router.get("/ui/fragments/calendar", response_class=HTMLResponse, include_in_schema=False)
 async def ui_fragment_calendar(request: Request) -> HTMLResponse:
     """Render the calendar body fragment.
@@ -1024,6 +1088,14 @@ def _narration_spec_from_form(
             return None
         try:
             return NarrationSpec.model_validate_json(raw)
+        except ValidationError as exc:
+            # Malformed JSON keeps the legacy lenient behaviour (ignore it),
+            # but a well-formed spec that fails validation — e.g. a cast that
+            # mixes engines (Phase 9.2) — must surface as an error instead of
+            # silently dropping the operator's narration config.
+            if any(err.get("type") == "json_invalid" for err in exc.errors()):
+                return None
+            raise
         except Exception:
             return None
 
@@ -1045,6 +1117,25 @@ def _narration_spec_from_form(
         }
     )
     return NarrationSpec.model_validate(payload)
+
+
+def _validation_message(exc: ValidationError) -> str:
+    """Extract the first readable message out of a Pydantic error.
+
+    Args:
+        exc: The validation error raised while building a model from the form.
+
+    Returns:
+        'field: message' (with the pydantic 'Value error, ' prefix stripped),
+        falling back to the raw error string when there is no field error.
+    """
+    errors = exc.errors()
+    if not errors:
+        return str(exc)
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc", ()))
+    message = str(first.get("msg", exc)).removeprefix("Value error, ")
+    return f"{location}: {message}" if location else message
 
 
 @router.post("/ui/collections", include_in_schema=False)
@@ -1113,6 +1204,8 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
         CollectionsRepository().create(config)
     except CollectionConflictError as exc:
         return _flash("/ui/collections", str(exc), "error")
+    except ValidationError as exc:
+        return _flash("/ui/collections", f"Error al crear: {_validation_message(exc)}", "error")
     except Exception as exc:
         return _flash("/ui/collections", f"Error al crear: {exc}", "error")
     return _flash("/ui/collections", f"Colección '{name}' creada")
@@ -1190,6 +1283,10 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
         collections = [c for c in repo.list() if c.name.casefold() != name.casefold()]
         collections.append(config)
         repo.save_all(collections)
+    except ValidationError as exc:
+        return _flash(
+            "/ui/collections", f"Error al actualizar: {_validation_message(exc)}", "error"
+        )
     except Exception as exc:
         return _flash("/ui/collections", f"Error al actualizar: {exc}", "error")
     return _flash("/ui/collections", f"Colección '{new_name}' actualizada")
@@ -1434,6 +1531,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
         HTMLResponse with the four forms and the voice catalog for the selects.
     """
     omni = await _omni_options()
+    edge = await _edge_voice_options()
     return _render(
         request,
         "tools.html",
@@ -1441,6 +1539,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "collections": _collections(),
             "omni_languages": omni["languages"],
             "omni_voices": omni["voices"],
+            "edge_voices": edge["voices"],
             **_lesson_voice_context(omni["voices"]),
         },
     )
@@ -1575,9 +1674,10 @@ async def ui_tools_podcast(request: Request) -> RedirectResponse:
 @router.get("/ui/fragments/lesson_voices", response_class=HTMLResponse, include_in_schema=False)
 async def ui_fragment_lesson_voices(
     request: Request,
-    mode: str = "mixed",
+    mode: str = "",
     voice: str = "",
     voice2: str = "",
+    current_mode: str = "",
 ) -> HTMLResponse:
     """Render the voice selector(s) of the language-lesson form (Phase 7.12).
 
@@ -1588,11 +1688,18 @@ async def ui_fragment_lesson_voices(
     and the selectors inside ``#lesson-voices`` are htmx-included) so toggling
     the mode does not drop what was already picked.
 
+    A voice change does not carry the mode select (it lives outside the
+    block), so the partial echoes the last mode in a ``current_mode`` hidden
+    field: ``mode`` (sent by the mode select itself) wins when present,
+    otherwise the echo is used. The response also carries the submit button
+    out-of-band, disabled while the two dual voices mix engines (Phase 9.2).
+
     Args:
         request: Incoming request.
-        mode: Lesson mode currently selected.
+        mode: Lesson mode sent by the mode select ('' on voice changes).
         voice: Currently selected native/single voice id.
         voice2: Currently selected target voice id (dual only).
+        current_mode: Last mode echoed by the hidden field of the partial.
 
     Returns:
         HTMLResponse with the _lesson_voices partial.
@@ -1601,7 +1708,13 @@ async def ui_fragment_lesson_voices(
     return _render(
         request,
         "partials/_lesson_voices.html",
-        _lesson_voice_context(omni["voices"], mode=mode, voice=voice, voice2=voice2),
+        _lesson_voice_context(
+            omni["voices"],
+            mode=mode or current_mode,
+            voice=voice,
+            voice2=voice2,
+            fragment=True,
+        ),
     )
 
 

@@ -3,15 +3,31 @@
    One field for the single-voice modes (mixed, native); two for 'dual', whose
    cast speaks two languages (the first voice teaches in the student's native
    language, the second one in the target language). Re-rendered by
-   GET /ui/fragments/lesson_voices whenever the mode select changes; the
-   current selections travel in the query string so toggling keeps them.
-   `lesson_voices` is the normalized catalogue ({id, label, language}); when
-   the gateway is down it is empty and the selects degrade to text inputs. #}
+   GET /ui/fragments/lesson_voices whenever the mode select changes AND
+   whenever a voice select changes (Phase 9.2): the current selections travel
+   in the query string so re-rendering keeps them, and the last mode is echoed
+   in the `current_mode` hidden field because the mode select lives outside
+   this block. `lesson_voices` is the normalized catalogue ({id, label,
+   language}); when the gateway is down it is empty and the selects degrade to
+   text inputs. When the two dual voices belong to different engines the
+   `mixed_message` explains why and the out-of-band submit button arrives
+   disabled. #}
+{% if fragment %}
+<input type="hidden" name="current_mode" value="{{ mode }}">
+{% endif %}
+{% if mixed_message %}
+<p class="muted" style="color:var(--err);font-size:12px;margin:4px 0">{{ mixed_message }}</p>
+{% endif %}
 {% if mode == 'dual' %}
 <div class="col">
   <label>Voz (lengua nativa)</label>
   {% if lesson_voices %}
-  <select name="voice">
+  <select name="voice"
+          hx-get="/ui/fragments/lesson_voices"
+          hx-trigger="change"
+          hx-target="#lesson-voices"
+          hx-include="#lesson-voices"
+          hx-swap="innerHTML">
     <option value="">(elige una voz)</option>
     {% for v in lesson_voices %}
     <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
@@ -24,7 +40,12 @@
 <div class="col">
   <label>Voz (lengua objetivo)</label>
   {% if lesson_voices %}
-  <select name="voice2">
+  <select name="voice2"
+          hx-get="/ui/fragments/lesson_voices"
+          hx-trigger="change"
+          hx-target="#lesson-voices"
+          hx-include="#lesson-voices"
+          hx-swap="innerHTML">
     <option value="">(elige una voz)</option>
     {% for v in lesson_voices %}
     <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice2 else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
@@ -38,7 +59,12 @@
 <div class="col">
   <label>Voz</label>
   {% if lesson_voices %}
-  <select name="voice">
+  <select name="voice"
+          hx-get="/ui/fragments/lesson_voices"
+          hx-trigger="change"
+          hx-target="#lesson-voices"
+          hx-include="#lesson-voices"
+          hx-swap="innerHTML">
     <option value="">(por defecto)</option>
     {% for v in lesson_voices %}
     <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
@@ -48,4 +74,7 @@
   <input type="text" name="voice" list="voice-list" value="{{ current_voice }}" placeholder="(por defecto)">
   {% endif %}
 </div>
+{% endif %}
+{% if fragment %}
+<div id="lesson-submit" hx-swap-oob="innerHTML"><button type="submit" class="primary" {{ 'disabled' if mixed_message else '' }}>Generar clase</button></div>
 {% endif %}

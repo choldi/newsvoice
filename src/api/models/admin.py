@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.api.models.narration import NarrationSpec
 from src.core.collections import (
@@ -151,6 +151,26 @@ class CollectionIn(BaseModel):
             A validated CollectionConfig built from this payload.
         """
         return CollectionConfig.model_validate(self.model_dump())
+
+    @model_validator(mode="after")
+    def _voice_matches_the_backend(self) -> CollectionIn:
+        """Reject a digest voice the chosen engine cannot synthesize.
+
+        Returns:
+            The validated payload.
+
+        Raises:
+            ValueError: If ``voice`` belongs to another engine's vocabulary
+                (Phase 9.2 guard; unknown ids pass so legacy data keeps
+                loading).
+        """
+        from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
+
+        try:
+            assert_voice_engine(self.voice, self.tts_backend, field="voice")
+        except VoiceEngineError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
 
 class CollectionOut(BaseModel):

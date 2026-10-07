@@ -224,8 +224,15 @@ async def test_render_activity_rejects_a_script_with_an_unknown_role(
 
 
 def _modal_spec(**overrides: Any) -> dict[str, Any]:
-    """Build a spec that opts into a Modal backend."""
-    payload: dict[str, Any] = {**SPEC, "tts_backend": "qwen3_tts"}
+    """Build a Modal-backed spec with catalog voices (Phase 9.2 guard)."""
+    payload: dict[str, Any] = {
+        **SPEC,
+        "tts_backend": "qwen3_tts",
+        "roles": [
+            {"name": "anchor", "voice_id": "anchor_neutral_m"},
+            {"name": "guest", "voice_id": "anchor_neutral_f"},
+        ],
+    }
     payload.update(overrides)
     return payload
 

@@ -1,6 +1,8 @@
 """Pydantic models for text-to-speech generation."""
 
-from pydantic import BaseModel, Field
+from __future__ import annotations
+
+from pydantic import BaseModel, Field, model_validator
 
 from src.api.models.narration import TTSBackend
 
@@ -37,6 +39,31 @@ class TTSIn(BaseModel):
         default=None,
         description="Synthesis engine; empty falls back to TTS_DEFAULT_BACKEND.",
     )
+
+    @model_validator(mode="after")
+    def _voice_matches_the_backend(self) -> TTSIn:
+        """Reject a voice the (explicit or default) engine cannot synthesize.
+
+        Returns:
+            The validated payload.
+
+        Raises:
+            ValueError: If the voice belongs to another engine's vocabulary
+                (Phase 9.2 guard; unknown ids and an empty voice pass).
+        """
+        from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
+
+        if self.backend is None:
+            from src.core.config import get_settings
+
+            backend = get_settings().tts_default_backend
+        else:
+            backend = str(self.backend)
+        try:
+            assert_voice_engine(self.voice or "", backend, field="voice")
+        except VoiceEngineError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
 
 class TTSOut(BaseModel):

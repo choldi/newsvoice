@@ -130,7 +130,14 @@ async def test_dispatch_follows_the_backend_when_the_target_is_unpinned(
     payload = _payload(namespace="", task_queue="")
     del payload["namespace"]
     del payload["task_queue"]
-    payload["spec"] = {**SPEC, "tts_backend": "qwen3_tts"}
+    payload["spec"] = {
+        **SPEC,
+        "tts_backend": "qwen3_tts",
+        "roles": [
+            {"name": "anchor", "voice_id": "anchor_neutral_m"},
+            {"name": "guest", "voice_id": "anchor_neutral_f"},
+        ],
+    }
 
     await ActivityEnvironment().run(activities.dispatch_narration_activity, payload)
 
