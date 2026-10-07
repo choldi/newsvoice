@@ -853,11 +853,17 @@ local).
       se implementó aquí por ser dependencia de la tarjeta (mover a 9.4 si
       se reordena).
       Verificado 2026-10-07: ruff limpio, suite completa 1237 passed.
-- [ ] **9.4 Probar voces** — ~~`GET /ui/voices/audio/{name}.wav`~~ (hecho en
-      9.3), `POST /ui/voices/test`
-      (sintetiza vía `voice_for`+`synthesize`, cache en
-      `data/voices/samples/`, fallback al WAV local si Modal está apagado) y
-      desplegable unificado "Probar voces" en `/ui/voices`.
+- [x] **9.4 Probar voces** — ~~`GET /ui/voices/audio/{name}.wav`~~ (hecho en
+      9.3); servicio `voice_preview` (`preview()` resuelve con
+      `voice_for`+`synthesize` en orden de motores preferente por voz,
+      frase fija por idioma, caché en `data/voices/samples/` y **fallback al
+      WAV de referencia** para voces Modal cuando `MODAL_ENABLED` está
+      apagado o la síntesis falla; voz desconocida = error, no otra voz);
+      `POST /ui/voices/test` (fragmento HTMX con `<audio>` o error inline),
+      `GET /ui/voices/sample/{filename}` (nombre validado +
+      `resolve()` anti-traversal) y desplegable unificado **"Probar voces"**
+      en `/ui/voices` alimentado por `list_all_voices()`.
+      Verificado 2026-10-07: ruff limpio, suite completa 1261 passed.
 - [ ] **9.5 Listados en todas las opciones de generar audio** — voz por
       `<select>` del registro en colección, cast, lecciones, doc-TTS y picker
       de prueba; docs (`Architecture.md`, `Deploy.md` ciclo de vida de voces

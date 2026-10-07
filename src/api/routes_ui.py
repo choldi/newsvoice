@@ -14,7 +14,6 @@ since Phase 7.11.
 """
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from urllib.parse import parse_qsl
 
 import structlog
@@ -27,8 +26,8 @@ from starlette.datastructures import UploadFile
 from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
-from src.api.models.voices import CustomVoiceIn, is_voice_slug
-from src.api.services import env_editor, voice_catalog_admin
+from src.api.models.voices import CustomVoiceIn
+from src.api.services import env_editor, voice_catalog_admin, voice_preview
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
 from src.api.services.env_editor import build_schema
@@ -42,7 +41,12 @@ from src.api.services.submit import SubmitError
 from src.api.services.temporal_admin import TemporalAdminService
 from src.api.services.tts_estimate import eta_seconds
 from src.api.services.voice_engine import engines_for_voice
-from src.api.services.voice_registry import edge_options, gateway_options, modal_options
+from src.api.services.voice_registry import (
+    edge_options,
+    gateway_options,
+    list_all_voices,
+    modal_options,
+)
 from src.api.services.voices import VoicesService
 from src.core.collections import LogicDeliveryConfig
 from src.core.prompts import EMOTION_TAGS
@@ -860,7 +864,12 @@ async def ui_voices(request: Request) -> HTMLResponse:
     service = VoicesService()
     stock = await service.list_stock()
     cloned = await service.list_cloned()
-    return _render(request, "voices.html", {"stock": stock, "cloned": cloned})
+    preview_voices = await list_all_voices()
+    return _render(
+        request,
+        "voices.html",
+        {"stock": stock, "cloned": cloned, "preview_voices": preview_voices},
+    )
 
 
 @router.get("/ui/fragments/runs", response_class=HTMLResponse, include_in_schema=False)
@@ -1481,28 +1490,57 @@ async def ui_voice_audio(name: str) -> FileResponse:
     """
     from fastapi import HTTPException
 
-    from src.core.config import settings
-    from src.core.voice_catalog import REFS_DIR, VoiceCatalogError, load_manifest, load_profiles
-
-    stem = name[:-4] if name.lower().endswith(".wav") else name
-    if not is_voice_slug(stem):
+    wav = voice_catalog_admin.reference_wav(name)
+    if wav is None:
         raise HTTPException(status_code=404, detail="voice not found")
+    return FileResponse(wav, media_type="audio/wav", filename=f"{wav.stem}.wav")
+
+
+@router.post("/ui/voices/test", response_class=HTMLResponse, include_in_schema=False)
+async def ui_test_voice(request: Request) -> HTMLResponse:
+    """Synthesize (or reuse) a short sample of one voice (Phase 9.4).
+
+    HTMX posts the picker form and swaps this fragment into the player box,
+    so a failure reads as an inline message instead of a redirect flash.
+
+    Args:
+        request: Incoming request with an `application/x-www-form-urlencoded` body.
+
+    Returns:
+        HTMLResponse with ``partials/_voice_sample.html``.
+    """
+    fields = await _form(request)
+    voice = fields.get("voice", "").strip()
     try:
-        profile = next((p for p in load_profiles() if p.name == stem), None)
-    except VoiceCatalogError:
-        profile = None
-    if profile is None:
-        raise HTTPException(status_code=404, detail="voice not found")
+        result = await voice_preview.preview(voice)
+    except voice_preview.VoicePreviewError as exc:
+        return _render(
+            request,
+            "partials/_voice_sample.html",
+            {"voice": voice, "error": str(exc)},
+        )
+    return _render(request, "partials/_voice_sample.html", result)
 
-    voices_root = Path(settings.voices_dir).resolve()
-    entry = load_manifest(voice_catalog_admin.manifest_path()).get(profile.name)
-    if entry is not None:
-        wav = (voices_root / entry.file).resolve()
-    else:
-        wav = (voices_root / REFS_DIR / f"{profile.name}.wav").resolve()
-    if not wav.is_relative_to(voices_root) or not wav.is_file():
-        raise HTTPException(status_code=404, detail="reference audio not available")
-    return FileResponse(wav, media_type="audio/wav", filename=f"{profile.name}.wav")
+
+@router.get("/ui/voices/sample/{filename}", include_in_schema=False)
+async def ui_voice_sample(filename: str) -> FileResponse:
+    """Serve a cached preview sample (Phase 9.4).
+
+    Args:
+        filename: Sample file name as linked by the preview fragment.
+
+    Returns:
+        FileResponse with the cached audio bytes.
+
+    Raises:
+        HTTPException: 404 when the name is unsafe or the sample is missing.
+    """
+    from fastapi import HTTPException
+
+    path = voice_preview.cached_sample(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="sample not found")
+    return FileResponse(path, media_type=voice_preview.media_type_for(filename), filename=filename)
 
 
 @router.get("/ui/login", response_class=HTMLResponse, include_in_schema=False)

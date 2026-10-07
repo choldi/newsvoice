@@ -257,3 +257,42 @@ def test_custom_profiles_file_is_written_under_the_voices_dir() -> None:
 
 def test_workflow_import_is_the_real_catalog_workflow() -> None:
     assert voice_catalog_admin.VoiceCatalogWorkflow is VoiceCatalogWorkflow
+
+
+# --- reference_wav -------------------------------------------------------------
+
+
+def test_reference_wav_resolves_the_reference(tmp_path: Path) -> None:
+    save_custom_profile(_profile())
+    wav = tmp_path / "voices" / "refs" / "mi_voz_es.wav"
+    wav.parent.mkdir(parents=True, exist_ok=True)
+    wav.write_bytes(b"RIFF....WAVE")
+
+    resolved = voice_catalog_admin.reference_wav("mi_voz_es.wav")
+
+    assert resolved == wav.resolve()
+    assert voice_catalog_admin.reference_wav("mi_voz_es") == wav.resolve()
+
+
+def test_reference_wav_refuses_unsafe_or_unknown_names(tmp_path: Path) -> None:
+    save_custom_profile(_profile())
+
+    assert voice_catalog_admin.reference_wav("../secret.wav") is None
+    assert voice_catalog_admin.reference_wav("Bad Name.wav") is None
+    assert voice_catalog_admin.reference_wav("no_existe") is None
+    assert voice_catalog_admin.reference_wav("mi_voz_es.wav") is None  # no wav yet
+
+
+def test_reference_wav_refuses_a_manifest_entry_outside_the_voices_dir(
+    tmp_path: Path,
+) -> None:
+    profile = _profile()
+    save_custom_profile(profile)
+    outside = tmp_path / "secret.wav"
+    outside.write_bytes(b"TOP SECRET")
+    write_manifest(
+        {"mi_voz_es": _entry(profile, file="../secret.wav")},
+        voice_catalog_admin.manifest_path(),
+    )
+
+    assert voice_catalog_admin.reference_wav("mi_voz_es.wav") is None

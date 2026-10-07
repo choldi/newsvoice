@@ -14,7 +14,12 @@ from typing import Any
 
 import structlog
 
-from src.api.models.voices import CustomVoiceIn, VoiceManifestEntry, VoiceProfile
+from src.api.models.voices import (
+    CustomVoiceIn,
+    VoiceManifestEntry,
+    VoiceProfile,
+    is_voice_slug,
+)
 from src.core.config import settings
 from src.core.voice_catalog import (
     MANIFEST_NAME,
@@ -65,6 +70,35 @@ def refs_dir() -> Path:
         Path of the ``refs`` directory in ``settings.voices_dir``.
     """
     return Path(settings.voices_dir) / REFS_DIR
+
+
+def reference_wav(name: str) -> Path | None:
+    """Resolve one profile's reference WAV safely (used by audio + preview).
+
+    Args:
+        name: Profile name, optionally with a ``.wav`` suffix.
+
+    Returns:
+        The resolved WAV path, or None when the name is unsafe, the profile
+        is unknown, the manifest entry escapes the voices directory, or the
+        file does not exist.
+    """
+    stem = name[:-4] if name.lower().endswith(".wav") else name
+    if not is_voice_slug(stem):
+        return None
+    try:
+        profile = next((p for p in load_profiles() if p.name == stem), None)
+    except VoiceCatalogError:
+        return None
+    if profile is None:
+        return None
+    voices_root = Path(settings.voices_dir).resolve()
+    entry = load_manifest(manifest_path()).get(profile.name)
+    relative = entry.file if entry is not None else f"{REFS_DIR}/{profile.name}.wav"
+    wav = (voices_root / relative).resolve()
+    if not wav.is_relative_to(voices_root) or not wav.is_file():
+        return None
+    return wav
 
 
 def generated_status(
