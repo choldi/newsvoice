@@ -639,7 +639,7 @@ def test_terminate_run_endpoint() -> None:
 
 
 def test_voices_page_renders_with_mock_service() -> None:
-    """Voices page renders stock and cloned lists from the voices service."""
+    """The unified table shows the stock and cloned rows of the service."""
     client = _ui_client()
     _login(client)
     with (
@@ -655,10 +655,16 @@ def test_voices_page_renders_with_mock_service() -> None:
         ),
     ):
         page = client.get("/ui/voices")
+        # The table paginates, so the rows are asserted through the filter.
+        stock = client.get("/ui/fragments/voices_table", params={"q": "es-mx-male"})
+        cloned = client.get("/ui/fragments/voices_table", params={"category": "cloned"})
 
     assert page.status_code == 200
-    assert "es-mx-male" in page.text
-    assert "mario" in page.text
+    assert 'id="voices-table"' in page.text
+    assert stock.status_code == 200
+    assert "es-mx-male" in stock.text
+    assert cloned.status_code == 200
+    assert "mario" in cloned.text
 
 
 def test_run_now_button_triggers_pipeline() -> None:

@@ -14,7 +14,7 @@ since Phase 7.11.
 """
 
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode
 
 import structlog
 from fastapi import APIRouter, Request
@@ -27,7 +27,7 @@ from src.api.db.database import AudioJobsRepository, RunsRepository, Verificatio
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
 from src.api.models.voices import CustomVoiceIn
-from src.api.services import env_editor, voice_catalog_admin, voice_preview
+from src.api.services import env_editor, voice_catalog_admin, voice_preview, voice_search
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
 from src.api.services.env_editor import build_schema
@@ -867,9 +867,111 @@ async def ui_runs(request: Request) -> HTMLResponse:
     return _render(request, "runs.html", {})
 
 
+#: Filter options of the "Todas las voces" table (Phase 9.6): value and label
+#: for the Tipo and Motor selects; the Idioma options come from the registry.
+CATEGORY_FILTERS: tuple[tuple[str, str], ...] = (
+    ("", "Todos"),
+    ("stock", "stock"),
+    ("cloned", "clonada"),
+    ("generated", "diseñada"),
+)
+ENGINE_FILTERS: tuple[tuple[str, str], ...] = (
+    ("", "Todos"),
+    ("edge", "edge"),
+    ("omni_voice", "tts-api gateway"),
+    ("qwen3_tts", "qwen3_tts"),
+    ("zonos2", "zonos2"),
+)
+
+
+async def _voices_table_context(
+    voices: list | None = None,
+    *,
+    q: str = "",
+    lang: str = "",
+    category: str = "",
+    engine: str = "",
+    page: str | int = 1,
+    size: str | int = voice_search.DEFAULT_PAGE_SIZE,
+) -> dict:
+    """Build the context of the unified voice table (Phase 9.6).
+
+    One pass over the registry applies the glob query and the structured
+    filters, then paginates; the design status of every Modal profile is
+    joined in so a row can badge "pendiente/generada/desactualizada" and
+    link its reference WAV. A unreadable manifest degrades to no status
+    instead of breaking the listing.
+
+    Args:
+        voices: Optional pre-fetched registry list (the page needs it once
+            more for the language options).
+        q: Glob-style query over id, label, language, category and engines.
+        lang: Language prefix filter ('es' matches es and es-ES).
+        category: Exact category filter ('stock', 'cloned', 'generated').
+        engine: Canonical engine id the voice must accept.
+        page: 1-based page number (str from the query string is fine).
+        size: Page size.
+
+    Returns:
+        Context keys for ``partials/_voices_table.html``: rows, page_obj
+        and the urlencoded filter state (qs) the pager links ride on.
+    """
+    from src.core.voice_catalog import VoiceCatalogError
+
+    if voices is None:
+        voices = await list_all_voices()
+    filtered = voice_search.filter_voices(
+        voices, query=q, lang=lang, category=category, engine=engine
+    )
+    page_obj = voice_search.paginate(filtered, page=page, size=size)
+    status_by_name: dict[str, dict] = {}
+    try:
+        for row in await voice_catalog_admin.generated_voices():
+            status_by_name[row["profile"].name] = row
+    except VoiceCatalogError as exc:
+        logger.warning("voices_table_status_failed", error=str(exc))
+    rows: list[dict] = []
+    for voice in page_obj.items:
+        status_row = status_by_name.get(voice.id)
+        status = str(status_row["status"]) if status_row else ""
+        rows.append(
+            {
+                "id": voice.id,
+                "label": voice.label,
+                "language": voice.language,
+                "category": voice.category,
+                "engines": voice.engines,
+                "status": status,
+                "badge": str(status_row["badge"]) if status_row else "",
+                "has_audio": status == voice_catalog_admin.STATUS_GENERATED,
+            }
+        )
+    filters = {
+        key: value
+        for key, value in {
+            "q": q,
+            "lang": lang,
+            "category": category,
+            "engine": engine,
+            "size": page_obj.size if page_obj.size != voice_search.DEFAULT_PAGE_SIZE else "",
+        }.items()
+        if value
+    }
+    return {
+        "rows": rows,
+        "page_obj": page_obj,
+        "qs": urlencode(filters),
+    }
+
+
 @router.get("/ui/voices", response_class=HTMLResponse, include_in_schema=False)
 async def ui_voices(request: Request) -> HTMLResponse:
     """Render the voices management page.
+
+    The listing is the unified Phase 9.6 table (clones, stock and designs
+    with filter row and pagination) rendered inline on first paint; the
+    generated-voices card keeps its 15 s poll while designs run, and the
+    custom/clone forms are unchanged.
 
     Args:
         request: Incoming request.
@@ -877,15 +979,59 @@ async def ui_voices(request: Request) -> HTMLResponse:
     Returns:
         HTMLResponse for the voices page.
     """
-    service = VoicesService()
-    stock = await service.list_stock()
-    cloned = await service.list_cloned()
-    preview_voices = await list_all_voices()
+    voices = await list_all_voices()
+    table = await _voices_table_context(voices)
     return _render(
         request,
         "voices.html",
-        {"stock": stock, "cloned": cloned, "preview_voices": preview_voices},
+        {
+            **table,
+            "q": "",
+            "lang": "",
+            "category": "",
+            "engine": "",
+            "size": voice_search.DEFAULT_PAGE_SIZE,
+            "lang_options": voice_search.language_options(voices),
+            "category_filters": CATEGORY_FILTERS,
+            "engine_filters": ENGINE_FILTERS,
+        },
     )
+
+
+@router.get("/ui/fragments/voices_table", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_voices_table(
+    request: Request,
+    q: str = "",
+    lang: str = "",
+    category: str = "",
+    engine: str = "",
+    page: str = "1",
+    size: str = "25",
+) -> HTMLResponse:
+    """Render one page of the unified voice table (Phase 9.6).
+
+    Swapped into ``#voices-table`` by the filter row (keyup with 300 ms
+    debounce on the query, change on the selects) and by the pager links.
+    The request never carries ``page`` from the filter inputs, so any
+    filter change restarts at page 1 while the pager links ship the full
+    filter state plus their own page number.
+
+    Args:
+        request: Incoming request.
+        q: Glob-style query.
+        lang: Language prefix filter.
+        category: Category filter ('stock', 'cloned', 'generated').
+        engine: Engine filter.
+        page: 1-based page number.
+        size: Page size.
+
+    Returns:
+        HTMLResponse with the table rows and the pager fragment.
+    """
+    context = await _voices_table_context(
+        q=q, lang=lang, category=category, engine=engine, page=page, size=size
+    )
+    return _render(request, "partials/_voices_table.html", context)
 
 
 @router.get("/ui/fragments/runs", response_class=HTMLResponse, include_in_schema=False)

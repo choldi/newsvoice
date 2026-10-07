@@ -14,21 +14,65 @@
 </div>
 
 <div class="card">
-  <h2>Probar voces</h2>
-  <p class="muted">Sintetiza una frase con cualquier voz (las de Modal caen al
-    WAV de referencia si está apagado) y deja el resultado en caché.</p>
-  <form hx-post="/ui/voices/test" hx-target="#voice-sample" hx-swap="innerHTML">
-    <label>Voz</label>
-    <select name="voice" required>
-      {% for v in preview_voices %}
-      <option value="{{ v.id }}">{{ v.label }} · {{ v.category }} · {{ v.language }}</option>
-      {% else %}
-      <option value="" disabled selected>Sin voces disponibles</option>
-      {% endfor %}
-    </select>
-    <button type="submit" class="primary">Probar</button>
-  </form>
-  <div id="voice-sample" style="margin-top:12px"></div>
+  <h2>Todas las voces</h2>
+  <p class="muted">Clonadas, stock y diseñadas de todos los motores. El texto
+    admite comodines: <code>Mich*clo</code> encuentra "Michael_sss en(glish)
+    Voz clonada".</p>
+  <div class="row" id="voices-filter-fields">
+    <div class="col" style="min-width:240px">
+      <label>Nombre o ID</label>
+      <input type="text" name="q" value="{{ q }}" placeholder="Mich*clo"
+             hx-get="/ui/fragments/voices_table" hx-trigger="keyup changed delay:300ms"
+             hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+    </div>
+    <div class="col">
+      <label>Idioma</label>
+      <select name="lang" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        <option value="">Todos</option>
+        {% for option in lang_options %}
+        <option value="{{ option.code }}" {{ 'selected' if option.code == lang else '' }}>
+          {{ option.code }} ({{ option.count }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col">
+      <label>Tipo</label>
+      <select name="category" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for value, text in category_filters %}
+        <option value="{{ value }}" {{ 'selected' if value == category else '' }}>{{ text }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col">
+      <label>Motor</label>
+      <select name="engine" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for value, text in engine_filters %}
+        <option value="{{ value }}" {{ 'selected' if value == engine else '' }}>{{ text }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col" style="min-width:120px">
+      <label>Por página</label>
+      <select name="size" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for option in (25, 50, 100) %}
+        <option value="{{ option }}" {{ 'selected' if option == size else '' }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col" style="flex:0;min-width:90px">
+      <label>&nbsp;</label>
+      <a href="/ui/voices">Limpiar</a>
+    </div>
+  </div>
+  <div id="voice-sample" style="margin-top:8px"></div>
+  <div id="voices-table">
+    {% include "partials/_voices_table.html" %}
+  </div>
 </div>
 
 <div class="card">
@@ -95,38 +139,5 @@
     <textarea name="ref_text" rows="3" placeholder="Texto dicho en el audio de referencia..."></textarea>
     <button type="submit" class="primary">Clonar</button>
   </form>
-</div>
-
-<div class="card">
-  <h2>Voces clonadas</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Idioma</th></tr></thead>
-    <tbody>
-      {% for v in cloned %}
-      <tr><td>{{ v.get('voice_id', v.get('name', '')) }}</td><td>{{ v.get('language', '—') }}</td></tr>
-      {% else %}
-      <tr><td colspan="2" class="empty">Sin voces clonadas</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-<div class="card">
-  <h2>Voces de stock</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Idioma</th><th>Género</th><th>Nombre</th></tr></thead>
-    <tbody>
-      {% for v in stock %}
-      <tr>
-        <td>{{ v.get('voice_id', '') }}</td>
-        <td>{{ v.get('language', '—') }}</td>
-        <td>{{ v.get('gender', '—') }}</td>
-        <td>{{ v.get('name', '—') }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="empty">No se pudieron cargar las voces de stock (¿OmniVoice accesible?)</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </div>
 {% endblock %}
