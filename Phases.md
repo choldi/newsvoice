@@ -876,8 +876,47 @@ local).
       Key Decisions) y `Deploy.md` (§8.6 ciclo de vida de voces custom y
       prerequisitos operativos, §16.6 menú Voces, §16.2 cast actualizado).
       Verificado 2026-10-07: ruff limpio, suite completa 1267 passed.
+- [x] **9.6 Tabla unificada de voces** — decisión del operador (2026-10-07,
+      "ampliar Fase 9"): unificar los listados de `/ui/voices` en **una tabla
+      paginada y filtrable** (se retiran las tarjetas "Probar voces", "Voces
+      clonadas" y "Voces de stock"; se conservan "Voces generadas" con poll
+      15s, "Nueva voz personalizada" y "Clonar nueva voz"). Nuevo servicio
+      `src/api/services/voice_search.py` (`matches`/`filter_voices`/
+      `picker_order`/`language_options`/`paginate`): glob **unanchored** y
+      case-insensitive —`Mich*clo` encuentra "Michael_sss en(glish) Voz
+      clonada"`—, `*`→`.*`, `?`→`.` con literales escapados; filtro de idioma
+      por prefijo ISO (`es`→`es`/`es-ES`); páginas de 25 (máx. 200) con clamp.
+      Tabla en `partials/_voices_table.html` con resumen ("N voces · página
+      X de Y"), columna Estado (badge del manifest), enlace al WAV de
+      referencia, botón "Probar" por fila, estado vacío y pager con el estado
+      de filtros url-encoded; `GET /ui/fragments/voices_table` re-renderiza
+      solo el cuerpo (búsqueda con `keyup changed delay:300ms`, selects
+      Tipo/Motor/Idioma/Tamaño por `change`); `ui_voices` reescrito con un
+      solo `list_all_voices()`. Tests: `tests/unit/test_voice_search.py`
+      (13) y `tests/integration/test_voices_table.py` (8); assert de la
+      página de voces en `test_ui_endpoints` actualizado a la paginación.
+      Verificado 2026-10-07: ruff limpio, suite completa 1288 passed.
+- [x] **9.7 Pickers de voz con búsqueda en herramientas** — decisión del
+      operador (2026-10-07, "ampliar Fase 9"): en la página Herramientas el
+      doc-TTS y las lecciones sustituyen `<select>`/datalist por **pickers
+      con búsqueda** (input glob + filtro de idioma + resultados en radios;
+      **sin JS inline**, todo htmx paginado; catálogo completo en
+      `voice_search` compartido). `partials/_voice_picker.html` +
+      `_voice_picker_results.html` + `GET /ui/fragments/voice_picker`
+      (helpers `_picker_context`/`_picker_results_context`, cap 20 con
+      contador, orden generadas→clonadas→stock, selección actual siempre
+      conservada y marcada, opción literal "Usar «q» tal cual" cuando hay
+      query sin coincidencias); doc-TTS solo-Edge (decisión 6) y lecciones
+      con guard: los radios viajan con el `hx-include` y el contenedor de
+      resultados re-dispara `/ui/fragments/lesson_voices` al pulsar para
+      recalcular el guard anti-mezcla (filtros tipados `voice_q` etc.
+      sobreviven al re-render); se retira el datalist `voice-list`. Tests:
+      `tests/integration/test_voice_picker.py` (10, incluye el ejemplo
+      `Mich*clo`) y actualización de dropdowns/guard/ui-tools al radio
+      `checked`.
+      Verificado 2026-10-07: ruff limpio, suite completa 1299 passed.
 
-**Fase 9 completada el 2026-10-07** (9.1-9.5, ver checklist arriba).
+**Fase 9 completada el 2026-10-07** (9.1-9.7, ver checklist arriba).
 
 **Success criteria:** `pytest -q` en verde con `ruff check .`/`ruff format`
 limpios; una voz creada desde la GUI queda en `custom_profiles.json`, su

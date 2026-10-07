@@ -122,13 +122,32 @@ ids and clone UUIDs, Modal catalog profile names), so
 `VoiceOption{id, label, language, engines, category}` list — `category` is
 `stock | cloned | generated` and a source that cannot be reached degrades to
 `[]` instead of breaking the page. `GET /api/admin/voices/all` exposes the
-merge, and every GUI selector that is not engine-bound is fed from it
-(lessons, the `voice-list` datalist, the "Probar voces" picker). The
-collection digest voice and the cast stay **per-engine** selects
-(`_tts_voice_options`), because an engine only accepts its own ids: the cast
-refreshes each row's options out-of-band via
+merge, and every GUI selector that is not engine-bound is fed from it: the
+tools pickers (searchable radios, Phase 9.7) and the unified `/ui/voices`
+table (Phase 9.6). The collection digest voice and the cast stay
+**per-engine** selects (`_tts_voice_options`), because an engine only accepts
+its own ids: the cast refreshes each row's options out-of-band via
 `GET /ui/fragments/cast_voices` (`hx-swap-oob`) when the backend changes, and
 document TTS stays Edge-only (user decision).
+
+Both search and table share one service, `src/api/services/voice_search.py`:
+a glob-style query (`*`/`?`, literals escaped, case-folded and **unanchored**
+— `Mich*clo` finds "Michael_sss en(glish) Voz clonada"` — plain text is a
+substring), a language prefix filter (`es` matches `es` and `es-ES`), an
+exact category/engine filter, a display order (generated → cloned → stock)
+and page slicing (25/page, clamp to valid range). The tools voice pickers
+(`partials/_voice_picker.html` + `_voice_picker_results.html`,
+`GET /ui/fragments/voice_picker`) render up to 20 radio results with a total
+count; the selection always survives searches (the checked radio travels with
+the htmx include and the fragment keeps it, checked, even when it falls
+outside the match), and a query with zero matches adds the literal "Usar «q»
+tal cual" option so an unknown id can be sent as-is. The lesson pickers'
+results container also listens for changes and re-runs
+`GET /ui/fragments/lesson_voices` so the mixed-engine submit guard recomputes
+after every pick. The unified table (`partials/_voices_table.html`,
+`GET /ui/fragments/voices_table`) filters with the same semantics, joins the
+design status (`voice_catalog_admin.generated_voices()`) for the badge and
+WAV link, and paginates with url-encoded filter state carried by the pager.
 
 `src/api/services/voice_engine.py` classifies a voice id with no network:
 Edge/gateway patterns and catalog names match, anything else is **unknown =

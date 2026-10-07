@@ -1483,25 +1483,31 @@ protegida por el middleware de admin (junto al resto de `/ui`).
 
 ### 16.6 Menú Voces (`/ui/voices`, Fase 9)
 
-Tres tarjetas nuevas, todas con el registro unificado como fuente:
-
 - **Voces generadas** — fragmento con polling cada 15 s
   (`/ui/fragments/voices_generated`): tabla con etiqueta, idioma, origen,
   estado (`pendiente`/`generada`/`desactualizada`, regla: WAV en
   `data/voices/refs/`) y `<audio>` del WAV de referencia cuando existe.
-- **Probar voces** — `<select>` con **todas** las voces del registro
-  (stock + clonadas + generadas, con motor y origen) → `POST /ui/voices/test`
-  devuelve el reproductor en la tarjeta: la muestra se sintetiza una vez y se
-  cachea en `data/voices/samples/`; con `MODAL_ENABLED` apagado (o si la
-  síntesis falla) suena el WAV de referencia local.
+- **Todas las voces** — tabla unificada y paginada (25/fila, `GET
+  /ui/fragments/voices_table`) que sustituye a las tarjetas "Probar voces",
+  "Voces clonadas" y "Voces de stock": búsqueda global (columna id, etiqueta,
+  idioma, tipo, motores) con glob `*`/`?` —`Mich*clo` encuentra una voz
+  etiquetada "Michael_sss en(glish) Voz clonada"`—, filtros Idioma (prefijo
+  ISO: `es` cubre `es`/`es-ES`), Tipo y Motor, contador "N voces · página X
+  de Y", columna Estado con el WAV de referencia cuando es generada y botón
+  "Probar" por fila (muestra sintetizada y cacheada en
+  `data/voices/samples/`; con `MODAL_ENABLED` apagado suena el WAV local).
 - **Nueva voz personalizada** — nombre + idioma + instruct + segmentos de
   referencia → `POST /ui/voices/custom` → perfil en
   `custom_profiles.json` + `VoiceCatalogWorkflow` (§8.6); el resultado
   aparece en la tarjeta de arriba y, con la ventana de diseño abierta, acaba
   sonando.
+- **Clonar nueva voz** — vía REST (audio base64 desde un endpoint de la GUI).
 
 El resto de desplegables de generación de audio (colección, cast, lecciones,
 doc-TTS) beben del mismo registro (`GET /api/admin/voices/all`), filtrado por
 motor donde el motor solo acepta su vocabulario; doc-TTS sigue siendo
-solo-Edge. La clase de idiomas (`/ui/tools`) ofrece además `· motor · origen`
-en cada opción y conserva una selección que ningún catálogo conoce.
+solo-Edge. En Herramientas las lecciones y el doc-TTS usan **pickers con
+búsqueda** (Fase 9.7): campo de glob + filtro de idioma + resultados en
+radios, hasta 20 con contador; la selección sobrevive a las búsquedas y una
+consulta sin coincidencias añade la opción "Usar «q» tal cual". Las lecciones
+recalculan el guard anti-mezcla tras cada selección.
