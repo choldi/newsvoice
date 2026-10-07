@@ -1,5 +1,12 @@
-{# <option> rows of a cast voice datalist (Phase 9.2).
+{# <option> rows of a cast voice <select> (Phases 9.2 / 9.5).
+
    Shared by the collections page (initial content) and
-   GET /ui/fragments/cast_voices (engine changes). Autoescaped by the
-   Jinja environment, so ids/labels are safe. #}
-{% for v in voices or [] %}<option value="{{ v.id }}">{{ v.label }} ({{ v.language or '—' }})</option>{% endfor %}
+   GET /ui/fragments/cast_voices (engine changes, delivered out-of-band to
+   every row). The leading empty option resets the field after an engine
+   switch, and a current value no catalogue offers (gateway down, legacy id)
+   is kept as its own selected option so a save never silently drops it.
+   Autoescaped by the Jinja environment, so ids/labels are safe. #}
+{% set voice_ids = (voices or []) | map(attribute="id") | list %}
+<option value="">(elige una voz)</option>
+{% for v in voices or [] %}<option value="{{ v.id }}" {{ 'selected' if v.id == (current_voice | default('')) else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>{% endfor %}
+{% if (current_voice | default('')) and (current_voice not in voice_ids) %}<option value="{{ current_voice }}" selected>{{ current_voice }}</option>{% endif %}

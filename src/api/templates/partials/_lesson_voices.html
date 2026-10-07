@@ -7,9 +7,11 @@
    whenever a voice select changes (Phase 9.2): the current selections travel
    in the query string so re-rendering keeps them, and the last mode is echoed
    in the `current_mode` hidden field because the mode select lives outside
-   this block. `lesson_voices` is the normalized catalogue ({id, label,
-   language}); when the gateway is down it is empty and the selects degrade to
-   text inputs. When the two dual voices belong to different engines the
+   this block. `lesson_voices` is the Phase 9 registry ({id, label, language,
+   tag}: every engine's stock, cloned and generated voices); when no source is
+   reachable it is empty and the selects degrade to text inputs, and a current
+   selection the catalogue does not know is kept as its own option instead of
+   being dropped. When the two dual voices belong to different engines the
    `mixed_message` explains why and the out-of-band submit button arrives
    disabled. #}
 {% if fragment %}
@@ -30,7 +32,7 @@
           hx-swap="innerHTML">
     <option value="">(elige una voz)</option>
     {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
     {% endfor %}
   </select>
   {% else %}
@@ -48,7 +50,7 @@
           hx-swap="innerHTML">
     <option value="">(elige una voz)</option>
     {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice2 else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice2 else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
     {% endfor %}
   </select>
   {% else %}
@@ -67,7 +69,7 @@
           hx-swap="innerHTML">
     <option value="">(por defecto)</option>
     {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
     {% endfor %}
   </select>
   {% else %}

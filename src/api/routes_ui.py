@@ -191,12 +191,14 @@ def _lesson_voice_context(
     """Build the template context of the lesson voice selector(s) (Phase 7.12).
 
     Shared by the tools page and its voice fragment so the initial render and
-    every mode switch render exactly the same block. The catalogue is normalized
-    to ``{id, label, language}`` and an unknown mode falls back to 'mixed',
-    which is the single-voice default.
+    every mode switch render exactly the same block. The catalogue is the
+    full Phase 9 registry (every engine, tagged) normalized to ``{id, label,
+    language, tag}``; a current selection no source offers (gateway down,
+    legacy id) is appended instead of dropped so it survives re-renders, and
+    an unknown mode falls back to 'mixed', the single-voice default.
 
     Args:
-        voices: Raw voice entries from :func:`_omni_options`.
+        voices: Raw voice entries from :func:`list_all_voices`.
         mode: Lesson mode from the form ('mixed', 'dual' or 'native').
         voice: Voice id currently selected for the native/single role.
         voice2: Voice id currently selected for the target role (dual only).
@@ -209,11 +211,25 @@ def _lesson_voice_context(
     normalized = str(mode or "").strip().lower()
     if normalized not in {m.value for m in LessonMode}:
         normalized = LessonMode.MIXED.value
+    entries = _normalize_voice_entries(voices)
+    known = {entry["id"] for entry in entries}
+    current_voice = (voice or "").strip()
+    current_voice2 = (voice2 or "").strip()
+    for current in dict.fromkeys((current_voice, current_voice2)):
+        if current and current not in known:
+            entries.append(
+                {"id": current, "label": current, "language": "", "engines": [], "category": ""}
+            )
+            known.add(current)
+    for entry in entries:
+        entry["tag"] = " · ".join(
+            part for part in ("/".join(entry["engines"]), entry["category"]) if part
+        )
     return {
         "mode": normalized,
-        "lesson_voices": _normalize_voice_entries(voices),
-        "current_voice": (voice or "").strip(),
-        "current_voice2": (voice2 or "").strip(),
+        "lesson_voices": entries,
+        "current_voice": current_voice,
+        "current_voice2": current_voice2,
         "mixed_message": _mixed_engine_message(voice, voice2),
         "fragment": fragment,
     }
@@ -998,19 +1014,30 @@ async def ui_fragment_tts_options(
 
 
 @router.get("/ui/fragments/cast_voices", response_class=HTMLResponse, include_in_schema=False)
-async def ui_fragment_cast_voices(request: Request, narr_backend: str = "") -> HTMLResponse:
-    """Options of the cast voice datalist for one narration engine (Phase 9.2).
+async def ui_fragment_cast_voices(
+    request: Request,
+    narr_backend: str = "",
+    cast: str = "",
+    rows: int = 2,
+) -> HTMLResponse:
+    """Out-of-band options of every cast voice select for one engine (Phase 9.5).
 
-    The cast editor's engine select re-fetches this fragment so the datalist
-    only offers ids the selected engine accepts; a Modal name in a gateway
-    cast (or the reverse) is what the multi-engine guard would reject anyway.
+    The cast editor's engine select re-fetches this fragment so each
+    ``<select>`` only offers ids the selected engine accepts; a Modal name in
+    a gateway cast (or the reverse) is what the multi-engine guard would
+    reject anyway. The response carries one ``hx-swap-oob`` block per cast row
+    (ids ``cast-voice-<cast>-<i>``), so a single fetch refreshes every row and
+    each select resets to the empty option: the old voice belonged to the
+    previous engine.
 
     Args:
         request: Incoming request.
         narr_backend: Engine chosen in the form ('omni_voice', 'qwen3_tts', ...).
+        cast: Form identifier of the cast ('nueva' or the collection name).
+        rows: Number of rows of the cast table (clamped to 1..8).
 
     Returns:
-        HTMLResponse with the ``<option>`` rows of the datalist.
+        HTMLResponse with the out-of-band ``<option>`` payloads.
     """
     from src.api.services.tts_backends import ALLOWED_BACKENDS
 
@@ -1018,7 +1045,15 @@ async def ui_fragment_cast_voices(request: Request, narr_backend: str = "") -> H
     if engine not in ALLOWED_BACKENDS:
         engine = TTSBackend.OMNIVOICE.value
     options = await _tts_voice_options(engine)
-    return _render(request, "partials/_cast_options.html", {"voices": options["voices"]})
+    return _render(
+        request,
+        "partials/_cast_voices_oob.html",
+        {
+            "cast": (cast or "").strip(),
+            "rows": max(1, min(rows or 2, 8)),
+            "voices": options["voices"],
+        },
+    )
 
 
 @router.get("/ui/fragments/calendar", response_class=HTMLResponse, include_in_schema=False)
@@ -1684,15 +1719,16 @@ async def ui_tools(request: Request) -> HTMLResponse:
     """
     omni = await _omni_options()
     edge = await _edge_voice_options()
+    all_voices = [voice.model_dump() for voice in await list_all_voices()]
     return _render(
         request,
         "tools.html",
         {
             "collections": _collections(),
             "omni_languages": omni["languages"],
-            "omni_voices": omni["voices"],
+            "all_voices": all_voices,
             "edge_voices": edge["voices"],
-            **_lesson_voice_context(omni["voices"]),
+            **_lesson_voice_context(all_voices),
         },
     )
 
@@ -1856,12 +1892,12 @@ async def ui_fragment_lesson_voices(
     Returns:
         HTMLResponse with the _lesson_voices partial.
     """
-    omni = await _omni_options()
+    all_voices = [voice.model_dump() for voice in await list_all_voices()]
     return _render(
         request,
         "partials/_lesson_voices.html",
         _lesson_voice_context(
-            omni["voices"],
+            all_voices,
             mode=mode or current_mode,
             voice=voice,
             voice2=voice2,

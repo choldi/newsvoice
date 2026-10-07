@@ -114,6 +114,41 @@ died. `TTS_LEASE_ENABLED=false` turns the whole protocol off.
 8.5 forecast, written by the extraction step) and `eta_seconds` (extrapolated
 from the measured rate of the chunks already finished), plus `paused`.
 
+### Voice registry, engine guard and custom voices (Phase 9)
+
+Each engine owns a different voice vocabulary (Edge ShortNames, gateway stock
+ids and clone UUIDs, Modal catalog profile names), so
+`src/api/services/voice_registry.py` merges every source into one
+`VoiceOption{id, label, language, engines, category}` list — `category` is
+`stock | cloned | generated` and a source that cannot be reached degrades to
+`[]` instead of breaking the page. `GET /api/admin/voices/all` exposes the
+merge, and every GUI selector that is not engine-bound is fed from it
+(lessons, the `voice-list` datalist, the "Probar voces" picker). The
+collection digest voice and the cast stay **per-engine** selects
+(`_tts_voice_options`), because an engine only accepts its own ids: the cast
+refreshes each row's options out-of-band via
+`GET /ui/fragments/cast_voices` (`hx-swap-oob`) when the backend changes, and
+document TTS stays Edge-only (user decision).
+
+`src/api/services/voice_engine.py` classifies a voice id with no network:
+Edge/gateway patterns and catalog names match, anything else is **unknown =
+wildcard** (lenient by decision, so legacy ids keep round-tripping).
+`assert_voice_engine` / `assert_same_engine` run in `CollectionIn`,
+`NarrationSpec`, `TTSIn` and the GUI forms, and `resolve_cast` infers a
+lesson's `tts_backend` from its voices, rejecting mixed-engine selections
+before anything is queued.
+
+Custom voices (menu `/ui/voices`): `POST /api/admin/voices/custom` (or the
+equivalent UI form) persists the profile in
+`data/voices/custom_profiles.json`, which `load_profiles()` merges with the
+committed catalog (name collisions are refused, writes are atomic), then
+starts `VoiceCatalogWorkflow` in `news-engine-voices`. A profile counts as
+*generated* as soon as `data/voices/refs/<name>.wav` exists
+(`voice_catalog_admin.generated_status` → `pendiente | generada |
+desactualizada`). `voice_preview.preview()` speaks a fixed phrase through the
+voice's preferred engine, caches the sample in `data/voices/samples/` and
+falls back to the local reference WAV while `MODAL_ENABLED` is off.
+
 ### Narration branch (Phase 7, in progress)
 
 The narration pipeline is a second, independent audio spoke that hangs off the
@@ -199,6 +234,7 @@ fails and the error alert fires instead.
 | **LiteLLM as LLM adapter** | Swap models without changing business code |
 | **Event fingerprinting over pure embeddings** | Faster, deterministic, debuggable first pass |
 | **No zigflow; Temporal Flow as optional desktop viewer** | zigflow's YAML DSL compiles to its own Go worker and would replace the tested Python SDK workflows; Temporal Flow is a read-mostly overlay that needs no code/container changes (see Observability) |
+| **One voice registry + lenient multi-engine guard (Phase 9)** | Every dropdown lists all engines' stock/cloned/generated voices; unknown ids stay wildcards so legacy values never break, and only a mixed-engine selection is rejected |
 
 ---
 

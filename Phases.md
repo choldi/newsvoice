@@ -864,10 +864,20 @@ local).
       `resolve()` anti-traversal) y desplegable unificado **"Probar voces"**
       en `/ui/voices` alimentado por `list_all_voices()`.
       Verificado 2026-10-07: ruff limpio, suite completa 1261 passed.
-- [ ] **9.5 Listados en todas las opciones de generar audio** — voz por
-      `<select>` del registro en colección, cast, lecciones, doc-TTS y picker
-      de prueba; docs (`Architecture.md`, `Deploy.md` ciclo de vida de voces
-      custom) y este checklist.
+- [x] **9.5 Listados en todas las opciones de generar audio** — lecciones y
+      `voice-list` pasan a `list_all_voices()` (todas las voces, cada opción
+      etiquetada `· motor · origen`, selección que ningún catálogo conoce
+      conservada); el cast editor pasa de input+datalist a **`<select>` por
+      fila** (decisión 4) con swap OOB de todas las filas vía
+      `/ui/fragments/cast_voices?cast=&rows=` y valor actual fuera de
+      catálogo conservado; colección y doc-TTS ya eran `<select>` del
+      registro (doc solo-Edge). Docs: `Architecture.md` (sección
+      «Voice registry, engine guard and custom voices (Phase 9)» + fila de
+      Key Decisions) y `Deploy.md` (§8.6 ciclo de vida de voces custom y
+      prerequisitos operativos, §16.6 menú Voces, §16.2 cast actualizado).
+      Verificado 2026-10-07: ruff limpio, suite completa 1267 passed.
+
+**Fase 9 completada el 2026-10-07** (9.1-9.5, ver checklist arriba).
 
 **Success criteria:** `pytest -q` en verde con `ruff check .`/`ruff format`
 limpios; una voz creada desde la GUI queda en `custom_profiles.json`, su

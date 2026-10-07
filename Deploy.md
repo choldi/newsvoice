@@ -620,8 +620,44 @@ rsync -a <old-host>:/path/to/news-summary/data/voices/ ./data/voices/
 docker compose down voice-catalog-worker
 systemctl --user disable --now news-engine-voice-worker   # on the GPU box
 ```
-
 The catalog keeps working from the references already in `data/voices/`.
+
+### 8.6 Custom voices created from the GUI (Phase 9)
+
+The Voices menu (`/ui/voices`) and `POST /api/admin/voices/custom` create new
+profiles on top of the committed catalog:
+
+- The profile is written atomically to `data/voices/custom_profiles.json`
+  (git-ignored; merged with the committed catalog by `load_profiles()`). A
+  name already used by the catalog or another custom voice is refused
+  (409 / flash) and a corrupt file is never overwritten.
+- Saving the profile enqueues `VoiceCatalogWorkflow` in `news-engine-voices`
+  (workflow id `voice-catalog-<timestamp>`), the same design pipeline as
+  §8.4. The profile is kept even when the enqueue fails — the card reports
+  the `start_error` instead of pretending the voice exists.
+- Lifecycle: `pendiente` while `data/voices/refs/<name>.wav` is missing,
+  `generada` once the WAV exists (that is the whole rule — Phase 9 decision),
+  `desactualizada` when the profile/instruct was edited afterwards. The card
+  plays it via `GET /ui/voices/audio/<name>.wav`.
+
+Operational prerequisites (not code):
+
+1. `VOICE_STAGING_API_KEY` shared by the API and the design worker (§8.2).
+2. The design window open on the GPU box (`./scripts/design_window.sh`).
+3. `MODAL_ENABLED=true` for real synthesis. Without it the "Probar" button
+   plays the local reference WAV, and a Modal synthesis failure falls back to
+   it instead of erroring.
+
+Testing voices: `POST /ui/voices/test` synthesizes a fixed phrase through the
+voice's preferred engine, caches the sample in `data/voices/samples/` and
+embeds the player in the page; `GET /ui/voices/sample/<file>` serves the
+cache behind a name-validated, traversal-proof lookup.
+
+Listings: `GET /api/admin/voices/all` and every GUI voice selector that is
+not engine-bound (lessons, `voice-list`, the "Probar voces" picker) show the
+merged registry — stock + cloned + generated of all engines. The document TTS
+select stays Edge-only (user decision, Phases.md → Phase 9).
+
 ---
 
 ## 9. Podcast namespaces (Phase 7.9b)
@@ -1386,10 +1422,12 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
 ### 16.2 Cast de narración (`/ui/collections`)
 
 - El textarea JSON se sustituyó por un **editor de cast**: filas rol
-  (nombre, voz con `datalist` del catálogo, idioma, velocidad, emoción) + campos
-  del spec (título, idioma, pausas, velocidad, emoción, backend, divulgación de
-  IA). Las filas vacías se ignoran; nombre sin voz (o al revés) rechaza el
-  guardado con mensaje.
+  (nombre, voz con `<select>` del registro —opciones del motor elegido,
+  refrescadas por `/ui/fragments/cast_voices` al cambiar el backend, y un
+  valor que ningún catálogo conoce se conserva como opción propia—, idioma,
+  velocidad, emoción) + campos del spec (título, idioma, pausas, velocidad,
+  emoción, backend, divulgación de IA). Las filas vacías se ignoran; nombre
+  sin voz (o al revés) rechaza el guardado con mensaje.
 - El **JSON avanzado** sigue disponible en un `<details>`: se usa solo si el
   cast de arriba está vacío, y los campos que el editor no expone (`music`,
   `max_chars_per_request`...) se **conservan** del spec existente.
@@ -1442,3 +1480,28 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
 La GUI no cambia datos de negocio: para volver a un `.env` anterior, restaura
 `.env.bak` y reinicia. Para retirar el editor entero no hay flag: es UI
 protegida por el middleware de admin (junto al resto de `/ui`).
+
+### 16.6 Menú Voces (`/ui/voices`, Fase 9)
+
+Tres tarjetas nuevas, todas con el registro unificado como fuente:
+
+- **Voces generadas** — fragmento con polling cada 15 s
+  (`/ui/fragments/voices_generated`): tabla con etiqueta, idioma, origen,
+  estado (`pendiente`/`generada`/`desactualizada`, regla: WAV en
+  `data/voices/refs/`) y `<audio>` del WAV de referencia cuando existe.
+- **Probar voces** — `<select>` con **todas** las voces del registro
+  (stock + clonadas + generadas, con motor y origen) → `POST /ui/voices/test`
+  devuelve el reproductor en la tarjeta: la muestra se sintetiza una vez y se
+  cachea en `data/voices/samples/`; con `MODAL_ENABLED` apagado (o si la
+  síntesis falla) suena el WAV de referencia local.
+- **Nueva voz personalizada** — nombre + idioma + instruct + segmentos de
+  referencia → `POST /ui/voices/custom` → perfil en
+  `custom_profiles.json` + `VoiceCatalogWorkflow` (§8.6); el resultado
+  aparece en la tarjeta de arriba y, con la ventana de diseño abierta, acaba
+  sonando.
+
+El resto de desplegables de generación de audio (colección, cast, lecciones,
+doc-TTS) beben del mismo registro (`GET /api/admin/voices/all`), filtrado por
+motor donde el motor solo acepta su vocabulario; doc-TTS sigue siendo
+solo-Edge. La clase de idiomas (`/ui/tools`) ofrece además `· motor · origen`
+en cada opción y conserva una selección que ningún catálogo conoce.

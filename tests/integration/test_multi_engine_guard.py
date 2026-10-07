@@ -303,26 +303,32 @@ def test_ui_advanced_json_mixed_cast_is_rejected_not_dropped() -> None:
 
 
 def test_cast_voices_fragment_follows_the_engine() -> None:
-    """The datalist fragment offers the vocabulary of the selected engine."""
+    """The OOB payload offers the vocabulary of the selected engine."""
     client = _ui_client()
+    params = {"cast": "tech", "rows": "3"}
 
-    modal = client.get("/ui/fragments/cast_voices", params={"narr_backend": "qwen3_tts"})
+    modal = client.get("/ui/fragments/cast_voices", params={"narr_backend": "qwen3_tts", **params})
     assert modal.status_code == 200
     assert MODAL_NAME in modal.text
     assert GATEWAY_STOCK not in modal.text
+    assert modal.text.count('hx-swap-oob="innerHTML"') == 3
+    for row in range(3):
+        assert f'id="cast-voice-tech-{row}"' in modal.text
 
-    gateway = client.get("/ui/fragments/cast_voices", params={"narr_backend": "omni_voice"})
+    gateway = client.get(
+        "/ui/fragments/cast_voices", params={"narr_backend": "omni_voice", **params}
+    )
     assert gateway.status_code == 200
     assert f'value="{GATEWAY_STOCK}"' in gateway.text
     assert MODAL_NAME not in gateway.text
 
-    fallback = client.get("/ui/fragments/cast_voices", params={"narr_backend": "banana"})
+    fallback = client.get("/ui/fragments/cast_voices", params={"narr_backend": "banana", **params})
     assert fallback.status_code == 200
     assert f'value="{GATEWAY_STOCK}"' in fallback.text
 
 
-def test_collections_page_wires_the_cast_datalists() -> None:
-    """Both forms get a per-form datalist fed by the hx-fetchable fragment."""
+def test_collections_page_wires_the_cast_selects() -> None:
+    """Both forms get per-row selects refreshed by the hx-fetchable fragment."""
     (tmp_toml := Path(settings.collections_file)).parent.mkdir(parents=True, exist_ok=True)
     tmp_toml.write_text(
         '[[collections]]\nname = "tech"\ntime = "08:00"\n'
@@ -334,10 +340,15 @@ def test_collections_page_wires_the_cast_datalists() -> None:
     page = client.get("/ui/collections")
 
     assert page.status_code == 200
-    assert 'id="cast-voices-nueva"' in page.text
+    # Every cast row is a <select>; no input+datalist pair remains.
+    assert '<div id="cast-voice-tech-0"><select name="role0_voice"' in page.text
+    assert '<div id="cast-voice-nueva-0"><select name="role0_voice"' in page.text
+    assert 'list="cast-voices' not in page.text, "the cast datalists are gone"
+    # The engine select targets the sink span and asks for its row count.
+    assert page.text.count('hx-get="/ui/fragments/cast_voices?cast=') >= 2
     assert 'id="cast-voices-tech"' in page.text
-    assert page.text.count('hx-get="/ui/fragments/cast_voices"') >= 2
-    assert 'list="cast-voices"' not in page.text, "the global datalist is gone"
+    assert 'id="cast-voices-nueva"' in page.text
+    assert page.text.count('hx-target="#cast-voices-') >= 2
     # The initial options follow the engine of each form without any fetch.
     assert f'value="{GATEWAY_STOCK}"' in page.text
 

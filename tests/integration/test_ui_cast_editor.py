@@ -82,13 +82,28 @@ def test_page_renders_the_structured_cast_for_a_spec_collection(_ui_env: Path) -
     # Two existing roles + one free row (cap is 8).
     card = body.split('<details class="card" id="d-gaming"')[1].split("</details>")[0]
     assert 'name="role0_name" value="michael"' in card
-    assert 'name="role0_voice" list="cast-voices-gaming" value="clone-1"' in card
+    assert '<div id="cast-voice-gaming-0"><select name="role0_voice"' in card
+    assert 'value="clone-1" selected' in card, "the saved voice stays selected"
     assert 'name="role1_name" value="dwight"' in card
     assert 'value="excited"' in card
     assert 'name="narr_title" value="Game Over"' in card
     assert 'name="narr_pause_ms" min="0" max="5000" value="350"' in card
     # The advanced JSON mirrors the spec for the fallback path.
     assert '"Game Over"' in card
+
+
+def test_page_keeps_a_voice_the_catalogue_lacks(_ui_env: Path) -> None:
+    """A legacy voice id absent from every catalogue is kept, not dropped."""
+    _write_spec_collection(_ui_env)
+    path = Path(_ui_env)
+    path.write_text(path.read_text().replace('voice_id="clone-1"', 'voice_id="legacy_voice"'))
+    client = _client()
+    response = client.get("/ui/collections")
+
+    assert response.status_code == 200
+    card = response.text.split('<details class="card" id="d-gaming"')[1].split("</details>")[0]
+    assert '<option value="legacy_voice" selected>legacy_voice</option>' in card
+    assert 'name="role1_name" value="dwight"' in card
 
 
 def test_page_renders_free_rows_for_a_collection_without_spec(_ui_env: Path) -> None:
