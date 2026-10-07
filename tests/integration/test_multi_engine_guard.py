@@ -393,7 +393,7 @@ def test_lesson_fragment_keeps_the_submit_for_one_engine() -> None:
 
 
 def test_doc_tts_dropdown_only_offers_edge_voices() -> None:
-    """The document voice select shows edge ShortNames, never gateway ids."""
+    """The document voice picker shows edge ShortNames, never gateway ids."""
     edge_option = VoiceOption(
         id="es-ES-DarioNeural",
         label="Dario (Neural)",
@@ -410,6 +410,6 @@ def test_doc_tts_dropdown_only_offers_edge_voices() -> None:
 
     assert page.status_code == 200
     doc_form = page.text.split('action="/ui/tools/doc-tts"', 1)[1].split("</form>", 1)[0]
-    assert '<select name="voice">' in doc_form
+    assert 'id="picker-doc"' in doc_form
     assert "es-ES-DarioNeural" in doc_form
     assert GATEWAY_STOCK not in doc_form, "the gateway vocabulary must not leak in"

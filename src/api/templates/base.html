@@ -88,6 +88,19 @@
     .tags { margin-bottom: 16px; }
     .tags a { display: inline-block; margin: 2px 4px 2px 0; }
     .empty { color: var(--muted); padding: 14px; text-align: center; }
+    .voice-picker input[type="text"], .voice-picker select { flex: 1; }
+    .voice-results {
+      max-height: 280px; overflow-y: auto; border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px; margin-top: 6px; background: var(--panel2);
+    }
+    .voice-option {
+      display: flex; gap: 8px; align-items: baseline; padding: 5px 8px; margin: 0;
+      border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text);
+    }
+    .voice-option:hover { background: var(--panel); }
+    .voice-option input { width: auto; flex-shrink: 0; margin: 0; }
+    .voice-option small { display: block; font-size: 11px; color: var(--muted); }
+    .voice-hint { font-size: 11px; padding: 4px 8px 0; }
     pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
     .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
     .login-box { width: 320px; }

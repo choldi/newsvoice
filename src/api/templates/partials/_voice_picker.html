@@ -1,0 +1,50 @@
+{# Reusable searchable voice picker of the tools forms (Phase 9.7).
+
+   The glob query field (300 ms debounce) and the language select re-fetch
+   only the radio results over htmx; each result is a radio, so clicking one
+   selects it with no inline JS. The checked radio rides along with every
+   fetch (hx-include) and GET /ui/fragments/voice_picker keeps it in the
+   response, which is what keeps the selection alive across searches. The
+   hidden `field`/`engines`/`empty_label` inputs tell the fragment which
+   radio group and vocabulary to render. `guard` (the lesson pickers) adds a
+   change listener to the results container so a pick re-runs
+   /ui/fragments/lesson_voices and the mixed-engine submit guard recomputes.
+
+   Context: `picker` dict from `_picker_context`. #}
+<div class="voice-picker" id="picker-{{ picker.picker_id }}">
+  <input type="hidden" name="field" value="{{ picker.field }}">
+  <input type="hidden" name="engines" value="{{ picker.engines }}">
+  {% if picker.empty_label %}<input type="hidden" name="empty_label" value="{{ picker.empty_label }}">{% endif %}
+  <div class="row" style="gap:8px;align-items:center">
+    <input type="text" name="{{ picker.field }}_q" value="{{ picker.q }}"
+           placeholder="Buscar voz (Mich*clo)"
+           hx-get="/ui/fragments/voice_picker"
+           hx-trigger="keyup changed delay:300ms"
+           hx-target="#voice-results-{{ picker.picker_id }}"
+           hx-include="#picker-{{ picker.picker_id }}"
+           hx-swap="innerHTML"
+           style="flex:2;min-width:140px">
+    <select name="{{ picker.field }}_lang"
+            hx-get="/ui/fragments/voice_picker"
+            hx-trigger="change"
+            hx-target="#voice-results-{{ picker.picker_id }}"
+            hx-include="#picker-{{ picker.picker_id }}"
+            hx-swap="innerHTML"
+            style="flex:1;min-width:130px">
+      <option value="">Idioma</option>
+      {% for option in picker.langs %}
+      <option value="{{ option.code }}" {{ 'selected' if option.code == picker.lang else '' }}>{{ option.code }} ({{ option.count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div id="voice-results-{{ picker.picker_id }}" class="voice-results"
+       {% if picker.guard %}
+       hx-get="/ui/fragments/lesson_voices"
+       hx-trigger="change"
+       hx-target="#lesson-voices"
+       hx-include="#lesson-voices"
+       hx-swap="innerHTML"
+       {% endif %}>
+    {% include "partials/_voice_picker_results.html" %}
+  </div>
+</div>

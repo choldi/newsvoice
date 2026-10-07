@@ -1,19 +1,17 @@
-{# Voice selector(s) of the language-lesson form (Phase 7.12).
+{# Voice picker(s) of the language-lesson form (Phases 7.12 + 9.7).
 
-   One field for the single-voice modes (mixed, native); two for 'dual', whose
-   cast speaks two languages (the first voice teaches in the student's native
-   language, the second one in the target language). Re-rendered by
-   GET /ui/fragments/lesson_voices whenever the mode select changes AND
-   whenever a voice select changes (Phase 9.2): the current selections travel
-   in the query string so re-rendering keeps them, and the last mode is echoed
-   in the `current_mode` hidden field because the mode select lives outside
-   this block. `lesson_voices` is the Phase 9 registry ({id, label, language,
-   tag}: every engine's stock, cloned and generated voices); when no source is
-   reachable it is empty and the selects degrade to text inputs, and a current
-   selection the catalogue does not know is kept as its own option instead of
-   being dropped. When the two dual voices belong to different engines the
-   `mixed_message` explains why and the out-of-band submit button arrives
-   disabled. #}
+   One picker for the single-voice modes (mixed, native); two for 'dual',
+   whose cast speaks two languages (the first voice teaches in the student's
+   native language, the second one in the target language). Each picker is a
+   glob search plus a language select over the Phase 9 registry with radio
+   results (partials/_voice_picker.html): the checked radio travels with
+   every htmx fetch (hx-include) so the selection survives re-renders, and
+   clicking one re-runs this fragment through the results container's change
+   listener so the Phase 9.2 mixed-engine guard recomputes and the out-of-band
+   submit button arrives disabled when the two dual voices mix engines. The
+   last mode is echoed in the `current_mode` hidden field because the mode
+   select lives outside this block. The typed filters keep their
+   `voice_q`/`voice2_q` names so re-renders do not lose them. #}
 {% if fragment %}
 <input type="hidden" name="current_mode" value="{{ mode }}">
 {% endif %}
@@ -23,58 +21,16 @@
 {% if mode == 'dual' %}
 <div class="col">
   <label>Voz (lengua nativa)</label>
-  {% if lesson_voices %}
-  <select name="voice"
-          hx-get="/ui/fragments/lesson_voices"
-          hx-trigger="change"
-          hx-target="#lesson-voices"
-          hx-include="#lesson-voices"
-          hx-swap="innerHTML">
-    <option value="">(elige una voz)</option>
-    {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
-    {% endfor %}
-  </select>
-  {% else %}
-  <input type="text" name="voice" list="voice-list" value="{{ current_voice }}" placeholder="voz de la lengua nativa">
-  {% endif %}
+  {% with picker = voice_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
 </div>
 <div class="col">
   <label>Voz (lengua objetivo)</label>
-  {% if lesson_voices %}
-  <select name="voice2"
-          hx-get="/ui/fragments/lesson_voices"
-          hx-trigger="change"
-          hx-target="#lesson-voices"
-          hx-include="#lesson-voices"
-          hx-swap="innerHTML">
-    <option value="">(elige una voz)</option>
-    {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice2 else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
-    {% endfor %}
-  </select>
-  {% else %}
-  <input type="text" name="voice2" list="voice-list" value="{{ current_voice2 }}" placeholder="voz de la lengua objetivo">
-  {% endif %}
+  {% with picker = voice2_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
 </div>
 {% else %}
 <div class="col">
   <label>Voz</label>
-  {% if lesson_voices %}
-  <select name="voice"
-          hx-get="/ui/fragments/lesson_voices"
-          hx-trigger="change"
-          hx-target="#lesson-voices"
-          hx-include="#lesson-voices"
-          hx-swap="innerHTML">
-    <option value="">(por defecto)</option>
-    {% for v in lesson_voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }}){{ ' · ' ~ v.tag if v.tag else '' }}</option>
-    {% endfor %}
-  </select>
-  {% else %}
-  <input type="text" name="voice" list="voice-list" value="{{ current_voice }}" placeholder="(por defecto)">
-  {% endif %}
+  {% with picker = voice_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
 </div>
 {% endif %}
 {% if fragment %}

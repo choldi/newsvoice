@@ -336,8 +336,8 @@ def test_lesson_voice_fragment_follows_the_mode() -> None:
     assert dual.status_code == 200
     assert 'name="voice"' in dual.text
     assert 'name="voice2"' in dual.text
-    assert 'value="es-mx-male" selected' in dual.text, "the pick survives the switch"
-    assert 'value="clone-1" selected' in dual.text
+    assert 'value="es-mx-male" checked' in dual.text, "the pick survives the switch"
+    assert 'value="clone-1" checked' in dual.text
 
 
 # ---------------------------------------------------------------------------

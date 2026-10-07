@@ -180,6 +180,136 @@ def _mixed_engine_message(voice: str, voice2: str) -> str:
     return ""
 
 
+#: Maximum number of radio results a picker renders before the count hint
+#: asks the operator to narrow the search (the edge catalogue alone has ~700).
+VOICE_PICKER_LIMIT = 20
+
+
+def _picker_results_context(
+    entries: list,
+    *,
+    field: str,
+    current: str = "",
+    q: str = "",
+    lang: str = "",
+) -> dict:
+    """Filter, order and cap the radio results of one voice picker (Phase 9.7).
+
+    The glob query and the language prefix run through
+    :mod:`src.api.services.voice_search`, then the category order (designs,
+    clones, stock) applies and the list is capped to
+    :data:`VOICE_PICKER_LIMIT`. The current selection is always kept —
+    prepended when it falls past the cap or is unknown to every catalogue —
+    so no re-render can drop what was picked; an unknown id keeps the exact
+    text the operator typed, which the guards then treat as a wildcard.
+
+    Args:
+        entries: Registry dicts ({id, label, language, engines, category})
+            or :class:`VoiceOption` objects.
+        field: Radio group name ('voice' or 'voice2').
+        current: Voice id currently checked in this group ('' = none).
+        q: Glob-style query (see :func:`voice_search.matches`).
+        lang: Language prefix filter ('es' matches es and es-ES).
+
+    Returns:
+        Context for ``partials/_voice_picker_results.html``: field, current,
+        q, lang, shown (capped, tagged), total matches, limit and the
+        literal option (query text to send as-is when nothing matched).
+    """
+    dicts = [entry if isinstance(entry, dict) else entry.model_dump() for entry in entries]
+    ordered = voice_search.picker_order(voice_search.filter_voices(dicts, query=q, lang=lang))
+    total = len(ordered)
+    shown = ordered[:VOICE_PICKER_LIMIT]
+    shown_ids = {str(entry["id"]) for entry in shown}
+    if current and current not in shown_ids:
+        existing = next((entry for entry in ordered if str(entry["id"]) == current), None)
+        if existing is None:
+            existing = {
+                "id": current,
+                "label": current,
+                "language": "",
+                "engines": [],
+                "category": "",
+            }
+        shown = [existing, *[entry for entry in shown if str(entry["id"]) != current]]
+    tagged = [
+        {
+            **entry,
+            "tag": " · ".join(
+                part
+                for part in (
+                    "/".join(str(engine) for engine in (entry.get("engines") or [])),
+                    entry.get("category") or "",
+                )
+                if part
+            ),
+        }
+        for entry in shown
+    ]
+    text = q.strip()
+    return {
+        "field": field,
+        "current": current,
+        "q": q,
+        "lang": lang,
+        "shown": tagged,
+        "total": total,
+        "limit": VOICE_PICKER_LIMIT,
+        "literal": bool(text) and total == 0 and text != current,
+    }
+
+
+def _picker_context(
+    entries: list,
+    *,
+    picker_id: str,
+    field: str,
+    current: str = "",
+    q: str = "",
+    lang: str = "",
+    engines: str = "all",
+    empty_label: str = "",
+    guard: bool = False,
+) -> dict:
+    """Build the full context of one tools voice picker (Phase 9.7).
+
+    Wraps :func:`_picker_results_context` with everything the reusable
+    ``partials/_voice_picker.html` needs: the hidden field/engine hints the
+    search fragment reads, the language options of the **unfiltered**
+    catalogue (stable while typing) and the guard flag that makes the
+    results container re-run the lesson fragment on selection.
+
+    Args:
+        entries: Registry dicts or VoiceOption objects of this vocabulary.
+        picker_id: Unique DOM id segment ('doc', 'voice', 'voice2').
+        field: Radio group name ('voice' or 'voice2').
+        current: Currently checked voice id for the group.
+        q: Pre-filled glob query.
+        lang: Pre-filled language prefix.
+        engines: 'all' or the canonical engine the fragment must restrict
+            itself to (the doc picker sends 'edge').
+        empty_label: Label of the value="" option ('' omits it).
+        guard: True for the lesson pickers (results container listens to
+            radio changes and re-fetches /ui/fragments/lesson_voices).
+
+    Returns:
+        Results context plus picker_id, engines, empty_label, guard and
+        langs (``[{'code', 'count'}]`` over the whole vocabulary).
+    """
+    dicts = [entry if isinstance(entry, dict) else entry.model_dump() for entry in entries]
+    context = _picker_results_context(dicts, field=field, current=current, q=q, lang=lang)
+    context.update(
+        {
+            "picker_id": picker_id,
+            "engines": engines,
+            "empty_label": empty_label,
+            "guard": guard,
+            "langs": voice_search.language_options(dicts),
+        }
+    )
+    return context
+
+
 def _lesson_voice_context(
     voices: list[dict],
     mode: str = "mixed",
@@ -187,15 +317,23 @@ def _lesson_voice_context(
     voice2: str = "",
     *,
     fragment: bool = False,
+    voice_q: str = "",
+    voice2_q: str = "",
+    voice_lang: str = "",
+    voice2_lang: str = "",
 ) -> dict:
-    """Build the template context of the lesson voice selector(s) (Phase 7.12).
+    """Build the template context of the lesson voice picker(s) (Phase 7.12).
 
     Shared by the tools page and its voice fragment so the initial render and
     every mode switch render exactly the same block. The catalogue is the
-    full Phase 9 registry (every engine, tagged) normalized to ``{id, label,
-    language, tag}``; a current selection no source offers (gateway down,
-    legacy id) is appended instead of dropped so it survives re-renders, and
-    an unknown mode falls back to 'mixed', the single-voice default.
+    full Phase 9 registry (every engine, tagged); each picker gets its radio
+    results (glob search + language filter, Phase 9.7) and its guard flag so
+    a click on any result re-runs this fragment and the Phase 9.2 mixed
+    engine guard recomputes. The typed queries ride along as named fields
+    (``voice_q``/``voice2_q``) so a re-render keeps the operator's filter. A
+    current selection no source offers (gateway down, legacy id) is kept in
+    the vocabulary instead of dropped, and an unknown mode falls back to
+    'mixed', the single-voice default.
 
     Args:
         voices: Raw voice entries from :func:`list_all_voices`.
@@ -204,9 +342,15 @@ def _lesson_voice_context(
         voice2: Voice id currently selected for the target role (dual only).
         fragment: True when rendering the htmx fragment, which additionally
             carries the out-of-band submit button (Phase 9.2 guard).
+        voice_q: Typed glob query of the native/single picker.
+        voice2_q: Typed glob query of the target picker (dual only).
+        voice_lang: Language prefix filter of the native/single picker.
+        voice2_lang: Language prefix filter of the target picker (dual only).
 
     Returns:
-        Context keys for ``partials/_lesson_voices.html``.
+        Context keys for ``partials/_lesson_voices.html``: mode, the
+        ``voice_picker``/``voice2_picker`` dicts, the mixed-engine message
+        and the fragment flag.
     """
     normalized = str(mode or "").strip().lower()
     if normalized not in {m.value for m in LessonMode}:
@@ -221,15 +365,30 @@ def _lesson_voice_context(
                 {"id": current, "label": current, "language": "", "engines": [], "category": ""}
             )
             known.add(current)
-    for entry in entries:
-        entry["tag"] = " · ".join(
-            part for part in ("/".join(entry["engines"]), entry["category"]) if part
-        )
+    dual = normalized == "dual"
     return {
         "mode": normalized,
         "lesson_voices": entries,
-        "current_voice": current_voice,
-        "current_voice2": current_voice2,
+        "voice_picker": _picker_context(
+            entries,
+            picker_id="voice",
+            field="voice",
+            current=current_voice,
+            q=voice_q,
+            lang=voice_lang,
+            empty_label="(elige una voz)" if dual else "(por defecto)",
+            guard=True,
+        ),
+        "voice2_picker": _picker_context(
+            entries,
+            picker_id="voice2",
+            field="voice2",
+            current=current_voice2,
+            q=voice2_q,
+            lang=voice2_lang,
+            empty_label="(elige una voz)",
+            guard=True,
+        ),
         "mixed_message": _mixed_engine_message(voice, voice2),
         "fragment": fragment,
     }
@@ -1861,19 +2020,27 @@ async def ui_tools(request: Request) -> HTMLResponse:
         request: Incoming request.
 
     Returns:
-        HTMLResponse with the four forms and the voice catalog for the selects.
+        HTMLResponse with the four forms: the document TTS voice is a
+        Phase 9.7 picker over the edge vocabulary, the lessons one over the
+        whole registry.
     """
     omni = await _omni_options()
     edge = await _edge_voice_options()
     all_voices = [voice.model_dump() for voice in await list_all_voices()]
+    doc_picker = _picker_context(
+        edge["voices"],
+        picker_id="doc",
+        field="voice",
+        engines="edge",
+        empty_label="(por defecto)",
+    )
     return _render(
         request,
         "tools.html",
         {
             "collections": _collections(),
             "omni_languages": omni["languages"],
-            "all_voices": all_voices,
-            "edge_voices": edge["voices"],
+            "doc_picker": doc_picker,
             **_lesson_voice_context(all_voices),
         },
     )
@@ -2012,20 +2179,26 @@ async def ui_fragment_lesson_voices(
     voice: str = "",
     voice2: str = "",
     current_mode: str = "",
+    voice_q: str = "",
+    voice2_q: str = "",
+    voice_lang: str = "",
+    voice2_lang: str = "",
 ) -> HTMLResponse:
-    """Render the voice selector(s) of the language-lesson form (Phase 7.12).
+    """Render the voice picker(s) of the language-lesson form (Phase 7.12).
 
     The block is re-fetched when the mode select changes: 'dual' voices the
     class with two roles (native-language teacher + target-language teacher),
     so it must ask for two voices, while 'mixed' and 'native' keep the single
     one. The current selections ride along as query parameters (the mode select
-    and the selectors inside ``#lesson-voices`` are htmx-included) so toggling
-    the mode does not drop what was already picked.
+    and the pickers inside ``#lesson-voices`` are htmx-included) so toggling
+    the mode does not drop what was already picked, and the typed filters
+    (glob query + language) keep their own parameters so a re-render does not
+    lose them either.
 
-    A voice change does not carry the mode select (it lives outside the
-    block), so the partial echoes the last mode in a ``current_mode`` hidden
-    field: ``mode`` (sent by the mode select itself) wins when present,
-    otherwise the echo is used. The response also carries the submit button
+    A pick does not carry the mode select (it lives outside the block), so
+    the partial echoes the last mode in a ``current_mode`` hidden field:
+    ``mode`` (sent by the mode select itself) wins when present, otherwise
+    the echo is used. The response also carries the submit button
     out-of-band, disabled while the two dual voices mix engines (Phase 9.2).
 
     Args:
@@ -2034,6 +2207,10 @@ async def ui_fragment_lesson_voices(
         voice: Currently selected native/single voice id.
         voice2: Currently selected target voice id (dual only).
         current_mode: Last mode echoed by the hidden field of the partial.
+        voice_q: Typed glob query of the native/single picker.
+        voice2_q: Typed glob query of the target picker (dual only).
+        voice_lang: Language prefix filter of the native/single picker.
+        voice2_lang: Language prefix filter of the target picker (dual only).
 
     Returns:
         HTMLResponse with the _lesson_voices partial.
@@ -2048,8 +2225,56 @@ async def ui_fragment_lesson_voices(
             voice=voice,
             voice2=voice2,
             fragment=True,
+            voice_q=voice_q,
+            voice2_q=voice2_q,
+            voice_lang=voice_lang,
+            voice2_lang=voice2_lang,
         ),
     )
+
+
+@router.get("/ui/fragments/voice_picker", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_voice_picker(
+    request: Request,
+    field: str = "voice",
+    voice: str = "",
+    voice2: str = "",
+    q: str = "",
+    lang: str = "",
+    engines: str = "all",
+    empty_label: str = "",
+) -> HTMLResponse:
+    """Search results of one tools voice picker (Phase 9.7).
+
+    Fired by the query field (keyup debounce) and the language select of every
+    picker in the tools page; the response swaps only the radio results, so
+    the search row keeps its state. The hidden inputs of the picker wrapper
+    (hx-included) tell which radio group, vocabulary and empty option to
+    render, and the currently checked radio — carried by the same include —
+    is always kept in the response, checked.
+
+    Args:
+        request: Incoming request.
+        field: Radio group name ('voice' or 'voice2'); anything else falls
+            back to 'voice'.
+        voice: Currently checked voice (native/single/doc picker).
+        voice2: Currently checked voice (target picker, dual mode only).
+        q: Glob-style query over id, label, language, category and engines.
+        lang: Language prefix filter ('es' matches es and es-ES).
+        engines: 'all' or the canonical engine of the vocabulary (the doc
+            picker sends 'edge').
+        empty_label: Label of the value='' option ('' omits it).
+
+    Returns:
+        HTMLResponse with the _voice_picker_results partial.
+    """
+    wanted_field = field if field in {"voice", "voice2"} else "voice"
+    current = voice2 if wanted_field == "voice2" else voice
+    engine = engines.strip() if engines not in {"", "all"} else None
+    voices = [entry.model_dump() for entry in await list_all_voices(engine=engine)]
+    context = _picker_results_context(voices, field=wanted_field, current=current, q=q, lang=lang)
+    context["empty_label"] = empty_label
+    return _render(request, "partials/_voice_picker_results.html", {"picker": context})
 
 
 @router.get("/ui/fragments/tool_jobs", response_class=HTMLResponse, include_in_schema=False)

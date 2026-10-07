@@ -49,16 +49,7 @@
       </div>
       <div class="col">
         <label>Voz (solo Edge)</label>
-        {% if edge_voices %}
-        <select name="voice">
-          <option value="">(por defecto)</option>
-          {% for v in edge_voices %}
-          <option value="{{ v.id }}">{{ v.label }} ({{ v.language or '—' }})</option>
-          {% endfor %}
-        </select>
-        {% else %}
-        <input type="text" name="voice" placeholder="(por defecto)">
-        {% endif %}
+        {% with picker = doc_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
       <div class="col">
         <label>Idioma</label>
@@ -163,8 +154,5 @@
 <datalist id="lang-list">
   {% for l in omni_languages %}<option value="{{ l }}">{% endfor %}
   <option value="es"><option value="en">
-</datalist>
-<datalist id="voice-list">
-  {% for v in all_voices %}<option value="{{ v.id }}">{% endfor %}
 </datalist>
 {% endblock %}
