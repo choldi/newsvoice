@@ -83,7 +83,12 @@
     <div class="row">
       <div class="col">
         <label>Modo</label>
-        <select name="mode">
+        <select name="mode"
+                hx-get="/ui/fragments/lesson_voices"
+                hx-trigger="change"
+                hx-target="#lesson-voices"
+                hx-include="#lesson-voices"
+                hx-swap="innerHTML">
           <option value="mixed">mixed — nativa + ejemplos en objetivo</option>
           <option value="dual">dual — dos voces, dos idiomas</option>
           <option value="native">native — todo en la lengua nativa</option>
@@ -110,25 +115,17 @@
         <label>Título (opcional)</label>
         <input type="text" name="title" placeholder="Se usa el nombre del fichero">
       </div>
-      <div class="col">
-        <label>Voz (modo mixed/native)</label>
-        {% if omni_voices %}
-        <select name="voice">
-          <option value="">(por defecto)</option>
-          {% for v in omni_voices %}
-          <option value="{{ v.get('voice_id') or v.get('name') }}">{{ v.get('voice_id') or v.get('name') }} ({{ v.get('language', '—') }})</option>
-          {% endfor %}
-        </select>
-        {% else %}
-        <input type="text" name="voice" list="voice-list" placeholder="(por defecto)">
-        {% endif %}
+      {# One voice for mixed/native, two for dual (native + target); the mode
+         select re-fetches this block so the cast always matches the mode. #}
+      <div class="col" id="lesson-voices" style="display:contents">
+        {% include "partials/_lesson_voices.html" %}
       </div>
     </div>
     <details>
-      <summary class="muted" style="cursor:pointer">Cast avanzado (spec JSON — obligatorio en modo dual)</summary>
+      <summary class="muted" style="cursor:pointer">Cast avanzado (spec JSON — anula los selectores de voz)</summary>
       <label>NarrationSpec JSON</label>
       <textarea name="spec" rows="8" style="font-family:monospace;font-size:12px" placeholder='{"language":"en","roles":[{"name":"profe_es","voice_id":"...","language":"es"},{"name":"profe_en","voice_id":"...","language":"en"}]}'></textarea>
-      <p class="muted" style="font-size:12px">Las voces clonadas están en <a href="/ui/voices">Voces</a>. Sin spec, se usa la voz de arriba con un solo rol.</p>
+      <p class="muted" style="font-size:12px">Las voces clonadas están en <a href="/ui/voices">Voces</a>. Sin spec, se usan las voces seleccionadas arriba (una en mixed/native, dos en dual).</p>
     </details>
     <button type="submit" class="primary">Generar clase</button>
   </form>

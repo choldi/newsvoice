@@ -54,6 +54,10 @@ async def submit_lesson_endpoint(
         default=None, description="NarrationSpec JSON; the cast that voices the class"
     ),
     voice: str | None = Form(default=None, description="Single voice id when no spec is given"),
+    voice2: str | None = Form(
+        default=None,
+        description="Second voice id (target language); required for mode='dual'",
+    ),
 ) -> LessonSubmitOut:
     """POST /admin/lessons endpoint handler.
 
@@ -66,7 +70,8 @@ async def submit_lesson_endpoint(
         collection: Collection whose channels receive the lesson.
         title: Optional lesson title.
         spec: Optional NarrationSpec JSON.
-        voice: Optional single voice for a default cast.
+        voice: Voice of the native-language role (the single role otherwise).
+        voice2: Voice of the target-language role; required for mode='dual'.
 
     Returns:
         LessonSubmitOut with the workflow id and the status URL.
@@ -86,6 +91,7 @@ async def submit_lesson_endpoint(
             title=title,
             spec=spec,
             voice=voice,
+            voice2=voice2,
         )
     except SubmitError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

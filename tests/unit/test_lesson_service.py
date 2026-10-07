@@ -21,6 +21,7 @@ from src.api.services.lesson import (
     lesson_upload_path,
     parse_lesson_content,
     read_lesson_meta,
+    resolve_cast,
     roles_summary,
     save_lesson,
     should_attach_audio,
@@ -29,6 +30,7 @@ from src.api.services.lesson import (
     validate_mode,
     validate_notes,
 )
+from src.api.services.submit import SubmitError
 
 
 @pytest.fixture(autouse=True)
@@ -161,6 +163,56 @@ def test_mixed_and_native_accept_one_role() -> None:
     validate_mode(LessonMode.MIXED, _spec("voice-1"))
     validate_mode(LessonMode.NATIVE, _spec("voice-1"))
     validate_mode(LessonMode.DUAL, _spec("voice-1", "voice-2"))
+
+
+def test_resolve_cast_dual_builds_the_two_roles() -> None:
+    """'dual' without a spec turns the two voice fields into the cast."""
+    spec = resolve_cast(
+        None,
+        "voice-native",
+        "en",
+        mode="dual",
+        native_language="es",
+        voice2="voice-target",
+    )
+    assert [(r.name, r.voice_id, r.language) for r in spec.roles] == [
+        ("profe_native", "voice-native", "es"),
+        ("profe_target", "voice-target", "en"),
+    ]
+
+
+def test_resolve_cast_dual_needs_both_voices() -> None:
+    """A missing second voice is a 422, never a silent one-role class."""
+    with pytest.raises(SubmitError) as exc:
+        resolve_cast(None, "voice-1", "en", mode="dual", native_language="es")
+    assert exc.value.status_code == 422
+    assert "voice2" in exc.value.message
+
+
+def test_resolve_cast_keeps_one_role_outside_dual() -> None:
+    """'mixed' and 'native' stay single-voice; voice2 is not part of the cast."""
+    for mode in ("mixed", "native"):
+        spec = resolve_cast(
+            None,
+            "voice-1",
+            "en",
+            mode=mode,
+            native_language="es",
+            voice2="voice-2",
+        )
+        assert [r.name for r in spec.roles] == ["teacher"]
+        assert spec.roles[0].voice_id == "voice-1"
+
+
+def test_resolve_cast_prefers_the_spec_json() -> None:
+    """A hand-written spec wins over the voice fields, dual included."""
+    spec_json = json.dumps(
+        {"language": "en", "roles": [{"name": "profe_es", "voice_id": "clone-es"}]}
+    )
+    spec = resolve_cast(
+        spec_json, "voice-1", "en", mode="dual", native_language="es", voice2="voice-2"
+    )
+    assert [r.name for r in spec.roles] == ["profe_es"]
 
 
 def test_roles_summary_reports_languages() -> None:

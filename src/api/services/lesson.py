@@ -29,6 +29,10 @@ logger = structlog.get_logger(__name__)
 
 #: ``audio_jobs.kind`` discriminator of this feature.
 JOB_KIND = "lesson"
+# Role names of the default two-voice cast in 'dual' mode. The prompt tells the
+# LLM which language each role speaks, so the names only have to be stable.
+DUAL_NATIVE_ROLE = "profe_native"
+DUAL_TARGET_ROLE = "profe_target"
 _LANGUAGE_RE = re.compile(r"[a-z]{2}")
 
 LESSON_EXTENSIONS = {".md": "md", ".txt": "txt"}
@@ -467,19 +471,36 @@ def language_code(value: str, field_name: str) -> str:
     return cleaned
 
 
-def resolve_cast(raw_spec: str | None, voice: str | None, target_language: str) -> NarrationSpec:
-    """Resolve the cast that will voice the class (spec JSON or one voice).
+def resolve_cast(
+    raw_spec: str | None,
+    voice: str | None,
+    target_language: str,
+    *,
+    mode: LessonMode | str = LessonMode.MIXED,
+    native_language: str = "",
+    voice2: str | None = None,
+) -> NarrationSpec:
+    """Resolve the cast that will voice the class (spec JSON or voice fields).
+
+    With no spec the cast follows the mode: ``dual`` needs two roles (the first
+    one teaches in ``native_language``, the second one in ``target_language``),
+    while ``mixed``/``native`` keep the single default role. The spec JSON, when
+    given, always wins so an operator can still hand-craft the cast.
 
     Args:
         raw_spec: Optional NarrationSpec JSON from the form.
-        voice: Optional single voice id for a default one-role cast.
+        voice: Voice id of the native-language role (single role otherwise).
         target_language: Language used as the spec default.
+        mode: Lesson mode driving the default cast shape.
+        native_language: Student's native language (the first dual role speaks it).
+        voice2: Voice id of the target-language role (dual mode only).
 
     Returns:
         The validated spec.
 
     Raises:
-        SubmitError: 422 when the spec JSON or the voice is unusable.
+        SubmitError: 422 when the spec JSON or the voices are unusable, or when
+            ``dual`` is asked for without two voices.
     """
     if raw_spec and raw_spec.strip():
         try:
@@ -489,12 +510,39 @@ def resolve_cast(raw_spec: str | None, voice: str | None, target_language: str) 
                 f"invalid spec JSON: {exc.errors()[0].get('msg', str(exc))}",
                 status_code=422,
             ) from exc
-    voice_id = (voice or "").strip() or get_settings().tts_voice
     try:
-        return NarrationSpec(
-            language=target_language,
-            roles=[SpeakerRole(name="teacher", voice_id=voice_id)],
-        )
+        lesson_mode = LessonMode(str(mode).strip().lower())
+    except ValueError as exc:
+        raise SubmitError(f"unknown lesson mode: {mode!r}", status_code=422) from exc
+    if lesson_mode is LessonMode.DUAL:
+        native_id = (voice or "").strip()
+        target_id = (voice2 or "").strip()
+        native_lang = (native_language or "").strip()
+        missing = [
+            label
+            for label, value in (
+                ("voice (native language)", native_id),
+                ("voice2 (target language)", target_id),
+                ("native_language", native_lang),
+            )
+            if not value
+        ]
+        if missing:
+            raise SubmitError(
+                "mode 'dual' needs two voices and both languages (missing: "
+                + ", ".join(missing)
+                + "); pick them in the form or send a NarrationSpec",
+                status_code=422,
+            )
+        roles = [
+            SpeakerRole(name=DUAL_NATIVE_ROLE, voice_id=native_id, language=native_lang),
+            SpeakerRole(name=DUAL_TARGET_ROLE, voice_id=target_id, language=target_language),
+        ]
+    else:
+        voice_id = (voice or "").strip() or get_settings().tts_voice
+        roles = [SpeakerRole(name="teacher", voice_id=voice_id)]
+    try:
+        return NarrationSpec(language=target_language, roles=roles)
     except ValidationError as exc:
         raise SubmitError(
             f"invalid default cast: {exc.errors()[0].get('msg', str(exc))}",
@@ -537,6 +585,7 @@ async def submit_lesson(
     title: str = "",
     spec: str | None = None,
     voice: str | None = None,
+    voice2: str | None = None,
 ) -> dict[str, str]:
     """Validate, store and start a lesson job (Phase 7.12).
 
@@ -552,7 +601,8 @@ async def submit_lesson(
         collection: Collection whose channels receive the lesson.
         title: Optional lesson title (defaults to the filename stem).
         spec: Optional NarrationSpec JSON.
-        voice: Optional single voice for a default cast.
+        voice: Voice of the native-language role (the single role otherwise).
+        voice2: Voice of the target-language role; required in 'dual' mode.
 
     Returns:
         Dict with workflow_id, collection, title, mode and status_url.
@@ -599,7 +649,14 @@ async def submit_lesson(
             code = 422
         raise SubmitError(detail, status_code=code) from exc
 
-    cast = resolve_cast(spec, voice, target)
+    cast = resolve_cast(
+        spec,
+        voice,
+        target,
+        mode=lesson_mode,
+        native_language=native,
+        voice2=voice2,
+    )
     try:
         validate_mode(lesson_mode, cast)
     except LessonError as exc:

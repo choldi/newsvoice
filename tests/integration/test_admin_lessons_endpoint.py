@@ -179,11 +179,32 @@ def test_submit_rejects_bad_languages_and_modes(_lesson_env: Path) -> None:
     assert _submit(target_language="en", native_language="es", mode="karate").status_code == 422
 
 
-def test_submit_rejects_dual_with_a_single_voice(_lesson_env: Path) -> None:
-    """'dual' with one role is a configuration error, not a silent downgrade."""
+def test_submit_rejects_dual_without_two_voices(_lesson_env: Path) -> None:
+    """'dual' with a single voice is refused instead of downgrading to one role."""
     response = _submit(target_language="en", native_language="es", mode="dual")
     assert response.status_code == 422
-    assert "at least two roles" in response.json()["detail"]
+    assert "voice2" in response.json()["detail"]
+
+
+def test_submit_builds_the_dual_cast_from_two_voices(_lesson_env: Path) -> None:
+    """The two voice fields become the native/target roles of a 'dual' class."""
+    with patch(
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
+        new_callable=AsyncMock,
+    ) as start:
+        response = _submit(
+            target_language="en",
+            native_language="es",
+            mode="dual",
+            voice="clone-native",
+            voice2="clone-target",
+        )
+
+    assert response.status_code == 202
+    roles = start.call_args.args[0].spec["roles"]
+    assert [role["name"] for role in roles] == ["profe_native", "profe_target"]
+    assert [role["voice_id"] for role in roles] == ["clone-native", "clone-target"]
+    assert [role["language"] for role in roles] == ["es", "en"]
 
 
 def test_submit_rejects_invalid_spec_json(_lesson_env: Path) -> None:

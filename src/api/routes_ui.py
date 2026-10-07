@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.datastructures import UploadFile
 
 from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
+from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec
 from src.api.services import env_editor
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
@@ -149,6 +150,39 @@ async def _omni_options() -> dict:
         logger.warning("omni_options_failed", error=str(exc))
         return {"languages": [], "voices": []}
     return {"languages": languages, "voices": voices}
+
+
+def _lesson_voice_context(
+    voices: list[dict],
+    mode: str = "mixed",
+    voice: str = "",
+    voice2: str = "",
+) -> dict:
+    """Build the template context of the lesson voice selector(s) (Phase 7.12).
+
+    Shared by the tools page and its voice fragment so the initial render and
+    every mode switch render exactly the same block. The catalogue is normalized
+    to ``{id, label, language}`` and an unknown mode falls back to 'mixed',
+    which is the single-voice default.
+
+    Args:
+        voices: Raw voice entries from :func:`_omni_options`.
+        mode: Lesson mode from the form ('mixed', 'dual' or 'native').
+        voice: Voice id currently selected for the native/single role.
+        voice2: Voice id currently selected for the target role (dual only).
+
+    Returns:
+        Context keys for ``partials/_lesson_voices.html``.
+    """
+    normalized = str(mode or "").strip().lower()
+    if normalized not in {m.value for m in LessonMode}:
+        normalized = LessonMode.MIXED.value
+    return {
+        "mode": normalized,
+        "lesson_voices": _normalize_voice_entries(voices),
+        "current_voice": (voice or "").strip(),
+        "current_voice2": (voice2 or "").strip(),
+    }
 
 
 #: Engines offered by the per-collection TTS dropdown, in menu order. One label
@@ -1427,6 +1461,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "collections": _collections(),
             "omni_languages": omni["languages"],
             "omni_voices": omni["voices"],
+            **_lesson_voice_context(omni["voices"]),
         },
     )
 
@@ -1523,6 +1558,7 @@ async def ui_tools_lessons(request: Request) -> RedirectResponse:
             title=fields.get("title", ""),
             spec=fields.get("spec") or None,
             voice=fields.get("voice") or None,
+            voice2=fields.get("voice2") or None,
         )
     except SubmitError as exc:
         return _flash(target, exc.message, "error")
@@ -1554,6 +1590,39 @@ async def ui_tools_podcast(request: Request) -> RedirectResponse:
     name = (fields.get("collection") or "default").strip()
     level, message = await start_collection_podcast(name)
     return _flash(target, message, level)
+
+
+@router.get("/ui/fragments/lesson_voices", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_lesson_voices(
+    request: Request,
+    mode: str = "mixed",
+    voice: str = "",
+    voice2: str = "",
+) -> HTMLResponse:
+    """Render the voice selector(s) of the language-lesson form (Phase 7.12).
+
+    The block is re-fetched when the mode select changes: 'dual' voices the
+    class with two roles (native-language teacher + target-language teacher),
+    so it must ask for two voices, while 'mixed' and 'native' keep the single
+    one. The current selections ride along as query parameters (the mode select
+    and the selectors inside ``#lesson-voices`` are htmx-included) so toggling
+    the mode does not drop what was already picked.
+
+    Args:
+        request: Incoming request.
+        mode: Lesson mode currently selected.
+        voice: Currently selected native/single voice id.
+        voice2: Currently selected target voice id (dual only).
+
+    Returns:
+        HTMLResponse with the _lesson_voices partial.
+    """
+    omni = await _omni_options()
+    return _render(
+        request,
+        "partials/_lesson_voices.html",
+        _lesson_voice_context(omni["voices"], mode=mode, voice=voice, voice2=voice2),
+    )
 
 
 @router.get("/ui/fragments/tool_jobs", response_class=HTMLResponse, include_in_schema=False)

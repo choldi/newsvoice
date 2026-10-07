@@ -1190,7 +1190,8 @@ curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
 ```
 
 Si omites `spec`, pásale `voice=<id>` (o nada) y se construye un cast de una
-voz con `TTS_VOICE`. Modos:
+voz con `TTS_VOICE`. En `dual` sin `spec` hacen falta las dos voces:
+`voice=<nativa>` y `voice2=<objetivo>` (422 si falta cualquiera). Modos:
 
 | Modo | Voces | Qué hace el LLM |
 |---|---|---|

@@ -1,0 +1,51 @@
+{# Voice selector(s) of the language-lesson form (Phase 7.12).
+
+   One field for the single-voice modes (mixed, native); two for 'dual', whose
+   cast speaks two languages (the first voice teaches in the student's native
+   language, the second one in the target language). Re-rendered by
+   GET /ui/fragments/lesson_voices whenever the mode select changes; the
+   current selections travel in the query string so toggling keeps them.
+   `lesson_voices` is the normalized catalogue ({id, label, language}); when
+   the gateway is down it is empty and the selects degrade to text inputs. #}
+{% if mode == 'dual' %}
+<div class="col">
+  <label>Voz (lengua nativa)</label>
+  {% if lesson_voices %}
+  <select name="voice">
+    <option value="">(elige una voz)</option>
+    {% for v in lesson_voices %}
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <input type="text" name="voice" list="voice-list" value="{{ current_voice }}" placeholder="voz de la lengua nativa">
+  {% endif %}
+</div>
+<div class="col">
+  <label>Voz (lengua objetivo)</label>
+  {% if lesson_voices %}
+  <select name="voice2">
+    <option value="">(elige una voz)</option>
+    {% for v in lesson_voices %}
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice2 else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <input type="text" name="voice2" list="voice-list" value="{{ current_voice2 }}" placeholder="voz de la lengua objetivo">
+  {% endif %}
+</div>
+{% else %}
+<div class="col">
+  <label>Voz</label>
+  {% if lesson_voices %}
+  <select name="voice">
+    <option value="">(por defecto)</option>
+    {% for v in lesson_voices %}
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <input type="text" name="voice" list="voice-list" value="{{ current_voice }}" placeholder="(por defecto)">
+  {% endif %}
+</div>
+{% endif %}

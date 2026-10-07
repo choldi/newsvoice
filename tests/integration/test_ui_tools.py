@@ -276,6 +276,70 @@ def test_lesson_submit_calls_the_shared_service() -> None:
     assert kwargs["collection"] == "tech"
 
 
+def test_lesson_submit_forwards_both_voices() -> None:
+    """The dual-mode form hands the native and the target voice to the service."""
+    client = _client()
+    with patch(
+        "src.api.routes_ui.submit_lesson",
+        new_callable=AsyncMock,
+        return_value={
+            "workflow_id": "lesson-def",
+            "collection": "default",
+            "title": "Dual",
+            "mode": "dual",
+            "status_url": "/api/admin/lessons/lesson-def",
+        },
+    ) as submit:
+        response = client.post(
+            "/ui/tools/lessons",
+            files={"file": ("apuntes.md", b"# Clase\n\nHola.", "text/markdown")},
+            data={
+                "mode": "dual",
+                "target_language": "en",
+                "native_language": "es",
+                "voice": "clone-native",
+                "voice2": "clone-target",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    kwargs = submit.call_args.kwargs
+    assert kwargs["voice"] == "clone-native"
+    assert kwargs["voice2"] == "clone-target"
+
+
+def test_lesson_form_wires_the_voice_fragment() -> None:
+    """The lesson form renders one voice field and swaps it when the mode changes."""
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    assert 'id="lesson-voices"' in response.text
+    assert 'hx-get="/ui/fragments/lesson_voices"' in response.text
+    assert 'name="voice2"' not in response.text, "mixed is single-voice"
+
+
+def test_lesson_voice_fragment_follows_the_mode() -> None:
+    """The fragment asks for two voices in dual and one in the other modes."""
+    client = _client()
+
+    mixed = client.get("/ui/fragments/lesson_voices", params={"mode": "mixed"})
+    assert mixed.status_code == 200
+    assert 'name="voice"' in mixed.text
+    assert 'name="voice2"' not in mixed.text
+
+    dual = client.get(
+        "/ui/fragments/lesson_voices",
+        params={"mode": "dual", "voice": "es-mx-male", "voice2": "clone-1"},
+    )
+    assert dual.status_code == 200
+    assert 'name="voice"' in dual.text
+    assert 'name="voice2"' in dual.text
+    assert 'value="es-mx-male" selected' in dual.text, "the pick survives the switch"
+    assert 'value="clone-1" selected' in dual.text
+
+
 # ---------------------------------------------------------------------------
 # Podcast
 # ---------------------------------------------------------------------------

@@ -531,12 +531,12 @@ token de admin y uno manipulado/expirado da 403.
 
 - [x] **7.12 Worker profesor de idiomas** — `POST /api/admin/lessons`
       (multipart: notas `.md`/`.txt`, modo, idiomas, colección y el **cast en
-      la petición** como `NarrationSpec` JSON o un `voice` suelto) sube las
-      notas a `data/lessons/uploads/`, abre la fila en `audio_jobs`
-      (`kind='lesson'`, sin migración) y arranca `LessonWorkflow` en la cola
-      propia `news-engine-teacher-queue`, servida por el contenedor nuevo
-      `teacher-worker`: ni el LLM ni un render de 10+ minutos pueden ocupar
-      los slots del worker de digest. El workflow `generate → render →
+      la petición** como `NarrationSpec` JSON o los campos `voice` (+ `voice2`
+      en `dual`)) sube las notas a `data/lessons/uploads/`, abre la fila en
+      `audio_jobs` (`kind='lesson'`, sin migración) y arranca `LessonWorkflow`
+      en la cola propia `news-engine-teacher-queue`, servida por el contenedor
+      nuevo `teacher-worker`: ni el LLM ni un render de 10+ minutos pueden
+      ocupar los slots del worker de digest. El workflow `generate → render →
       deliver` vive en `src/workers/lesson_{activities,workflows}.py` (módulo
       propio, igual que narración). **generate**: valida las notas (extensión,
       `TEACHER_MAX_NOTES_CHARS`), construye el prompt con el modo y el cast
@@ -563,9 +563,11 @@ token de admin y uno manipulado/expirado da 403.
       acepta `prefix`), servido por la ruta pública nueva que confina el
       fichero a `narration_cache_dir`. Estados en
       `/api/admin/lessons/{id}` + `data/lessons/meta/<id>.json`. Modos:
-      `mixed` (una voz, nativa + ejemplos en objetivo), `dual` (dos voces,
-      obligatorio en el cast, primera en nativa y segunda en objetivo) y
-      `native` (todo en nativa, la objetivo citada). Cola y contenedor
+      `mixed` (una voz, nativa + ejemplos en objetivo), `dual` (dos voces —
+      `voice` + `voice2` en la GUI/API o el cast en JSON —, la primera en
+      nativa y la segunda en objetivo; sin ambas, 422) y `native` (todo en
+      nativa, la objetivo citada). La GUI pide las voces según el modo vía
+      `GET /ui/fragments/lesson_voices`. Cola y contenedor
       (`teacher-worker`) añadidos a compose; sin dependencias nuevas.
 
 **Success criteria:** `933 passed` con `ruff` limpio; el worker nuevo espeja
