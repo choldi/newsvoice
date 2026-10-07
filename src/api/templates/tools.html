@@ -53,7 +53,7 @@
         <select name="voice">
           <option value="">(por defecto)</option>
           {% for v in omni_voices %}
-          <option value="{{ v.get('voice_id') or v.get('name') }}">{{ v.get('voice_id') or v.get('name') }} ({{ v.get('language', '—') }})</option>
+          <option value="{{ v.id }}">{{ v.label }} ({{ v.language or '—' }})</option>
           {% endfor %}
         </select>
         {% else %}
@@ -165,6 +165,6 @@
   <option value="es"><option value="en">
 </datalist>
 <datalist id="voice-list">
-  {% for v in omni_voices %}<option value="{{ v.get('voice_id') or v.get('name') }}">{% endfor %}
+  {% for v in omni_voices %}<option value="{{ v.id }}">{% endfor %}
 </datalist>
 {% endblock %}

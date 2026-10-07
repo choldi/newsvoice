@@ -19,6 +19,9 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from src.api.models.admin import VoiceCloneIn, VoiceCloneOut, VoicesOut
+from src.api.models.voices import VoicesAllOut
+from src.api.services.tts_backends import ALLOWED_BACKENDS
+from src.api.services.voice_registry import CATEGORY_ORDER, list_all_voices
 from src.api.services.voices import VoicesService
 from src.core.config import settings
 from src.core.voice_catalog import load_manifest, load_profiles, missing_or_stale
@@ -55,6 +58,42 @@ async def list_cloned_voices() -> VoicesOut:
     service = VoicesService()
     voices = await service.list_cloned()
     return VoicesOut(voices=voices)
+
+
+@router.get("/admin/voices/all", response_model=VoicesAllOut)
+async def list_all_voice_options(
+    engine: str | None = None,
+    category: str | None = None,
+) -> VoicesAllOut:
+    """List every selectable voice of every engine (Phase 9.1).
+
+    The single source behind the GUI dropdowns: cloned, generated and stock
+    voices of edge, the gateway and Modal, each tagged with the engines that
+    accept it so a mixed-engine selection can be rejected before generation.
+
+    Args:
+        engine: Optional canonical engine id ('edge', 'omni_voice', 'qwen3_tts',
+            'zonos2') to filter by.
+        category: Optional 'stock', 'cloned' or 'generated' to filter by.
+
+    Returns:
+        VoicesAllOut with the tagged voice list.
+
+    Raises:
+        HTTPException: 422 when engine or category is not a known value.
+    """
+    if engine and engine.strip().lower() not in ALLOWED_BACKENDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"engine must be one of {list(ALLOWED_BACKENDS)}: {engine!r}",
+        )
+    if category and category.strip().lower() not in CATEGORY_ORDER:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"category must be one of {list(CATEGORY_ORDER)}: {category!r}",
+        )
+    voices = await list_all_voices(engine=engine, category=category)
+    return VoicesAllOut(voices=voices)
 
 
 @router.post("/admin/voices/clone", response_model=VoiceCloneOut)

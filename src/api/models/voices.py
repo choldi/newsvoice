@@ -158,6 +158,41 @@ class VoiceProfile(BaseModel):
         return slug
 
 
+class VoiceOption(BaseModel):
+    """One selectable voice from any engine, tagged for the GUI (Phase 9.1).
+
+    The registry behind ``GET /api/admin/voices/all`` merges the three sources
+    (cloned, generated, stock) of every engine into this one shape, so a
+    dropdown can show where each voice lives and the engine guard can reject a
+    selection that mixes engines.
+
+    Attributes:
+        id: Engine-native voice id: Edge ShortName, gateway stock id or clone
+            UUID, or catalog profile name.
+        label: Human-readable name shown in the dropdown.
+        language: Language code in the engine's own vocabulary ('es', 'es-ES').
+        engines: Engines that accept this id. A Modal catalog voice serves
+            both qwen3_tts and zonos2; an edge/gateway alias id serves both.
+        category: 'stock' (shipped by an engine), 'cloned' (gateway clone) or
+            'generated' (custom voice created from the GUI).
+    """
+
+    id: str = Field(..., min_length=1, description="Engine-native voice id")
+    label: str = Field(..., min_length=1, description="Human-readable dropdown label")
+    language: str = Field(default="", description="Language code as the engine spells it")
+    engines: list[str] = Field(
+        default_factory=list, description="Engines whose vocabulary contains this id"
+    )
+    category: str = Field(..., description="stock | cloned | generated")
+
+
+class VoicesAllOut(BaseModel):
+    """Response carrying every selectable voice, tagged by engine and origin."""
+
+    status: str = Field(default="ok", description="Execution status: ok or error")
+    voices: list[VoiceOption] = Field(..., description="Cloned + generated + stock voices")
+
+
 class VoiceManifestEntry(BaseModel):
     """Generated record for one designed voice.
 

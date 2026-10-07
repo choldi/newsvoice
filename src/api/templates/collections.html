@@ -540,7 +540,7 @@
 </div>
 
 <datalist id="cast-voices">
-  {% for v in omni.voices %}<option value="{{ v.get('voice_id') or v.get('name') }}">{% endfor %}
+  {% for v in omni.voices %}<option value="{{ v.id }}">{% endfor %}
 </datalist>
 <datalist id="lang-list">
   {% for l in omni.languages %}<option value="{{ l }}">{% endfor %}

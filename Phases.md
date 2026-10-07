@@ -331,7 +331,7 @@ counts son configurables por colección.
 
 **Effort:** 8-10 hours.
 
-- [ ] **7.8 Voz pública con Qwen3-TTS en Modal** — vía pública con derechos
+- [x] **7.8 Voz pública con Qwen3-TTS en Modal** — vía pública con derechos
       comerciales claros, en paralelo a la vía privada actual (OmniVoice + clones):
       `TTSBackend` = `OMNIVOICE` | `QWEN3_TTS` | `ZONOS2` (ZONOS2 behind gate);
       `VoiceSource` = `QWEN_DESIGN` | `RECORDING`; catálogo JSON versionable
@@ -357,7 +357,16 @@ ningún audio publicado usa voces de terceros sin licencia.
 
 **Effort:** 12-16 hours.
 
-- [ ] **7.9 Diseño de voces en la GPU box (debwk)** — el diseño sale de Modal y
+> **Cerrada (2026-10-07).** Verificado en el árbol: `modal>=1.0.0` en
+> `pyproject.toml`, `TTSBackend.OMNIVOICE|QWEN3_TTS|ZONOS2` + `VoiceSource`,
+> 24 perfiles con guard `instruct_sha256`/`ref_text_sha256`, flujo
+> `VoiceCatalogWorkflow → design → store → upload`, las dos task queues
+> (`narration_local_task_queue`/`narration_modal_task_queue`), el worker Modal
+> declarado tras el profile `modal` (no levantado), el dispatch
+> `_post_modal_tts()` con `atempo`, presupuesto `modal_budget_usd_daily=1.0` /
+> `monthly=10.0` con alertas, y el gate ZONOS2 con `scripts/benchmark_zonos.py`.
+
+- [x] **7.9 Diseño de voces en la GPU box (debwk)** — el diseño sale de Modal y
       se ejecuta en `debwk` (`100.75.148.68`, RTX 2000 Ada) con Qwen3-TTS
       VoiceDesign local: `run_voice_worker --role design` registra solo
       `design_voice_activity` (cola `VOICE_DESIGN_TASK_QUEUE`, sin DB ni
@@ -382,6 +391,14 @@ namespace `news-engine-voices`, `status` reporta 24 perfiles listos, y la vía A
 no cambia ni audiblemente ni en tests.
 
 **Effort:** 6-8 hours (setup de debwk, namespace, verificación y gate).
+
+> **Cerrada (2026-10-07).** Verificado en el árbol: `run_voice_worker` con
+> roles `design`/`catalog` en colas y namespace propios, `voice-catalog-worker`
+> en docker-compose, `data/voices/refs/` con 24 WAV + `manifest.json` con 24
+> entradas, `concat_wavs` en `src/core/audio.py` y `design_voice` en
+> `src/core/local_tts.py`, `ref_text` compartido por idioma y cobertura de
+> fonemas con tests (`test_phoneme_inventory.py`, 42/42 EN + 32/32 ES). La
+> ventana de diseño sigue siendo manual (`scripts/design_window.sh`).
 
 ---
 
@@ -735,7 +752,8 @@ synthesis will take.
   semáforo de gateway); es una línea por activity si se quiere un gate global.
 - El **id fijo** del schedule (`digest-pipeline-<collection>`) no cambia: 8.1
   serializa el **paso TTS**, no el run. Un start de schedule que llega con el
-  run anterior vivo sigue siendo descartado por Temporal → eso sería Fase 9.
+  run anterior vivo sigue siendo descartado por Temporal → eso queda fuera de
+  esta fase.
 - El doc-TTS **sigue en Edge**; hacerlo apuntar al gateway es un cambio aparte
   (el gateway no trocea y `doc_tts_chunk_chars` habría que re-tunearlo).
 
@@ -771,6 +789,80 @@ tests nuevos (1027 → 1134).
   barato cualquier reintento; un ajuste extra que no aporta sería ruido.
 - Narración y clases no toman el lease (ya llevan su propio semáforo de
   gateway); añadirlo es una línea por activity.
+
+---
+
+## PHASE 9 — Voces personalizadas y selección multi-engine
+
+**Goal:** que el menú **Voces** permita crear una voz nueva personalizada,
+probarla y listarla como "voz generada"; que **todas** las voces (clonadas +
+generadas + stock de todos los engines) se ofrezcan en desplegable en las
+opciones de generar audio; y que una selección que mezcle voces de 2 engines
+distintos quede **bloqueada en frontend y backend**.
+
+**Decision record (2026-10-07, operador):**
+
+| # | Pregunta | Decisión |
+|---|----------|----------|
+| 1 | Qué genera el apartado | **Voz nueva personalizada** (perfil nuevo, hoy solo se leen perfiles) |
+| 2 | Alcance del guard anti-mix | **Todas las selecciones de voces** (GUI + API) |
+| 3 | Alcance de los listados | **Menú voces + todos los desplegables** |
+| 4 | Desplegable dentro de "Generar voces" | **Picker para probar voces**; en las opciones de generar audio, voz siempre vía `<select>` |
+| 5 | Ciclo de vida | La voz pasa a "generada" **al existir su WAV** en `data/voices/refs/` |
+| 6 | doc-TTS | Dropdown **solo-edge** (hoy muestra voces gateway que se ignoran en silencio) |
+| 7 | Desconocidos en el guard | Heurística permisiva (sin falsos positivos) + verificación estricta solo donde el catálogo ya está en memoria |
+
+**Prerrequisitos operativos** (no son código; documentados en `Deploy.md`):
+`VOICE_STAGING_API_KEY` compartida entre API y worker de diseño, ventana de
+diseño abierta (`scripts/design_window.sh`), y `MODAL_ENABLED=true` solo para
+sintetizar con voces Modal (sin él, "Probar" reproduce el WAV de referencia
+local).
+
+- [x] **9.1 Registro unificado** — `src/api/services/voice_registry.py`
+      (`VoiceOption` con `id/label/language/engines/category`;
+      `stock|cloned|generated`), endpoint nuevo `GET /api/admin/voices/all`
+      (los existentes quedan intactos), `_normalize_voice_entries` y los
+      `_tts_voice_options`/`_edge_voice_options`/`_modal_voice_options`/
+      `_omni_options` propagan `engine`+`category` con degradación a `[]`.
+      Verificado 2026-10-07: ruff limpio, suite completa 1162 passed.
+- [ ] **9.2 Guard multi-engine** — `src/api/services/voice_engine.py`
+      (`engines_for_voice()` síncrono sin red: patrones Edge, alias/patrón/UUID
+      gateway, nombres del catálogo Modal, unión de engines válidos;
+      desconocido = permitir) + `assert_voice_engine`/`assert_same_engine`
+      (`VoiceEngineError`); validadores en `CollectionIn`, `NarrationSpec`,
+      `TTSIn`; guards en la GUI de colecciones y `_narration_spec_from_form`;
+      `resolve_cast` **infiere `tts_backend`** de `voice`+`voice2` y rechaza
+      mixtos (`SubmitError`); `submit_document` edge-only; frontend sin JS
+      inline: opciones filtradas por motor (`cast_voices` datalist re-fetch,
+      `_tts_options` ya por motor, doc-TTS solo edge) y fragmento de lecciones
+      que deshabilita el botón si hay mezcla.
+- [ ] **9.3 Voz nueva personalizada** — `load_profiles()` fusiona
+      `data/voices/custom_profiles.json` (atómico, gitignored, **sin** aplicar
+      el bloque `languages` a los custom, duplicado = error) +
+      `save_custom_profile()`; servicio `voice_catalog_admin`
+      (`catalog_status()`/`start_generate()` compartidos REST-UI);
+      `POST /api/admin/voices/custom` y `POST /ui/voices/custom`;
+      tarjeta **"Voces generadas"** (fragmento con estado
+      `pendiente|generada|desactualizada` + `<audio>` del WAV de referencia).
+- [ ] **9.4 Probar voces** — `GET /ui/voices/audio/{name}.wav` (ref con
+      validación slug + `resolve()` anti-traversal), `POST /ui/voices/test`
+      (sintetiza vía `voice_for`+`synthesize`, cache en
+      `data/voices/samples/`, fallback al WAV local si Modal está apagado) y
+      desplegable unificado "Probar voces" en `/ui/voices`.
+- [ ] **9.5 Listados en todas las opciones de generar audio** — voz por
+      `<select>` del registro en colección, cast, lecciones, doc-TTS y picker
+      de prueba; docs (`Architecture.md`, `Deploy.md` ciclo de vida de voces
+      custom) y este checklist.
+
+**Success criteria:** `pytest -q` en verde con `ruff check .`/`ruff format`
+limpios; una voz creada desde la GUI queda en `custom_profiles.json`, su
+workflow aparece en el namespace `news-engine-voices` y, con la ventana de
+diseño abierta, produce `data/voices/refs/<nombre>.wav` audible desde la
+tarjeta; mezclar voces de 2 engines en lecciones/cast/colección devuelve
+flash/422 sin crear job ni guardar; el catálogo devuelto por
+`GET /api/admin/voices/all` incluye clonadas + generadas + stock con `engine`.
+
+**Effort:** 8-12 hours.
 
 ---
 

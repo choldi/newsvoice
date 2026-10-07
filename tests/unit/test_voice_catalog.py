@@ -9,7 +9,9 @@ from pydantic import ValidationError
 from src.api.models.voices import VoiceManifestEntry, VoiceProfile, VoiceSource
 from src.core.voice_catalog import (
     VoiceCatalogError,
+    custom_profiles_path,
     is_stale,
+    load_custom_profiles,
     load_manifest,
     load_profiles,
     missing_or_stale,
@@ -290,3 +292,70 @@ def test_profile_dict_is_json_serializable() -> None:
 def test_voice_source_values() -> None:
     assert VoiceSource.QWEN_DESIGN == "qwen_design"
     assert VoiceSource.RECORDING == "recording"
+
+
+# --- load_custom_profiles --------------------------------------------------
+
+
+def test_load_custom_profiles_returns_empty_when_the_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    assert load_custom_profiles(tmp_path / "custom_profiles.json") == []
+
+
+def test_custom_profiles_path_honours_an_explicit_path(tmp_path: Path) -> None:
+    assert custom_profiles_path(tmp_path / "mine.json") == tmp_path / "mine.json"
+
+
+def test_load_custom_profiles_returns_validated_profiles(tmp_path: Path) -> None:
+    path = tmp_path / "custom_profiles.json"
+    path.write_text(json.dumps({"profiles": [PROFILE]}), encoding="utf-8")
+
+    profiles = load_custom_profiles(path)
+
+    assert [profile.name for profile in profiles] == ["anchor_neutral_m"]
+
+
+def test_load_custom_profiles_keeps_its_own_reference_text(tmp_path: Path) -> None:
+    """A custom profile is not rewritten by the committed language block."""
+    custom = dict(PROFILE, name="custom_es", language="es")
+    path = tmp_path / "custom_profiles.json"
+    path.write_text(json.dumps({"profiles": [custom]}), encoding="utf-8")
+
+    profile = load_custom_profiles(path)[0]
+
+    assert profile.name == "custom_es"
+    assert profile.ref_text == PROFILE["ref_text"]
+
+
+def test_load_custom_profiles_rejects_invalid_json(tmp_path: Path) -> None:
+    path = tmp_path / "custom_profiles.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match="not readable JSON"):
+        load_custom_profiles(path)
+
+
+def test_load_custom_profiles_requires_a_profiles_list(tmp_path: Path) -> None:
+    path = tmp_path / "custom_profiles.json"
+    path.write_text(json.dumps({"voices": []}), encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match="needs a 'profiles' list"):
+        load_custom_profiles(path)
+
+
+def test_load_custom_profiles_rejects_duplicate_names(tmp_path: Path) -> None:
+    path = tmp_path / "custom_profiles.json"
+    path.write_text(json.dumps({"profiles": [PROFILE, PROFILE]}), encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match="duplicate custom voice profile names"):
+        load_custom_profiles(path)
+
+
+def test_load_custom_profiles_rejects_an_invalid_profile(tmp_path: Path) -> None:
+    broken = dict(PROFILE, language="spanish")
+    path = tmp_path / "custom_profiles.json"
+    path.write_text(json.dumps({"profiles": [broken]}), encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match="is invalid"):
+        load_custom_profiles(path)

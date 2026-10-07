@@ -19,6 +19,10 @@ DEFAULT_PROFILES_FILE = "voice_profiles.json"
 DEFAULT_VOICES_DIR = "data/voices"
 MANIFEST_NAME = "manifest.json"
 REFS_DIR = "refs"
+#: Runtime file holding the operator-created profiles (Phase 9.3). It lives
+#: under the voices directory, which is gitignored: a custom voice is data, not
+#: catalog shipped with the repo.
+CUSTOM_PROFILES_NAME = "custom_profiles.json"
 
 
 class VoiceCatalogError(RuntimeError):
@@ -102,6 +106,72 @@ def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise VoiceCatalogError(f"duplicate voice profile names: {duplicates}")
+    return profiles
+
+
+def custom_profiles_path(path: str | Path | None = None) -> Path:
+    """Return where the operator-created profiles are stored.
+
+    Args:
+        path: Explicit file path. Defaults to ``<voices_dir>/custom_profiles.json``
+            (``settings.voices_dir``, ``data/voices`` by default).
+
+    Returns:
+        Path of the custom profiles file (which may not exist yet).
+    """
+    if path is not None:
+        return Path(path)
+    try:
+        from src.core.config import get_settings
+
+        voices_dir = Path(get_settings().voices_dir)
+    except Exception:  # noqa: BLE001 - settings must never break catalog reads
+        voices_dir = Path(DEFAULT_VOICES_DIR)
+    return voices_dir / CUSTOM_PROFILES_NAME
+
+
+def load_custom_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
+    """Load the operator-created profiles (read side of Phase 9.3).
+
+    Unlike the committed catalog, a custom profile always carries its own
+    reference text: the shared ``languages.<lang>.ref_segments`` block is not
+    applied, because the whole point of a custom voice is its own transcript.
+
+    Args:
+        path: Custom profiles file. Defaults to :func:`custom_profiles_path`.
+
+    Returns:
+        The validated custom profiles in file order; empty when the file does
+        not exist yet.
+
+    Raises:
+        VoiceCatalogError: If the file exists but is not readable JSON, lacks
+            a 'profiles' list, holds a non-object entry or duplicate names.
+    """
+    catalog = custom_profiles_path(path)
+    if not catalog.is_file():
+        return []
+    try:
+        raw = json.loads(catalog.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VoiceCatalogError(f"custom voice catalog is not readable JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("profiles"), list):
+        raise VoiceCatalogError("custom voice catalog needs a 'profiles' list")
+
+    profiles: list[VoiceProfile] = []
+    for item in raw["profiles"]:
+        if not isinstance(item, dict):
+            raise VoiceCatalogError("custom voice catalog profiles must be objects")
+        try:
+            profiles.append(VoiceProfile.model_validate(item))
+        except ValueError as exc:
+            name = item.get("name", "?")
+            raise VoiceCatalogError(f"custom voice profile {name!r} is invalid: {exc}") from exc
+
+    names = [profile.name for profile in profiles]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise VoiceCatalogError(f"duplicate custom voice profile names: {duplicates}")
     return profiles
 
 

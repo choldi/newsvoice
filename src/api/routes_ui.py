@@ -38,6 +38,7 @@ from src.api.services.signed_links import (
 from src.api.services.submit import SubmitError
 from src.api.services.temporal_admin import TemporalAdminService
 from src.api.services.tts_estimate import eta_seconds
+from src.api.services.voice_registry import edge_options, gateway_options, modal_options
 from src.api.services.voices import VoicesService
 from src.core.collections import LogicDeliveryConfig
 from src.core.prompts import EMOTION_TAGS
@@ -140,16 +141,11 @@ async def _omni_options() -> dict:
 
     Returns:
         Dict with 'languages' (sorted unique codes) and 'voices' (stock +
-        cloned). Empty lists if OmniVoice is unreachable.
+        cloned, tagged with engine and category by the voice registry). Empty
+        lists if OmniVoice is unreachable.
     """
-    service = VoicesService()
-    try:
-        languages = await service.list_languages()
-        voices = await service.list_stock() + await service.list_cloned()
-    except Exception as exc:
-        logger.warning("omni_options_failed", error=str(exc))
-        return {"languages": [], "voices": []}
-    return {"languages": languages, "voices": voices}
+    languages, voices = await gateway_options()
+    return _registry_options(languages, voices)
 
 
 def _lesson_voice_context(
@@ -215,9 +211,28 @@ def _normalize_voice_entries(entries: list[dict]) -> list[dict]:
                 "id": identifier,
                 "label": str(item.get("label") or item.get("name") or identifier),
                 "language": str(item.get("language") or ""),
+                "engines": [str(engine) for engine in (item.get("engines") or [])],
+                "category": str(item.get("category") or ""),
             }
         )
     return sorted(normalized, key=lambda v: (v["language"], v["label"]))
+
+
+def _registry_options(languages: list[str], voices: list) -> dict:
+    """Reshape a registry source into the dropdown context contract.
+
+    Args:
+        languages: Language codes the source reported.
+        voices: Registry :class:`VoiceOption` objects from one source.
+
+    Returns:
+        Dict with 'languages' and normalized 'voices' (id, label, language,
+        engines, category).
+    """
+    return {
+        "languages": languages,
+        "voices": _normalize_voice_entries([v.model_dump() for v in voices]),
+    }
 
 
 async def _edge_voice_options() -> dict:
@@ -232,33 +247,8 @@ async def _edge_voice_options() -> dict:
     Returns:
         Dict with 'languages' (ISO 639-1 codes) and normalized 'voices'.
     """
-    import asyncio
-
-    from src.api.services import tts as tts_service
-
-    try:
-        # Populates tts_service._EDGE_VOICES; also caches the ShortName set.
-        await asyncio.wait_for(tts_service._available_voice_names(), timeout=15.0)
-    except Exception as exc:
-        logger.warning("edge_voice_options_failed", error=str(exc))
-        return {"languages": [], "voices": []}
-    voices = []
-    locales: set[str] = set()
-    for item in tts_service._EDGE_VOICES or []:
-        short = str(item.get("ShortName") or "")
-        locale = str(item.get("Locale") or "")
-        if not short:
-            continue
-        if locale:
-            locales.add(locale.split("-")[0])
-        voices.append(
-            {
-                "id": short,
-                "label": str(item.get("FriendlyName") or short),
-                "language": locale,
-            }
-        )
-    return {"languages": sorted(locales), "voices": _normalize_voice_entries(voices)}
+    languages, voices = await edge_options()
+    return _registry_options(languages, voices)
 
 
 def _modal_voice_options() -> dict:
@@ -268,18 +258,8 @@ def _modal_voice_options() -> dict:
         Dict with 'languages' and normalized 'voices', empty when the catalog
         file is missing (a Modal collection then falls back to a text input).
     """
-    from src.core.voice_catalog import VoiceCatalogError, load_profiles
-
-    try:
-        profiles = load_profiles()
-    except VoiceCatalogError as exc:
-        logger.warning("modal_voice_options_failed", error=str(exc))
-        return {"languages": [], "voices": []}
-    voices = [{"id": p.name, "label": p.label or p.name, "language": p.language} for p in profiles]
-    return {
-        "languages": sorted({v["language"] for v in voices if v["language"]}),
-        "voices": _normalize_voice_entries(voices),
-    }
+    languages, voices = modal_options()
+    return _registry_options(languages, voices)
 
 
 async def _tts_voice_options(backend: str) -> dict:
