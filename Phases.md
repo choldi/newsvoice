@@ -837,16 +837,24 @@ local).
       `_tts_options` ya por motor, doc-TTS solo edge) y fragmento de lecciones
       que deshabilita el botón si hay mezcla.
       Verificado 2026-10-07: ruff limpio, suite completa 1200 passed.
-- [ ] **9.3 Voz nueva personalizada** — `load_profiles()` fusiona
+- [x] **9.3 Voz nueva personalizada** — `load_profiles()` fusiona
       `data/voices/custom_profiles.json` (atómico, gitignored, **sin** aplicar
       el bloque `languages` a los custom, duplicado = error) +
       `save_custom_profile()`; servicio `voice_catalog_admin`
-      (`catalog_status()`/`start_generate()` compartidos REST-UI);
-      `POST /api/admin/voices/custom` y `POST /ui/voices/custom`;
-      tarjeta **"Voces generadas"** (fragmento con estado
-      `pendiente|generada|desactualizada` + `<audio>` del WAV de referencia).
-- [ ] **9.4 Probar voces** — `GET /ui/voices/audio/{name}.wav` (ref con
-      validación slug + `resolve()` anti-traversal), `POST /ui/voices/test`
+      (`catalog_status()`/`start_generate()`/`generated_voices()`/
+      `create_custom_voice()` compartidos REST-UI);
+      `POST /api/admin/voices/custom` (422 perfil inválido, 409 nombre
+      ocupado, profile guardado aunque falle el enqueue) y
+      `POST /ui/voices/custom`; tarjeta **"Voces generadas"** (fragmento
+      `voices_generated` con estado `pendiente|generada|desactualizada`
+      + `<audio>` del WAV de referencia); `modal_options()` etiqueta lo
+      custom como `generated` tras la fusión. El endpoint de audio
+      `GET /ui/voices/audio/{name}.wav` (slug + `resolve()` anti-traversal)
+      se implementó aquí por ser dependencia de la tarjeta (mover a 9.4 si
+      se reordena).
+      Verificado 2026-10-07: ruff limpio, suite completa 1237 passed.
+- [ ] **9.4 Probar voces** — ~~`GET /ui/voices/audio/{name}.wav`~~ (hecho en
+      9.3), `POST /ui/voices/test`
       (sintetiza vía `voice_for`+`synthesize`, cache en
       `data/voices/samples/`, fallback al WAV local si Modal está apagado) y
       desplegable unificado "Probar voces" en `/ui/voices`.

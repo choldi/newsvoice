@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -62,8 +63,40 @@ def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
     makes sense to write it once. A profile may still spell out its own text,
     but it must then agree with the block, so the two can never drift apart.
 
+    With no explicit ``path`` the committed catalog is merged with the
+    operator-created profiles (Phase 9.3), so every reader of this function
+    sees the full set of voices. An explicit ``path`` reads only that file,
+    which keeps tests and one-off inspections pinned to the committed catalog.
+
     Args:
-        path: Catalog JSON path. Defaults to ``voice_profiles.json``.
+        path: Catalog JSON path. Defaults to ``voice_profiles.json`` plus the
+            custom profiles file under ``settings.voices_dir``.
+
+    Returns:
+        The validated profiles: committed ones in file order, then the custom
+        ones.
+
+    Raises:
+        VoiceCatalogError: If the file is missing, unreadable, not valid JSON,
+            contains duplicate names (within or across the two files), or
+            leaves a profile without any reference text.
+    """
+    if path is not None:
+        return _load_committed_profiles(Path(path))
+    profiles = _load_committed_profiles(Path(DEFAULT_PROFILES_FILE))
+    custom = load_custom_profiles()
+    known = {profile.name for profile in profiles}
+    clashes = sorted(known & {profile.name for profile in custom})
+    if clashes:
+        raise VoiceCatalogError(f"duplicate voice profile names: {clashes}")
+    return [*profiles, *custom]
+
+
+def _load_committed_profiles(catalog: Path) -> list[VoiceProfile]:
+    """Read and validate one committed catalog file.
+
+    Args:
+        catalog: Path of the catalog JSON file.
 
     Returns:
         The validated profiles, in file order.
@@ -73,7 +106,6 @@ def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
             contains duplicate names, or leaves a profile without any
             reference text.
     """
-    catalog = Path(path) if path else Path(DEFAULT_PROFILES_FILE)
     if not catalog.is_file():
         raise VoiceCatalogError(f"voice catalog not found: {catalog}")
     try:
@@ -173,6 +205,40 @@ def load_custom_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
     if duplicates:
         raise VoiceCatalogError(f"duplicate custom voice profile names: {duplicates}")
     return profiles
+
+
+def save_custom_profile(profile: VoiceProfile, path: str | Path | None = None) -> VoiceProfile:
+    """Persist one operator-created profile (write side of Phase 9.3).
+
+    The write is atomic (temp file plus ``os.replace``) so a crash can never
+    leave a half-written catalog behind, and it refuses to clobber either an
+    existing custom voice or a name the committed catalog already owns.
+
+    Args:
+        profile: Validated profile to append.
+        path: Custom profiles file. Defaults to :func:`custom_profiles_path`.
+
+    Returns:
+        The saved profile.
+
+    Raises:
+        VoiceCatalogError: If the name is already taken (custom or committed)
+            or an existing custom file is unreadable (never overwritten).
+    """
+    target = custom_profiles_path(path)
+    existing = load_custom_profiles(target)
+    if any(saved.name == profile.name for saved in existing):
+        raise VoiceCatalogError(f"custom voice profile already exists: {profile.name!r}")
+    committed = {saved.name for saved in _load_committed_profiles(Path(DEFAULT_PROFILES_FILE))}
+    if profile.name in committed:
+        raise VoiceCatalogError(f"voice profile name already in the catalog: {profile.name!r}")
+
+    payload = {"profiles": [saved.model_dump(mode="json") for saved in [*existing, profile]]}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
+    return profile
 
 
 def load_manifest(path: str | Path | None = None) -> dict[str, VoiceManifestEntry]:

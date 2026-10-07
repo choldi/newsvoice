@@ -14,11 +14,12 @@ since Phase 7.11.
 """
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qsl
 
 import structlog
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
@@ -26,7 +27,8 @@ from starlette.datastructures import UploadFile
 from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
-from src.api.services import env_editor
+from src.api.models.voices import CustomVoiceIn, is_voice_slug
+from src.api.services import env_editor, voice_catalog_admin
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
 from src.api.services.env_editor import build_schema
@@ -1389,6 +1391,118 @@ async def ui_clone_voice(request: Request) -> RedirectResponse:
     except Exception as exc:
         return _flash("/ui/voices", f"Fallo al clonar voz: {exc}", "error")
     return _flash("/ui/voices", f"Voz '{name}' clonada")
+
+
+@router.post("/ui/voices/custom", include_in_schema=False)
+async def ui_create_custom_voice(request: Request) -> RedirectResponse:
+    """Create an operator-authored voice profile from the GUI form (Phase 9.3).
+
+    Args:
+        request: Incoming request with an `application/x-www-form-urlencoded` body.
+
+    Returns:
+        Redirect to the voices page with a flash describing the outcome.
+    """
+    from src.core.voice_catalog import VoiceCatalogError
+
+    fields = await _form(request)
+    name = fields.get("name", "").strip()
+    lines = [line.strip() for line in fields.get("ref_text", "").splitlines() if line.strip()]
+    if not name:
+        return _flash("/ui/voices", "Nombre de voz requerido", "error")
+    if not lines:
+        return _flash("/ui/voices", "El texto de referencia es obligatorio", "error")
+    try:
+        payload = CustomVoiceIn(
+            name=name,
+            label=fields.get("label", ""),
+            language=fields.get("language", "es"),
+            instruct=fields.get("instruct", ""),
+            ref_segments=lines,
+            role_hint=fields.get("role_hint", ""),
+            generate=fields.get("generate", "") == "on",
+        )
+        result = await voice_catalog_admin.create_custom_voice(payload)
+    except ValidationError as exc:
+        return _flash("/ui/voices", f"Voz no válida: {_validation_message(exc)}", "error")
+    except VoiceCatalogError as exc:
+        return _flash("/ui/voices", str(exc), "error")
+    saved = result["profile"].name
+    if result["start_error"]:
+        return _flash(
+            "/ui/voices",
+            f"Voz '{saved}' creada, pero no se pudo encolar el diseño: {result['start_error']}",
+            "warn",
+        )
+    if result["workflow_id"]:
+        return _flash(
+            "/ui/voices",
+            f"Voz '{saved}' creada; diseño en cola ({result['workflow_id']})",
+            "ok",
+        )
+    return _flash("/ui/voices", f"Voz '{saved}' creada (pendiente de generar)", "ok")
+
+
+@router.get("/ui/fragments/voices_generated", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_voices_generated(request: Request) -> HTMLResponse:
+    """Rows of the "Voces generadas" card, polled while designs run (Phase 9.3).
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the generated-voices table fragment.
+    """
+    from src.core.voice_catalog import VoiceCatalogError
+
+    try:
+        voices = await voice_catalog_admin.generated_voices()
+        error = ""
+    except VoiceCatalogError as exc:
+        voices = []
+        error = str(exc)
+    return _render(request, "partials/_voices_generated.html", {"voices": voices, "error": error})
+
+
+@router.get("/ui/voices/audio/{name}", include_in_schema=False)
+async def ui_voice_audio(name: str) -> FileResponse:
+    """Serve the reference WAV of one catalog voice (Phase 9.3).
+
+    Args:
+        name: Profile name, optionally with a ``.wav`` suffix (the audio tag
+            appends one).
+
+    Returns:
+        FileResponse with the WAV bytes.
+
+    Raises:
+        HTTPException: 404 for an unknown voice, an unsafe name, or a
+            reference that is missing or escapes the voices directory.
+    """
+    from fastapi import HTTPException
+
+    from src.core.config import settings
+    from src.core.voice_catalog import REFS_DIR, VoiceCatalogError, load_manifest, load_profiles
+
+    stem = name[:-4] if name.lower().endswith(".wav") else name
+    if not is_voice_slug(stem):
+        raise HTTPException(status_code=404, detail="voice not found")
+    try:
+        profile = next((p for p in load_profiles() if p.name == stem), None)
+    except VoiceCatalogError:
+        profile = None
+    if profile is None:
+        raise HTTPException(status_code=404, detail="voice not found")
+
+    voices_root = Path(settings.voices_dir).resolve()
+    entry = load_manifest(voice_catalog_admin.manifest_path()).get(profile.name)
+    if entry is not None:
+        wav = (voices_root / entry.file).resolve()
+    else:
+        wav = (voices_root / REFS_DIR / f"{profile.name}.wav").resolve()
+    if not wav.is_relative_to(voices_root) or not wav.is_file():
+        raise HTTPException(status_code=404, detail="reference audio not available")
+    return FileResponse(wav, media_type="audio/wav", filename=f"{profile.name}.wav")
 
 
 @router.get("/ui/login", response_class=HTMLResponse, include_in_schema=False)

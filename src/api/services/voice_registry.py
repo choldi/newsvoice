@@ -152,28 +152,22 @@ def modal_options() -> tuple[list[str], list[VoiceOption]]:
         logger.warning("voice_registry_modal_failed", error=str(exc))
         return [], []
 
-    known = {profile.name for profile in profiles}
-    voices = [
-        VoiceOption(
-            id=profile.name,
-            label=profile.label or profile.name,
-            language=profile.language,
-            engines=list(MODAL_ENGINES),
-            category="stock",
+    custom_names = {profile.name for profile in custom}
+    voices: list[VoiceOption] = []
+    seen: set[str] = set()
+    for profile in [*profiles, *custom]:
+        if profile.name in seen:
+            continue
+        seen.add(profile.name)
+        voices.append(
+            VoiceOption(
+                id=profile.name,
+                label=profile.label or profile.name,
+                language=profile.language,
+                engines=list(MODAL_ENGINES),
+                category="generated" if profile.name in custom_names else "stock",
+            )
         )
-        for profile in profiles
-    ]
-    voices.extend(
-        VoiceOption(
-            id=profile.name,
-            label=profile.label or profile.name,
-            language=profile.language,
-            engines=list(MODAL_ENGINES),
-            category="generated",
-        )
-        for profile in custom
-        if profile.name not in known
-    )
     languages = sorted({voice.language for voice in voices if voice.language})
     return languages, voices
 

@@ -19,6 +19,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
+def is_voice_slug(value: str) -> bool:
+    """Report whether a string is safe to use as a profile name.
+
+    Args:
+        value: Candidate string (e.g. a file name from a URL path).
+
+    Returns:
+        True when the string matches the profile slug pattern.
+    """
+    return bool(_SLUG.match(value))
+
+
 class VoiceSource(StrEnum):
     """Where a reference voice comes from.
 
@@ -222,3 +234,45 @@ class VoiceManifestEntry(BaseModel):
     ref_text_sha256: str = Field(..., description="Digest of the profile ref_text")
     created_at: str = Field(..., description="ISO-8601 generation timestamp")
     modal_cost_usd: float = Field(default=0.0, ge=0.0, description="Cost of the design call")
+
+
+class CustomVoiceIn(BaseModel):
+    """Request to create an operator-authored voice profile (Phase 9.3).
+
+    The service validates the payload as a full :class:`VoiceProfile`; this
+    model only shapes the transport, so the GUI form and the REST endpoint
+    share one contract.
+
+    Attributes:
+        name: Stable slug; becomes the reference file name on disk.
+        label: Human-readable name (defaults to the name when empty).
+        language: ISO 639-1 code the voice speaks.
+        instruct: Natural-language persona description for VoiceDesign.
+        ref_segments: Reference text split in segments (one phrase per line
+            in the form). May be empty when ``ref_text`` carries the text.
+        ref_text: Whole transcript, used when no segments were given.
+        role_hint: Intended use (anchor, cohost, narrator, ...).
+        generate: Start the design workflow right after saving the profile.
+        upload: Also upload the reference to the Modal Volume when starting.
+    """
+
+    name: str = Field(..., min_length=1, max_length=64, description="Stable slug")
+    label: str = Field(default="", max_length=128, description="Human label")
+    language: str = Field(default="es", description="ISO 639-1 code")
+    instruct: str = Field(..., min_length=10, max_length=2000, description="VoiceDesign persona")
+    ref_segments: list[str] = Field(default_factory=list, description="Transcript lines")
+    ref_text: str = Field(default="", max_length=600, description="Whole transcript")
+    role_hint: str = Field(default="", max_length=64, description="Intended role")
+    generate: bool = Field(default=True, description="Queue the design workflow")
+    upload: bool = Field(default=False, description="Upload the reference to Modal")
+
+
+class CustomVoiceOut(BaseModel):
+    """Response for a created custom voice (Phase 9.3)."""
+
+    status: str = Field(default="ok", description="Execution status: ok or error")
+    profile: dict[str, Any] = Field(..., description="The saved profile")
+    workflow_id: str = Field(default="", description="Design workflow id when started")
+    start_error: str = Field(
+        default="", description="Why the design run could not be queued (profile kept)"
+    )

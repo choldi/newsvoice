@@ -11,22 +11,19 @@ client below connects there rather than to the digest pipeline's namespace.
 """
 
 import base64
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.api.models.admin import VoiceCloneIn, VoiceCloneOut, VoicesOut
-from src.api.models.voices import VoicesAllOut
+from src.api.models.voices import CustomVoiceIn, CustomVoiceOut, VoicesAllOut
+from src.api.services import voice_catalog_admin
 from src.api.services.tts_backends import ALLOWED_BACKENDS
 from src.api.services.voice_registry import CATEGORY_ORDER, list_all_voices
 from src.api.services.voices import VoicesService
-from src.core.config import settings
-from src.core.voice_catalog import load_manifest, load_profiles, missing_or_stale
-from src.workers.run_worker import build_client
-from src.workers.voice_workflows import VoiceCatalogConfig, VoiceCatalogWorkflow
+from src.core.voice_catalog import VoiceCatalogError
 
 logger = structlog.get_logger(__name__)
 
@@ -153,16 +150,7 @@ async def voice_catalog_status() -> dict[str, Any]:
     Returns:
         Dict with the profiles and which are generated, missing or stale.
     """
-    profiles = load_profiles()
-    manifest = load_manifest()
-    pending = set(missing_or_stale(profiles, manifest))
-    return {
-        "status": "ok",
-        "profiles": [profile.model_dump(mode="json") for profile in profiles],
-        "generated": sorted(p.name for p in profiles if p.name not in pending and p.enabled),
-        "missing": sorted(pending),
-        "stale": sorted(pending),
-    }
+    return await voice_catalog_admin.catalog_status()
 
 
 @router.post("/admin/voices/catalog/generate")
@@ -179,25 +167,47 @@ async def voice_catalog_generate(payload: VoiceCatalogGenerateIn) -> dict[str, A
     Raises:
         HTTPException: 502 when the workflow cannot be started.
     """
-    workflow_id = f"voice-catalog-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-    config = VoiceCatalogConfig(
-        names=payload.names,
-        upload=payload.upload,
-        task_queue=settings.voice_catalog_task_queue,
-        design_task_queue=settings.voice_design_task_queue,
-    )
     try:
-        client = await build_client(settings.temporal_voices_namespace)
-        await client.execute_workflow(
-            VoiceCatalogWorkflow.run,
-            config,
-            id=workflow_id,
-            task_queue=settings.voice_catalog_task_queue,
+        workflow_id = await voice_catalog_admin.start_generate(
+            names=payload.names, upload=payload.upload
         )
-    except Exception as exc:
-        logger.error("voice_catalog_generate_failed", error=str(exc), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to start voice catalog: {exc}",
-        ) from exc
+    except voice_catalog_admin.VoiceCatalogAdminError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return {"workflow_id": workflow_id, "status": "started"}
+
+
+@router.post(
+    "/admin/voices/custom",
+    response_model=CustomVoiceOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_custom_voice(payload: CustomVoiceIn) -> CustomVoiceOut:
+    """Create an operator-authored voice profile (Phase 9.3).
+
+    Args:
+        payload: CustomVoiceIn describing the new voice.
+
+    Returns:
+        CustomVoiceOut with the saved profile and the design workflow id
+        (when one could be queued).
+
+    Raises:
+        HTTPException: 422 on an invalid profile, 409 when the name is taken.
+    """
+    try:
+        result = await voice_catalog_admin.create_custom_voice(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[
+                {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+                for error in exc.errors()
+            ],
+        ) from exc
+    except VoiceCatalogError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return CustomVoiceOut(
+        profile=result["profile"].model_dump(mode="json"),
+        workflow_id=result["workflow_id"],
+        start_error=result["start_error"],
+    )

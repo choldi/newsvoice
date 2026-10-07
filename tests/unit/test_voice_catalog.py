@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.api.models.voices import VoiceManifestEntry, VoiceProfile, VoiceSource
+from src.core.config import settings
 from src.core.voice_catalog import (
     VoiceCatalogError,
     custom_profiles_path,
@@ -18,6 +19,7 @@ from src.core.voice_catalog import (
     profile_dict,
     ref_text_for,
     resolve_reference,
+    save_custom_profile,
     sha256_text,
     write_manifest,
 )
@@ -359,3 +361,115 @@ def test_load_custom_profiles_rejects_an_invalid_profile(tmp_path: Path) -> None
 
     with pytest.raises(VoiceCatalogError, match="is invalid"):
         load_custom_profiles(path)
+
+
+# --- merged load + save_custom_profile (Phase 9.3) ---------------------------
+
+
+def _isolated_voices_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point settings.voices_dir at an empty temp dir and return it."""
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    monkeypatch.setattr(settings, "voices_dir", str(voices))
+    return voices
+
+
+def _custom(name: str = "mi_voz_es") -> VoiceProfile:
+    """Build a valid operator-authored profile for the merge tests."""
+    return VoiceProfile.model_validate(dict(PROFILE, name=name))
+
+
+def test_load_profiles_merges_the_custom_file_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    voices = _isolated_voices_dir(tmp_path, monkeypatch)
+    custom_profiles_path().write_text(
+        json.dumps({"profiles": [_custom().model_dump(mode="json")]}), encoding="utf-8"
+    )
+
+    profiles = load_profiles()
+    committed = load_profiles(CATALOG)
+
+    assert [profile.name for profile in profiles] == [
+        *[profile.name for profile in committed],
+        "mi_voz_es",
+    ]
+    assert len(committed) == 24
+    assert voices.is_dir()
+
+
+def test_load_profiles_with_an_explicit_path_stays_committed_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+    custom_profiles_path().write_text(
+        json.dumps({"profiles": [_custom().model_dump(mode="json")]}), encoding="utf-8"
+    )
+
+    names = [profile.name for profile in load_profiles(CATALOG)]
+
+    assert len(names) == 24
+    assert "mi_voz_es" not in names
+
+
+def test_load_profiles_rejects_a_cross_file_duplicate_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+    committed_name = load_profiles(CATALOG)[0].name
+    custom_profiles_path().write_text(
+        json.dumps({"profiles": [_custom(committed_name).model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(VoiceCatalogError, match="duplicate voice profile names"):
+        load_profiles()
+
+
+def test_save_custom_profile_appends_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+
+    save_custom_profile(_custom())
+    save_custom_profile(_custom("otra_voz"))
+
+    assert [profile.name for profile in load_custom_profiles()] == [
+        "mi_voz_es",
+        "otra_voz",
+    ]
+    target = custom_profiles_path()
+    assert not target.with_name(f"{target.name}.tmp").exists()
+
+
+def test_save_custom_profile_rejects_an_existing_custom_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+    save_custom_profile(_custom())
+
+    with pytest.raises(VoiceCatalogError, match="already exists"):
+        save_custom_profile(_custom())
+
+
+def test_save_custom_profile_rejects_a_committed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+    committed_name = load_profiles(CATALOG)[0].name
+
+    with pytest.raises(VoiceCatalogError, match="already in the catalog"):
+        save_custom_profile(_custom(committed_name))
+
+
+def test_save_custom_profile_never_clobbers_a_corrupt_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolated_voices_dir(tmp_path, monkeypatch)
+    target = custom_profiles_path()
+    target.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(VoiceCatalogError, match="not readable JSON"):
+        save_custom_profile(_custom())
+
+    assert target.read_text(encoding="utf-8") == "{not json"

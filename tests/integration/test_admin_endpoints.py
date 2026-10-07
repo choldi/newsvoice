@@ -418,11 +418,14 @@ def test_voice_clone_invalid_base64_422() -> None:
 def test_voice_catalog_status_lists_profiles() -> None:
     """GET /admin/voices/catalog returns the catalog and its status.
 
-    The manifest is patched empty: the host's ``data/voices/manifest.json``
-    holds the migrated designed voices (state that differs per machine), and
-    this test must pin the no-manifest behaviour deterministically.
+    The manifest is patched empty and the custom profiles file is neutralised:
+    ``data/voices`` holds state that differs per machine, and this test must
+    pin the committed-catalog behaviour deterministically.
     """
-    with patch("src.api.routes.admin_voices.load_manifest", return_value={}):
+    with (
+        patch("src.api.services.voice_catalog_admin.load_manifest", return_value={}),
+        patch("src.core.voice_catalog.load_custom_profiles", return_value=[]),
+    ):
         response = client.get("/api/admin/voices/catalog")
     assert response.status_code == 200
     body = response.json()
@@ -450,7 +453,7 @@ def test_voice_catalog_generate_starts_workflow(
             started["kwargs"] = kwargs
 
     connect = AsyncMock(return_value=_FakeClient())
-    monkeypatch.setattr("src.api.routes.admin_voices.build_client", connect)
+    monkeypatch.setattr("src.api.services.voice_catalog_admin.build_client", connect)
     response = client.post("/api/admin/voices/catalog/generate", json={"upload": True})
     assert response.status_code == 200
     body = response.json()
@@ -469,7 +472,7 @@ def test_voice_catalog_generate_wraps_failures(
     async def boom(*args: object, **kwargs: object) -> None:
         raise RuntimeError("temporal down")
 
-    monkeypatch.setattr("src.api.routes.admin_voices.build_client", boom)
+    monkeypatch.setattr("src.api.services.voice_catalog_admin.build_client", boom)
     response = client.post("/api/admin/voices/catalog/generate", json={})
     assert response.status_code == 502
     assert "temporal down" in response.json()["detail"]
