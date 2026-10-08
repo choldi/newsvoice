@@ -48,12 +48,22 @@
         <input type="text" name="title" placeholder="Se usa el nombre del fichero">
       </div>
       <div class="col">
-        <label>Voz (solo Edge)</label>
-        {% with picker = doc_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
+        <label>Idioma</label>
+        <select name="language" id="doc-language"
+                required
+                hx-get="/ui/fragments/voice_picker"
+                hx-trigger="change"
+                hx-target="#voice-results-doc"
+                hx-include="#picker-doc, [name='language']"
+                hx-swap="innerHTML">
+          {% for option in doc_language_options %}
+          <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col">
-        <label>Idioma</label>
-        <input type="text" name="language" list="lang-list" placeholder="es">
+        <label>Voz (solo Edge)</label>
+        {% with picker = doc_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
     </div>
     <button type="submit" class="primary">Convertir a audio</button>
@@ -78,20 +88,38 @@
                 hx-get="/ui/fragments/lesson_voices"
                 hx-trigger="change"
                 hx-target="#lesson-voices"
-                hx-include="#lesson-voices"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
                 hx-swap="innerHTML">
-          <option value="mixed">mixed — nativa + ejemplos en objetivo</option>
-          <option value="dual">dual — dos voces, dos idiomas</option>
-          <option value="native">native — todo en la lengua nativa</option>
+          <option value="mixed" {{ 'selected' if mode == 'mixed' else '' }}>mixed — nativa + ejemplos en objetivo</option>
+          <option value="dual" {{ 'selected' if mode == 'dual' else '' }}>dual — dos voces, dos idiomas</option>
+          <option value="native" {{ 'selected' if mode == 'native' else '' }}>native — todo en la lengua nativa</option>
         </select>
       </div>
       <div class="col">
         <label>Idioma objetivo (se enseña)</label>
-        <input type="text" name="target_language" list="lang-list" value="en" required>
+        <select name="target_language" id="lesson-target-language" required
+                hx-get="/ui/fragments/lesson_voices"
+                hx-trigger="change"
+                hx-target="#lesson-voices"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
+                hx-swap="innerHTML">
+          {% for option in lesson_language_options %}
+          <option value="{{ option.code }}" {{ 'selected' if option.code == 'en' else '' }}>{{ option.code }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col">
         <label>Lengua nativa (del alumno)</label>
-        <input type="text" name="native_language" list="lang-list" value="es" required>
+        <select name="native_language" id="lesson-native-language" required
+                hx-get="/ui/fragments/lesson_voices"
+                hx-trigger="change"
+                hx-target="#lesson-voices"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
+                hx-swap="innerHTML">
+          {% for option in lesson_language_options %}
+          <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
       </div>
     </div>
     <div class="row">
@@ -117,6 +145,10 @@
       <label>NarrationSpec JSON</label>
       <textarea name="spec" rows="8" style="font-family:monospace;font-size:12px" placeholder='{"language":"en","roles":[{"name":"profe_es","voice_id":"...","language":"es"},{"name":"profe_en","voice_id":"...","language":"en"}]}'></textarea>
       <p class="muted" style="font-size:12px">Las voces clonadas están en <a href="/ui/voices">Voces</a>. Sin spec, se usan las voces seleccionadas arriba (una en mixed/native, dos en dual).</p>
+      <div class="voice-picker" id="spec-preview">
+        <div class="hint">{{ 'Previsualización lista' if preview_ready else 'Selecciona una voz para previsualizar el JSON' }}</div>
+        <pre>{{ preview_spec }}</pre>
+      </div>
     </details>
     <div id="lesson-submit"><button type="submit" class="primary">Generar clase</button></div>
   </form>

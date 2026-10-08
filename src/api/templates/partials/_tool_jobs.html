@@ -30,7 +30,7 @@
   <div class="card">
     <table>
       <thead>
-        <tr><th>Inicio</th><th>Colección</th><th>Título</th><th>Estado</th><th>Duración</th><th>Audio</th></tr>
+        <tr><th>Inicio</th><th>Colección</th><th>Título</th><th>Estado</th><th>Duración</th><th>Audio</th><th></th></tr>
       </thead>
       <tbody>
         {% for j in jobs %}
@@ -68,6 +68,14 @@
             <span class="muted" title="Sin secreto de enlaces firmados no hay URL">—</span>
             {% else %}
             <span class="muted">…</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if j.status == 'FINISHED_OK' and j.audio_url %}
+            <form method="post" action="/ui/tools/jobs/{{ kind }}/{{ j.run_id }}/delete"
+                  onsubmit="return confirm('¿Borrar este audio y todo su trabajo?')">
+              <button class="btn danger" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Borrar</button>
+            </form>
             {% endif %}
           </td>
         </tr>

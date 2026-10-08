@@ -503,3 +503,160 @@ def test_job_fragment_marks_failed_jobs(_ui_env: Path) -> None:
     assert "error" in response.text
     assert "unreadable PDF" in response.text
     assert "Descargar" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 9.8
+# ---------------------------------------------------------------------------
+
+
+def test_tools_doc_form_wires_the_language_select_before_the_picker() -> None:
+    """The doc form has one idiom select that filters the edge picker."""
+    client = _client()
+    page = client.get("/ui/tools")
+
+    assert page.status_code == 200
+    doc_form = page.text.split('action="/ui/tools/doc-tts"', 1)[1].split("</form>", 1)[0]
+    assert 'name="language"' in doc_form
+    assert 'id="doc-language"' in doc_form
+    assert 'hx-target="#voice-results-doc"' in doc_form
+    assert 'name="language_q"' not in doc_form, "no internal picker language select"
+    assert doc_form.index('name="language"') < doc_form.index('id="picker-doc"'), (
+        "the language select precedes the voice picker"
+    )
+
+
+def test_lesson_language_selects_refresh_the_voice_block() -> None:
+    """The lesson native/target selects re-fetch #lesson-voices on change."""
+    client = _client()
+    page = client.get("/ui/tools")
+
+    assert page.status_code == 200
+    lesson_form = page.text.split('action="/ui/tools/lessons"', 1)[1].split("</form>", 1)[0]
+    assert 'name="target_language"' in lesson_form
+    assert 'name="native_language"' in lesson_form
+    assert lesson_form.count('hx-get="/ui/fragments/lesson_voices"') >= 3, (
+        "mode + both language selects re-render the voice block"
+    )
+
+
+def test_tools_page_embeds_the_cast_preview_spec() -> None:
+    """The cast avanzado box starts with the JSON the current cast would make."""
+    client = _client()
+    page = client.get("/ui/tools")
+
+    assert page.status_code == 200
+    assert 'id="spec-preview"' in page.text
+    assert "<pre>" in page.text
+    assert "Selecciona una voz para previsualizar el JSON" in page.text
+
+
+def test_delete_job_removes_files_row_and_narration_link(_ui_env: Path) -> None:
+    """POST delete purges the audio, sidecar, upload/text/meta and the row."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+    from src.api.services.audio_cleanup import delete_job_artifacts
+
+    run_id = "doc-tts-delete1"
+    audio_dir = Path(settings.doc_tts_dir) / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    (audio_dir / f"{run_id}.mp3").write_bytes(b"ID3")
+    (audio_dir / f"{run_id}.meta.json").write_text('{"sha256": "x"}')
+    upload = Path(settings.doc_tts_dir) / "uploads"
+    upload.mkdir(parents=True, exist_ok=True)
+    (upload / f"{run_id}.txt").write_text("fuente")
+    text = Path(settings.doc_tts_dir) / "text"
+    text.mkdir(exist_ok=True)
+    (text / f"{run_id}.txt").write_text("extracto")
+    meta = Path(settings.doc_tts_dir) / "meta"
+    meta.mkdir(exist_ok=True)
+    (meta / f"{run_id}.json").write_text('{"title": "doc"}')
+
+    async def _seed() -> None:
+        await AudioJobsRepository().start_job(run_id, collection="documents", kind="doc_tts")
+        await AudioJobsRepository().finish_job(
+            run_id,
+            status="FINISHED_OK",
+            audio_path=str(audio_dir / f"{run_id}.mp3"),
+            kind="doc_tts",
+        )
+
+    asyncio.run(_seed())
+
+    client = _client()
+    with patch(
+        "src.api.routes_ui.delete_job_artifacts",
+        side_effect=delete_job_artifacts,
+    ):
+        response = client.post(f"/ui/tools/jobs/doc_tts/{run_id}/delete", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "Borrado" in _flash_of(response.headers["location"])
+    assert not (audio_dir / f"{run_id}.mp3").exists(), "the audio file is gone"
+    assert not (audio_dir / f"{run_id}.meta.json").exists(), "the sidecar is gone"
+    assert not (text / f"{run_id}.txt").exists(), "the extracted text is gone"
+    assert not (meta / f"{run_id}.json").exists(), "the meta json is gone"
+    assert not (upload / f"{run_id}.txt").exists(), "the upload is gone"
+
+    async def _check() -> None:
+        assert await AudioJobsRepository().get_job(run_id, kind="doc_tts") is None
+
+    asyncio.run(_check())
+
+
+def test_delete_narration_forgets_the_runs_narration_path(_ui_env: Path) -> None:
+    """Deleting a narration also clears digest_runs.narration_path."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository, RunsRepository
+
+    run_id = "digest-pipeline-delete-2"
+    audio_dir = Path(settings.narration_cache_dir)
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    (audio_dir / "narrate_tech_261008_x.wav").write_bytes(b"WAV")
+
+    async def _seed() -> None:
+        await RunsRepository().record_run(
+            workflow_id=run_id,
+            collection="tech",
+            status="ok",
+            article_count=1,
+            cluster_count=1,
+            digest_preview="# X",
+        )
+        await RunsRepository().set_narration_path(
+            run_id, str(audio_dir / "narrate_tech_261008_x.wav")
+        )
+        await AudioJobsRepository().start_job(run_id, collection="tech", kind="narration")
+        await AudioJobsRepository().finish_job(
+            run_id,
+            status="FINISHED_OK",
+            audio_path=str(audio_dir / "narrate_tech_261008_x.wav"),
+            kind="narration",
+        )
+
+    asyncio.run(_seed())
+
+    client = _client()
+    response = client.post(f"/ui/tools/jobs/narration/{run_id}/delete", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert not (audio_dir / "narrate_tech_261008_x.wav").exists(), "the narration audio is gone"
+
+    async def _check() -> None:
+        assert await AudioJobsRepository().get_job(run_id, kind="narration") is None
+        run = await RunsRepository().get_run_by_workflow_id(run_id)
+        assert bool(run) and not run.get("narration_path")
+
+    asyncio.run(_check())
+
+
+def test_delete_job_refuses_a_foreign_id(_ui_env: Path) -> None:
+    """A run id outside the safe alphabet never reaches the filesystem."""
+    client = _client()
+
+    response = client.post("/ui/tools/jobs/doc_tts/../../etc-x/delete", follow_redirects=False)
+
+    assert response.status_code == 404, "the router does not match traversal ids"
+    assert not client.get("/ui/fragments/tool_jobs?kind=doc_tts").status_code == 500

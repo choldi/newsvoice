@@ -234,3 +234,80 @@ def test_lesson_picker_results_carry_the_guard_listener() -> None:
     assert 'id="voice-results-voice2"' in fragment.text
     listens = fragment.text.count('hx-get="/ui/fragments/lesson_voices"')
     assert listens == 2, "both lesson slots recompute the mixed-engine guard on pick"
+
+
+# ---------------------------------------------------------------------------
+# Phase 9.8: the forms' own language fields drive the pickers
+# ---------------------------------------------------------------------------
+
+
+def test_doc_language_select_filters_the_edge_picker() -> None:
+    """The document form's language field filters which edge voices appear."""
+    client = _client()
+    spanish = client.get("/ui/fragments/voice_picker", params={"language": "es", "engines": "edge"})
+    english = client.get("/ui/fragments/voice_picker", params={"language": "en", "engines": "edge"})
+
+    assert spanish.status_code == 200
+    assert 'value="es-ES-DarioNeural"' in spanish.text
+    assert english.status_code == 200
+    assert 'value="es-ES-DarioNeural"' not in english.text, "es voices must not match an en filter"
+
+
+def test_lesson_dual_languages_map_to_each_role_s_picker() -> None:
+    """In dual the native picker lists es voices, the en target its own."""
+    client = _client()
+    fragment = client.get(
+        "/ui/fragments/lesson_voices",
+        params={"mode": "dual", "native_language": "es", "target_language": "en"},
+    )
+
+    assert fragment.status_code == 200
+    native = fragment.text.split('id="voice-results-voice"', 1)[1].split("</div>", 1)[0]
+    target = fragment.text.split('id="voice-results-voice2"', 1)[1].split("</div>", 1)[0]
+    assert f'value="{CLONE_UUID}"' in native, "the es native picker lists es voices"
+    assert 'value="anchor_neutral_m"' not in native, "en voices stay out of the es picker"
+    assert 'value="anchor_neutral_m"' in target, "the en target picker lists en voices"
+    assert f'value="{CLONE_UUID}"' not in target, "es voices stay out of the en picker"
+
+
+def test_lesson_mixed_target_language_filters_the_single_picker() -> None:
+    """In mixed the only picker filters by the target language being taught."""
+    client = _client()
+    fragment = client.get(
+        "/ui/fragments/lesson_voices",
+        params={"mode": "mixed", "native_language": "es", "target_language": "en"},
+    )
+
+    assert fragment.status_code == 200
+    assert 'value="anchor_neutral_m"' in fragment.text, "the en target lists en voices"
+    assert f'value="{CLONE_UUID}"' not in fragment.text, "es native voices stay out of the picker"
+    assert 'id="voice-results-voice2"' not in fragment.text, "mixed has a single picker"
+
+
+def test_fragment_emits_the_live_cast_preview() -> None:
+    """The lesson fragment carries the cast-box JSON out-of-band (Phase 9.8)."""
+    client = _client()
+    fragment = client.get(
+        "/ui/fragments/lesson_voices",
+        params={"mode": "dual", "voice": GATEWAY_STOCK, "voice2": "anchor_neutral_m"},
+    )
+
+    assert fragment.status_code == 200
+    assert 'id="spec-preview"' in fragment.text
+    assert 'hx-swap-oob="innerHTML"' in fragment.text
+    assert "&#34;voice_id&#34;: &#34;es-mx-male&#34;" in fragment.text
+    assert "&#34;voice_id&#34;: &#34;anchor_neutral_m&#34;" in fragment.text
+    assert "Previsualización lista" in fragment.text
+
+
+def test_fragment_hints_before_every_role_has_a_voice() -> None:
+    """Dual mode with a missing voice renders the hint, not a ready spec."""
+    client = _client()
+    fragment = client.get(
+        "/ui/fragments/lesson_voices",
+        params={"mode": "dual", "voice": GATEWAY_STOCK},
+    )
+
+    assert fragment.status_code == 200
+    assert "Selecciona una voz para previsualizar el JSON" in fragment.text
+    assert "Previsualización lista" not in fragment.text

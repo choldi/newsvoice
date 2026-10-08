@@ -915,8 +915,34 @@ local).
       `Mich*clo`) y actualización de dropdowns/guard/ui-tools al radio
       `checked`.
       Verificado 2026-10-07: ruff limpio, suite completa 1299 passed.
+- [x] **9.8 Herramientas: idioma de los pickers, preview del cast y borrado** —
+      decisión del operador (2026-10-08, "ampliar Fase 9"): en la página
+      Herramientas (a) el **doc-TTS** pasa de input de idioma a un **select
+      único** (poblado con los idiomas del catálogo, antes del picker) que
+      filtra las voces Edge — se elimina el select interno redundante del
+      picker (`_picker_context(langs=False)`); (b) las **lecciones** usan
+      selects `target_language`/`native_language` del catálogo que re-fetchean
+      `#lesson-voices` y filtran cada rol por su idioma — 'dual' → nativo
+      `native_language`/objetivo `target_language`, 'mixed'/'native' → solo
+      el objetivo (`_picker_lang_param`, `_picker_context(lang_input=...)`
+      para que la búsqueda debounce conserve el filtro); (c) la ventana de
+      **cast avanzado** añade una **preview dinámica** del NarrationSpec JSON
+      sincronizada con modo+idiomas+voces vía htmx (helpers
+      `_lesson_preview_spec`/`_lesson_preview_ready`, `<pre id="spec-preview">`
+      con hint "Selecciona una voz..." y swap OOB desde el fragmento, sin
+      botón copiar ni JS); (d) cada trabajo de audio terminado gana un botón
+      **Borrar** que elimina todo lo del run — audio + sidecar `.meta.json` +
+      fila `audio_jobs` + upload + `text/` + `meta/` (y el script en lecciones)
+      vía `src/api/services/audio_cleanup.py` + `POST /ui/tools/jobs/{kind}/{run_id}/delete`;
+      la narración además resetea `digest_runs.narration_path`
+      (`RunsRepository.set_narration_path(..., None)` con `delete_job`).
+      Tests: `tests/integration/test_voice_picker.py` (+5), condiciones 9.8
+      en `test_voice_dropdowns.py` y `test_ui_tools.py` (+5; borrado de
+      doc/lesson/narración con ficheros en disco y fila DB).
+      Verificado 2026-10-08: ruff format/check limpios, suite completa 1310
+      passed.
 
-**Fase 9 completada el 2026-10-07** (9.1-9.7, ver checklist arriba).
+**Fase 9 completada el 2026-10-07** (9.1-9.8, ver checklist arriba).
 
 **Success criteria:** `pytest -q` en verde con `ruff check .`/`ruff format`
 limpios; una voz creada desde la GUI queda en `custom_profiles.json`, su

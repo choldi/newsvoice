@@ -1,17 +1,23 @@
-{# Voice picker(s) of the language-lesson form (Phases 7.12 + 9.7).
+{# Voice picker(s) of the language-lesson form (Phases 7.12 + 9.7 + 9.8).
 
    One picker for the single-voice modes (mixed, native); two for 'dual',
    whose cast speaks two languages (the first voice teaches in the student's
    native language, the second one in the target language). Each picker is a
-   glob search plus a language select over the Phase 9 registry with radio
-   results (partials/_voice_picker.html): the checked radio travels with
-   every htmx fetch (hx-include) so the selection survives re-renders, and
-   clicking one re-runs this fragment through the results container's change
-   listener so the Phase 9.2 mixed-engine guard recomputes and the out-of-band
-   submit button arrives disabled when the two dual voices mix engines. The
-   last mode is echoed in the `current_mode` hidden field because the mode
-   select lives outside this block. The typed filters keep their
-   `voice_q`/`voice2_q` names so re-renders do not lose them. #}
+   glob search over the Phase 9 registry with radio results
+   (partials/_voice_picker.html): the checked radio travels with every htmx
+   fetch (hx-include) so the selection survives re-renders, and clicking one
+   re-runs this fragment through the results container's change listener so
+   the Phase 9.2 mixed-engine guard recomputes and the out-of-band submit
+   button arrives disabled when the two dual voices mix engines. The last
+   mode is echoed in the `current_mode` hidden field because the mode select
+   lives outside this block. The typed filters keep their
+   `voice_q`/`voice2_q` names so re-renders do not lose them.
+
+   Since Phase 9.8 the language filter comes from the form's own selects
+   (native_language/target_language), the pickers render no internal language
+   select, and the block also emits the live cast preview of the cast
+   avanzado box out-of-band: a <pre> with the JSON this select would generate,
+   hinting when a role still has no voice. #}
 {% if fragment %}
 <input type="hidden" name="current_mode" value="{{ mode }}">
 {% endif %}
@@ -35,4 +41,8 @@
 {% endif %}
 {% if fragment %}
 <div id="lesson-submit" hx-swap-oob="innerHTML"><button type="submit" class="primary" {{ 'disabled' if mixed_message else '' }}>Generar clase</button></div>
+<div id="spec-preview" hx-swap-oob="innerHTML">
+  <div class="hint">{{ 'Previsualización lista' if preview_ready else 'Selecciona una voz para previsualizar el JSON' }}</div>
+  <pre>{{ preview_spec }}</pre>
+</div>
 {% endif %}

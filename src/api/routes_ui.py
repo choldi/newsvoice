@@ -28,10 +28,16 @@ from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
 from src.api.models.voices import CustomVoiceIn
 from src.api.services import env_editor, voice_catalog_admin, voice_preview, voice_search
+from src.api.services.audio_cleanup import delete_job_artifacts
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
 from src.api.services.env_editor import build_schema
-from src.api.services.lesson import lesson_audio_link, read_lesson_meta, submit_lesson
+from src.api.services.lesson import (
+    LessonError,
+    lesson_audio_link,
+    read_lesson_meta,
+    submit_lesson,
+)
 from src.api.services.signed_links import (
     NARRATION_AUDIO_LINK_PREFIX,
     SignedLinkError,
@@ -259,6 +265,115 @@ def _picker_results_context(
     }
 
 
+def _picker_lang_param(
+    *,
+    field: str,
+    lang: str,
+    language: str,
+    mode: str = "",
+    native_language: str = "",
+    target_language: str = "",
+) -> str:
+    """Resolve the effective language filter of one picker (Phase 9.8).
+
+    The document and lesson forms drive the picker language from their own
+    fields instead of the old per-picker language select: the doc form sends
+    ``language`` and the lesson form sends ``native_language``/
+    ``target_language`` plus ``mode``. An explicit ``lang`` param (the legacy
+    fragment tests) still wins; otherwise the mapping follows the lesson mode
+    so the picker only offers voices that can voice that role's language —
+    'dual' pins the native picker to ``native_language`` and the target picker
+    to ``target_language'', while 'mixed'/'native' filter everything by the
+    target language (the class is taught there).
+
+    Args:
+        field: Radio group ('voice' or 'voice2').
+        lang: Legacy explicit language prefix ('' in the forms).
+        language: Document form language field.
+        mode: Lesson mode ('dual', 'mixed', 'native' or '' for documents).
+        native_language: Lesson native language field.
+        target_language: Lesson target language field.
+
+    Returns:
+        The language prefix to filter by ('' = no filter applied).
+    """
+    if (lang or "").strip():
+        return lang.strip()
+    lesson_mode = str(mode or "").strip().lower()
+    if lesson_mode in {m.value for m in LessonMode}:
+        if field == "voice2" and lesson_mode == "dual":
+            return (target_language or "").strip()
+        if lesson_mode == "dual":
+            return (native_language or "").strip()
+        return (target_language or "").strip()
+    return (language or "").strip()
+
+
+def _lesson_preview_spec(
+    mode: str,
+    target_language: str,
+    native_language: str,
+    voice: str,
+    voice2: str,
+) -> str:
+    """Render the NarrationSpec the current lesson form would generate.
+
+    Mirrors :func:`src.api.services.lesson.resolve_cast` for the no-spec path
+    (the form preview of the cast avanzado box): the spec is what the engine
+    would really voice — one role for mixed/native, two pinned to their
+    languages in dual. The JSON is pretty-printed so the operator can read it
+    in the preview window before pasting it into the spec textarea.
+
+    Args:
+        mode: Normalized lesson mode ('mixed', 'dual' or 'native').
+        target_language: Language being taught.
+        native_language: Student's native language.
+        voice: Selected native/single voice id ('' when none yet).
+        voice2: Selected target voice id (dual only).
+
+    Returns:
+        Pretty-printed NarrationSpec JSON for the current selection.
+    """
+    import json
+
+    if mode == "dual":
+        roles = [
+            {
+                "name": "profe_native",
+                "voice_id": voice or "",
+                "language": native_language or None,
+            },
+            {
+                "name": "profe_target",
+                "voice_id": voice2 or "",
+                "language": target_language or None,
+            },
+        ]
+    else:
+        roles = [{"name": "teacher", "voice_id": voice or "", "language": None}]
+    return json.dumps(
+        {"language": target_language or "", "roles": roles},
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _lesson_preview_ready(mode: str, voice: str, voice2: str) -> bool:
+    """Tell whether the current cast has enough voices to actually render.
+
+    Args:
+        mode: Normalized lesson mode.
+        voice: Selected native/single voice id.
+        voice2: Selected target voice id (dual only).
+
+    Returns:
+        True when every role the mode needs has a voice chosen.
+    """
+    if mode == "dual":
+        return bool((voice or "").strip() and (voice2 or "").strip())
+    return bool((voice or "").strip())
+
+
 def _picker_context(
     entries: list,
     *,
@@ -270,6 +385,8 @@ def _picker_context(
     engines: str = "all",
     empty_label: str = "",
     guard: bool = False,
+    langs: bool = True,
+    lang_input: str = "",
 ) -> dict:
     """Build the full context of one tools voice picker (Phase 9.7).
 
@@ -291,10 +408,16 @@ def _picker_context(
         empty_label: Label of the value="" option ('' omits it).
         guard: True for the lesson pickers (results container listens to
             radio changes and re-fetches /ui/fragments/lesson_voices).
+        langs: False omits the language options dict (Phase 9.8: the forms
+            already carry their own language selects, so the pickers render
+            no internal language select).
+        lang_input: CSS selector (or comma list) of the form's language
+            field(s) the picker must include in its htmx requests so the
+            debounced search keeps the language filter (Phase 9.8).
 
     Returns:
-        Results context plus picker_id, engines, empty_label, guard and
-        langs (``[{'code', 'count'}]`` over the whole vocabulary).
+        Results context plus picker_id, engines, empty_label, guard, lang_input
+        and langs (``[{'code', 'count'}]`` over the whole vocabulary).
     """
     dicts = [entry if isinstance(entry, dict) else entry.model_dump() for entry in entries]
     context = _picker_results_context(dicts, field=field, current=current, q=q, lang=lang)
@@ -304,7 +427,8 @@ def _picker_context(
             "engines": engines,
             "empty_label": empty_label,
             "guard": guard,
-            "langs": voice_search.language_options(dicts),
+            "lang_input": lang_input,
+            "langs": voice_search.language_options(dicts) if langs else [],
         }
     )
     return context
@@ -319,21 +443,27 @@ def _lesson_voice_context(
     fragment: bool = False,
     voice_q: str = "",
     voice2_q: str = "",
-    voice_lang: str = "",
-    voice2_lang: str = "",
+    native_language: str = "",
+    target_language: str = "",
 ) -> dict:
     """Build the template context of the lesson voice picker(s) (Phase 7.12).
 
     Shared by the tools page and its voice fragment so the initial render and
     every mode switch render exactly the same block. The catalogue is the
     full Phase 9 registry (every engine, tagged); each picker gets its radio
-    results (glob search + language filter, Phase 9.7) and its guard flag so
-    a click on any result re-runs this fragment and the Phase 9.2 mixed
+    results (glob search + language filter, Phase 9.7/9.8) and its guard flag
+    so a click on any result re-runs this fragment and the Phase 9.2 mixed
     engine guard recomputes. The typed queries ride along as named fields
     (``voice_q``/``voice2_q``) so a re-render keeps the operator's filter. A
     current selection no source offers (gateway down, legacy id) is kept in
     the vocabulary instead of dropped, and an unknown mode falls back to
     'mixed', the single-voice default.
+
+    Since Phase 9.8 the pickers filter by the form's own language selects:
+    in 'dual' the native picker asks voices of ``native_language`` and the
+    target picker voices of ``target_language``; in 'mixed'/'native' a single
+    role is filtered by the target language (the class is taught there). The
+    pickers therefore render no internal language select of their own.
 
     Args:
         voices: Raw voice entries from :func:`list_all_voices`.
@@ -341,16 +471,19 @@ def _lesson_voice_context(
         voice: Voice id currently selected for the native/single role.
         voice2: Voice id currently selected for the target role (dual only).
         fragment: True when rendering the htmx fragment, which additionally
-            carries the out-of-band submit button (Phase 9.2 guard).
+            carries the out-of-band submit button (Phase 9.2 guard) and the
+            live cast preview (Phase 9.8).
         voice_q: Typed glob query of the native/single picker.
         voice2_q: Typed glob query of the target picker (dual only).
-        voice_lang: Language prefix filter of the native/single picker.
-        voice2_lang: Language prefix filter of the target picker (dual only).
+        native_language: Lesson native language (drives the native picker in
+            'dual'; the 'mixed'/'native' picker filters by the target).
+        target_language: Lesson target language (drives the single picker and
+            the 'dual' target picker).
 
     Returns:
         Context keys for ``partials/_lesson_voices.html``: mode, the
-        ``voice_picker``/``voice2_picker`` dicts, the mixed-engine message
-        and the fragment flag.
+        ``voice_picker``/``voice2_picker`` dicts, the mixed-engine message,
+        the fragment flag and the JSON ``preview_spec`` for the cast box.
     """
     normalized = str(mode or "").strip().lower()
     if normalized not in {m.value for m in LessonMode}:
@@ -366,6 +499,9 @@ def _lesson_voice_context(
             )
             known.add(current)
     dual = normalized == "dual"
+    native = (native_language or "").strip()
+    target = (target_language or "").strip()
+    lesson_lang_input = "[name='native_language'], [name='target_language']"
     return {
         "mode": normalized,
         "lesson_voices": entries,
@@ -375,9 +511,11 @@ def _lesson_voice_context(
             field="voice",
             current=current_voice,
             q=voice_q,
-            lang=voice_lang,
+            lang=target if not dual else native,
             empty_label="(elige una voz)" if dual else "(por defecto)",
             guard=True,
+            langs=False,
+            lang_input=lesson_lang_input,
         ),
         "voice2_picker": _picker_context(
             entries,
@@ -385,12 +523,18 @@ def _lesson_voice_context(
             field="voice2",
             current=current_voice2,
             q=voice2_q,
-            lang=voice2_lang,
+            lang=target,
             empty_label="(elige una voz)",
             guard=True,
+            langs=False,
+            lang_input=lesson_lang_input,
         ),
         "mixed_message": _mixed_engine_message(voice, voice2),
         "fragment": fragment,
+        "preview_spec": _lesson_preview_spec(
+            normalized, target, native, current_voice, current_voice2
+        ),
+        "preview_ready": _lesson_preview_ready(normalized, current_voice, current_voice2),
     }
 
 
@@ -2033,6 +2177,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
         field="voice",
         engines="edge",
         empty_label="(por defecto)",
+        langs=False,
+        lang_input="[name='language']",
     )
     return _render(
         request,
@@ -2041,7 +2187,13 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "collections": _collections(),
             "omni_languages": omni["languages"],
             "doc_picker": doc_picker,
-            **_lesson_voice_context(all_voices),
+            "doc_language_options": voice_search.language_options(edge["voices"]),
+            "lesson_language_options": voice_search.language_options(all_voices),
+            **_lesson_voice_context(
+                all_voices,
+                native_language="es",
+                target_language="en",
+            ),
         },
     )
 
@@ -2181,8 +2333,8 @@ async def ui_fragment_lesson_voices(
     current_mode: str = "",
     voice_q: str = "",
     voice2_q: str = "",
-    voice_lang: str = "",
-    voice2_lang: str = "",
+    native_language: str = "",
+    target_language: str = "",
 ) -> HTMLResponse:
     """Render the voice picker(s) of the language-lesson form (Phase 7.12).
 
@@ -2192,14 +2344,19 @@ async def ui_fragment_lesson_voices(
     one. The current selections ride along as query parameters (the mode select
     and the pickers inside ``#lesson-voices`` are htmx-included) so toggling
     the mode does not drop what was already picked, and the typed filters
-    (glob query + language) keep their own parameters so a re-render does not
-    lose them either.
+    (glob query) keep their own parameters so a re-render does not lose them
+    either.
 
     A pick does not carry the mode select (it lives outside the block), so
     the partial echoes the last mode in a ``current_mode`` hidden field:
     ``mode`` (sent by the mode select itself) wins when present, otherwise
     the echo is used. The response also carries the submit button
-    out-of-band, disabled while the two dual voices mix engines (Phase 9.2).
+    out-of-band, disabled while the two dual voices mix engines (Phase 9.2),
+    and the live cast preview of the cast avanzado box (Phase 9.8).
+
+    Since Phase 9.8 the voice pickers are filtered by the form's own language
+    fields (``native_language``/``target_language``), which ride along as
+    query parameters the same way the mode does.
 
     Args:
         request: Incoming request.
@@ -2209,8 +2366,8 @@ async def ui_fragment_lesson_voices(
         current_mode: Last mode echoed by the hidden field of the partial.
         voice_q: Typed glob query of the native/single picker.
         voice2_q: Typed glob query of the target picker (dual only).
-        voice_lang: Language prefix filter of the native/single picker.
-        voice2_lang: Language prefix filter of the target picker (dual only).
+        native_language: Student's native language ('es').
+        target_language: Language being taught ('en').
 
     Returns:
         HTMLResponse with the _lesson_voices partial.
@@ -2227,8 +2384,8 @@ async def ui_fragment_lesson_voices(
             fragment=True,
             voice_q=voice_q,
             voice2_q=voice2_q,
-            voice_lang=voice_lang,
-            voice2_lang=voice2_lang,
+            native_language=native_language,
+            target_language=target_language,
         ),
     )
 
@@ -2243,15 +2400,27 @@ async def ui_fragment_voice_picker(
     lang: str = "",
     engines: str = "all",
     empty_label: str = "",
+    language: str = "",
+    mode: str = "",
+    native_language: str = "",
+    target_language: str = "",
 ) -> HTMLResponse:
-    """Search results of one tools voice picker (Phase 9.7).
+    """Search results of one tools voice picker (Phase 9.7/9.8).
 
-    Fired by the query field (keyup debounce) and the language select of every
-    picker in the tools page; the response swaps only the radio results, so
-    the search row keeps its state. The hidden inputs of the picker wrapper
+    Fired by the query field (keyup debounce) and the language-driven sources
+    of the forms; the response swaps only the radio results, so the search
+    row keeps its state. The hidden inputs of the picker wrapper
     (hx-included) tell which radio group, vocabulary and empty option to
     render, and the currently checked radio — carried by the same include —
     is always kept in the response, checked.
+
+    Since Phase 9.8 the language filter comes from the form's own language
+    fields instead of an internal select: the document form sends ``language``
+    and the lesson form sends ``native_language``/``target_language`` plus its
+    ``mode``, and this route maps them to a single ``lang`` prefix, so one
+    filter drives the voices that language can actually voice (a lesson in
+    'dual' filters the native picker by ``native_language`` and the target
+    picker by ``target_language``; mixed/native by the target language alone).
 
     Args:
         request: Incoming request.
@@ -2260,10 +2429,14 @@ async def ui_fragment_voice_picker(
         voice: Currently checked voice (native/single/doc picker).
         voice2: Currently checked voice (target picker, dual mode only).
         q: Glob-style query over id, label, language, category and engines.
-        lang: Language prefix filter ('es' matches es and es-ES).
+        lang: Legacy language prefix param, kept for tests ('' normally).
         engines: 'all' or the canonical engine of the vocabulary (the doc
             picker sends 'edge').
         empty_label: Label of the value='' option ('' omits it).
+        language: Document form language field ('es' matches es and es-ES).
+        mode: Lesson mode driving the per-role language mapping.
+        native_language: Lesson native language (native picker, dual only).
+        target_language: Lesson target language (single/target picker).
 
     Returns:
         HTMLResponse with the _voice_picker_results partial.
@@ -2271,8 +2444,18 @@ async def ui_fragment_voice_picker(
     wanted_field = field if field in {"voice", "voice2"} else "voice"
     current = voice2 if wanted_field == "voice2" else voice
     engine = engines.strip() if engines not in {"", "all"} else None
+    resolved = _picker_lang_param(
+        field=wanted_field,
+        lang=lang,
+        language=language,
+        mode=mode,
+        native_language=native_language,
+        target_language=target_language,
+    )
     voices = [entry.model_dump() for entry in await list_all_voices(engine=engine)]
-    context = _picker_results_context(voices, field=wanted_field, current=current, q=q, lang=lang)
+    context = _picker_results_context(
+        voices, field=wanted_field, current=current, q=q, lang=resolved
+    )
     context["empty_label"] = empty_label
     return _render(request, "partials/_voice_picker_results.html", {"picker": context})
 
@@ -2311,6 +2494,42 @@ async def ui_fragment_tool_jobs(request: Request, kind: str = "doc_tts") -> HTML
     else:
         context["error"] = f"tipo desconocido: {kind}"
     return _render(request, "partials/_tool_jobs.html", context)
+
+
+@router.post("/ui/tools/jobs/{kind}/{run_id}/delete", include_in_schema=False)
+async def ui_tools_delete_job(request: Request, kind: str, run_id: str) -> RedirectResponse:
+    """Delete a generated audio and everything the run left behind (Phase 9.8).
+
+    Only the artifacts and the ``audio_jobs`` row die here — not the Temporal
+    workflow, whose history stays for auditing; a deleted file makes any old
+    signed link 404, which is the point of the button. Narrations also forget
+    their ``narration_path`` so the collections page stops pointing at a file
+    that no longer exists.
+
+    Args:
+        request: Incoming request.
+        kind: Audio job kind: 'doc_tts', 'lesson' or 'narration'.
+        run_id: Workflow id of the run to delete.
+
+    Returns:
+        Redirect back to the tools page with a flash.
+    """
+    target = "/ui/tools"
+    try:
+        job = await AudioJobsRepository().get_job(run_id, kind=kind)
+        if job is None:
+            return _flash(target, "no hay ningún trabajo con ese id", "error")
+        deleted = delete_job_artifacts(run_id, kind, str(job.get("audio_path") or ""))
+        await AudioJobsRepository().delete_job(run_id, kind)
+        if kind == "narration":
+            await RunsRepository().set_narration_path(run_id, None)
+    except (ValueError, LessonError) as exc:
+        return _flash(target, str(exc), "error")
+    except Exception as exc:
+        logger.error("ui_tools_delete_failed", kind=kind, run_id=run_id, error=str(exc))
+        return _flash(target, f"No se pudo borrar: {exc}", "error")
+    files = " + ".join(deleted) or "sin ficheros en disco"
+    return _flash(target, f"Borrado {kind} {run_id}: {files}", "ok")
 
 
 @router.post("/ui/collections/{name}/narrate", include_in_schema=False)

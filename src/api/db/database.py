@@ -554,16 +554,18 @@ class RunsRepository:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
-    async def set_narration_path(self, workflow_id: str, narration_path: str) -> int:
-        """Attach a generated narration file to an existing run.
+    async def set_narration_path(self, workflow_id: str, narration_path: str | None) -> int:
+        """Attach or clear a generated narration file on an existing run.
 
         The narration worker runs as a separate workflow, so it must not rewrite
         the whole run row (which would reset the digest counters and status);
-        only the narration column is touched.
+        only the narration column is touched. Phase 9.8: a ``None`` value clears
+        the column (the tools page uses it when deleting a generated audio).
 
         Args:
             workflow_id: Temporal workflow id of the run that was narrated.
-            narration_path: Path of the generated narration audio file.
+            narration_path: Path of the generated narration audio file, or
+                None to clear it.
 
         Returns:
             Number of rows updated (0 when no run matches the workflow id).
@@ -757,6 +759,30 @@ class AudioJobsRepository:
             async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
+
+    async def delete_job(self, run_id: str, kind: str) -> dict | None:
+        """Delete an audio job row and return what it had generated.
+
+        Phase 9.8: the tools page offers delete per generated audio; the row
+        tells the caller which files the workflow produced (audio_path and the
+        sidecar it implies) so the service can remove them from disk.
+
+        Args:
+            run_id: Workflow id of the run the job belongs to.
+            kind: Audio job kind ('doc_tts', 'lesson', 'narration').
+
+        Returns:
+            The deleted job dict (with its ``audio_path``), or None when no
+            row matched.
+        """
+        job = await self.get_job(run_id, kind)
+        if job is None:
+            return None
+        query = "DELETE FROM audio_jobs WHERE run_id = ? AND kind = ?"
+        async with get_db(self.db_path) as db:
+            await db.execute(query, (run_id, kind))
+            await db.commit()
+        return job
 
 
 class NarrationRepository:

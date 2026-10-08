@@ -105,8 +105,12 @@ def test_lesson_pickers_merge_every_engine() -> None:
 
     page = client.get("/ui/tools")
     assert page.status_code == 200
-    assert f'value="{MODAL_CUSTOM}"' in page.text, "the generated design leads the initial list"
-    assert f'value="{CLONE_UUID}"' in page.text, "clones follow the designs"
+    assert f'value="{MODAL_COMMITTED}"' in page.text, (
+        "the default mixed/en picker lists English voices"
+    )
+    assert f'value="{MODAL_CUSTOM}"' not in page.text, (
+        "the default mixed/en picker filters out 'es' voices (Phase 9.8)"
+    )
 
 
 def test_doc_tts_stays_edge_only_beside_the_full_lesson_list() -> None:
@@ -144,13 +148,18 @@ def test_lesson_picker_carries_the_typed_filter_across_rerenders() -> None:
     client = _client()
     fragment = client.get(
         "/ui/fragments/lesson_voices",
-        params={"mode": "mixed", "voice_q": "anchor", "voice_lang": "en"},
+        params={
+            "mode": "mixed",
+            "voice_q": "anchor",
+            "native_language": "es",
+            "target_language": "en",
+        },
     )
 
     assert fragment.status_code == 200
     assert 'name="voice_q" value="anchor"' in fragment.text
-    assert 'name="voice_lang"' in fragment.text
-    assert '<option value="en" selected>' in fragment.text
+    assert 'name="voice_lang"' not in fragment.text, "the form's language select replaces it"
+    assert 'name="voice2_lang"' not in fragment.text, "the form's language select replaces it"
     assert 'id="voice-results-voice"' in fragment.text
     assert 'hx-get="/ui/fragments/lesson_voices"' in fragment.text, "the guard listens on picks"
 
