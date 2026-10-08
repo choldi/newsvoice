@@ -25,8 +25,13 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from src.api.authz import Role
-from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
+from src.api.authz import ASSIGNABLE_ROLES, Role
+from src.api.db.database import (
+    AudioJobsRepository,
+    RunsRepository,
+    UsersRepository,
+    VerificationsRepository,
+)
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
 from src.api.models.voices import CustomVoiceIn
@@ -2136,6 +2141,128 @@ async def ui_register(request: Request) -> RedirectResponse:
         "Registro recibido. El administrador validará tu cuenta.",
         "ok",
     )
+
+
+@router.get("/ui/users", response_class=HTMLResponse, include_in_schema=False)
+async def ui_users(request: Request) -> HTMLResponse:
+    """Render the user management page (admin only, Phase 6).
+
+    The local admin credential never appears here: the table lists only
+    self-registered accounts with their status and assigned role.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse for the users page.
+    """
+    users = await UsersRepository().list_all()
+    return _render(
+        request,
+        "users.html",
+        {"users": users, "assignable_roles": ASSIGNABLE_ROLES},
+    )
+
+
+@router.post("/ui/users/{user_id}/approve", include_in_schema=False)
+async def ui_user_approve(user_id: int, request: Request) -> RedirectResponse:
+    """Approve a pending account and assign its role in one step.
+
+    Args:
+        user_id: Primary key of the user to approve.
+        request: Incoming request with the ``role`` field.
+
+    Returns:
+        Redirect to /ui/users with a flash message.
+    """
+    fields = await _form(request)
+    role = fields.get("role", "")
+    if role not in ASSIGNABLE_ROLES:
+        return _flash("/ui/users", "Rol no válido", "error")
+    try:
+        await UsersRepository().set_status(user_id, "active", role)
+    except ValueError:
+        return _flash("/ui/users", "Usuario no encontrado", "error")
+    logger.info("user_approved", user_id=user_id, role=role)
+    return _flash("/ui/users", f"Usuario aprobado con rol '{role}'")
+
+
+@router.post("/ui/users/{user_id}/role", include_in_schema=False)
+async def ui_user_role(user_id: int, request: Request) -> RedirectResponse:
+    """Change the role of an existing account, keeping its status.
+
+    Args:
+        user_id: Primary key of the user to update.
+        request: Incoming request with the ``role`` field.
+
+    Returns:
+        Redirect to /ui/users with a flash message.
+    """
+    fields = await _form(request)
+    role = fields.get("role", "")
+    if role not in ASSIGNABLE_ROLES:
+        return _flash("/ui/users", "Rol no válido", "error")
+    repo = UsersRepository()
+    user = await repo.get(user_id)
+    if user is None:
+        return _flash("/ui/users", "Usuario no encontrado", "error")
+    await repo.set_status(user_id, user["status"], role)
+    logger.info("user_role_changed", user_id=user_id, role=role)
+    return _flash("/ui/users", f"Rol actualizado a '{role}'")
+
+
+@router.post("/ui/users/{user_id}/disable", include_in_schema=False)
+async def ui_user_disable(user_id: int) -> RedirectResponse:
+    """Disable an account; open sessions are purged by the repository.
+
+    Args:
+        user_id: Primary key of the user to disable.
+
+    Returns:
+        Redirect to /ui/users with a flash message.
+    """
+    try:
+        await UsersRepository().set_status(user_id, "disabled")
+    except ValueError:
+        return _flash("/ui/users", "Usuario no encontrado", "error")
+    logger.info("user_disabled", user_id=user_id)
+    return _flash("/ui/users", "Usuario deshababilitado")
+
+
+@router.post("/ui/users/{user_id}/enable", include_in_schema=False)
+async def ui_user_enable(user_id: int) -> RedirectResponse:
+    """Re-enable a previously disabled account.
+
+    Args:
+        user_id: Primary key of the user to enable.
+
+    Returns:
+        Redirect to /ui/users with a flash message.
+    """
+    try:
+        await UsersRepository().set_status(user_id, "active")
+    except ValueError:
+        return _flash("/ui/users", "Usuario no encontrado", "error")
+    logger.info("user_enabled", user_id=user_id)
+    return _flash("/ui/users", "Usuario habilitado")
+
+
+@router.post("/ui/users/{user_id}/delete", include_in_schema=False)
+async def ui_user_delete(user_id: int) -> RedirectResponse:
+    """Delete an account and purge its sessions.
+
+    Args:
+        user_id: Primary key of the user to delete.
+
+    Returns:
+        Redirect to /ui/users with a flash message.
+    """
+    try:
+        await UsersRepository().delete(user_id)
+    except ValueError:
+        return _flash("/ui/users", "Usuario no encontrado", "error")
+    logger.info("user_deleted", user_id=user_id)
+    return _flash("/ui/users", "Usuario eliminado")
 
 
 @router.post("/ui/login", include_in_schema=False)
