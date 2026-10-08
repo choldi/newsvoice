@@ -71,7 +71,7 @@
             {% endif %}
           </td>
           <td>
-            {% if j.status == 'FINISHED_OK' and j.audio_url %}
+            {% if j.status == 'FINISHED_OK' and j.audio_url and can_operate %}
             <form method="post" action="/ui/tools/jobs/{{ kind }}/{{ j.run_id }}/delete"
                   onsubmit="return confirm('¿Borrar este audio y todo su trabajo?')">
               <button class="btn danger" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Borrar</button>

@@ -75,6 +75,7 @@
   </div>
 </div>
 
+{% if is_admin %}
 <div class="card">
   <h2>Nueva voz personalizada</h2>
   <p class="muted">Diseña una voz nueva con Qwen3-TTS VoiceDesign; el WAV de
@@ -116,7 +117,9 @@
     <button type="submit" class="primary">Crear voz</button>
   </form>
 </div>
+{% endif %}
 
+{% if is_admin %}
 <div class="card">
   <h2>Clonar nueva voz</h2>
   <p class="muted">Sube audio de referencia (WAV, 5–30s) codificado en base64.</p>
@@ -140,4 +143,5 @@
     <button type="submit" class="primary">Clonar</button>
   </form>
 </div>
+{% endif %}
 {% endblock %}

@@ -117,7 +117,13 @@
       <a class="nav {{ 'active' if active == 'runs' else '' }}" href="/ui/runs">Ejecuciones</a>
       <a class="nav {{ 'active' if active == 'tools' else '' }}" href="/ui/tools">Herramientas</a>
       <a class="nav {{ 'active' if active == 'voices' else '' }}" href="/ui/voices">Voces</a>
+      {% if is_admin %}
       <a class="nav {{ 'active' if active == 'settings' else '' }}" href="/ui/settings">Ajustes</a>
+      <a class="nav {{ 'active' if active == 'users' else '' }}" href="/ui/users">Usuarios</a>
+      {% endif %}
+      {% if current_user %}
+      <div class="muted" style="padding:8px 10px;font-size:12px">{{ current_user }} · {{ role }}</div>
+      {% endif %}
       <form method="post" action="/ui/logout" style="margin-top:24px">
         <button type="submit" class="danger">Cerrar sesión</button>
       </form>

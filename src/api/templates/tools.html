@@ -12,6 +12,7 @@
 
 <details class="card" id="tool-url" open>
   <summary><strong>🔗 Resumen de URL (Fase 7.10)</strong></summary>
+{% if can_operate %}
   <form method="post" action="/ui/tools/url">
     <label>URL del artículo</label>
     <input type="url" name="url" required placeholder="https://elpais.com/...">
@@ -32,6 +33,7 @@
     </div>
     <button type="submit" class="primary">Resumir</button>
   </form>
+{% endif %}
   <div id="jobs-url" hx-get="/ui/fragments/tool_jobs?kind=url" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="empty">Cargando…</div>
   </div>
@@ -39,6 +41,7 @@
 
 <details class="card" id="tool-doc">
   <summary><strong>📄 TTS de documentos — PDF/EPUB/TXT/MD (Fase 7.11)</strong></summary>
+{% if can_operate %}
   <form method="post" action="/ui/tools/doc-tts" enctype="multipart/form-data">
     <label>Fichero</label>
     <input type="file" name="file" accept=".pdf,.epub,.txt,.md" required>
@@ -71,6 +74,7 @@
       Un MP3 por documento; el estado incluye el enlace firmado para abrirlo desde el móvil.
     </p>
   </form>
+{% endif %}
   <div id="jobs-doc_tts" hx-get="/ui/fragments/tool_jobs?kind=doc_tts" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="empty">Cargando…</div>
   </div>
@@ -78,6 +82,7 @@
 
 <details class="card" id="tool-lesson">
   <summary><strong>🎓 Clase de idiomas — profesor (Fase 7.12)</strong></summary>
+{% if can_operate %}
   <form method="post" action="/ui/tools/lessons" enctype="multipart/form-data">
     <label>Apuntes (.md / .txt)</label>
     <input type="file" name="file" accept=".md,.txt" required>
@@ -152,6 +157,7 @@
     </details>
     <div id="lesson-submit"><button type="submit" class="primary">Generar clase</button></div>
   </form>
+{% endif %}
   <div id="jobs-lesson" hx-get="/ui/fragments/tool_jobs?kind=lesson" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="empty">Cargando…</div>
   </div>
@@ -159,6 +165,7 @@
 
 <details class="card" id="tool-podcast">
   <summary><strong>🎙 Podcast de una colección (narración, Fase 7)</strong></summary>
+{% if can_operate %}
   <form method="post" action="/ui/tools/podcast">
     <div class="row">
       <div class="col">
@@ -178,6 +185,7 @@
     </div>
     <button type="submit" class="primary">Generar podcast ahora</button>
   </form>
+{% endif %}
   <div id="jobs-narration" hx-get="/ui/fragments/tool_jobs?kind=narration" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="empty">Cargando…</div>
   </div>

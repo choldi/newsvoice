@@ -2,12 +2,14 @@
 {% block title %}News Engine · Colecciones{% endblock %}
 {% block app %}
 <h1>Colecciones</h1>
+{% if is_admin %}
 <div class="tags">
   <a class="btn" href="#nueva">Nueva colección</a>
   <form method="post" action="/ui/schedules/resync" style="display:inline">
     <button type="submit" class="primary">Resincronizar schedules</button>
   </form>
 </div>
+{% endif %}
 
 {% for c in collections %}
 <details class="card" id="d-{{ c.name }}">
@@ -25,18 +27,23 @@
       </span>
     </span>
     <span style="display:flex;gap:4px;align-items:center">
+      {% if can_operate %}
       <form method="post" action="/ui/collections/{{ c.name }}/run" onclick="event.stopPropagation()" style="display:inline">
         <button type="submit" class="btn primary" style="margin:0">Ejecutar ahora</button>
       </form>
+      {% endif %}
+      {% if is_admin %}
       <button class="btn"
               onclick="event.preventDefault();event.stopPropagation();var d=document.getElementById('d-{{ c.name }}');d.open=true;setTimeout(function(){var el=document.getElementById('edit-form-{{ c.name }}');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});},100);">Editar</button>
       <form method="post" action="/ui/collections/{{ c.name }}/delete" onclick="event.stopPropagation()" style="display:inline"
             onsubmit="return confirm('¿Eliminar la colección {{ c.name }}?')">
         <button type="submit" class="btn danger" style="margin:0">Eliminar</button>
       </form>
+      {% endif %}
     </span>
   </summary>
   <div class="inner">
+    {% if is_admin %}
     <form method="post" action="/ui/collections/{{ c.name }}/update" id="edit-form-{{ c.name }}">
       <div class="row">
         <div class="col">
@@ -299,14 +306,18 @@
         </div>
       </details>
     </form>
+    {% endif %}
+    {% if can_operate %}
     <form method="post" action="/ui/collections/{{ c.name }}/narrate" style="margin-top:10px">
       <button type="submit" class="primary">🎙 Generar podcast ahora</button>
       <span class="muted" style="font-size:12px">usa el cast de arriba y el último digesto de la colección</span>
     </form>
+    {% endif %}
   </div>
 </details>
 {% endfor %}
 
+{% if is_admin %}
 <div class="card" id="nueva">
   <h2>Nueva colección</h2>
   <form method="post" action="/ui/collections" id="create-form">
@@ -550,6 +561,7 @@
     </details>
   </form>
 </div>
+{% endif %}
 
 <datalist id="lang-list">
   {% for l in omni.languages %}<option value="{{ l }}">{% endfor %}

@@ -926,8 +926,11 @@ def _render(request: Request, name: str, context: dict) -> HTMLResponse:
     context.setdefault("active", name.split(".")[0])
     # Phase 6: the middleware injects the resolved identity; public pages
     # (login/register) fall back to an empty role so the nav stays hidden.
-    context.setdefault("role", getattr(request.state, "role", None))
+    role = getattr(request.state, "role", None)
+    context.setdefault("role", role)
     context.setdefault("current_user", getattr(request.state, "user", ""))
+    context.setdefault("is_admin", role is not None and str(role) == "admin")
+    context.setdefault("can_operate", str(role) in ("admin", "user"))
     return templates.TemplateResponse(request, name, context)
 
 

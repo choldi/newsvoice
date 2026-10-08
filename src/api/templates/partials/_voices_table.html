@@ -31,10 +31,12 @@
       <td>{{ v.engines | join(' · ') or '—' }}</td>
       <td>{% if v.status %}<span class="badge {{ v.badge }}">{{ v.status }}</span>{% else %}—{% endif %}</td>
       <td style="white-space:nowrap">
+        {% if is_admin %}
         <form hx-post="/ui/voices/test" hx-target="#voice-sample" hx-swap="innerHTML" style="display:inline">
           <input type="hidden" name="voice" value="{{ v.id }}">
           <button type="submit">Probar</button>
         </form>
+        {% endif %}
         {% if v.has_audio %}
         <a class="btn" href="/ui/voices/audio/{{ v.id }}.wav" target="_blank" rel="noopener">WAV</a>
         {% endif %}
