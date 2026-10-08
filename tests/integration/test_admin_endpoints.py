@@ -448,9 +448,12 @@ def test_voice_catalog_generate_starts_workflow(
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        async def execute_workflow(self, *args: object, **kwargs: object) -> None:
+        async def start_workflow(self, *args: object, **kwargs: object) -> None:
             started["args"] = args
             started["kwargs"] = kwargs
+
+        async def execute_workflow(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("catalog generation must not block on completion")
 
     connect = AsyncMock(return_value=_FakeClient())
     monkeypatch.setattr("src.api.services.voice_catalog_admin.build_client", connect)

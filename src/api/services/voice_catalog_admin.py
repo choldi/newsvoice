@@ -190,6 +190,10 @@ async def generated_voices() -> list[dict[str, Any]]:
 async def start_generate(names: list[str] | None = None, upload: bool = False) -> str:
     """Start a voice catalog generation run in Temporal.
 
+    The run is enqueued fire-and-forget: the workflow id is returned as soon as
+    Temporal accepts it, without waiting for the design activities to finish.
+    Callers poll the catalog status for progress.
+
     Args:
         names: Optional subset of profile names; empty means the whole catalog.
         upload: Also upload the produced references to the Modal Volume.
@@ -209,7 +213,7 @@ async def start_generate(names: list[str] | None = None, upload: bool = False) -
     )
     try:
         client = await build_client(settings.temporal_voices_namespace)
-        await client.execute_workflow(
+        await client.start_workflow(
             VoiceCatalogWorkflow.run,
             config,
             id=workflow_id,

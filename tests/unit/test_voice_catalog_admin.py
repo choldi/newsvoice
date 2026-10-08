@@ -161,6 +161,30 @@ async def test_start_generate_wraps_temporal_failures(
         await voice_catalog_admin.start_generate(names=["mi_voz_es"])
 
 
+async def test_start_generate_is_fire_and_forget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """start_generate enqueues the run and returns without waiting for it."""
+    client = AsyncMock()
+    client.execute_workflow = AsyncMock(
+        side_effect=AssertionError("start_generate must not wait for completion")
+    )
+
+    async def fake_build_client(namespace: str | None = None) -> object:
+        return client
+
+    monkeypatch.setattr(voice_catalog_admin, "build_client", fake_build_client)
+
+    workflow_id = await voice_catalog_admin.start_generate(names=["mi_voz_es"])
+
+    assert workflow_id.startswith("voice-catalog-")
+    client.start_workflow.assert_awaited_once()
+    assert client.start_workflow.await_args.kwargs["task_queue"] == (
+        settings.voice_catalog_task_queue
+    )
+    client.execute_workflow.assert_not_awaited()
+
+
 # --- generated_status / catalog_status / generated_voices ---------------------
 
 
