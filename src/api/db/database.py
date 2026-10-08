@@ -1229,3 +1229,460 @@ class VerificationsRepository:
         rows = await self.get_for_run(run_id)
         matching = [row for row in rows if row["target"] == target]
         return matching[-1] if matching else None
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    """Parse a stored timestamp string into an aware UTC datetime.
+
+    Rows written by this file use ``datetime.now(UTC).isoformat()`` (aware),
+    while table defaults use ``CURRENT_TIMESTAMP`` (naive, UTC). Both are
+    normalized here so expiry comparisons never raise.
+
+    Args:
+        value: Raw timestamp string from SQLite, or None.
+
+    Returns:
+        An aware UTC datetime, or None when value is None/empty.
+    """
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+class UsersRepository:
+    """Repository for self-registered non-admin users (Phase 6, migration 012).
+
+    The admin is a local credential in ``.env`` and never appears here.
+    Disabling or deleting a user also purges their sessions so the change
+    takes effect on the next request.
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def create(self, email: str, role: str = "viewer") -> dict[str, Any]:
+        """Insert a new applicant with status 'pending'.
+
+        Args:
+            email: Email of the applicant; stored case-insensitively unique.
+            role: Role to assign once approved ('user' or 'viewer').
+
+        Returns:
+            The freshly inserted user row as a dict.
+
+        Raises:
+            ValueError: If the email is already registered.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        normalized = email.strip()
+        query = """
+            INSERT INTO users (email, role, status, created_at)
+            VALUES (?, ?, 'pending', ?)
+        """
+        async with get_db(self.db_path) as db:
+            try:
+                await db.execute(query, (normalized, role, now_iso))
+            except aiosqlite.IntegrityError as exc:
+                raise ValueError("email_already_registered") from exc
+            async with db.execute("SELECT * FROM users WHERE email = ?", (normalized,)) as cursor:
+                row = await cursor.fetchone()
+            await db.commit()
+        return dict(row) if row else {}
+
+    async def get(self, user_id: int) -> dict[str, Any] | None:
+        """Return a user row by id, or None.
+
+        Args:
+            user_id: Primary key of the user.
+
+        Returns:
+            The user dict, or None when it does not exist.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def get_by_email(self, email: str) -> dict[str, Any] | None:
+        """Return a user row by email (case-insensitive), or None.
+
+        Args:
+            email: Email to look up.
+
+        Returns:
+            The user dict, or None when it does not exist.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(
+                "SELECT * FROM users WHERE email = ?", (email.strip(),)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def list_all(self) -> list[dict[str, Any]]:
+        """List every user, newest registration first.
+
+        Returns:
+            List of user dicts ordered by id descending.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute("SELECT * FROM users ORDER BY id DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def count(self) -> int:
+        """Count users of any status.
+
+        Returns:
+            Number of registered (non-admin) users.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM users") as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+
+    async def set_status(self, user_id: int, status: str, role: str | None = None) -> None:
+        """Update a user's status and, optionally, their role.
+
+        Approving (status 'active') stamps ``approved_at`` on first approval.
+        Any status other than 'active' purges the user's open sessions.
+
+        Args:
+            user_id: Primary key of the user to update.
+            status: New status ('pending' | 'active' | 'disabled').
+            role: Optional new role ('user' | 'viewer'); None keeps current.
+
+        Raises:
+            ValueError: If no row matched user_id.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with get_db(self.db_path) as db:
+            if role is None:
+                query = """
+                    UPDATE users
+                    SET status = ?,
+                        approved_at = CASE
+                            WHEN status <> 'active' AND ? = 'active'
+                                 THEN COALESCE(approved_at, ?)
+                            ELSE approved_at
+                        END
+                    WHERE id = ?
+                """
+                params: tuple[Any, ...] = (status, status, now_iso, user_id)
+            else:
+                query = """
+                    UPDATE users
+                    SET status = ?, role = ?,
+                        approved_at = CASE
+                            WHEN status <> 'active' AND ? = 'active'
+                                 THEN COALESCE(approved_at, ?)
+                            ELSE approved_at
+                        END
+                    WHERE id = ?
+                """
+                params = (status, role, status, now_iso, user_id)
+            cursor = await db.execute(query, params)
+            if cursor.rowcount == 0:
+                raise ValueError("user_not_found")
+            if status != "active":
+                await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def delete(self, user_id: int) -> None:
+        """Delete a user and all their sessions.
+
+        Args:
+            user_id: Primary key of the user to remove.
+
+        Raises:
+            ValueError: If no row matched user_id.
+        """
+        async with get_db(self.db_path) as db:
+            # Purge sessions first: FK ON DELETE SET NULL would null user_id
+            # and make a post-delete purge match nothing.
+            await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            cursor = await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            if cursor.rowcount == 0:
+                raise ValueError("user_not_found")
+            await db.commit()
+
+    async def touch_login(self, user_id: int) -> None:
+        """Stamp ``last_login_at`` after a successful OTP login.
+
+        Args:
+            user_id: Primary key of the user who just logged in.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET last_login_at = ? WHERE id = ?",
+                (now_iso, user_id),
+            )
+            await db.commit()
+
+
+class LoginCodesRepository:
+    """Repository for sha256-hashed one-time login codes (migration 012).
+
+    Only the hash of the 6-digit code is persisted. At most one live code
+    exists per email: creating a new one purges previous rows, which also
+    keeps the resend-cooldown check trivial (look at the single row).
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def create(self, email: str, code_hash: str, ttl_seconds: int = 600) -> dict[str, Any]:
+        """Store a fresh code hash, replacing any previous codes for the email.
+
+        Args:
+            email: Email the code was sent to.
+            code_hash: Hex sha256 digest of the 6-digit code.
+            ttl_seconds: Lifetime of the code in seconds (default 600 = 10 min).
+
+        Returns:
+            The freshly inserted login code row as a dict.
+        """
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
+        expires_iso = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        normalized = email.strip()
+        async with get_db(self.db_path) as db:
+            await db.execute("DELETE FROM login_codes WHERE email = ?", (normalized,))
+            await db.execute(
+                """
+                INSERT INTO login_codes
+                    (email, code_hash, attempts, expires_at, last_sent_at,
+                     created_at)
+                VALUES (?, ?, 0, ?, ?, ?)
+                """,
+                (normalized, code_hash, expires_iso, now_iso, now_iso),
+            )
+            async with db.execute(
+                "SELECT * FROM login_codes WHERE email = ?", (normalized,)
+            ) as cursor:
+                row = await cursor.fetchone()
+            await db.commit()
+        return dict(row) if row else {}
+
+    async def latest(self, email: str) -> dict[str, Any] | None:
+        """Return the newest code row for an email, or None.
+
+        Args:
+            email: Email whose live code to fetch.
+
+        Returns:
+            The login code dict, or None when no code was ever issued.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT * FROM login_codes
+                WHERE email = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (email.strip(),),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def record_attempt(self, code_id: int) -> int:
+        """Increment the failed-attempts counter of a code.
+
+        Args:
+            code_id: Primary key of the code row.
+
+        Returns:
+            The attempts count after the increment.
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                "UPDATE login_codes SET attempts = attempts + 1 WHERE id = ?",
+                (code_id,),
+            )
+            async with db.execute(
+                "SELECT attempts FROM login_codes WHERE id = ?", (code_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+            await db.commit()
+            return int(row[0]) if row else 0
+
+    async def consume(self, code_id: int) -> bool:
+        """Atomically mark a code as used (single-use guarantee).
+
+        Args:
+            code_id: Primary key of the code row.
+
+        Returns:
+            True if this call consumed the code, False if it was already used.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE login_codes
+                SET consumed_at = ?
+                WHERE id = ? AND consumed_at IS NULL
+                """,
+                (now_iso, code_id),
+            )
+            consumed = cursor.rowcount > 0
+            await db.commit()
+            return consumed
+
+    async def purge_expired(self) -> int:
+        """Delete codes whose expiry has passed.
+
+        Returns:
+            Number of rows removed.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM login_codes WHERE expires_at < ?", (now_iso,))
+            await db.commit()
+            return cursor.rowcount
+
+    async def is_expired(self, row: dict[str, Any]) -> bool:
+        """Tell whether a code row is past its expiry.
+
+        Args:
+            row: Login code dict as returned by ``latest``/``create``.
+
+        Returns:
+            True when the code can no longer be verified.
+        """
+        expires_at = _parse_ts(row.get("expires_at"))
+        if expires_at is None:
+            return True
+        return datetime.now(UTC) >= expires_at
+
+
+class SessionsRepository:
+    """Repository for HttpOnly session tokens (migration 012 ``sessions``).
+
+    Replaces the legacy cookie that carried the raw admin password: each
+    login inserts a random ``secrets.token_urlsafe(32)`` token that the
+    cookie stores verbatim, so the DB only ever holds that token plus the
+    role snapshot used to authorize requests.
+    """
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    async def create(
+        self,
+        token: str,
+        identity: str,
+        role: str,
+        user_id: int | None = None,
+        ttl_hours: int = 12,
+    ) -> dict[str, Any]:
+        """Insert a new session and purge expired ones.
+
+        Args:
+            token: Random URL-safe token stored verbatim in the cookie.
+            identity: Display identity (email or admin username).
+            role: Role snapshot ('admin' | 'user' | 'viewer').
+            user_id: users.id for non-admin sessions, None for the admin.
+            ttl_hours: Session lifetime in hours (matches the cookie max-age).
+
+        Returns:
+            The freshly inserted session row as a dict.
+        """
+        now = datetime.now(UTC)
+        expires_iso = (now + timedelta(hours=ttl_hours)).isoformat()
+        async with get_db(self.db_path) as db:
+            await db.execute(
+                "DELETE FROM sessions WHERE expires_at < ?",
+                (now.isoformat(),),
+            )
+            await db.execute(
+                """
+                INSERT INTO sessions
+                    (token, user_id, identity, role, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (token, user_id, identity, role, now.isoformat(), expires_iso),
+            )
+            async with db.execute("SELECT * FROM sessions WHERE token = ?", (token,)) as cursor:
+                row = await cursor.fetchone()
+            await db.commit()
+        return dict(row) if row else {}
+
+    async def get(self, token: str) -> dict[str, Any] | None:
+        """Return a live session by token, or None.
+
+        Expired sessions are deleted on lookup so stale cookies cannot be
+        replayed after their 12 h window.
+
+        Args:
+            token: Raw token read from the cookie.
+
+        Returns:
+            The session dict, or None when missing or expired.
+        """
+        if not token:
+            return None
+        async with get_db(self.db_path) as db:
+            async with db.execute("SELECT * FROM sessions WHERE token = ?", (token,)) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                return None
+            session = dict(row)
+            expires_at = _parse_ts(session.get("expires_at"))
+            if expires_at is None or datetime.now(UTC) >= expires_at:
+                await db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                await db.commit()
+                return None
+            return session
+
+    async def delete(self, token: str) -> None:
+        """Delete one session (logout).
+
+        Args:
+            token: Raw token read from the cookie.
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            await db.commit()
+
+    async def delete_for_user(self, user_id: int) -> None:
+        """Delete every session of a user (revoke access).
+
+        Args:
+            user_id: Primary key of the user.
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            await db.commit()
+
+    async def purge_expired(self) -> int:
+        """Delete all expired sessions.
+
+        Returns:
+            Number of rows removed.
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso,))
+            await db.commit()
+            return cursor.rowcount
