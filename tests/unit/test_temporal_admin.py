@@ -7,9 +7,11 @@ import pytest
 from temporalio.client import RPCError, WorkflowExecutionStatus
 from temporalio.service import RPCStatusCode
 
+from src.api.models.narration import NarrationSpec, SpeakerRole
 from src.api.services.temporal_admin import TemporalAdminService
 from src.core.collections import CollectionConfig
 from src.core.config import settings
+from src.workers.podcast_target import PodcastTarget
 from src.workers.schedule import pipeline_config_for, url_summarize_config_for
 
 
@@ -204,6 +206,33 @@ async def test_trigger_collection_starts_fire_and_forget() -> None:
 
     assert workflow_id.startswith("digest-pipeline-tech-")
     assert fake.started == [workflow_id]
+
+
+@pytest.mark.asyncio
+async def test_start_narration_render_is_fire_and_forget() -> None:
+    """start_narration_render enqueues and returns without waiting for the render."""
+    fake = FakeClient()
+    fake.execute_workflow = AsyncMock(
+        side_effect=AssertionError("start_narration_render must not wait")
+    )
+    spec = NarrationSpec(roles=[SpeakerRole(name="anchor", voice_id="v1")])
+    target = PodcastTarget(namespace="news-engine-podcast-local", task_queue="q", modal=False)
+    with (
+        patch(
+            "src.api.services.temporal_admin.build_client",
+            new_callable=AsyncMock,
+            return_value=fake,
+        ),
+        patch("src.workers.podcast_target.podcast_target", return_value=target),
+    ):
+        result = await TemporalAdminService(client=fake).start_narration_render(
+            collection="tech", spec=spec, run_id="digest-pipeline-tech-1", force=True
+        )
+
+    assert result["status"] == "started"
+    assert result["workflow_id"].startswith("narration-tech-")
+    assert fake.started == [result["workflow_id"]]
+    fake.execute_workflow.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

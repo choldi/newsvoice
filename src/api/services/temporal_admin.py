@@ -346,7 +346,7 @@ class TemporalAdminService:
         target = podcast_target(spec.model_dump())
         client = await build_client(target.namespace)
         try:
-            await client.execute_workflow(
+            await client.start_workflow(
                 NarrationWorkflow.run,
                 config,
                 id=workflow_id,
