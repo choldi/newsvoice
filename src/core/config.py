@@ -314,6 +314,13 @@ class Settings(BaseSettings):
     # python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"
     admin_username: str = ""
     admin_password_hash: str = ""
+    # --- Phase 6: email one-time login codes (OTP) ---
+    # Lifetime of the 6-digit code emailed on every non-admin login.
+    login_code_ttl_seconds: int = Field(default=600, ge=60)
+    # Failed attempts allowed per code before a new one must be requested.
+    login_code_max_attempts: int = Field(default=5, ge=1)
+    # Minimum seconds between two code emails for the same address.
+    login_code_cooldown_seconds: int = Field(default=60, ge=0)
 
     # --- Narration (Phase 7) ------------------------------------------------
     # Master switch for the multi-speaker narration pipeline. Collections opt in

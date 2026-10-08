@@ -49,6 +49,9 @@ PUBLIC_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
     # Signed audio links (HMAC bearer) and the staging webhook (own key).
     ("*", re.compile(r"^/api/audio/")),
     ("*", re.compile(r"^/api/internal/voices/staged/")),
+    # Tombstone: always answers 410 Gone without side effects, so legacy
+    # unauthenticated callers keep getting the "removed" signal, not a 401.
+    ("POST", re.compile(r"^/api/generate_tts$")),
 )
 
 #: (method, path regex) -> minimum role, evaluated top-down before defaults.

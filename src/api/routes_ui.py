@@ -921,6 +921,10 @@ def _render(request: Request, name: str, context: dict) -> HTMLResponse:
     context.setdefault("flash", request.query_params.get("flash", ""))
     context.setdefault("flash_level", request.query_params.get("level", "ok"))
     context.setdefault("active", name.split(".")[0])
+    # Phase 6: the middleware injects the resolved identity; public pages
+    # (login/register) fall back to an empty role so the nav stays hidden.
+    context.setdefault("role", getattr(request.state, "role", None))
+    context.setdefault("current_user", getattr(request.state, "user", ""))
     return templates.TemplateResponse(request, name, context)
 
 
@@ -2045,7 +2049,11 @@ async def ui_login_page(request: Request) -> HTMLResponse:
 
 @router.post("/ui/login", include_in_schema=False)
 async def ui_login(request: Request) -> RedirectResponse:
-    """Validate admin credentials and set the session cookie.
+    """Validate admin credentials and start a server-side session.
+
+    Instead of storing the raw password/token in the cookie (pre-Phase 6),
+    a random 12 h session token is persisted in the ``sessions`` table and
+    only that token travels in the HttpOnly cookie.
 
     Args:
         request: Incoming request with form fields.
@@ -2053,7 +2061,14 @@ async def ui_login(request: Request) -> RedirectResponse:
     Returns:
         Redirect to /ui/collections on success, back to login on failure.
     """
-    from src.api.auth import ADMIN_COOKIE_NAME, _password_ok, _token_ok
+    from src.api.auth import (
+        ADMIN_COOKIE_NAME,
+        SESSION_TTL_HOURS,
+        Role,
+        _password_ok,
+        _token_ok,
+        create_session,
+    )
     from src.core.config import settings
 
     fields = await _form(request)
@@ -2064,6 +2079,7 @@ async def ui_login(request: Request) -> RedirectResponse:
         password = fields.get("password", "")
         if username != settings.admin_username or not _password_ok(password):
             return _flash("/ui/login", "Usuario o contraseña incorrectos", "error")
+        identity = username
     else:
         # Legacy token flow
         token = fields.get("token", "").strip()
@@ -2076,28 +2092,33 @@ async def ui_login(request: Request) -> RedirectResponse:
             )
         if not _token_ok(token):
             return _flash("/ui/login", "Token incorrecto", "error")
-        password = token  # store token in cookie for middleware
+        identity = "admin"
 
+    session_token = await create_session(identity, Role.ADMIN)
     response = RedirectResponse("/ui/collections", status_code=302)
     response.set_cookie(
         ADMIN_COOKIE_NAME,
-        password,
+        session_token,
         httponly=True,
         samesite="lax",
-        max_age=12 * 60 * 60,
+        max_age=SESSION_TTL_HOURS * 60 * 60,
     )
     return response
 
 
 @router.post("/ui/logout", include_in_schema=False)
-async def ui_logout() -> RedirectResponse:
-    """Clear the admin session cookie.
+async def ui_logout(request: Request) -> RedirectResponse:
+    """Destroy the session row and clear the cookie.
+
+    Args:
+        request: Incoming request (its cookie identifies the session).
 
     Returns:
         Redirect to the login page.
     """
-    from src.api.auth import ADMIN_COOKIE_NAME
+    from src.api.auth import ADMIN_COOKIE_NAME, destroy_session
 
+    await destroy_session(request.cookies.get(ADMIN_COOKIE_NAME, ""))
     response = RedirectResponse("/ui/login", status_code=302)
     response.delete_cookie(ADMIN_COOKIE_NAME)
     return response
