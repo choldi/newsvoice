@@ -261,6 +261,28 @@
   `DIGEST_TEMPLATE_ADDITIONS` (built-in: `default`, `finance`, `health`,
   `investigative`, `gaming`)
 
+## Auth and Roles (Phase 6)
+- Authorization decisions live ONLY in `src/api.authz`: `required_role(method, path)`
+  and `has_role(actual, required)` with `Role` (admin > user > viewer). Routes
+  never hand-roll role checks; a new endpoint is safe by default (unlisted
+  `/ui`+`/api` writes require admin) and only joins `_ROLE_RULES` when it
+  needs a different level. Routes that must be reachable with no session go
+  into `PUBLIC_ROUTES` deliberately — never by accident.
+- The middleware in `src.api.auth` runs on every request: it injects
+  `request.state.user` / `request.state.role` and answers 401/403. For
+  `/api/*` the answer is JSON (`{"status": "error", ...}` with
+  `required`/`role` in the 403 detail); for HTML it is a redirect (exact
+  302 to `/ui/login` when anonymous, flash redirect when under-privileged).
+- Sessions: mint them only via `create_session` / `destroy_session`
+  (opaque random token, HttpOnly cookie `news_engine_admin`, 12 h row in
+  `sessions`). Never put passwords or long-lived secrets in the cookie, and
+  never store a password for a non-admin user — they log in with the
+  emailed one-time code from `src.api.services.login_codes`.
+- Templates gate affordances with the flags `_render` injects: `is_admin`,
+  `can_operate` (admin or user), `role` and `current_user`. Hiding a button
+  is UX only — the middleware is what actually denies the request, so both
+  must agree (see `tests/integration/test_rbac.py`).
+
 ## Logging
 - `structlog` with JSON output (workflows use the Temporal sandbox logger)
 - Levels:

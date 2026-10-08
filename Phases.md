@@ -234,6 +234,49 @@ sin cambios de arquitectura.
 - [x] CRUD for collections and feeds
 - [x] History + executions viewer with live Temporal status and stop button
 
+**Extensión multi-usuario / RBAC (2026-10-08, plan aprobado por el usuario):**
+- [x] **6.1 Modelos y migración** — `012_users_sessions.sql`: `users` (rol
+      `user|viewer`, estado `pending|active|disabled`), `login_codes` (solo el
+      hash sha256 del código, single-use) y `sessions` (token opaco, 12 h);
+      `src/api/models/auth.py`; repos `UsersRepository`,
+      `LoginCodesRepository`, `SessionsRepository`
+- [x] **6.2 Sesión y middleware de roles** — `src/api/authz.py` como fuente
+      única de verdad (`Role` admin>user>viewer, `required_role`/`has_role`,
+      `PUBLIC_ROUTES`; una ruta sin regla en `/ui`+`GET`→viewer y el resto→
+      admin); `src/api/auth.py` reescrito: cookie HttpOnly
+      `news_engine_admin` con token de sesión en DB (12 h), identidad en
+      `request.state.user/role`, 401 JSON en `/api/*`, 302 exacto a
+      `/ui/login` en HTML, 403 con `required`/`role` en JSON o flash en la
+      página; fallback retrocompatible con `ADMIN_API_TOKEN`/password
+      (nadie se desconecta tras el deploy)
+- [x] **6.3 Registro + OTP por email** — auto-registro público en
+      `/ui/register` (email → `pending`) que el admin aprueba y asigna rol
+      desde `/ui/users`; `src/api/services/login_codes.py`: código de 6
+      dígitos, TTL 600 s, hash sha256 ligado al email, 1 solo uso, máx. 5
+      intentos, cooldown de reenvío 60 s, purge si SMTP falla;
+      `EmailService.send_login_code_email`; rutas `/ui/login/email` y
+      `/ui/login/verify`; el admin local (ADMIN_USERNAME/ADMIN_PASSWORD_HASH)
+      nunca usa OTP ni es fila de `users`
+- [x] **6.4 Gating de plantillas por rol** — nav admin (Ajustes, Usuarios);
+      `_render` inyecta `is_admin`/`can_operate` y los botones se ocultan:
+      viewer solo lectura (sin POST salvo logout), user además herramientas,
+      ejecutar/narrar, terminar runs y borrar trabajos de audio, admin
+      además colecciones (CRUD+resync), voces y settings
+- [x] **6.5 Página de usuarios** — `GET /ui/users` + acciones solo-admin
+      (`approve` con rol, `role`, `disable`, `enable`, `delete`; deshabilitar
+      o borrar purga sesiones)
+- [x] **6.6 Tests** — `tests/unit/test_authz.py` (matriz
+      required_role/has_role), `tests/unit/test_login_codes.py` (OTP:
+      estados, hash, single-use, intentos, TTL, cooldown, purge) y
+      `tests/integration/test_rbac.py` (registro→aprobación→OTP→sesión,
+      permisos viewer/user/admin, 401/403)
+- [x] **6.7 Docs** — `.env.example` (SMTP/LOGIN_CODE_*/ADMIN_*),
+      Deploy.md (login, roles y nota de lockout), Architecture.md y
+      CONVENTIONS.md
+
+**Fase 6 (extensión RBAC) completada el 2026-10-08** en `phase-6-rbac`
+(7 commits, pendiente de PR a `main`).
+
 **Success criteria:** A non-technical user can add an RSS feed without touching
 code.
 

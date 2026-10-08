@@ -254,6 +254,7 @@ fails and the error alert fires instead.
 | **Event fingerprinting over pure embeddings** | Faster, deterministic, debuggable first pass |
 | **No zigflow; Temporal Flow as optional desktop viewer** | zigflow's YAML DSL compiles to its own Go worker and would replace the tested Python SDK workflows; Temporal Flow is a read-mostly overlay that needs no code/container changes (see Observability) |
 | **One voice registry + lenient multi-engine guard (Phase 9)** | Every dropdown lists all engines' stock/cloned/generated voices; unknown ids stay wildcards so legacy values never break, and only a mixed-engine selection is rejected |
+| **Role map in one module + session cookies (Phase 6 RBAC)** | `src/api/authz.py` is the only place that decides who may do what (`required_role`/`has_role`; unlisted writes default to admin, so a new endpoint is never accidentally open); logins mint an opaque 12 h session token stored server-side instead of putting credentials in the browser, and non-admin users hold no password at all — each login emails a 6-digit single-use code |
 
 ---
 
@@ -317,7 +318,10 @@ news-engine/
 ├── src/
 │   ├── api/
 │   │   ├── main.py             # FastAPI app
-│   │   ├── auth.py             # ADMIN_API_TOKEN middleware for /ui + /api/admin
+│   │   ├── auth.py             # session/role-guard middleware (Phase 6: cookie
+│   │   │                       # sessions, 401/403, identity on request.state)
+│   │   ├── authz.py            # role map: required_role/has_role (admin >
+│   │   │                       # user > viewer) + PUBLIC_ROUTES, single truth
 │   │   ├── routes_ui.py        # Jinja2 + HTMX admin GUI pages
 │   │   ├── templates/          # GUI templates (base + pages + HTMX partials)
 │   │   ├── static/             # vendored htmx.min.js
@@ -326,7 +330,8 @@ news-engine/
 │   │   │                       # runs, schedules, tts). /generate_tts is a
 │   │   │                       # 410 Gone alias kept for one release.
 │   │   ├── services/           # Business logic (called by routes AND activities)
-│   │   │                       # incl. collections_repo, voices, temporal_admin
+│   │   │                       # incl. collections_repo, voices, temporal_admin,
+│   │   │                       # login_codes (Phase 6 one-time email codes)
 │   │   ├── models/             # Pydantic schemas (incl. narration, Phase 7)
 │   │   └── db/                 # SQLite layer + migrations
 │   ├── core/
@@ -358,7 +363,9 @@ news-engine/
 
 ## Non-Goals (v1)
 
-- [ ] Multi-user / per-user accounts (the admin GUI uses a single shared token)
+- [x] Multi-user / per-user accounts → **done in Phase 6 (RBAC)**:
+      self-registration + admin approval, OTP login by email, roles
+      admin / user / viewer enforced by the middleware
 - [ ] Vector database (Qdrant / Milvus)
 - [ ] Web administration UI → **done in Phase 6** (FastAPI + Jinja2 + HTMX)
 - [ ] Real-time streaming

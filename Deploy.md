@@ -42,12 +42,16 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
    - `TEMPORAL_HOST` & `TEMPORAL_TASK_QUEUE` (defaults work for the bundled
      Temporal server; the Compose `api`/`worker` services override it to
      `temporal:7233` for container-to-container access)
-   - `ADMIN_API_TOKEN` — token for the admin web GUI (`/ui`) and the admin REST
-     API (`/api/admin/*`). Leave empty to keep the GUI locked (secure default).
-     Generate one with `openssl rand -hex 24`.
+   - `ADMIN_API_TOKEN` — legacy shared token for the admin web GUI (`/ui`) and
+     the admin REST API (`/api/admin/*`). Generate one with
+     `openssl rand -hex 24`.
    - **Preferred**: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt). The login
      form will use username/password instead of the token. Generate the hash
      with: `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"`
+   - **Fase 6**: mientras `ADMIN_*` esté vacío la GUI solo se cierra cuando el
+     primer usuario se auto-registra (`/ui/register`); a partir de ahí hace
+     falta una sesión (admin con user/pass, o código OTP por email con
+     `SMTP_*` configurado). Ver *Admin GUI → Lockout recovery* abajo.
    Nota de topología: **debwk (`100.75.148.68`,
    `debwk.elver-exponential.ts.net`) es la instancia autoritativa** del pack:
    UI, workers, Temporal y datos viven allí desde la migración (desde cualquier
@@ -109,8 +113,38 @@ full list):
 tienes el nombre local resuelto). La GUI solo es remota cuando la caja expone
 `:8000` en la interfaz elegida.
 
-Log in at `http://<host>:8000/ui/login` with `ADMIN_API_TOKEN`. From there you
-can, without touching code or `collections.toml` by hand:
+**Login (Fase 6, multi-usuario):**
+
+- **Admin local** — `http://<host>:8000/ui/login` con `ADMIN_USERNAME` +
+  `ADMIN_PASSWORD_HASH` (recomendado) o, en su defecto, `ADMIN_API_TOKEN`.
+  No usa OTP ni aparece en la lista de usuarios.
+- **Usuarios auto-registrados** — se dan de alta en `/ui/register` con su
+  email; la cuenta queda **pendiente** hasta que el admin la aprueba y le
+  asigna rol desde **Usuarios** (`/ui/users`). Cada login pide un **código de
+  6 dígitos** enviado por email (`SMTP_*` debe estar configurado; TTL 10 min,
+  5 intentos, reenvío cada 60 s). No hay contraseña que recordar.
+- **Roles** — `admin`: todo; `user`: lectura + herramientas (URL/doc-TTS/
+  lecciones/podcast), ejecutar/narrar ahora, terminar runs y borrar trabajos
+  de audio; `viewer`: solo lectura (ningún POST salvo cerrar sesión).
+  Las páginas y la API responden 302 (GUI) o 401/403 JSON (`/api/*`) a quien
+  no tiene el rol.
+
+**Lockout recovery** — si hay usuarios registrados y `ADMIN_*` está vacío,
+nadie puede entrar (la auth ya está activada por los registros). Salida
+rápida por SSH en el host del despliegue:
+
+```bash
+# Opción A (recomendada): añadir credencial de admin en .env y recrear la api
+#   ADMIN_USERNAME=admin
+#   ADMIN_PASSWORD_HASH=<bcrypt>
+docker compose up -d api
+
+# Opción B (nuclear): borrar usuarios y sesiones vuelve a dejar la GUI abierta
+docker compose exec api python -c \
+  "import sqlite3; db=sqlite3.connect('data/news.db'); db.execute('DELETE FROM sessions'); db.execute('DELETE FROM users'); db.commit()"
+```
+
+Desde ahí, sin tocar código ni `collections.toml` a mano, el admin puede:
 
 - Create / edit / delete collections (feeds, time, TTS, podcast identity,
   narration cast editor, verification options)
@@ -118,6 +152,7 @@ can, without touching code or `collections.toml` by hand:
 - Browse run history (with the verification ledger per run) and launch an
   immediate run
 - Manage voices (stock voices and cloning new ones from an audio reference)
+- Approve, promote, disable or delete self-registered users (`/ui/users`)
 - **Herramientas** (`/ui/tools`): URL summary, document TTS, language lessons
   and manual podcast renders, with live job tables
 - **Ajustes** (`/ui/settings`): validated editor for the whole `.env`
