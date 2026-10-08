@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Registro{% endblock %}
+{% block login %}
+<div class="card login-box">
+  <h2>Crear cuenta</h2>
+  <p class="muted" style="margin-top:0">
+    El administrador validará tu cuenta antes de poder entrar.
+  </p>
+  <form method="post" action="/ui/register">
+    <label>Email</label>
+    <input type="email" name="email" required autofocus autocomplete="email">
+    <div style="margin-top:14px">
+      <button type="submit" class="primary" style="width:100%">Registrarme</button>
+    </div>
+  </form>
+  <p style="margin-top:12px; text-align:center"><a href="/ui/login">← Volver al acceso</a></p>
+</div>
+{% endblock %}

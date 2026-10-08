@@ -5,7 +5,9 @@ collections, schedule calendar, executions (merged Temporal + DB runs), and
 voice management. It uses the admin REST services directly (no HTTP hop) and
 HTMX for live partial refreshes (executions polling, calendar, tables).
 
-Auth is handled by the ADMIN_API_TOKEN cookie middleware (`src/api/auth.py`).
+Auth is handled by the role-guard middleware (`src/api/auth.py`): admin
+credentials for the local account, plus Phase 6 self-registration and
+one-time email codes for non-admin users.
 
 Plain form bodies are parsed with the stdlib (`urllib.parse.parse_qsl`);
 multipart forms (the Phase 7.11/7.12 tool uploads) go through Starlette's
@@ -23,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
+from src.api.authz import Role
 from src.api.db.database import AudioJobsRepository, RunsRepository, VerificationsRepository
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
@@ -2031,12 +2034,40 @@ async def ui_voice_sample(filename: str) -> FileResponse:
     return FileResponse(path, media_type=voice_preview.media_type_for(filename), filename=filename)
 
 
-@router.get("/ui/login", response_class=HTMLResponse, include_in_schema=False)
-async def ui_login_page(request: Request) -> HTMLResponse:
-    """Render the login page.
+async def _session_response(
+    identity: str, role: Role, user_id: int | None = None
+) -> RedirectResponse:
+    """Start a server-side session and redirect to the landing page.
 
     Args:
-        request: Incoming request.
+        identity: Display identity (email or admin username).
+        role: Role stored with the session.
+        user_id: users.id for non-admin sessions, None for the admin.
+
+    Returns:
+        A 302 to /ui/collections carrying the HttpOnly session cookie.
+    """
+    from src.api.auth import ADMIN_COOKIE_NAME, SESSION_TTL_HOURS, create_session
+
+    token = await create_session(identity, role, user_id=user_id)
+    response = RedirectResponse("/ui/collections", status_code=302)
+    response.set_cookie(
+        ADMIN_COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_HOURS * 60 * 60,
+    )
+    return response
+
+
+@router.get("/ui/login", response_class=HTMLResponse, include_in_schema=False)
+async def ui_login_page(request: Request) -> HTMLResponse:
+    """Render the login page (admin credentials and/or email-code entry).
+
+    Args:
+        request: Incoming request; ``?step=code&email=...`` selects the
+            one-time-code form after a code was emailed.
 
     Returns:
         HTMLResponse for the login page.
@@ -2044,7 +2075,64 @@ async def ui_login_page(request: Request) -> HTMLResponse:
     from src.core.config import settings
 
     use_legacy_token = bool(settings.admin_api_token) and not settings.admin_username
-    return _render(request, "login.html", {"use_legacy_token": use_legacy_token})
+    verify_email = request.query_params.get("email", "")
+    return _render(
+        request,
+        "login.html",
+        {
+            "use_legacy_token": use_legacy_token,
+            "verify_email": verify_email,
+            "show_code_step": request.query_params.get("step") == "code",
+        },
+    )
+
+
+@router.get("/ui/register", response_class=HTMLResponse, include_in_schema=False)
+async def ui_register_page(request: Request) -> HTMLResponse:
+    """Render the self-registration page (centered, nav hidden).
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse for the registration form.
+    """
+    return _render(request, "register.html", {"active": "login"})
+
+
+@router.post("/ui/register", include_in_schema=False)
+async def ui_register(request: Request) -> RedirectResponse:
+    """Create a pending account from the registration form (Phase 6).
+
+    The account starts ``pending``: the admin approves it and assigns the
+    role from the /ui/users page before the owner can request a code.
+
+    Args:
+        request: Incoming request with the ``email`` field.
+
+    Returns:
+        Redirect back to the login page with a flash message.
+    """
+    from src.api.db.database import UsersRepository
+
+    fields = await _form(request)
+    email = fields.get("email", "").strip()
+    if not email or email.count("@") != 1 or "." not in email.split("@")[-1]:
+        return _flash("/ui/register", "Email no válido", "error")
+    try:
+        await UsersRepository().create(email, role="viewer")
+    except ValueError:
+        return _flash(
+            "/ui/register",
+            "Ese email ya está registrado. Inicia sesión con un código.",
+            "error",
+        )
+    logger.info("user_registered", email=email)
+    return _flash(
+        "/ui/login",
+        "Registro recibido. El administrador validará tu cuenta.",
+        "ok",
+    )
 
 
 @router.post("/ui/login", include_in_schema=False)
@@ -2061,14 +2149,7 @@ async def ui_login(request: Request) -> RedirectResponse:
     Returns:
         Redirect to /ui/collections on success, back to login on failure.
     """
-    from src.api.auth import (
-        ADMIN_COOKIE_NAME,
-        SESSION_TTL_HOURS,
-        Role,
-        _password_ok,
-        _token_ok,
-        create_session,
-    )
+    from src.api.auth import _password_ok, _token_ok
     from src.core.config import settings
 
     fields = await _form(request)
@@ -2094,16 +2175,55 @@ async def ui_login(request: Request) -> RedirectResponse:
             return _flash("/ui/login", "Token incorrecto", "error")
         identity = "admin"
 
-    session_token = await create_session(identity, Role.ADMIN)
-    response = RedirectResponse("/ui/collections", status_code=302)
-    response.set_cookie(
-        ADMIN_COOKIE_NAME,
-        session_token,
-        httponly=True,
-        samesite="lax",
-        max_age=SESSION_TTL_HOURS * 60 * 60,
+    return await _session_response(identity, Role.ADMIN)
+
+
+@router.post("/ui/login/email", include_in_schema=False)
+async def ui_login_email(request: Request) -> RedirectResponse:
+    """Email a one-time login code to a registered account (Phase 6).
+
+    Args:
+        request: Incoming request with the ``email`` field.
+
+    Returns:
+        Redirect to the login page's code step, or back with an error flash.
+    """
+    from src.api.services.login_codes import LoginCodeError, request_code
+
+    fields = await _form(request)
+    email = fields.get("email", "").strip()
+    try:
+        await request_code(email)
+    except LoginCodeError as exc:
+        return _flash("/ui/login", str(exc), "error")
+    target = f"/ui/login?{urlencode({'step': 'code', 'email': email})}"
+    return _flash(target, f"Código enviado a {email}. Revisa tu correo.", "ok")
+
+
+@router.post("/ui/login/verify", include_in_schema=False)
+async def ui_login_verify(request: Request) -> RedirectResponse:
+    """Verify a one-time code and start the user's session (Phase 6).
+
+    Args:
+        request: Incoming request with ``email`` and ``code`` fields.
+
+    Returns:
+        Redirect to /ui/collections on success, back to the code step on
+        failure.
+    """
+    from src.api.services.login_codes import LoginCodeError, verify_code
+
+    fields = await _form(request)
+    email = fields.get("email", "").strip()
+    code = fields.get("code", "").strip()
+    back = f"/ui/login?{urlencode({'step': 'code', 'email': email})}"
+    try:
+        user = await verify_code(email, code)
+    except LoginCodeError as exc:
+        return _flash(back, str(exc), "error")
+    return await _session_response(
+        str(user["email"]), Role(str(user["role"])), user_id=int(user["id"])
     )
-    return response
 
 
 @router.post("/ui/logout", include_in_schema=False)

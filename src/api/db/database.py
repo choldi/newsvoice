@@ -1556,6 +1556,16 @@ class LoginCodesRepository:
             await db.commit()
             return cursor.rowcount
 
+    async def purge_for_email(self, email: str) -> None:
+        """Delete every code of an email (e.g. after a failed send).
+
+        Args:
+            email: Email whose codes should be removed.
+        """
+        async with get_db(self.db_path) as db:
+            await db.execute("DELETE FROM login_codes WHERE email = ?", (email.strip(),))
+            await db.commit()
+
     async def is_expired(self, row: dict[str, Any]) -> bool:
         """Tell whether a code row is past its expiry.
 

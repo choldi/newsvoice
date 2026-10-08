@@ -248,6 +248,57 @@ class EmailService:
                     server.login(s.smtp_user, s.smtp_password)
                 server.send_message(message)
 
+    def build_login_code_message(self, email: str, code: str) -> EmailMessage:
+        """Build the plain-text email carrying a one-time login code (Phase 6).
+
+        Args:
+            email: Recipient address (the account asking for the code).
+            code: The 6-digit plaintext code; never persisted, only emailed.
+
+        Returns:
+            A ready-to-send ``EmailMessage`` with a plain-text body.
+        """
+        msg = EmailMessage()
+        msg["Subject"] = "News Engine · tu código de acceso"
+        name = self._cfg.mail_from_name
+        msg["From"] = f"{name} <{self._cfg.mail_from}>" if name else self._cfg.mail_from
+        msg["To"] = email
+        msg.set_content(
+            f"Tu código de acceso es: {code}\n\n"
+            "Caduca en unos minutos y solo puede usarse una vez.\n"
+            "Si no has solicitado este código, ignora este mensaje.\n"
+        )
+        return msg
+
+    def send_login_code(self, email: str, code: str) -> None:
+        """Send the 6-digit one-time login code synchronously (blocking).
+
+        Args:
+            email: Recipient address.
+            code: The plaintext code to deliver.
+
+        Raises:
+            RuntimeError: When SMTP credentials are missing.
+            smtplib.SMTPException: On connection or authentication failure.
+        """
+        self.send_message(self.build_login_code_message(email, code))
+
+    async def send_login_code_email(self, email: str, code: str) -> None:
+        """Send the one-time login code asynchronously.
+
+        Wraps the blocking SMTP call in ``asyncio.to_thread`` so the
+        coroutine is safe inside FastAPI handlers.
+
+        Args:
+            email: Recipient address.
+            code: The plaintext code to deliver.
+
+        Raises:
+            RuntimeError: When SMTP credentials are missing.
+            smtplib.SMTPException: On connection or authentication failure.
+        """
+        await asyncio.to_thread(self.send_login_code, email, code)
+
     async def send_digest_email(
         self,
         recipients: list[str],

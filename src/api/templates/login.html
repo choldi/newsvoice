@@ -2,7 +2,21 @@
 {% block title %}News Engine · Login{% endblock %}
 {% block login %}
 <div class="card login-box">
-  <h2>Acceso admin</h2>
+  {% if show_code_step and verify_email %}
+  <h2>Acceso</h2>
+  <form method="post" action="/ui/login/verify">
+    <p class="muted" style="margin:0 0 6px">Código enviado a <strong>{{ verify_email }}</strong></p>
+    <label>Código de 6 dígitos</label>
+    <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+           required autofocus autocomplete="one-time-code">
+    <input type="hidden" name="email" value="{{ verify_email }}">
+    <div style="margin-top:14px">
+      <button type="submit" class="primary" style="width:100%">Entrar</button>
+    </div>
+  </form>
+  <p style="margin-top:12px; text-align:center"><a href="/ui/login">← Probar otro método</a></p>
+  {% else %}
+  <h2>Acceso</h2>
   {% if use_legacy_token %}
   <form method="post" action="/ui/login">
     <label>Token (ADMIN_API_TOKEN)</label>
@@ -21,6 +35,16 @@
       <button type="submit" class="primary" style="width:100%">Entrar</button>
     </div>
   </form>
+  {% endif %}
+  <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
+  <form method="post" action="/ui/login/email">
+    <label>Acceso con email</label>
+    <input type="email" name="email" required placeholder="tu@email.com" autocomplete="email">
+    <div style="margin-top:14px">
+      <button type="submit" style="width:100%">Enviar código</button>
+    </div>
+  </form>
+  <p style="margin-top:12px; text-align:center"><a href="/ui/register">Crear una cuenta</a></p>
   {% endif %}
 </div>
 {% endblock %}
