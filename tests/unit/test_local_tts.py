@@ -52,7 +52,7 @@ def test_resolve_language_maps_iso_to_qwen_name() -> None:
 
 def test_resolve_language_rejects_unknown_code() -> None:
     with pytest.raises(LocalTTSError, match="no Qwen3-TTS language mapping"):
-        resolve_language("fr")
+        resolve_language("xx")
 
 
 # --- audio helpers ----------------------------------------------------------
@@ -133,7 +133,7 @@ def test_generate_rejects_empty_segments() -> None:
 
 def test_generate_rejects_unsupported_language() -> None:
     with pytest.raises(LocalTTSError, match="no Qwen3-TTS language mapping"):
-        _backend(_FakeModel([0.0])).generate(["text"], "instruct", "fr")
+        _backend(_FakeModel([0.0])).generate(["text"], "instruct", "xx")
 
 
 def test_generate_wraps_model_errors() -> None:

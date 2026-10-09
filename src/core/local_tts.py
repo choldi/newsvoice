@@ -29,6 +29,14 @@ from src.core.config import settings
 QWEN_LANGUAGE_NAMES: dict[str, str] = {
     "en": "english",
     "es": "spanish",
+    "fr": "french",
+    "ca": "french",
+    "pt": "portuguese",
+    "de": "german",
+    "it": "italian",
+    "ja": "japanese",
+    "ko": "korean",
+    "ru": "russian",
 }
 
 #: Silence inserted between reference segments so the join is not audible.
