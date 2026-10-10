@@ -20,6 +20,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from src.api.db.database import AudioJobsRepository
+from src.api.models.lesson import LessonContent
 from src.api.models.narration import NarrationScript, NarrationSpec
 from src.api.services.lesson import (
     LessonError,
@@ -48,6 +49,14 @@ LESSON_JOB_KIND = "lesson"
 #: Temperature for lesson generation: teaching is creative work, not a
 #: faithful summary (see CONVENTIONS: 0.3 summaries, 0.7 clustering).
 LESSON_TEMPERATURE = 0.7
+
+#: A small local model asked for a whole class in one shot is unreliable: it
+#: may wrap the JSON in prose or drop a delimiter. Those are transport
+#: failures, so a fresh sample can fix them; a bad cast cannot and is still
+#: raised non-retryable below.
+_LESSON_FORMAT_ATTEMPTS = 3
+#: The class is longer than a digest and JSON mode still needs headroom.
+_LESSON_MAX_TOKENS = 8192
 
 
 def _validated_spec(raw: Any) -> NarrationSpec:
@@ -87,8 +96,9 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     Raises:
         ApplicationError: Non-retryable for unusable notes, an invalid mode or
-            an unparsable LLM reply (the job row records the reason first);
-            retryable when the LLM call itself fails.
+            an unparsable LLM reply after the format retries (the job row
+            records the reason first); retryable when the LLM call itself
+            fails on every attempt.
     """
     run_id = str(payload.get("run_id") or "")
     if not run_id:
@@ -122,14 +132,53 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
         native_language=str(payload.get("native_language") or ""),
     )
     started = time.monotonic()
-    try:
-        from src.core.llm import generate_completion
+    from src.core.llm import generate_completion
 
-        reply = await generate_completion(
-            messages=messages,
-            temperature=LESSON_TEMPERATURE,
+    # A small local model asked for a whole class in one JSON object sometimes
+    # drops a delimiter or wraps the answer in prose. JSON mode plus a fresh
+    # sample fixes those format failures; the notes and the cast are validated
+    # before this point, so only transient formatting can land here.
+    content: LessonContent | None = None
+    last_error = ""
+    transient = False
+    for attempt in range(1, _LESSON_FORMAT_ATTEMPTS + 1):
+        try:
+            reply = await generate_completion(
+                messages=messages,
+                temperature=LESSON_TEMPERATURE,
+                response_format="json_object",
+                max_tokens=_LESSON_MAX_TOKENS,
+            )
+        except Exception as exc:
+            last_error = f"LLM call failed: {exc}"
+            transient = True
+            activity.logger.warning(f"lesson_generate_retry attempt={attempt} reason={last_error}")
+            continue
+        try:
+            content = parse_lesson_content(reply)
+        except LessonError as exc:
+            last_error = str(exc)
+            transient = False
+            activity.logger.warning(f"lesson_generate_retry attempt={attempt} reason={last_error}")
+            continue
+        break
+
+    if content is None:
+        await repo.finish_job(
+            run_id,
+            status="FINISHED_ERROR",
+            error=last_error,
+            elapsed_seconds=round(time.monotonic() - started, 2),
+            kind=LESSON_JOB_KIND,
         )
-        content = parse_lesson_content(reply)
+        # A transport failure (the call itself failed) is worth a Temporal
+        # retry; an unparsable reply is not — the model answered, badly.
+        raise ApplicationError(
+            f"Lesson generation rejected: {last_error}",
+            non_retryable=not transient,
+        )
+
+    try:
         script = build_script(content, spec)
         text_path = save_lesson(run_id, content, script)
         script_path = str(lesson_script_path(run_id))
@@ -143,17 +192,6 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
             kind=LESSON_JOB_KIND,
         )
         raise ApplicationError(f"Lesson generation rejected: {exc}", non_retryable=True) from exc
-    except Exception as exc:
-        # Transient LLM failure: record it (so a run that never comes back is
-        # not stuck in GENERATING) but allow Temporal to retry the activity.
-        await repo.finish_job(
-            run_id,
-            status="FINISHED_ERROR",
-            error=str(exc),
-            elapsed_seconds=round(time.monotonic() - started, 2),
-            kind=LESSON_JOB_KIND,
-        )
-        raise ApplicationError(f"Lesson LLM call failed: {exc}") from exc
 
     update_lesson_meta(
         run_id,
