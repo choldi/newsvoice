@@ -77,8 +77,8 @@ async def test_generate_retries_then_succeeds_on_malformed_json(
     assert job is not None and job["status"] == "GENERATING"
 
 
-async def test_generate_uses_json_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The LLM is called in JSON mode so a stray newline cannot break the reply."""
+async def test_generate_uses_strict_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reply is constrained by a strict schema so its shape cannot drift."""
     notes = await _prepare_notes(tmp_path)
     completion = AsyncMock(return_value=json.dumps(VALID_LESSON))
     monkeypatch.setattr("src.core.llm.generate_completion", completion)
@@ -86,7 +86,9 @@ async def test_generate_uses_json_mode(tmp_path: Path, monkeypatch: pytest.Monke
     await ActivityEnvironment().run(generate_lesson_activity, _payload(notes))
 
     _, kwargs = completion.call_args
-    assert kwargs["response_format"] == "json_object"
+    assert kwargs["response_format"] == "json_schema"
+    segment = kwargs["json_schema"]["properties"]["segments"]["items"]
+    assert segment["required"] == ["role", "text"]
 
 
 async def test_generate_gives_up_after_the_format_retries(

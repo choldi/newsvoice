@@ -51,12 +51,39 @@ LESSON_JOB_KIND = "lesson"
 LESSON_TEMPERATURE = 0.7
 
 #: A small local model asked for a whole class in one shot is unreliable: it
-#: may wrap the JSON in prose or drop a delimiter. Those are transport
-#: failures, so a fresh sample can fix them; a bad cast cannot and is still
-#: raised non-retryable below.
+#: may wrap the JSON in prose, drop a delimiter, or flatten "segments" to a
+#: list of bare strings. Those are format failures, so a fresh sample can fix
+#: them; a bad cast cannot and is still raised non-retryable below.
 _LESSON_FORMAT_ATTEMPTS = 3
 #: The class is longer than a digest and JSON mode still needs headroom.
 _LESSON_MAX_TOKENS = 8192
+
+#: Strict schema handed to the provider (Ollama structured outputs). JSON mode
+#: alone only guarantees *valid* JSON: qwen3:8b still returned "segments" as an
+#: array of strings about half the time, which the model casually reshaped on a
+#: fresh sample. A strict schema pins the object shape at the sampling step, so
+#: the reply matches ``LessonContent`` on the first try.
+_LESSON_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "markdown": {"type": "string"},
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["role", "text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["title", "markdown", "segments"],
+    "additionalProperties": False,
+}
 
 
 def _validated_spec(raw: Any) -> NarrationSpec:
@@ -135,9 +162,10 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
     from src.core.llm import generate_completion
 
     # A small local model asked for a whole class in one JSON object sometimes
-    # drops a delimiter or wraps the answer in prose. JSON mode plus a fresh
-    # sample fixes those format failures; the notes and the cast are validated
-    # before this point, so only transient formatting can land here.
+    # drops a delimiter, wraps the answer in prose, or flattens "segments" to
+    # bare strings. A strict schema pins the shape and a fresh sample fixes the
+    # rest; the notes and the cast are validated before this point, so only
+    # transient formatting can land here.
     content: LessonContent | None = None
     last_error = ""
     transient = False
@@ -146,7 +174,8 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
             reply = await generate_completion(
                 messages=messages,
                 temperature=LESSON_TEMPERATURE,
-                response_format="json_object",
+                response_format="json_schema",
+                json_schema=_LESSON_JSON_SCHEMA,
                 max_tokens=_LESSON_MAX_TOKENS,
             )
         except Exception as exc:
