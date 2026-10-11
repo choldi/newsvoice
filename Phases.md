@@ -1039,6 +1039,14 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       `run_in_modal=false` + voz en gateway qwen3_tts. Verificado en prod:
       `marie_fr` se resuelve a un clon `marie_fr__qwen3_tts` y sintetiza FR por
       el gateway local (200, 24 kHz) sin Modal.
+- [x] **10.8 Catálogo FR + origen de voces**: añadir francés al catálogo
+      committed (`voice_profiles.json`, 8 perfiles `fr_*` con su bloque
+      `languages.fr.ref_segments`) y su inventario fonético (35 fonemas en
+      `src/core/phoneme_inventory.py`). Corregir el merge de `list_all_voices`
+      para que una voz del catálogo Modal conserve su origen `stock` cuando el
+      gateway tiene un clon del mismo nombre (antes se etiquetaba `cloned` y
+      desaparecía del filtro `stock` de qwen3_tts/zonos2). Catálogo: 32
+      perfiles (16 en + 8 es + 8 fr).
 
 **Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
 local sin Modal habilitado; UI expone el switch; lint + tests verdes.

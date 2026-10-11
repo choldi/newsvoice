@@ -204,7 +204,7 @@ def test_picker_caps_the_results_and_reports_the_total() -> None:
     assert results.status_code == 200
     radios = results.text.count('type="radio"')
     assert radios == VOICE_PICKER_LIMIT + 1, "cap + the (por defecto) empty option"
-    assert "28 voces · escribe para filtrar" in results.text
+    assert "36 voces · escribe para filtrar" in results.text
 
 
 # ---------------------------------------------------------------------------

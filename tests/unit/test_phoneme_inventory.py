@@ -26,7 +26,7 @@ from src.core.voice_catalog import load_profiles
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CATALOG = REPO_ROOT / "voice_profiles.json"
 
-LANGUAGES = ("en", "es")
+LANGUAGES = ("en", "es", "fr")
 
 
 # --- inventory coverage ------------------------------------------------------
@@ -38,6 +38,10 @@ def test_english_inventory_is_fully_covered() -> None:
 
 def test_spanish_inventory_is_fully_covered() -> None:
     assert missing_phonemes("es") == set()
+
+
+def test_french_inventory_is_fully_covered() -> None:
+    assert missing_phonemes("fr") == set()
 
 
 def test_coverage_words_only_use_known_phonemes() -> None:

@@ -113,11 +113,13 @@ def test_load_profiles_rejects_bad_slug(tmp_path: Path) -> None:
 
 def test_repo_catalog_loads_and_is_balanced() -> None:
     profiles = load_profiles(CATALOG)
-    assert len(profiles) == 24
+    assert len(profiles) == 32
     english = [p for p in profiles if p.language == "en"]
     spanish = [p for p in profiles if p.language == "es"]
+    french = [p for p in profiles if p.language == "fr"]
     assert len(english) == 16
     assert len(spanish) == 8
+    assert len(french) == 8
     assert all(p.enabled for p in profiles)
 
 
@@ -394,7 +396,7 @@ def test_load_profiles_merges_the_custom_file_last(
         *[profile.name for profile in committed],
         "mi_voz_es",
     ]
-    assert len(committed) == 24
+    assert len(committed) == 32
     assert voices.is_dir()
 
 
@@ -408,7 +410,7 @@ def test_load_profiles_with_an_explicit_path_stays_committed_only(
 
     names = [profile.name for profile in load_profiles(CATALOG)]
 
-    assert len(names) == 24
+    assert len(names) == 32
     assert "mi_voz_es" not in names
 
 

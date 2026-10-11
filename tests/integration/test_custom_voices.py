@@ -14,6 +14,7 @@ from src.api.models.voices import VoiceManifestEntry, VoiceProfile
 from src.core.config import settings
 from src.core.voice_catalog import (
     load_custom_profiles,
+    load_profiles,
     save_custom_profile,
     sha256_text,
     write_manifest,
@@ -137,7 +138,7 @@ def test_catalog_status_includes_the_custom_voice() -> None:
 
     body = client.get("/api/admin/voices/catalog").json()
 
-    assert len(body["profiles"]) == 25
+    assert len(body["profiles"]) == len(load_profiles())
     assert "mi_voz_es" in body["missing"]
     assert body["custom"] == ["mi_voz_es"]
     assert body["generated"] == []

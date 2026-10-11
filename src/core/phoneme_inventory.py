@@ -133,6 +133,50 @@ SPANISH_PHONEMES: tuple[str, ...] = (
     "ɾ̩",
 )
 
+#: Neutral French: 17 consonants + 3 semivowels + 11 oral vowels + 4 nasal
+#: vowels = 35 phonemes. ``ʁ`` is the standard uvular rhotic, and the four
+#: nasal vowels (``ɑ̃ ɛ̃ ɔ̃ œ̃``) are kept apart even though many speakers merge
+#: ``œ̃`` into ``ɛ̃`` and ``ɑ`` into ``a``: the reference should still exercise
+#: the full set so the clone does not drift on the ones that survive. ``ŋ`` is
+#: left out on purpose: it only appears in recent loanwords.
+FRENCH_PHONEMES: tuple[str, ...] = (
+    "p",
+    "b",
+    "t",
+    "d",
+    "k",
+    "ɡ",
+    "f",
+    "v",
+    "s",
+    "z",
+    "ʃ",
+    "ʒ",
+    "m",
+    "n",
+    "ɲ",
+    "l",
+    "ʁ",
+    "j",
+    "w",
+    "ɥ",
+    "i",
+    "e",
+    "ɛ",
+    "a",
+    "y",
+    "ø",
+    "œ",
+    "ə",
+    "ɔ",
+    "o",
+    "u",
+    "ɑ̃",
+    "ɛ̃",
+    "ɔ̃",
+    "œ̃",
+)
+
 #: English words drawn from the reference text, each tagged with its phonemes.
 ENGLISH_COVERAGE_WORDS: tuple[CoverageWord, ...] = (
     CoverageWord("welcome", ("w", "ɛ", "l", "k", "ə", "m")),
@@ -228,14 +272,56 @@ SPANISH_COVERAGE_WORDS: tuple[CoverageWord, ...] = (
     CoverageWord("plaza", ("p", "l", "a", "θ̞", "a")),
 )
 
+#: French words drawn from the reference text, each tagged with its phonemes.
+FRENCH_COVERAGE_WORDS: tuple[CoverageWord, ...] = (
+    CoverageWord("Bonjour", ("b", "ɔ̃", "ʒ", "u", "ʁ")),
+    CoverageWord("Bienvenue", ("b", "j", "ɛ̃", "v", "ə", "n", "y")),
+    CoverageWord("dans", ("d", "ɑ̃")),
+    CoverageWord("résumé", ("ʁ", "e", "z", "y", "m")),
+    CoverageWord("matin", ("m", "a", "t", "ɛ̃")),
+    CoverageWord("Aujourd'hui", ("o", "ʒ", "u", "ʁ", "d", "ɥ", "i")),
+    CoverageWord("parcourons", ("p", "a", "ʁ", "k", "u", "ʁ", "ɔ̃")),
+    CoverageWord("nouvelles", ("n", "u", "v", "ɛ", "l")),
+    CoverageWord("technologie", ("t", "ɛ", "k", "n", "ɔ", "l", "ɔ", "ʒ", "i")),
+    CoverageWord("marchés", ("m", "a", "ʁ", "ʃ", "e")),
+    CoverageWord("culture", ("k", "y", "l", "t", "y", "ʁ")),
+    CoverageWord("voix", ("v", "w", "a")),
+    CoverageWord(
+        "correspondants",
+        ("k", "ɔ", "ʁ", "ɛ", "s", "p", "ɔ̃", "d", "ɑ̃"),
+    ),
+    CoverageWord("chiffres", ("ʃ", "i", "f", "ʁ")),
+    CoverageWord("port", ("p", "ɔ", "ʁ")),
+    CoverageWord("choc", ("ʃ", "ɔ", "k")),
+    CoverageWord("banque", ("b", "ɑ̃", "k")),
+    CoverageWord("centrale", ("s", "ɑ̃", "t", "ʁ", "a", "l")),
+    CoverageWord("eau", ("o",)),
+    CoverageWord("nuage", ("n", "ɥ", "a", "ʒ")),
+    CoverageWord("confirment", ("k", "ɔ̃", "f", "i", "ʁ", "m")),
+    CoverageWord("musée", ("m", "y", "z", "e")),
+    CoverageWord("ferme", ("f", "ɛ", "ʁ", "m")),
+    CoverageWord("vingt", ("v", "ɛ̃")),
+    CoverageWord("un", ("œ̃",)),
+    CoverageWord("cœur", ("k", "œ", "ʁ")),
+    CoverageWord("chorale", ("ʃ", "ɔ", "ʁ", "a", "l")),
+    CoverageWord("guitare", ("ɡ", "i", "t", "a", "ʁ")),
+    CoverageWord("euro", ("ø", "ʁ", "o")),
+    CoverageWord("fleur", ("f", "l", "œ", "ʁ")),
+    CoverageWord("huile", ("ɥ", "i", "l")),
+    CoverageWord("montagne", ("m", "ɔ̃", "t", "a", "ɲ")),
+    CoverageWord("place", ("p", "l", "a", "s")),
+)
+
 _INVENTORIES: dict[str, tuple[str, ...]] = {
     "en": ENGLISH_PHONEMES,
     "es": SPANISH_PHONEMES,
+    "fr": FRENCH_PHONEMES,
 }
 
 _COVERAGE_WORDS: dict[str, tuple[CoverageWord, ...]] = {
     "en": ENGLISH_COVERAGE_WORDS,
     "es": SPANISH_COVERAGE_WORDS,
+    "fr": FRENCH_COVERAGE_WORDS,
 }
 
 
