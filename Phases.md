@@ -1034,10 +1034,11 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       de spec, y que el render usa gateway cuando `run_in_modal=false`. Hecho:
       `tests/unit/test_gateway_voices.py` y el caso local qwen3_tts en
       `tests/unit/test_narration_tts.py`.
-- [ ] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
+- [x] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
       reintento de lección que falla con Modal deshabilitado usando
-      `run_in_modal=false` + voz en gateway qwen3_tts. (tests y lint verdes;
-      falta el reintento en prod tras desplegar)
+      `run_in_modal=false` + voz en gateway qwen3_tts. Verificado en prod:
+      `marie_fr` se resuelve a un clon `marie_fr__qwen3_tts` y sintetiza FR por
+      el gateway local (200, 24 kHz) sin Modal.
 
 **Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
 local sin Modal habilitado; UI expone el switch; lint + tests verdes.
