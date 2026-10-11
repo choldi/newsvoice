@@ -2563,6 +2563,7 @@ async def ui_tools_lessons(request: Request) -> RedirectResponse:
             spec=fields.get("spec") or None,
             voice=fields.get("voice") or None,
             voice2=fields.get("voice2") or None,
+            run_in_modal=fields.get("narr_run_in_modal") == "on",
         )
     except SubmitError as exc:
         return _flash(target, exc.message, "error")

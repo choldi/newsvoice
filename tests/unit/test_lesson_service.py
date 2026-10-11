@@ -215,6 +215,19 @@ def test_resolve_cast_prefers_the_spec_json() -> None:
     assert [r.name for r in spec.roles] == ["profe_es"]
 
 
+def test_resolve_cast_defaults_to_gateway_local() -> None:
+    """Without the checkbox the render stays on the gateway local (no Modal)."""
+    spec = resolve_cast(None, "voice-1", "en")
+    assert spec.run_in_modal is False
+
+
+def test_resolve_cast_carries_run_in_modal() -> None:
+    """The lesson form checkbox turns the Modal route on for qwen3_tts."""
+    spec = resolve_cast(None, "anchor_neutral_m", "en", run_in_modal=True)
+    assert spec.run_in_modal is True
+    assert str(spec.tts_backend) == "qwen3_tts"
+
+
 def test_roles_summary_reports_languages() -> None:
     """The prompt receives names and languages as JSON."""
     spec = _spec("voice-1", "voice-2")

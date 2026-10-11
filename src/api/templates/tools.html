@@ -139,6 +139,10 @@
         <label>Título (opcional)</label>
         <input type="text" name="title" placeholder="Se usa el nombre del fichero">
       </div>
+      <div class="col">
+        <div class="check" style="margin-top:26px"><input type="checkbox" name="narr_run_in_modal"><label>Ejecutar en Modal</label></div>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">Solo voces Qwen3-TTS/ZONOS2; sin marcar, síntesis en el gateway local.</p>
+      </div>
       {# One voice for mixed/native, two for dual (native + target); the mode
          select re-fetches this block so the cast always matches the mode. #}
       <div class="col" id="lesson-voices" style="display:contents">

@@ -309,6 +309,47 @@ def test_lesson_submit_forwards_both_voices() -> None:
     assert kwargs["voice2"] == "clone-target"
 
 
+def test_lesson_submit_forwards_the_modal_switch() -> None:
+    """The 'Ejecutar en Modal' checkbox reaches the shared submit service."""
+    client = _client()
+    with patch(
+        "src.api.routes_ui.submit_lesson",
+        new_callable=AsyncMock,
+        return_value={
+            "workflow_id": "lesson-ghi",
+            "collection": "default",
+            "title": "Modal",
+            "mode": "mixed",
+            "status_url": "/api/admin/lessons/lesson-ghi",
+        },
+    ) as submit:
+        response = client.post(
+            "/ui/tools/lessons",
+            files={"file": ("apuntes.md", b"# Clase\n\nHola.", "text/markdown")},
+            data={
+                "mode": "mixed",
+                "target_language": "en",
+                "native_language": "es",
+                "narr_run_in_modal": "on",
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert submit.call_args.kwargs["run_in_modal"] is True
+
+
+def test_lesson_form_exposes_the_modal_switch() -> None:
+    """The lesson form offers the local/Modal switch, off by default."""
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    lesson_form = response.text.split('action="/ui/tools/lessons"', 1)[1].split("</form>", 1)[0]
+    assert 'name="narr_run_in_modal"' in lesson_form
+    assert "checked" not in lesson_form.split('name="narr_run_in_modal"', 1)[1][:40]
+
+
 def test_lesson_form_wires_the_voice_fragment() -> None:
     """The lesson form renders one voice field and swaps it when the mode changes."""
     client = _client()

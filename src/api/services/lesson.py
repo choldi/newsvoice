@@ -480,6 +480,7 @@ def resolve_cast(
     mode: LessonMode | str = LessonMode.MIXED,
     native_language: str = "",
     voice2: str | None = None,
+    run_in_modal: bool = False,
 ) -> NarrationSpec:
     """Resolve the cast that will voice the class (spec JSON or voice fields).
 
@@ -495,6 +496,8 @@ def resolve_cast(
         mode: Lesson mode driving the default cast shape.
         native_language: Student's native language (the first dual role speaks it).
         voice2: Voice id of the target-language role (dual mode only).
+        run_in_modal: For the QWEN3_TTS backend, run synthesis in Modal instead
+            of the gateway local (default), mirroring the lesson form checkbox.
 
     Returns:
         The validated spec.
@@ -553,6 +556,7 @@ def resolve_cast(
         return NarrationSpec(
             language=target_language,
             roles=roles,
+            run_in_modal=run_in_modal,
             **({"tts_backend": backend} if backend else {}),
         )
     except ValidationError as exc:
@@ -598,6 +602,7 @@ async def submit_lesson(
     spec: str | None = None,
     voice: str | None = None,
     voice2: str | None = None,
+    run_in_modal: bool = False,
 ) -> dict[str, str]:
     """Validate, store and start a lesson job (Phase 7.12).
 
@@ -615,6 +620,8 @@ async def submit_lesson(
         spec: Optional NarrationSpec JSON.
         voice: Voice of the native-language role (the single role otherwise).
         voice2: Voice of the target-language role; required in 'dual' mode.
+        run_in_modal: For the QWEN3_TTS backend, run synthesis in Modal instead
+            of the gateway local (default).
 
     Returns:
         Dict with workflow_id, collection, title, mode and status_url.
@@ -668,6 +675,7 @@ async def submit_lesson(
         mode=lesson_mode,
         native_language=native,
         voice2=voice2,
+        run_in_modal=run_in_modal,
     )
     try:
         validate_mode(lesson_mode, cast)
