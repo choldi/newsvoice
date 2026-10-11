@@ -1010,130 +1010,14 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       cloning/design soportados, health check no-fatal si falta runtime,
       catálogo `/api/v1/engines` con capacidades y `locations`. (hecho en
       gateway `dd874e3`; tests añadidos)
-- [ ] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
+- [x] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
       (default `false`). Cuando `tts_backend == QWEN3_TTS` y `run_in_modal` es
       `false`, enrutar a gateway con `engine=qwen3_tts` (pin por voz) para
       síntesis; cuando `true`, usar Modal. Mantener comportamiento para otros
       backends.
-- [ ] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
-      de cast/colecciones (junto a Backend TTS). Persistir en `narration_spec`.
-- [ ] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
-      en creación de voz custom/clonación y en inicio de generación desde
-      catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
-      actual) o el gateway según corresponda. Cuando `true`, permitir generar
-      vía Modal si habilitado.
-- [ ] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
-      incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
-      se desea forzar. Documentar en `Architecture.md`/`Deploy.md`.
-- [ ] **10.6 Tests**: unit/integration para routing local/nube, validación
-      de spec, y que el render usa gateway cuando `run_in_modal=false`.
-- [ ] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
-      reintento de lección que falla con Modal deshabilitado usando
-      `run_in_modal=false` + voz en gateway qwen3_tts.
-
-**Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
-local sin Modal habilitado; UI expone el switch; lint + tests verdes.
-
-**Effort:** 4-6 hours.
-
-
-
-## FASE 10: Qwen3-TTS local (gateway) + switch local/nube
-
-**Objetivo:** Permitir usar Qwen3-TTS tanto local (gateway `~/ov_api` con engine
-`qwen3_tts`) como en nube (Modal) con un switch explícito por operación.
-
-### Checklist
-- [x] **10.1 Gateway qwen3_tts local** (depende de gateway) — engine `qwen3_tts`
-      con subprocess worker al venv `~/qwen3-tts/venv`, `locations=["local"]`,
-      cloning/design soportados, health check no-fatal si falta runtime,
-      catálogo `/api/v1/engines` con capacidades y `locations`. (hecho en
-      gateway `dd874e3`; tests añadidos)
-- [ ] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
-      (default `false`). Cuando `tts_backend == QWEN3_TTS` y `run_in_modal` es
-      `false`, enrutar a gateway con `engine=qwen3_tts` (pin por voz) para
-      síntesis; cuando `true`, usar Modal. Mantener comportamiento para otros
-      backends.
-- [ ] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
-      de cast/colecciones (junto a Backend TTS). Persistir en `narration_spec`.
-- [ ] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
-      en creación de voz custom/clonación y en inicio de generación desde
-      catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
-      actual) o el gateway según corresponda. Cuando `true`, permitir generar
-      vía Modal si habilitado.
-- [ ] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
-      incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
-      se desea forzar. Documentar en `Architecture.md`/`Deploy.md`.
-- [ ] **10.6 Tests**: unit/integration para routing local/nube, validación
-      de spec, y que el render usa gateway cuando `run_in_modal=false`.
-- [ ] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
-      reintento de lección que falla con Modal deshabilitado usando
-      `run_in_modal=false` + voz en gateway qwen3_tts.
-
-**Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
-local sin Modal habilitado; UI expone el switch; lint + tests verdes.
-
-**Effort:** 4-6 hours.
-
-
-## FASE 10: Qwen3-TTS local (gateway) + switch local/nube
-
-**Objetivo:** Permitir usar Qwen3-TTS tanto local (gateway `~/ov_api` con engine
-`qwen3_tts`) como en nube (Modal) con un switch explícito por operación.
-
-### Checklist
-- [x] **10.1 Gateway qwen3_tts local** (depende de gateway) — engine `qwen3_tts`
-      con subprocess worker al venv `~/qwen3-tts/venv`, `locations=["local"]`,
-      cloning/design soportados, health check no-fatal si falta runtime,
-      catálogo `/api/v1/engines` con capacidades y `locations`. (hecho en
-      gateway `dd874e3`; tests añadidos)
-- [ ] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
-      (default `false`). Cuando `tts_backend == QWEN3_TTS` y `run_in_modal` es
-      `false`, enrutar a gateway con `engine=qwen3_tts` (pin por voz) para
-      síntesis; cuando `true`, usar Modal. Mantener comportamiento para otros
-      backends.
-- [ ] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
-      de cast/colecciones (junto a Backend TTS). Persistir en `narration_spec`.
-- [ ] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
-      en creación de voz custom/clonación y en inicio de generación desde
-      catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
-      actual) o el gateway según corresponda. Cuando `true`, permitir generar
-      vía Modal si habilitado.
-- [ ] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
-      incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
-      se desea forzar. Documentar en `Architecture.md`/`Deploy.md`.
-- [ ] **10.6 Tests**: unit/integration para routing local/nube, validación
-      de spec, y que el render usa gateway cuando `run_in_modal=false`.
-- [ ] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
-      reintento de lección que falla con Modal deshabilitado usando
-      `run_in_modal=false` + voz en gateway qwen3_tts.
-
-**Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
-local sin Modal habilitado; UI expone el switch; lint + tests verdes.
-
-**Effort:** 4-6 hours.
-
-
-
-
-## FASE 10: Qwen3-TTS local (gateway) + switch local/nube
-
-**Objetivo:** Permitir usar Qwen3-TTS tanto local (gateway `~/ov_api` con engine
-`qwen3_tts`) como en nube (Modal) con un switch explícito por operación.
-
-### Checklist
-- [x] **10.1 Gateway qwen3_tts local** (depende de gateway) — engine `qwen3_tts`
-      con subprocess worker al venv `~/qwen3-tts/venv`, `locations=["local"]`,
-      cloning/design soportados, health check no-fatal si falta runtime,
-      catálogo `/api/v1/engines` con capacidades y `locations`. (hecho en
-      gateway `dd874e3`; tests añadidos)
-- [ ] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
-      (default `false`). Cuando `tts_backend == QWEN3_TTS` y `run_in_modal` es
-      `false`, enrutar a gateway con `engine=qwen3_tts` (pin por voz) para
-      síntesis; cuando `true`, usar Modal. Mantener comportamiento para otros
-      backends.
-- [ ] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
-      de cast/colecciones (junto a Backend TTS). Persistir en `narration_spec`.
+- [x] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
+      de cast/colecciones (junto a Backend TTS) y en el formulario de clase de
+      idiomas (`tools.html`). Persistir en `narration_spec`.
 - [ ] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
       en creación de voz custom/clonación y en inicio de generación desde
       catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
