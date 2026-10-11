@@ -77,7 +77,15 @@ asked for** (`tts_backend`, resolved outside the workflow by
 |---------|------|--------|
 | `edge` (default) | client-side `edge_tts.Communicate` | `.mp3` |
 | `omni_voice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
-| `qwen3_tts` / `zonos2` | `modal_client.modal_tts()` / `_zonos2()` | `.wav` |
+| `qwen3_tts` | local gateway `engine=qwen3_tts` (default) or `modal_client.modal_tts()` when `run_in_modal` | `.wav` |
+| `zonos2` | `modal_client.modal_zonos2_tts()` | `.wav` |
+
+`qwen3_tts` runs locally on the gateway unless `run_in_modal` is set (Phase 10).
+The local engine has **no stock voices**, so a catalog profile name (committed
+or operator-designed) is registered once as a gateway clone pinned to
+`qwen3_tts` (`src/api/services/gateway_voices.py`), reusing the reference WAV
+and its `ref_text`; the assigned clone UUID then drives synthesis. Gateway-owned
+ids (stock ids and clone UUIDs) pass through untouched.
 
 `src/api/services/tts_backends.py` owns the dispatch, the per-engine voice
 resolution and the output extension. The engine is part of the cache hash

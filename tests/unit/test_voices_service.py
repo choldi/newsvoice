@@ -76,7 +76,7 @@ async def test_clone_voice_posts_form() -> None:
         assert result == expected
         mock_client.post.assert_called_once()
         kwargs = mock_client.post.call_args.kwargs
-        assert kwargs["data"] == {"name": "mi-voz", "language": "es"}
+        assert kwargs["data"] == {"name": "mi-voz", "language": "es", "engines": "auto"}
         assert "reference_audio" in kwargs["files"]
 
 
@@ -106,5 +106,10 @@ async def test_clone_voice_includes_ref_text_when_provided() -> None:
         assert result == expected
         mock_client.post.assert_called_once()
         kwargs = mock_client.post.call_args.kwargs
-        assert kwargs["data"] == {"name": "mi-voz", "language": "es", "ref_text": "Hola mundo"}
+        assert kwargs["data"] == {
+            "name": "mi-voz",
+            "language": "es",
+            "engines": "auto",
+            "ref_text": "Hola mundo",
+        }
         assert "reference_audio" in kwargs["files"]

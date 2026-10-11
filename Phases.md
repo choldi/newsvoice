@@ -1023,14 +1023,21 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
       actual) o el gateway según corresponda. Cuando `true`, permitir generar
       vía Modal si habilitado.
-- [ ] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
+- [x] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
       incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
-      se desea forzar. Documentar en `Architecture.md`/`Deploy.md`.
-- [ ] **10.6 Tests**: unit/integration para routing local/nube, validación
-      de spec, y que el render usa gateway cuando `run_in_modal=false`.
+      se desea forzar. Documentar en `Architecture.md`/`Deploy.md`. Hecho:
+      `src/api/services/gateway_voices.py` resuelve nombres de perfil a un clon
+      `qwen3_tts` (nombre `<voice>__qwen3_tts`) reutilizando el WAV de
+      referencia y su `ref_text`, y cachea el UUID; `VoicesService.clone_voice`
+      acepta `engines`.
+- [x] **10.6 Tests**: unit/integration para routing local/nube, validación
+      de spec, y que el render usa gateway cuando `run_in_modal=false`. Hecho:
+      `tests/unit/test_gateway_voices.py` y el caso local qwen3_tts en
+      `tests/unit/test_narration_tts.py`.
 - [ ] **10.7 Verificación**: `pytest -q`, `ruff check .`, `ruff format .`,
       reintento de lección que falla con Modal deshabilitado usando
-      `run_in_modal=false` + voz en gateway qwen3_tts.
+      `run_in_modal=false` + voz en gateway qwen3_tts. (tests y lint verdes;
+      falta el reintento en prod tras desplegar)
 
 **Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
 local sin Modal habilitado; UI expone el switch; lint + tests verdes.

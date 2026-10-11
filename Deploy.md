@@ -810,6 +810,17 @@ A `404 voice_not_found (stock)` here means the engine cannot serve that clone:
 either the voice is tagged for another engine or the cast is wrong. Stock ids
 (`en-us-male`, `es-mx-male`, ...) live in `/api/v1/voices/stock`.
 
+The local `qwen3_tts` engine has no stock voices, so a catalog profile name is
+registered on demand: the first local synthesis clones the reference WAV into
+the gateway as `<name>__qwen3_tts` with `engines=qwen3_tts` and uses the returned
+UUID (`src/api/services/gateway_voices.py`). A designed voice such as `marie_fr`
+therefore needs no manual step. To force a re-registration, delete the clone:
+
+```bash
+curl -s http://localhost:8001/api/v1/voices/cloned | grep -B2 qwen3_tts
+curl -s -X DELETE http://localhost:8001/api/v1/voices/cloned/<id> -w '\n%{http_code}\n'
+```
+
 ### 10.3 Rollback
 
 ```bash

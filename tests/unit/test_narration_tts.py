@@ -848,6 +848,33 @@ async def test_synthesize_turn_dispatches_to_modal_for_qwen3_tts(
     await service.aclose()
 
 
+async def test_synthesize_turn_local_qwen_uses_resolved_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    async def fake_resolve(voice: str, language: str) -> str:
+        return "uuid-marie"
+
+    monkeypatch.setattr("src.api.services.narration_tts.resolve_gateway_qwen_voice", fake_resolve)
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Bonjour", "marie_fr", "fr", backend=TTSBackend.QWEN3_TTS, run_in_modal=False
+    )
+
+    assert used_edge is False
+    assert wav_format(audio).framerate == CANONICAL_RATE
+    assert calls[0]["voice_id"] == "uuid-marie"
+    assert calls[0]["engine"] == "qwen3_tts"
+    await service.aclose()
+
+
 async def test_post_modal_tts_wraps_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing_modal(**kwargs: object) -> bytes:
         raise RuntimeError("boom")

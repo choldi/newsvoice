@@ -139,6 +139,7 @@ class VoicesService:
         reference_audio: bytes,
         filename: str = "reference.wav",
         ref_text: str | None = None,
+        engines: str = "auto",
     ) -> dict[str, Any]:
         """Clone a voice from a reference audio file.
 
@@ -148,6 +149,8 @@ class VoicesService:
             reference_audio: Raw audio bytes (WAV/FLAC, 5-30s).
             filename: Uploaded filename used in multipart form.
             ref_text: Transcription of the reference audio (optional, improves cloning).
+            engines: Comma-separated engine(s) to pin the clone on (e.g.
+                'qwen3_tts'), or 'auto' to use the active engine router.
 
         Returns:
             The cloning response dict (voice_id, name, language).
@@ -160,7 +163,7 @@ class VoicesService:
         files = {
             "reference_audio": (filename, reference_audio, "audio/wav"),
         }
-        data = {"name": name, "language": language}
+        data = {"name": name, "language": language, "engines": engines}
         if ref_text:
             data["ref_text"] = ref_text
         headers = _headers(settings)

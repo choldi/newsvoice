@@ -54,6 +54,7 @@ from src.api.models.narration import (
 )
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
+from src.api.services.gateway_voices import resolve_gateway_qwen_voice
 from src.api.services.tts import DEFAULT_VOICE_BY_LANGUAGE, LEGACY_VOICE_ALIASES
 from src.core.audio import (
     CANONICAL_CHANNELS,
@@ -700,9 +701,10 @@ class NarrationTTSService:
                     False,
                 )
             # Route to gateway local qwen3_tts engine
+            resolved_voice = await resolve_gateway_qwen_voice(voice_id, language)
             payload: dict[str, Any] = {
                 "text": text,
-                "voice_id": voice_id,
+                "voice_id": resolved_voice,
                 "language": language,
                 "speed": speed,
                 "engine": "qwen3_tts",
