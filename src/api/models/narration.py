@@ -190,6 +190,10 @@ class NarrationSpec(BaseModel):
     ai_disclosure: bool = Field(
         default=False, description="Prepend an audible AI-generated disclosure"
     )
+    run_in_modal: bool = Field(
+        default=False,
+        description="For QWEN3_TTS backend, run synthesis in Modal instead of gateway local",
+    )
 
     @field_validator("language")
     @classmethod

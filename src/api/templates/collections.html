@@ -250,6 +250,7 @@
           <div class="row">
             <div class="col">
               <div class="check"><input type="checkbox" name="narr_disclosure" {{ 'checked' if c.narration_spec and c.narration_spec.ai_disclosure else '' }}><label>Divulgación de IA audible</label></div>
+                        <div class="check"><input type="checkbox" name="narr_run_in_modal" {{ 'checked' if c.narration_spec and c.narration_spec.run_in_modal else '' }}><label>Ejecutar en Modal</label></div>
             </div>
           </div>
           <details style="margin-top:8px">
@@ -525,6 +526,8 @@
         <div class="row">
           <div class="col">
             <div class="check"><input type="checkbox" name="narr_disclosure" ><label>Divulgación de IA audible</label></div>
+                        <div class="check"><input type="checkbox" name="narr_run_in_modal" ><label>Ejecutar en Modal</label></div>
+            
           </div>
         </div>
         <details style="margin-top:8px">

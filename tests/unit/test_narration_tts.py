@@ -840,7 +840,7 @@ async def test_synthesize_turn_dispatches_to_modal_for_qwen3_tts(
     monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
 
     audio, used_edge = await service.synthesize_turn(
-        "Hola", "anchor_neutral_m", "es", backend=TTSBackend.QWEN3_TTS
+        "Hola", "anchor_neutral_m", "es", backend=TTSBackend.QWEN3_TTS, run_in_modal=True
     )
 
     assert used_edge is False
@@ -856,7 +856,9 @@ async def test_post_modal_tts_wraps_errors(tmp_path: Path, monkeypatch: pytest.M
     service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
 
     with pytest.raises(NarrationGatewayError, match="modal tts call failed"):
-        await service.synthesize_turn("Hola", "anchor", "es", backend=TTSBackend.QWEN3_TTS)
+        await service.synthesize_turn(
+            "Hola", "anchor", "es", backend=TTSBackend.QWEN3_TTS, run_in_modal=True
+        )
     await service.aclose()
 
 

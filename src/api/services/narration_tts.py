@@ -658,6 +658,7 @@ class NarrationTTSService:
         emotion: str | None = None,
         allow_edge_fallback: bool | None = None,
         backend: TTSBackend = TTSBackend.OMNIVOICE,
+        run_in_modal: bool | None = None,
     ) -> tuple[bytes, bool]:
         """Synthesize one turn, dispatching on the configured backend.
 
@@ -689,6 +690,48 @@ class NarrationTTSService:
             return await self._edge_synthesize(
                 text, edge_voice_for(voice_id, language), speed=speed
             ), False
+        if backend is TTSBackend.QWEN3_TTS:
+            # Route Qwen3-TTS: Modal if run_in_modal True; else gateway local qwen3_tts
+            if run_in_modal:
+                return (
+                    await self._post_modal_tts(
+                        text, voice_id, language, speed=speed, emotion=emotion, backend=backend
+                    ),
+                    False,
+                )
+            # Route to gateway local qwen3_tts engine
+            payload: dict[str, Any] = {
+                "text": text,
+                "voice_id": voice_id,
+                "language": language,
+                "speed": speed,
+                "engine": "qwen3_tts",
+            }
+            if emotion:
+                payload["emotion"] = emotion
+            try:
+                return await self._post_audio("tts", payload), False
+            except NarrationGatewayError as exc:
+                fallback_allowed = (
+                    self._fallback_to_edge if allow_edge_fallback is None else allow_edge_fallback
+                )
+                if not fallback_allowed:
+                    raise
+                edge_voice = edge_voice_for(voice_id, language)
+                logger.warning(
+                    "narration_gateway_fallback_to_edge",
+                    voice_id=voice_id,
+                    edge_voice=edge_voice,
+                    status_code=exc.status_code,
+                    error_type=exc.error_type,
+                    error=str(exc),
+                )
+                try:
+                    return await self._edge_synthesize(text, edge_voice, speed=speed), True
+                except Exception as edge_exc:
+                    raise NarrationGatewayError(
+                        f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
+                    ) from edge_exc
         if backend is not TTSBackend.OMNIVOICE:
             return (
                 await self._post_modal_tts(
@@ -1179,6 +1222,7 @@ class NarrationTTSService:
                     emotion=emotion,
                     allow_edge_fallback=allow_fallback,
                     backend=spec.tts_backend,
+                    run_in_modal=getattr(spec, "run_in_modal", False),
                 )
                 fallbacks += int(used_edge)
                 audio = await self._to_canonical(audio)

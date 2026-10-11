@@ -1624,6 +1624,7 @@ def _narration_spec_from_form(
             "tts_backend": (fields.get("narr_backend") or "").strip()
             or payload.get("tts_backend", "omni_voice"),
             "ai_disclosure": fields.get("narr_disclosure") == "on",
+            "run_in_modal": fields.get("narr_run_in_modal") == "on",
         }
     )
     return NarrationSpec.model_validate(payload)
