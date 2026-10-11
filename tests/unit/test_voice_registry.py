@@ -137,6 +137,39 @@ async def test_list_all_merges_sources_and_dedupes(monkeypatch: pytest.MonkeyPat
     assert sorted(shared.engines) == ["edge", "omni_voice"]
 
 
+async def test_list_all_keeps_catalog_origin_over_gateway_clone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cloned catalog voice stays 'stock' when listed for its Modal engine.
+
+    The gateway holds a clone under the same name as the committed profile, so
+    the merge must not relabel the stock voice as 'cloned' and hide it from the
+    stock filter of qwen3_tts/zonos2.
+    """
+
+    async def _gateway() -> tuple[list[str], list[VoiceOption]]:
+        return ["en"], [_option("anchor_neutral_m", language="en", category="cloned")]
+
+    def _modal() -> tuple[list[str], list[VoiceOption]]:
+        return ["en"], [
+            _option(
+                "anchor_neutral_m",
+                language="en",
+                engines=["qwen3_tts", "zonos2"],
+                category="stock",
+            )
+        ]
+
+    monkeypatch.setattr(voice_registry, "edge_options", _empty_source)
+    monkeypatch.setattr(voice_registry, "gateway_options", _gateway)
+    monkeypatch.setattr(voice_registry, "modal_options", _modal)
+
+    stock = await voice_registry.list_all_voices(engine="zonos2", category="stock")
+
+    assert [voice.id for voice in stock] == ["anchor_neutral_m"]
+    assert sorted(stock[0].engines) == ["omni_voice", "qwen3_tts", "zonos2"]
+
+
 async def test_list_all_filters_by_engine_and_category(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

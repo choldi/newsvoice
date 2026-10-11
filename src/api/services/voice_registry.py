@@ -38,7 +38,9 @@ def _dedupe(voices: list[VoiceOption]) -> list[VoiceOption]:
     """Merge entries that repeat an id across sources.
 
     The same id can legitimately belong to two vocabularies (an edge/gateway
-    alias), in which case the union of engines is what both sources mean.
+    alias), in which case the union of engines is what both sources mean. The
+    metadata (label, language, category) of the first entry seen for an id is
+    kept, so source order decides whose origin wins a collision.
 
     Args:
         voices: Raw merged entries in source order.
@@ -190,7 +192,12 @@ async def list_all_voices(
     _, gateway = await gateway_options()
     _, modal = modal_options()
 
-    voices = _dedupe([*edge, *gateway, *modal])
+    # The Modal catalog is the authoritative metadata for a reference voice: a
+    # committed profile keeps its ``stock`` origin (or ``generated`` for an
+    # operator-created one) even when the gateway holds a clone of the same
+    # name. Ordering modal before gateway lets the catalog's origin and label
+    # win the merge, while the clone still contributes its engine.
+    voices = _dedupe([*edge, *modal, *gateway])
     if engine:
         wanted = engine.strip().lower()
         voices = [voice for voice in voices if wanted in voice.engines]
