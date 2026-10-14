@@ -4,13 +4,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.api.auth import admin_middleware
 from src.api.db.database import run_migrations
+from src.api.observability import observability_middleware
 from src.api.routes import (
     admin_collections_router,
     admin_documents_router,
@@ -28,17 +28,11 @@ from src.api.routes import (
     tts_router,
     voice_staging_router,
 )
+from src.api.routes.logs import router as logs_router
 from src.api.routes_ui import router as ui_router
-from src.core.config import settings
+from src.core.logging import configure_logging
 
-structlog.configure(
-    processors=[
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(settings.log_level),
-)
+configure_logging(process_name="api")
 
 
 @asynccontextmanager
@@ -63,6 +57,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.middleware("http")(admin_middleware)
+app.middleware("http")(observability_middleware)
 
 # Static assets (bundled htmx.js for the self-hosted GUI)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
@@ -81,6 +76,7 @@ app.include_router(admin_lessons_router, prefix="/api")
 app.include_router(admin_runs_router, prefix="/api")
 app.include_router(admin_schedules_router, prefix="/api")
 app.include_router(admin_narration_router, prefix="/api")
+app.include_router(logs_router, prefix="/api")
 app.include_router(voice_staging_router, prefix="/api")
 app.include_router(audio_link_router, prefix="/api")
 app.include_router(ui_router)

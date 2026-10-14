@@ -177,6 +177,30 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000, ge=1, lt=65536)
     api_request_timeout: int = Field(default=120, ge=1)
     log_level: str = "INFO"
+    # --- Observability (Phase 1) --------------------------------------------
+    # Shared rotating JSONL sink. The API and every worker mount the same
+    # ./data volume, so this file is what makes worker logs visible to the
+    # API-served logs UI. Empty disables the file sink.
+    log_file_dir: str = "data/logs"
+    log_file_name: str = "news_engine.jsonl"
+    log_file_max_bytes: int = Field(default=5_000_000, ge=100_000)
+    log_file_backup_count: int = Field(default=5, ge=1)
+    # Bounded in-memory buffer of the most recent records served to the UI.
+    log_ring_size: int = Field(default=10_000, ge=1_000)
+    # Attach module/function/line to each record. Costs a stack walk per log
+    # call, so it can be turned off on hot paths.
+    log_include_caller: bool = True
+    # Local-only tracing (OpenTelemetry SDK, no OTLP export). Sampling is by
+    # ratio so a busy worker does not trace every function.
+    trace_enabled: bool = True
+    trace_sampling_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+    # Deep per-function tracing is opt-in: it is verbose and adds overhead.
+    trace_instrument_all: bool = False
+    trace_capture_args: bool = False
+    trace_capture_result: bool = False
+    trace_max_arg_len: int = Field(default=200, ge=0)
+    # Where the UI writes exported log/trace files.
+    obs_export_dir: str = "data/logs/exports"
     database_path: str = "data/news.db"
     temporal_host: str = "localhost:7233"
     temporal_namespace: str = "default"
@@ -402,6 +426,10 @@ class Settings(BaseSettings):
     qwen_tts_design_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     qwen_tts_max_new_tokens: int = Field(default=2048, ge=256, le=8192)
     qwen_tts_batch_size: int = Field(default=8, ge=1, le=32)
+    # VoiceDesign sampling. The model ships temperature 0.9 / top_p 1.0, which
+    # added artifacts to the designed references; a calmer draw is cleaner.
+    qwen_tts_design_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    qwen_tts_design_top_p: float = Field(default=0.9, gt=0.0, le=1.0)
     # Voice design runs on the GPU box (Phase 7.9), not in the container. sdpa is
     # the default because designing a batch of short clips does not need
     # flash-attn, which keeps the worker off the CUDA runtime.

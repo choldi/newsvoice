@@ -48,16 +48,13 @@ def configure_logging() -> None:
 
     structlog carries the application's own JSON lines; the Temporal SDK
     carries the activity and workflow ones. Both have to be wired or half of
-    the worker's output never leaves the container.
+    the worker's output never leaves the container. The structlog side is the
+    shared observability configuration so worker records carry the same
+    correlation/trace metadata as the API's.
     """
-    structlog.configure(
-        processors=[
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(settings.log_level),
-    )
+    from src.core.logging import configure_logging as _configure_observability
+
+    _configure_observability(process_name="worker")
     configure_temporal_logging()
 
 
