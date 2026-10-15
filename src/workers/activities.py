@@ -1,5 +1,3 @@
-from src.core.tracing import trace_function
-
 """Temporal activities wrapping the news-engine services."""
 
 import asyncio
@@ -44,6 +42,7 @@ from src.api.services.whatsapp import (
 )
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
+from src.core.tracing import trace_function
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/{method}"
 # Telegram hard limit is 4096 chars per sendMessage; keep a safety margin.
@@ -88,10 +87,8 @@ def split_message_chunks(text: str, max_chars: int = TELEGRAM_MESSAGE_MAX_CHARS)
 
 
 @activity.defn
-@trace_function(component="workers.activities")
-async def fetch_rss_activity(
-    feed_urls: list[str], correlation_id: str | None = None, traceparent: str | None = None
-) -> list[dict[str, Any]]:
+@trace_function(component="workers.activities.fetch_rss_activity")
+async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
     """Fetch and normalize articles from a list of RSS feeds.
 
     Each feed is fetched independently; a failure on one feed only logs a
@@ -141,6 +138,7 @@ async def fetch_rss_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.fetch_url_activity")
 async def fetch_url_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Fetch a single article URL and extract its readable body (Phase 7.10).
 
@@ -170,6 +168,7 @@ async def fetch_url_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.save_article_activity")
 async def save_article_activity(
     article: dict[str, Any], collection: str = "default"
 ) -> dict[str, Any]:
@@ -229,13 +228,10 @@ def _validate_articles(articles: list[dict[str, Any]]) -> list[ArticleIn]:
     return validated
 
 
-@trace_function(component="workers.activities")
 @activity.defn
+@trace_function(component="workers.activities.filter_new_activity")
 async def filter_new_activity(
-    articles: list[dict[str, Any]],
-    collection: str = "default",
-    correlation_id: str | None = None,
-    traceparent: str | None = None,
+    articles: list[dict[str, Any]], collection: str = "default"
 ) -> list[dict[str, Any]]:
     """Filter out articles already delivered within the retention window.
 
@@ -261,6 +257,7 @@ async def filter_new_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.cluster_activity")
 async def cluster_activity(
     articles: list[dict[str, Any]], collection: str = "default"
 ) -> list[dict[str, Any]]:
@@ -290,6 +287,7 @@ async def cluster_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.generate_digest_activity")
 async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Generate the AI news digest from RSS articles/clusters.
 
@@ -319,6 +317,7 @@ async def generate_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.verify_digest_activity")
 async def verify_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Verify a generated digest against the clusters it was written from (Phase 7.13).
 
@@ -400,6 +399,7 @@ async def verify_digest_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.generate_logic_activity")
 async def generate_logic_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Ask the LLM to explain the news-selection logic behind a digest.
 
@@ -446,6 +446,7 @@ async def generate_logic_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_logic_activity")
 async def deliver_logic_activity(
     logic: str, delivery: dict[str, Any], collection: str
 ) -> dict[str, Any]:
@@ -516,6 +517,7 @@ async def deliver_logic_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.generate_tts_activity")
 async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     """Convert the digest markdown into audio with the collection's engine (Phase 8).
 
@@ -628,6 +630,7 @@ async def _record_audio_verification(
 
 
 @activity.defn
+@trace_function(component="workers.activities.verify_tts_audio_activity")
 async def verify_tts_audio_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Transcribe a digest TTS file and score it against the digest (Phase 7.14).
 
@@ -723,6 +726,7 @@ async def verify_tts_audio_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.compress_audio_activity")
 async def compress_audio_activity(audio_path: str) -> dict[str, Any]:
     """Transcode the synthesized WAV to a delivery-ready M4A (AAC) file.
 
@@ -800,6 +804,7 @@ async def _telegram_request(
 
 
 @activity.defn
+@trace_function(component="workers.activities.record_run_activity")
 async def record_run_activity(run: dict[str, Any]) -> dict[str, Any]:
     """Persist a run summary to the digest_runs table for the admin GUI.
 
@@ -825,6 +830,7 @@ async def record_run_activity(run: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_telegram_message_activity")
 async def deliver_telegram_message_activity(
     text: str, chat_id: str | None = None
 ) -> dict[str, Any]:
@@ -894,6 +900,7 @@ def _audio_mime_type(audio_path: str) -> str:
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_telegram_audio_activity")
 async def deliver_telegram_audio_activity(
     audio_path: str, caption: str | None = None, chat_id: str | None = None
 ) -> dict[str, Any]:
@@ -956,6 +963,7 @@ async def deliver_telegram_audio_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_telegram_document_activity")
 async def deliver_telegram_document_activity(
     document_path: str, caption: str | None = None, chat_id: str | None = None
 ) -> dict[str, Any]:
@@ -1007,6 +1015,7 @@ async def deliver_telegram_document_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_email_activity")
 async def deliver_email_activity(
     recipients: list[str],
     markdown_text: str,
@@ -1048,6 +1057,7 @@ async def deliver_email_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_whatsapp_message_activity")
 async def deliver_whatsapp_message_activity(
     text: str,
     recipients: list[str] | None = None,
@@ -1082,6 +1092,7 @@ async def deliver_whatsapp_message_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.deliver_whatsapp_audio_activity")
 async def deliver_whatsapp_audio_activity(
     audio_path: str,
     caption: str | None = None,
@@ -1119,6 +1130,7 @@ async def deliver_whatsapp_audio_activity(
 
 
 @activity.defn
+@trace_function(component="workers.activities.read_collections_signature_activity")
 async def read_collections_signature_activity() -> str | None:
     """Compute the sha256 signature of the current collections file.
 
@@ -1150,6 +1162,7 @@ async def read_collections_signature_activity() -> str | None:
 
 
 @activity.defn
+@trace_function(component="workers.activities.get_synced_signature_activity")
 async def get_synced_signature_activity() -> str | None:
     """Return the signature of the last successfully registered state.
 
@@ -1160,6 +1173,7 @@ async def get_synced_signature_activity() -> str | None:
 
 
 @activity.defn
+@trace_function(component="workers.activities.sync_collections_schedules_activity")
 async def sync_collections_schedules_activity(signature: str) -> None:
     """Re-register the Temporal schedules from the current collections file.
 
@@ -1204,6 +1218,7 @@ async def sync_collections_schedules_activity(signature: str) -> None:
 
 
 @activity.defn
+@trace_function(component="workers.activities.collections_changes_activity")
 async def collections_changes_activity() -> dict[str, list[str]]:
     """Diff the current enabled collection names against the stored snapshot.
 
@@ -1240,6 +1255,7 @@ async def collections_changes_activity() -> dict[str, list[str]]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.get_monitor_state_activity")
 async def get_monitor_state_activity(key: str) -> str | None:
     """Read a monitor state key from the KV store.
 
@@ -1253,6 +1269,7 @@ async def get_monitor_state_activity(key: str) -> str | None:
 
 
 @activity.defn
+@trace_function(component="workers.activities.set_monitor_state_activity")
 async def set_monitor_state_activity(key: str, value: str) -> None:
     """Write a monitor state key to the KV store.
 
@@ -1264,6 +1281,7 @@ async def set_monitor_state_activity(key: str, value: str) -> None:
 
 
 @activity.defn
+@trace_function(component="workers.activities.run_monitor_checks_activity")
 async def run_monitor_checks_activity(config: dict[str, Any]) -> dict[str, Any]:
     """Run every registered system check and produce a MonitorReport.
 
@@ -1308,6 +1326,7 @@ async def run_monitor_checks_activity(config: dict[str, Any]) -> dict[str, Any]:
 
 
 @activity.defn
+@trace_function(component="workers.activities.send_monitor_alert_activity")
 async def send_monitor_alert_activity(text: str) -> dict[str, Any]:
     """Deliver an alert through the configured monitor channels.
 
@@ -1388,6 +1407,7 @@ def _narration_workflow_id(collection: str, run_id: str) -> str:
 
 
 @activity.defn
+@trace_function(component="workers.activities.dispatch_narration_activity")
 async def dispatch_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Render one podcast in its own Temporal namespace and wait for the audio.
 
