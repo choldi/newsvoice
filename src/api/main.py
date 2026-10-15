@@ -86,3 +86,27 @@ app.include_router(ui_router)
 async def health_check() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "ok", "service": "news-engine-api"}
+
+
+def _instrument_fastapi() -> None:
+    """Auto-instrument every route with an OpenTelemetry server span.
+
+    Called once after all routers are registered; a missing optional package
+    leaves the app working with the manual spans only.
+    """
+    from src.core.config import settings
+
+    if not settings.trace_enabled:
+        return
+    try:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        from src.core.tracing import get_tracer
+
+        get_tracer()
+        FastAPIInstrumentor.instrument_app(app)
+    except Exception:  # pragma: no cover - optional instrumentation package
+        return
+
+
+_instrument_fastapi()
