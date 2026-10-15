@@ -1,3 +1,5 @@
+from src.core.tracing import trace_function
+
 """Temporal activities wrapping the news-engine services."""
 
 import asyncio
@@ -86,7 +88,10 @@ def split_message_chunks(text: str, max_chars: int = TELEGRAM_MESSAGE_MAX_CHARS)
 
 
 @activity.defn
-async def fetch_rss_activity(feed_urls: list[str]) -> list[dict[str, Any]]:
+@trace_function(component="workers.activities")
+async def fetch_rss_activity(
+    feed_urls: list[str], correlation_id: str | None = None, traceparent: str | None = None
+) -> list[dict[str, Any]]:
     """Fetch and normalize articles from a list of RSS feeds.
 
     Each feed is fetched independently; a failure on one feed only logs a
@@ -224,9 +229,13 @@ def _validate_articles(articles: list[dict[str, Any]]) -> list[ArticleIn]:
     return validated
 
 
+@trace_function(component="workers.activities")
 @activity.defn
 async def filter_new_activity(
-    articles: list[dict[str, Any]], collection: str = "default"
+    articles: list[dict[str, Any]],
+    collection: str = "default",
+    correlation_id: str | None = None,
+    traceparent: str | None = None,
 ) -> list[dict[str, Any]]:
     """Filter out articles already delivered within the retention window.
 

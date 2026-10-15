@@ -195,7 +195,12 @@ class DigestPipelineWorkflow:
     """Daily digest pipeline: fetch -> dedup -> cluster -> summarize -> deliver."""
 
     @workflow.run
-    async def run(self, config: PipelineConfig) -> dict[str, Any]:
+    async def run(
+        self,
+        config: PipelineConfig,
+        correlation_id: str | None = None,
+        traceparent: str | None = None,
+    ) -> dict[str, Any]:
         """Execute the full digest pipeline.
 
         Args:
@@ -224,7 +229,7 @@ class DigestPipelineWorkflow:
 
         new_articles = await workflow.execute_activity(
             filter_new_activity,
-            args=[articles, config.collection],
+            args=[articles, config.collection, correlation_id, traceparent],
             start_to_close_timeout=FILTER_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -250,7 +255,7 @@ class DigestPipelineWorkflow:
 
         clusters = await workflow.execute_activity(
             cluster_activity,
-            args=[new_articles, config.collection],
+            args=[new_articles, config.collection, correlation_id, traceparent],
             start_to_close_timeout=CLUSTER_TIMEOUT,
             retry_policy=NETWORK_RETRY_POLICY,
         )
@@ -945,7 +950,12 @@ class UrlSummarizeWorkflow:
     """
 
     @workflow.run
-    async def run(self, config: UrlSummarizeConfig) -> dict[str, Any]:
+    async def run(
+        self,
+        config: UrlSummarizeConfig,
+        correlation_id: str | None = None,
+        traceparent: str | None = None,
+    ) -> dict[str, Any]:
         """Execute the single-URL summary pipeline.
 
         Args:
