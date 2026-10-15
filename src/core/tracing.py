@@ -20,7 +20,8 @@ import functools
 import os
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import trace
@@ -168,16 +169,29 @@ def trace_function(
                 attrs["kwargs"] = repr(kwargs)[:max_arg_len]
             return attrs
 
+        @contextmanager
+        def _span(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Iterator[None]:
+            tracer = get_tracer(comp)
+            with tracer.start_as_current_span(
+                func.__qualname__, attributes=_attrs(args, kwargs)
+            ) as span:
+                ctx = span.get_span_context()
+                token_t = context.trace_id_var.set(format(ctx.trace_id, "032x"))
+                token_s = context.span_id_var.set(format(ctx.span_id, "016x"))
+                try:
+                    yield None
+                finally:
+                    context.trace_id_var.reset(token_t)
+                    context.span_id_var.reset(token_s)
+
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            tracer = get_tracer(comp)
-            with tracer.start_as_current_span(func.__qualname__, attributes=_attrs(args, kwargs)):
+            with _span(args, kwargs):
                 return func(*args, **kwargs)
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            tracer = get_tracer(comp)
-            with tracer.start_as_current_span(func.__qualname__, attributes=_attrs(args, kwargs)):
+            with _span(args, kwargs):
                 return await func(*args, **kwargs)
 
         return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
