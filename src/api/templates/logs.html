@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Observabilidad{% endblock %}
+{% block app %}
+<h1>Observabilidad</h1>
+
+<div class="card">
+  <h2>Filtros</h2>
+  <form id="log-form" hx-get="/ui/fragments/logs" hx-target="#logs-panel"
+        hx-swap="innerHTML" hx-trigger="load, submit">
+    <div class="row">
+      <div class="col">
+        <label for="f-component">Componente</label>
+        <select id="f-component" name="component" multiple size="5">
+          {% for c in components %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label for="f-level">Nivel</label>
+        <select id="f-level" name="level" multiple size="5">
+          {% for lv in level_names %}<option value="{{ lv }}">{{ lv }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label for="f-text">Texto</label>
+        <input type="text" id="f-text" name="text" placeholder="subcadena…">
+        <label for="f-corr">Correlation ID</label>
+        <input type="text" id="f-corr" name="correlation_id">
+        <label for="f-trace">Trace ID</label>
+        <input type="text" id="f-trace" name="trace_id">
+      </div>
+      <div class="col">
+        <label for="f-refresh">Auto-refresco</label>
+        <select id="f-refresh">
+          <option value="0">Off</option>
+          <option value="2000">2 s</option>
+          <option value="5000" selected>5 s</option>
+          <option value="10000">10 s</option>
+        </select>
+        <div class="check">
+          <input type="checkbox" id="f-follow">
+          <label for="f-follow">Seguir en vivo (SSE)</label>
+        </div>
+        <div class="check">
+          <input type="checkbox" id="f-file" {% if file_state.enabled %}checked{% endif %}>
+          <label for="f-file">Log a fichero</label>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn primary" type="submit">Aplicar</button>
+      <button class="btn" type="button" id="export-jsonl">Exportar JSONL</button>
+      <button class="btn" type="button" id="export-txt">Exportar TXT</button>
+      <span class="muted" id="status" style="margin-left:8px"></span>
+    </div>
+  </form>
+  <div id="export-status" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
+  <h2>Logs</h2>
+  <div id="logs-panel"><div class="empty">Cargando…</div></div>
+</div>
+
+<div class="card">
+  <h2>Niveles por componente</h2>
+  <div id="log-levels-panel" hx-get="/ui/fragments/log_levels" hx-trigger="load"
+       hx-swap="innerHTML"><div class="empty">Cargando…</div></div>
+</div>
+
+<div class="card">
+  <h2>Trazas recientes</h2>
+  <div id="traces-panel" hx-get="/ui/fragments/traces" hx-trigger="load, every 20s"
+       hx-swap="innerHTML"><div class="empty">Cargando…</div></div>
+  <div id="trace-detail" style="margin-top:12px"></div>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById('log-form');
+  const panel = document.getElementById('logs-panel');
+  const refresh = document.getElementById('f-refresh');
+  const follow = document.getElementById('f-follow');
+  const fileToggle = document.getElementById('f-file');
+  const statusEl = document.getElementById('status');
+  let timer = null;
+  let es = null;
+
+  function filters() {
+    return new URLSearchParams(new FormData(form));
+  }
+
+  function levelBadge(level) {
+    const lv = (level || '').toLowerCase();
+    const cls = lv === 'error' || lv === 'critical' ? 'failed'
+      : lv === 'warning' ? 'terminated'
+      : lv === 'debug' || lv === 'trace' ? 'no_new_articles' : 'ok';
+    return '<span class="badge ' + cls + '">' + (level || '') + '</span>';
+  }
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function rowHtml(rec) {
+    return '<td class="muted">' + esc(rec.timestamp) + '</td>'
+      + '<td>' + levelBadge(rec.level) + '</td>'
+      + '<td>' + esc(rec.component) + '</td>'
+      + '<td class="muted">' + esc(rec.correlation_id) + '</td>'
+      + '<td class="muted">' + esc(rec.trace_id) + '</td>'
+      + '<td>' + esc(rec.event) + '</td>';
+  }
+
+  function addRow(rec) {
+    const tbody = panel.querySelector('tbody');
+    if (!tbody) return;
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowHtml(rec);
+    tbody.appendChild(tr);
+    while (tbody.children.length > 500) tbody.removeChild(tbody.firstChild);
+  }
+
+  function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
+
+  function startPoll() {
+    stopPoll();
+    const ms = parseInt(refresh.value, 10);
+    if (ms > 0 && !follow.checked) {
+      timer = setInterval(function () { htmx.trigger(form, 'submit'); }, ms);
+    }
+  }
+
+  function stopFollow() {
+    if (es) { es.close(); es = null; }
+    statusEl.textContent = '';
+  }
+
+  function startFollow() {
+    stopFollow();
+    const qs = filters().toString();
+    es = new EventSource('/api/logs/stream' + (qs ? ('?' + qs) : ''));
+    es.onmessage = function (ev) {
+      try { addRow(JSON.parse(ev.data)); } catch (e) { /* ignore */ }
+    };
+    statusEl.textContent = 'En vivo…';
+  }
+
+  refresh.addEventListener('change', startPoll);
+  follow.addEventListener('change', function () {
+    if (follow.checked) { stopPoll(); startFollow(); }
+    else { stopFollow(); startPoll(); }
+  });
+
+  fileToggle.addEventListener('change', function () {
+    fetch('/api/logs/file/redirect?enabled=' + (fileToggle.checked ? 'true' : 'false'),
+      { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { statusEl.textContent = 'Fichero: ' + (j.enabled ? 'on' : 'off'); });
+  });
+
+  function doExport(fmt) {
+    const p = filters();
+    p.set('fmt', fmt);
+    htmx.ajax('GET', '/ui/fragments/export?' + p.toString(),
+      { target: '#export-status', swap: 'innerHTML' });
+  }
+  document.getElementById('export-jsonl').addEventListener('click', function () { doExport('jsonl'); });
+  document.getElementById('export-txt').addEventListener('click', function () { doExport('txt'); });
+
+  startPoll();
+})();
+</script>
+{% endblock %}

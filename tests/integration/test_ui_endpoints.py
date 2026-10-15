@@ -841,3 +841,94 @@ def test_collections_gui_round_trips_the_tts_backend() -> None:
 
     repo = CollectionsRepository()
     assert repo.get("motor").tts_backend == "qwen3_tts"
+
+
+def _emit_log(event: str, component: str = "ui.test") -> None:
+    """Write one structured log record into the in-memory ring buffer."""
+    import structlog
+
+    from src.core import logging as logging_ext
+
+    logging_ext.configure_logging("api")
+    structlog.get_logger("ui-test").info(event, component=component)
+
+
+def test_logs_page_renders() -> None:
+    """The observability page loads with the logs panel container."""
+    client = _ui_client()
+    _login(client)
+    page = client.get("/ui/logs")
+    assert page.status_code == 200
+    assert "Observabilidad" in page.text
+    assert 'id="logs-panel"' in page.text
+
+
+def test_logs_fragment_renders_records() -> None:
+    """The logs fragment renders rows for records in the ring buffer."""
+    from src.core import logging as logging_ext
+
+    logging_ext.clear_ring_buffer()
+    _emit_log("ui-fragment-needle")
+
+    client = _ui_client()
+    _login(client)
+    fragment = client.get("/ui/fragments/logs", params={"component": "ui.test"})
+    assert fragment.status_code == 200
+    assert "ui-fragment-needle" in fragment.text
+
+
+def test_log_levels_fragment_and_update() -> None:
+    """The level controls render and POST persists a new component level."""
+    from src.core import logging as logging_ext
+
+    client = _ui_client()
+    _login(client)
+
+    levels = client.get("/ui/fragments/log_levels")
+    assert levels.status_code == 200
+    assert 'name="component"' in levels.text
+
+    update = client.post(
+        "/ui/fragments/log_level",
+        data={"component": "ui.test", "level": "DEBUG"},
+    )
+    assert update.status_code == 200
+    assert logging_ext.get_component_levels().get("ui.test") == "DEBUG"
+
+
+def test_traces_fragment_and_detail() -> None:
+    """The traces fragment lists a span and the detail endpoint renders it."""
+    from src.core import tracing
+
+    tracing.clear_spans()
+    tracer = tracing.get_tracer("ui.trace")
+    with tracer.start_as_current_span("ui-root-span") as span:
+        trace_id = format(span.get_span_context().trace_id, "032x")
+
+    client = _ui_client()
+    _login(client)
+
+    listing = client.get("/ui/fragments/traces")
+    assert listing.status_code == 200
+    assert trace_id in listing.text
+
+    detail = client.get("/ui/fragments/trace_detail", params={"trace_id": trace_id})
+    assert detail.status_code == 200
+    assert "ui-root-span" in detail.text
+
+
+def test_export_fragment_reports_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exporting writes a file and the fragment reports its name."""
+    from src.core import logging as logging_ext
+    from src.core.config import settings as core_settings
+
+    monkeypatch.setattr(core_settings, "obs_export_dir", str(tmp_path))
+    logging_ext.clear_ring_buffer()
+    _emit_log("ui-export-needle")
+
+    client = _ui_client()
+    _login(client)
+    fragment = client.get("/ui/fragments/export", params={"fmt": "jsonl", "component": "ui.test"})
+    assert fragment.status_code == 200
+    assert "Exportados" in fragment.text
+    assert list(tmp_path.glob("logs-*.jsonl"))

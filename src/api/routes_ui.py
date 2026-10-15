@@ -62,8 +62,13 @@ from src.api.services.voice_registry import (
     modal_options,
 )
 from src.api.services.voices import VoicesService
+from src.core import logging as logging_ext
+from src.core import tracing
 from src.core.collections import LogicDeliveryConfig
 from src.core.prompts import EMOTION_TAGS
+
+#: Level names offered by the observability UI, ordered low to high.
+LOG_LEVEL_NAMES: tuple[str, ...] = ("TRACE", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 logger = structlog.get_logger(__name__)
 
@@ -2914,4 +2919,163 @@ async def ui_settings_save(request: Request) -> HTMLResponse:
             "flash": env_editor.saved_flash(changes),
             "flash_level": "ok",
         },
+    )
+
+
+def _log_filters(request: Request) -> dict:
+    """Extract the shared log filters from the request query string.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        Keyword arguments for :func:`src.core.logging.query_logs`.
+    """
+    qp = request.query_params
+    return {
+        "levels": qp.getlist("level") or None,
+        "components": qp.getlist("component") or None,
+        "text": qp.get("text") or None,
+        "correlation_id": qp.get("correlation_id") or None,
+        "trace_id": qp.get("trace_id") or None,
+    }
+
+
+@router.get("/ui/logs", response_class=HTMLResponse, include_in_schema=False)
+async def ui_logs(request: Request) -> HTMLResponse:
+    """Render the observability console (logs, levels and traces).
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse for the observability page.
+    """
+    return _render(
+        request,
+        "logs.html",
+        {
+            "components": logging_ext.list_components(),
+            "levels": logging_ext.get_component_levels(),
+            "level_names": LOG_LEVEL_NAMES,
+            "file_state": logging_ext.file_sink_state(),
+        },
+    )
+
+
+@router.get("/ui/fragments/logs", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_logs(request: Request) -> HTMLResponse:
+    """Render the filtered log table fragment for HTMX polling.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the log table.
+    """
+    limit = int(request.query_params.get("limit", "200") or "200")
+    items = logging_ext.query_logs(limit=limit, include_file=True, **_log_filters(request))
+    return _render(request, "partials/_logs.html", {"items": items})
+
+
+@router.get("/ui/fragments/log_levels", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_log_levels(request: Request) -> HTMLResponse:
+    """Render the per-component log level controls.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the level controls table.
+    """
+    return _render(
+        request,
+        "partials/_log_levels.html",
+        {
+            "components": logging_ext.list_components(),
+            "levels": logging_ext.get_component_levels(),
+            "level_names": LOG_LEVEL_NAMES,
+        },
+    )
+
+
+@router.post("/ui/fragments/log_level", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_set_log_level(request: Request) -> HTMLResponse:
+    """Apply a component level change and re-render the controls.
+
+    Args:
+        request: Incoming request with `component` and `level` form fields.
+
+    Returns:
+        HTMLResponse with the refreshed level controls table.
+    """
+    form = await _form(request)
+    component = form.get("component", "")
+    level = form.get("level", "")
+    flash = ""
+    if component and level:
+        try:
+            logging_ext.set_component_level(component, level)
+            flash = f"{component} → {level.upper()}"
+        except ValueError as exc:
+            logger.warning("ui_set_log_level_invalid", component=component, error=str(exc))
+    return _render(
+        request,
+        "partials/_log_levels.html",
+        {
+            "components": logging_ext.list_components(),
+            "levels": logging_ext.get_component_levels(),
+            "level_names": LOG_LEVEL_NAMES,
+            "flash": flash,
+        },
+    )
+
+
+@router.get("/ui/fragments/export", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_export(request: Request) -> HTMLResponse:
+    """Export the current filtered view to a file and report the path.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse describing the exported file.
+    """
+    fmt = request.query_params.get("fmt", "jsonl")
+    fmt = fmt if fmt in ("jsonl", "txt") else "jsonl"
+    records = logging_ext.query_logs(limit=20000, include_file=True, **_log_filters(request))
+    result = logging_ext.export_logs(records, fmt=fmt)
+    return _render(request, "partials/_export.html", result)
+
+
+@router.get("/ui/fragments/traces", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_traces(request: Request) -> HTMLResponse:
+    """Render the recent-traces table fragment.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the traces table.
+    """
+    return _render(request, "partials/_traces.html", {"traces": tracing.summarize_traces(50)})
+
+
+@router.get("/ui/fragments/trace_detail", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_trace_detail(request: Request, trace_id: str) -> HTMLResponse:
+    """Render the span timeline and linked logs for one trace.
+
+    Args:
+        request: Incoming request.
+        trace_id: Trace id to inspect.
+
+    Returns:
+        HTMLResponse with the trace detail.
+    """
+    spans = tracing.get_inmem_spans(trace_id=trace_id, limit=1000)
+    logs = logging_ext.query_logs(trace_id=trace_id, limit=500, include_file=True)
+    return _render(
+        request,
+        "partials/_trace_detail.html",
+        {"trace_id": trace_id, "spans": spans, "logs": logs},
     )

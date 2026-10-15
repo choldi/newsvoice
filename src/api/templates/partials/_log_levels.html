@@ -1,0 +1,29 @@
+<table>
+  <thead>
+    <tr><th>Componente</th><th>Nivel</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for c in components %}
+    <tr>
+      <td>{{ c }}</td>
+      <td>
+        {% set cur = levels.get(c, 'INFO') %}
+        <form hx-post="/ui/fragments/log_level" hx-target="#log-levels-panel"
+              hx-swap="innerHTML"
+              style="display:flex;gap:8px;align-items:center;margin:0">
+          <input type="hidden" name="component" value="{{ c }}">
+          <select name="level" style="width:auto">
+            {% for lv in level_names %}
+            <option value="{{ lv }}" {{ 'selected' if lv == cur else '' }}>{{ lv }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn primary" type="submit" style="margin:0">Guardar</button>
+        </form>
+      </td>
+      <td>{% if c not in levels %}<span class="muted">por defecto</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="empty">Sin componentes</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

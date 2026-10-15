@@ -1,0 +1,45 @@
+<div class="card">
+  <h2>Trace {{ trace_id }}</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Span</th>
+        <th>Componente</th>
+        <th>Padre</th>
+        <th>Duración</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in spans %}
+      <tr>
+        <td>{{ s.name }}</td>
+        <td>{{ s.component or '' }}</td>
+        <td class="muted">{{ s.parent_span_id or '—' }}</td>
+        <td>{{ s.duration_ms if s.duration_ms is not none else '—' }} ms</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">Sin spans</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h2>Logs del trace</h2>
+  <table>
+    <thead>
+      <tr><th>Hora</th><th>Nivel</th><th>Componente</th><th>Evento</th></tr>
+    </thead>
+    <tbody>
+      {% for r in logs %}
+      <tr>
+        <td class="muted">{{ r.timestamp }}</td>
+        <td>{{ r.level }}</td>
+        <td>{{ r.component }}</td>
+        <td>{{ r.event }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">Sin logs</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
