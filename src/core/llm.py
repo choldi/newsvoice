@@ -6,10 +6,12 @@ import litellm
 import structlog
 
 from src.core.config import settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 
 
+@trace_function(component="core.llm")
 async def generate_completion(
     messages: list[dict[str, str]],
     temperature: float | None = None,

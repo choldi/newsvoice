@@ -1,3 +1,5 @@
+from src.core.tracing import trace_function
+
 """Event clustering service using deterministic fingerprinting."""
 
 import hashlib
@@ -278,6 +280,7 @@ class ClusterService:
             logger.warning("material_update_check_failed", error=str(exc))
             return False  # Conservative: assume no material update on error
 
+    @trace_function(component="api.services.cluster")
     async def cluster_articles(self, payload: ClusterIn) -> list[ClusterItem]:
         """Cluster articles by event fingerprint and detect material updates."""
         if not payload.articles:

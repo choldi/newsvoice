@@ -37,6 +37,7 @@ import structlog
 
 from src.api.models.narration import TTSBackend
 from src.core.config import get_settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
@@ -466,6 +467,7 @@ def _modal_voice_for(voice: str, language: str) -> str:
 # --- synthesis ---------------------------------------------------------------
 
 
+@trace_function(component="tts.backends")
 async def synthesize(
     backend: TTSBackend,
     text: str,

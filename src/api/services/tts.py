@@ -38,6 +38,7 @@ from src.api.services.tts_backends import (
 )
 from src.api.services.tts_estimate import estimate_synthesis
 from src.core.config import get_settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
@@ -259,6 +260,7 @@ async def resolve_edge_voice(voice: str, language: str) -> str:
     return DEFAULT_VOICE_BY_LANGUAGE.get(language, "es-MX-JorgeNeural")
 
 
+@trace_function(component="tts.engine")
 async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -> bytes:
     """Synthesize text with an Edge neural voice, returning the MP3 bytes.
 

@@ -8,8 +8,10 @@ Modal code path touches this module.
 from __future__ import annotations
 
 from src.core.config import settings
+from src.core.tracing import trace_function
 
 
+@trace_function(component="modal.client")
 async def modal_tts(
     *,
     text: str,
@@ -51,6 +53,7 @@ async def modal_tts(
     )
 
 
+@trace_function(component="modal.client")
 async def modal_zonos2_tts(
     *,
     text: str,
@@ -110,6 +113,7 @@ async def upload_voice(name: str, wav: bytes) -> None:
     await function.remote.aio(name=name, wav=wav)
 
 
+@trace_function(component="modal.client")
 async def modal_judge(
     *,
     system_prompt: str,
