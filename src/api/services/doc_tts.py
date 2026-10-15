@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from src.core.tracing import trace_function
+
 """Long-form document TTS (Phase 7.11): chunk, synthesize, join into one MP3.
 
 The digest TTS truncates to ``tts_max_chars`` because a digest is bounded; a
@@ -15,7 +19,6 @@ digest's lease-waiter row (see :mod:`src.api.services.tts_lease`), never a
 clock, so a paused or disabled collection never pauses a book for nothing.
 """
 
-from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -516,6 +519,7 @@ def _uploads_dir() -> Path:
     return path
 
 
+@trace_function(component="api.services.doc_tts")
 async def submit_document(
     *,
     upload: UploadFile,

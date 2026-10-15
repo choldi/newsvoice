@@ -1,3 +1,6 @@
+from __future__ import annotations
+from src.core.tracing import trace_function
+
 """Priority engine lease serializing TTS synthesis across processes (Phase 8.1).
 
 The digest TTS step and the long-document render are served by the same engines
@@ -33,7 +36,6 @@ This module is imported from activities and services only — never from a
 workflow, which must not do I/O.
 """
 
-from __future__ import annotations
 
 import asyncio
 import inspect
@@ -256,6 +258,7 @@ class TTSLeaseService:
 
     # --- lease --------------------------------------------------------------
 
+    @trace_function(component="api.services.tts_lease")
     async def acquire(self, owner: str, priority: int) -> bool:
         """Try to take the lease without blocking.
 

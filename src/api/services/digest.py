@@ -1,3 +1,5 @@
+from src.core.tracing import trace_function
+
 """Digest service providing business logic for daily news summarization."""
 
 import structlog
@@ -100,6 +102,7 @@ class DigestService:
             headline_count=payload.headline_count,
         )
 
+    @trace_function(component="api.services.digest")
     async def generate_digest(self, payload: DigestIn) -> DigestOut:
         """Generates a news digest from incoming articles or clusters payload using LLM.
 

@@ -1,3 +1,5 @@
+from src.core.tracing import trace_function
+
 """Deduplication and URL normalization service."""
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -81,6 +83,7 @@ class DedupService:
         """
         self.repo = repository or ArticleRepository()
 
+    @trace_function(component="api.services.dedup")
     async def filter_new_articles(
         self,
         articles: list[ArticleIn],

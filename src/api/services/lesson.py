@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from src.core.tracing import trace_function
+
 """Language-teacher lesson helpers (Phase 7.12).
 
 Turns uploaded notes into an LLM lesson (readable Markdown plus a spoken
@@ -5,7 +9,6 @@ script) and prepares it for rendering: the same ``NarrationSpec`` the rest of
 the project uses, so the class is voiced by the operator's cloned voices.
 """
 
-from __future__ import annotations
 
 import json
 import re
@@ -590,6 +593,7 @@ def collection_delivery(collection_name: str) -> tuple[list[str], str | None, li
     )
 
 
+@trace_function(component="api.services.lesson")
 async def submit_lesson(
     *,
     upload: UploadFile,
