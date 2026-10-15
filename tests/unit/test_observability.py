@@ -129,6 +129,142 @@ def test_file_sink_degrades_when_unwritable(monkeypatch: pytest.MonkeyPatch) -> 
     assert logmod._FILE_HANDLER is None
 
 
+async def test_trace_function_binds_and_restores_trace_context() -> None:
+    from src.core.tracing import trace_function
+
+    context.set_trace_context("outer-trace", "outer-span")
+
+    @trace_function(component="test.comp")
+    async def inner() -> tuple[str | None, str | None]:
+        return context.get_trace_id(), context.get_span_id()
+
+    tid, sid = await inner()
+    # Inside the span the context points at the new span, not the outer one.
+    assert tid and tid != "outer-trace"
+    assert sid and sid != "outer-span"
+    # After the call the previous context is restored.
+    assert context.get_trace_id() == "outer-trace"
+    assert context.get_span_id() == "outer-span"
+    context.clear_trace_context()
+
+
+def test_interceptor_correlation_round_trip() -> None:
+    from src.workers.interceptors import (
+        CORRELATION_HEADER,
+        decode_correlation,
+        encode_correlation,
+    )
+
+    payload = encode_correlation("run-42")
+    assert decode_correlation({CORRELATION_HEADER: payload}) == "run-42"
+    assert decode_correlation({}) is None
+
+
+async def test_correlation_activity_interceptor_sets_context() -> None:
+    from src.workers.interceptors import (
+        CORRELATION_HEADER,
+        CorrelationInterceptor,
+        encode_correlation,
+    )
+
+    captured: dict[str, str | None] = {}
+
+    async def handler(input: object) -> str:
+        captured["cid"] = context.get_correlation_id()
+        return "ok"
+
+    interceptor = CorrelationInterceptor().intercept_activity(_DummyNextInbound(handler))
+    headers = {CORRELATION_HEADER: encode_correlation("cid-from-header")}
+    context.clear_correlation_id()
+    result = await interceptor.execute_activity(_DummyActivityInput(headers))
+    assert result == "ok"
+    assert captured["cid"] == "cid-from-header"
+    context.clear_correlation_id()
+
+
+async def test_correlation_workflow_inbound_sets_context() -> None:
+    from src.workers.interceptors import (
+        CORRELATION_HEADER,
+        _CorrelationWorkflowInbound,
+        encode_correlation,
+    )
+
+    class _NextWorkflow:
+        async def execute_workflow(self, input: object) -> str:
+            return "done"
+
+    inbound = _CorrelationWorkflowInbound(_NextWorkflow())
+    headers = {CORRELATION_HEADER: encode_correlation("wf-cid")}
+    context.clear_correlation_id()
+    result = await inbound.execute_workflow(_DummyWorkflowInput(headers))
+    assert result == "done"
+    assert inbound.correlation_id == "wf-cid"
+    assert context.get_correlation_id() == "wf-cid"
+    context.clear_correlation_id()
+
+
+def test_correlation_workflow_outbound_stamps_activity_headers() -> None:
+    from src.workers.interceptors import (
+        _CorrelationWorkflowOutbound,
+        decode_correlation,
+    )
+
+    class _Root:
+        correlation_id = "wf-cid"
+
+    class _NextOutbound:
+        def start_activity(self, input: object) -> object:
+            return input
+
+    outbound = _CorrelationWorkflowOutbound(_NextOutbound(), _Root())
+    started = _DummyStartActivityInput({})
+    handle = outbound.start_activity(started)
+    assert decode_correlation(handle.headers) == "wf-cid"
+
+
+class _DummyWorkflowInput:
+    def __init__(self, headers: dict) -> None:
+        self.headers = headers
+        self.type = object
+        self.run_fn = None
+        self.args: list = []
+
+
+class _DummyStartActivityInput:
+    def __init__(self, headers: dict) -> None:
+        self.headers = headers
+        self.activity = "x"
+        self.args: list = []
+        self.activity_id = None
+        self.task_queue = None
+        self.schedule_to_close_timeout = None
+        self.schedule_to_start_timeout = None
+        self.start_to_close_timeout = None
+        self.heartbeat_timeout = None
+        self.retry_policy = None
+        self.cancellation_type = None
+        self.disable_eager_execution = False
+        self.versioning_intent = None
+        self.summary = None
+        self.priority = None
+
+
+class _DummyActivityInput:
+    def __init__(self, headers: dict) -> None:
+        self.headers = headers
+        self.fn = None
+        self.args: list = []
+        self.executor = None
+
+
+class _DummyNextInbound:
+    def __init__(self, handler) -> None:
+        self._handler = handler
+
+    async def execute_activity(self, input: object) -> object:
+        return await self._handler(input)
+
+
 def test_logs_api_query_filters() -> None:
     from fastapi.testclient import TestClient
 
