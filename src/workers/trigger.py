@@ -12,9 +12,10 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+from src.core import context
 from src.core.collections import CollectionConfig, get_collection
 from src.core.config import settings
-from src.workers.run_worker import build_client
+from src.workers.run_worker import build_client, configure_logging
 from src.workers.schedule import pipeline_config_for
 from src.workers.workflows import DigestPipelineWorkflow, PipelineConfig
 
@@ -46,6 +47,9 @@ def _config_for_collection(collection: CollectionConfig, tts_flag: bool) -> Pipe
 
 async def main() -> None:
     """Start and wait for a manual digest pipeline workflow."""
+    configure_logging()
+    correlation_id = context.generate_correlation_id()
+    context.set_correlation_id(correlation_id)
     parser = argparse.ArgumentParser(description="Run one digest pipeline manually")
     parser.add_argument(
         "--collection",

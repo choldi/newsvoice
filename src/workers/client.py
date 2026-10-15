@@ -8,6 +8,7 @@ design box), so it cannot pull in the database, the RSS stack or any service.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import structlog
 from temporalio.client import Client
@@ -16,6 +17,18 @@ from src.core.config import settings
 
 #: The SDK logs activities, workflows and the client under this hierarchy.
 TEMPORAL_LOGGER_NAME = "temporalio"
+
+
+class _ContextFilter(logging.Filter):
+    """Stamp the current correlation/trace ids onto SDK log records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Attach the observability contextvars to ``record``."""
+        from src.core import context
+
+        record.correlation_id = context.get_correlation_id() or "-"
+        record.trace_id = context.get_trace_id() or "-"
+        return True
 
 
 def configure_temporal_logging() -> None:
@@ -37,7 +50,10 @@ def configure_temporal_logging() -> None:
     temporal_logger.propagate = False
     if not temporal_logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        handler.setFormatter(
+            logging.Formatter("%(levelname)s %(name)s [%(correlation_id)s]: %(message)s")
+        )
+        handler.addFilter(_ContextFilter())
         temporal_logger.addHandler(handler)
     for handler in temporal_logger.handlers:
         handler.setLevel(level)
@@ -56,6 +72,39 @@ def configure_logging() -> None:
 
     _configure_observability(process_name="worker")
     configure_temporal_logging()
+
+
+def build_interceptors() -> list[Any]:
+    """Return the client/worker interceptors for observability.
+
+    The OpenTelemetry interceptor creates spans and propagates the W3C trace
+    context; the correlation interceptor carries the business id. Both are
+    best-effort: when tracing is disabled, or the contrib package is missing,
+    the client still connects (the correlation id alone is enough to follow a
+    run in the logs).
+
+    Returns:
+        Interceptors to hand to ``Client.connect`` (the worker inherits any
+        that also implement ``temporalio.worker.Interceptor``).
+    """
+    if not settings.trace_enabled:
+        return []
+    interceptors: list[Any] = []
+    try:
+        # Install the local in-memory TracerProvider before the interceptor
+        # resolves its tracer, otherwise spans go to the default no-op provider.
+        from temporalio.contrib.opentelemetry import TracingInterceptor
+
+        from src.core.tracing import get_tracer
+
+        get_tracer()
+        interceptors.append(TracingInterceptor(always_create_workflow_spans=True))
+    except Exception:  # pragma: no cover - optional contrib package
+        structlog.get_logger(__name__).warning("otel_interceptor_unavailable")
+    from src.workers.interceptors import CorrelationInterceptor
+
+    interceptors.append(CorrelationInterceptor())
+    return interceptors
 
 
 async def build_client(namespace: str | None = None) -> Client:
@@ -77,4 +126,5 @@ async def build_client(namespace: str | None = None) -> Client:
     return await Client.connect(
         settings.temporal_host,
         namespace=target,
+        interceptors=build_interceptors(),
     )
