@@ -144,12 +144,37 @@ Los 4 criterios deben pasar:
 Si **pasa**: `ZONOS2_ENABLED=true` en `.env`.
 Si **falla**: ZONOS2 queda inactivo; Qwen3-TTS sigue siendo el renderer.
 
-## 8. Activar la vía B en una colección
+## 8. Correr el gate de VoxCPM2
+
+VoxCPM2 es Apache-2.0, 48 kHz y corre en Modal (L4). Se activa por colección
+solo si supera el gate de calidad.
+
+```bash
+python scripts/benchmark_voxcpm.py --all
+```
+
+Los criterios deben pasar:
+
+| Criterio | Umbral |
+|---|---|
+| `sample_rate` (frecuencia nativa) | == 48000 |
+| `no_clipping` (pico sin recorte) | peak ≤ 0.99 |
+| `mos` (DNSMOS P.835 OVRL) | ≥ 3.0 |
+| `wideband` (energía > 16 kHz) | ≥ 0.02 |
+
+El script también informa `best_gain` (mejora MOS entre mejor take y el primero)
+cuando se usan varios candidatos (`VOXCPM2_CANDIDATES`, por defecto 3).
+
+Si **pasa**: `VOXCPM2_ENABLED=true` en `.env`.
+Si **falla**: VoxCPM2 queda inactivo; el backend por defecto sigue siendo
+`qwen3_tts` (o el que esté activo para esa colección).
+
+## 9. Activar la vía B en una colección
 
 En `collections.toml` del servidor (bind-mount, inode `461207`):
 
 ```toml
-narration_tts_backend = "qwen3_tts"   # o "zonos2" si el gate pasó
+narration_tts_backend = "qwen3_tts"   # o "zonos2" / "voxcpm2" si el gate pasó
 narration_voice_source = "qwen_design"
 ```
 
@@ -159,7 +184,7 @@ Y en el `narration_spec` de la colección:
 ai_disclosure = true   # descargo audible AI Act Art. 50(4)
 ```
 
-## 9. Verificar
+## 10. Verificar
 
 ```bash
 curl http://localhost:8000/health
@@ -170,7 +195,7 @@ docker compose logs -f narration-modal-worker
 Comprobar que `modal_spend` registra coste (solo render), que el audio
 entregado tiene el descargo audible y que la vía A no ha cambiado.
 
-## 10. Merge a main
+## 11. Merge a main
 
 Cuando sea estable:
 

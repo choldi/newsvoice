@@ -45,6 +45,44 @@ def _ref_text(voice_ref: str) -> str:
     return entry["ref_text"]
 
 
+def _dnsmos_ovrl(mos: object, wav: object, sample_rate: int) -> float | None:
+    """Score one clip with the no-reference DNSMOS P.835 overall MOS.
+
+    The clip is resampled to the 16 kHz DNSMOS expects with a plain linear
+    interpolation: it is only ever compared against sibling takes of the same
+    speaker and text, so any dependency-free resampler preserves the ordering.
+
+    Args:
+        mos: The loaded ``torch_dnsmos`` scorer.
+        wav: Audio as a float array of samples.
+        sample_rate: Sample rate of the clip.
+
+    Returns:
+        The overall MOS, or None when the clip could not be scored.
+    """
+    import numpy as np
+    import torch
+
+    try:
+        waveform = torch.from_numpy(np.asarray(wav, dtype=np.float32)).flatten()
+        if waveform.numel() == 0:
+            return None
+        if sample_rate != 16000:
+            length = int(round(waveform.shape[-1] * 16000 / sample_rate))
+            if length < 1:
+                return None
+            waveform = torch.nn.functional.interpolate(
+                waveform[None, None], size=length, mode="linear", align_corners=False
+            )[0, 0]
+        prediction = mos.predict(waveform, sample_rate=16000)
+        scores = prediction.get("scores") if isinstance(prediction, dict) else None
+        if isinstance(scores, dict) and "OVRL" in scores:
+            return float(scores["OVRL"])
+        return None
+    except Exception:
+        return None
+
+
 @app.cls(
     gpu=modal.gpu.L4(),
     timeout=3600,
@@ -206,40 +244,6 @@ class VoxCPM2TTS:
         # P.835 SIG/BAK/OVRL; OVRL is the single figure used to rank takes.
         self._mos = torch_dnsmos.load("sig_bak_ovr")
 
-    def _mos_score(self, wav: object, sample_rate: int) -> float | None:
-        """Rank one take with the no-reference DNSMOS P.835 overall score.
-
-        The take is resampled to the 16 kHz DNSMOS expects with a plain
-        linear interpolation: the takes share a speaker and a text, so only
-        their relative order matters and any dependency-free resampler works.
-
-        Args:
-            wav: One take as a float array of samples.
-            sample_rate: Sample rate of the take.
-
-        Returns:
-            The overall MOS, or None when the take could not be scored.
-        """
-        import numpy as np
-        import torch
-
-        try:
-            waveform = torch.from_numpy(np.asarray(wav, dtype=np.float32)).flatten()
-            if sample_rate != 16000:
-                length = int(round(waveform.shape[-1] * 16000 / sample_rate))
-                if length < 1:
-                    return None
-                waveform = torch.nn.functional.interpolate(
-                    waveform[None, None], size=length, mode="linear", align_corners=False
-                )[0, 0]
-            prediction = self._mos.predict(waveform, sample_rate=16000)
-            scores = prediction.get("scores") if isinstance(prediction, dict) else None
-            if isinstance(scores, dict) and "OVRL" in scores:
-                return float(scores["OVRL"])
-            return None
-        except Exception:
-            return None
-
     @modal.method()
     def generate_tts_voxcpm2(
         self,
@@ -292,7 +296,7 @@ class VoxCPM2TTS:
 
             def _rank(index: int) -> tuple[bool, float]:
                 """Prefer a scored take; an unscoreable one ranks last."""
-                score = self._mos_score(takes[index], sample_rate)
+                score = _dnsmos_ovrl(self._mos, takes[index], sample_rate)
                 return (score is not None, score if score is not None else 0.0)
 
             wav = takes[max(range(len(takes)), key=_rank)]
@@ -413,6 +417,99 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
 
     return {
         "voice_ref": voice_ref,
+        "criteria": criteria,
+        "pass": all(c["pass"] for c in criteria.values()),
+    }
+
+
+@app.function(
+    gpu=modal.gpu.L4(),
+    timeout=1800,
+    volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
+)
+def benchmark_voxcpm2(voice_ref: str, text: str, language: str, num_candidates: int = 3) -> dict:
+    """Run the VoxCPM2 gate benchmark for one reference voice.
+
+    Measures the criteria that decide whether VoxCPM2 is activated over the
+    current renderer: native 48 kHz, no clipping, a decent no-reference MOS
+    and genuine wideband content. It also reports the best-of-N MOS gain.
+
+    Args:
+        voice_ref: Reference voice name; resolves to a WAV in the volume.
+        text: Text to synthesize for the measurements.
+        language: ISO 639-1 language code; VoxCPM2 infers it from the text.
+        num_candidates: Takes synthesized before DNSMOS picks the best.
+
+    Returns:
+        Dict with the per-criterion results and an overall ``pass``.
+    """
+    import numpy as np
+    import torch_dnsmos
+    from voxcpm import VoxCPM
+
+    model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
+    mos = torch_dnsmos.load("sig_bak_ovr")
+    ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
+    sample_rate = model.tts_model.sample_rate
+
+    takes = [
+        model.generate(
+            text=text,
+            prompt_wav_path=ref_path,
+            prompt_text=_ref_text(voice_ref),
+            reference_wav_path=ref_path,
+        )
+        for _ in range(max(1, num_candidates))
+    ]
+    ovrl = [_dnsmos_ovrl(mos, take, sample_rate) for take in takes]
+    first_ovrl = ovrl[0]
+    scored = [score for score in ovrl if score is not None]
+    best_ovrl = max(scored) if scored else None
+    best = max(
+        range(len(takes)),
+        key=lambda i: (ovrl[i] is not None, ovrl[i] if ovrl[i] is not None else 0.0),
+    )
+    wav = np.asarray(takes[best], dtype=np.float32).flatten()
+
+    peak = float(np.max(np.abs(wav))) if wav.size else 0.0
+
+    spectrum = np.abs(np.fft.rfft(wav))
+    freqs = np.fft.rfftfreq(len(wav), 1 / sample_rate)
+    total = float(np.sum(spectrum))
+    wide_ratio = float(np.sum(spectrum[freqs > 16000])) / total if total > 0 else 0.0
+
+    criteria = {
+        "sample_rate": {
+            "value": sample_rate,
+            "expected": 48000,
+            "pass": sample_rate == 48000,
+        },
+        "no_clipping": {
+            "peak": round(peak, 4),
+            "pass": peak <= 0.99,
+        },
+        "mos": {
+            "value": round(best_ovrl, 4) if best_ovrl is not None else None,
+            "threshold": 3.0,
+            "pass": best_ovrl is not None and best_ovrl >= 3.0,
+        },
+        "wideband": {
+            "high_ratio": round(wide_ratio, 6),
+            "threshold": 0.02,
+            "pass": wide_ratio >= 0.02,
+        },
+    }
+
+    return {
+        "voice_ref": voice_ref,
+        "takes": {
+            "count": len(takes),
+            "ovrl": [round(score, 4) if score is not None else None for score in ovrl],
+            "best_index": best,
+            "best_gain": round(best_ovrl - first_ovrl, 4)
+            if best_ovrl is not None and first_ovrl is not None
+            else None,
+        },
         "criteria": criteria,
         "pass": all(c["pass"] for c in criteria.values()),
     }
