@@ -33,6 +33,8 @@ _RING_BUFFER: deque[dict[str, Any]] = deque(maxlen=10_000)
 _COMPONENT_LEVELS: dict[str, str] = {}
 #: Guards ring buffer and level registry against concurrent mutation.
 _LOCK = threading.Lock()
+#: Monotonic per-process record id used for paging and SSE Last-Event-ID.
+_SEQ = 0
 #: Whether the running process has already configured logging.
 _CONFIGURED = False
 #: Shared rotating JSONL sink used by both structlog and stdlib records.
@@ -102,8 +104,16 @@ def _context_processor(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ring_processor(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
-    """Copy each finalized record into the bounded ring buffer."""
+    """Stamp a monotonic id and copy the record into the bounded ring buffer.
+
+    The id is set on the event dict *before* the file processor runs so the
+    ring and file copies of the same record share an id; that is what lets the
+    query layer merge the two without duplicating a record.
+    """
+    global _SEQ
     with _LOCK:
+        _SEQ += 1
+        event_dict.setdefault("id", _SEQ)
         _RING_BUFFER.append(dict(event_dict))
     return event_dict
 
@@ -212,16 +222,19 @@ def _configure_stdlib(settings: Any) -> None:
 
     class _BufferHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
+            global _SEQ
             try:
-                payload = {
-                    "event": record.getMessage(),
-                    "level": record.levelname.lower(),
-                    "logger": record.name,
-                    "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
-                    "component": context.get_component() or record.name,
-                    "process": context.get_process(),
-                }
                 with _LOCK:
+                    _SEQ += 1
+                    payload = {
+                        "id": _SEQ,
+                        "event": record.getMessage(),
+                        "level": record.levelname.lower(),
+                        "logger": record.name,
+                        "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+                        "component": context.get_component() or record.name,
+                        "process": context.get_process(),
+                    }
                     _RING_BUFFER.append(payload)
                 handler = _FILE_HANDLER
                 if handler is not None:
@@ -343,3 +356,186 @@ def read_file_tail(limit: int = 500) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return records
+
+
+def _merge_records(include_file: bool, file_limit: int) -> list[dict[str, Any]]:
+    """Merge ring-buffer and file records, de-duplicating by (process, id).
+
+    Args:
+        include_file: Whether to append the shared file tail (worker logs).
+        file_limit: How many trailing file lines to read when enabled.
+
+    Returns:
+        Records ordered oldest-first.
+    """
+    records = get_ring_buffer()
+    if include_file:
+        records = records + read_file_tail(file_limit)
+    seen: set[tuple[Any, Any]] = set()
+    merged: list[dict[str, Any]] = []
+    for record in records:
+        rid = record.get("id")
+        if rid is not None:
+            key = (record.get("process"), rid)
+            if key in seen:
+                continue
+            seen.add(key)
+        merged.append(record)
+    merged.sort(key=lambda r: (str(r.get("timestamp") or ""), str(r.get("id") or "")))
+    return merged
+
+
+def _matches(
+    record: dict[str, Any],
+    *,
+    levels: set[str] | None,
+    components: set[str] | None,
+    text: str | None,
+    correlation_id: str | None,
+    trace_id: str | None,
+    module: str | None,
+    func: str | None,
+) -> bool:
+    """Return whether a record passes the given filters."""
+    if levels and str(record.get("level", "")).upper() not in levels:
+        return False
+    if components and record.get("component") not in components:
+        return False
+    if correlation_id and record.get("correlation_id") != correlation_id:
+        return False
+    if trace_id and record.get("trace_id") != trace_id:
+        return False
+    if module and module not in str(record.get("module", "")):
+        return False
+    if func and func not in str(record.get("func_name", record.get("function", ""))):
+        return False
+    if text:
+        haystack = json.dumps(record, ensure_ascii=True, default=str).lower()
+        if text.lower() not in haystack:
+            return False
+    return True
+
+
+def query_logs(
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    levels: list[str] | None = None,
+    components: list[str] | None = None,
+    text: str | None = None,
+    correlation_id: str | None = None,
+    trace_id: str | None = None,
+    module: str | None = None,
+    func: str | None = None,
+    since_id: int | None = None,
+    include_file: bool = True,
+    file_limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Filter and page the merged log records (newest last).
+
+    Args:
+        limit: Maximum records to return.
+        offset: Records to skip from the newest end (for paging).
+        levels: Allowed level names (case-insensitive).
+        components: Allowed component names.
+        text: Substring matched against the whole record.
+        correlation_id: Exact correlation id filter.
+        trace_id: Exact trace id filter.
+        module: Substring matched against the record module.
+        func: Substring matched against the record function name.
+        since_id: Only records with ``id`` greater than this value.
+        include_file: Also read the shared file tail (worker records).
+        file_limit: Trailing file lines to read; defaults to ``limit * 4``.
+
+    Returns:
+        Matching records ordered oldest-first.
+    """
+    normalized_levels = {str(lvl).upper() for lvl in levels} if levels else None
+    component_set = set(components) if components else None
+    merged = _merge_records(include_file, file_limit or max(limit * 4, 500))
+    selected = [
+        record
+        for record in merged
+        if _matches(
+            record,
+            levels=normalized_levels,
+            components=component_set,
+            text=text,
+            correlation_id=correlation_id,
+            trace_id=trace_id,
+            module=module,
+            func=func,
+        )
+        and (since_id is None or int(record.get("id") or 0) > since_id)
+    ]
+    if offset:
+        selected = selected[:-offset] if offset < len(selected) else []
+    return selected[-limit:]
+
+
+def export_logs(records: list[dict[str, Any]], fmt: str = "jsonl") -> dict[str, Any]:
+    """Write records to a timestamped export file under ``obs_export_dir``.
+
+    Args:
+        records: Records to export (already filtered).
+        fmt: ``jsonl`` (default) or ``txt`` (human-readable lines).
+
+    Returns:
+        Dict with the filename, absolute path and record count.
+    """
+    settings = _settings()
+    directory = Path(settings.obs_export_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    extension = "txt" if fmt == "txt" else "jsonl"
+    filename = f"logs-{stamp}.{extension}"
+    path = directory / filename
+    if extension == "jsonl":
+        body = "\n".join(json.dumps(r, ensure_ascii=True, default=str) for r in records)
+    else:
+        body = "\n".join(
+            f"{r.get('timestamp', '')}\t{str(r.get('level', '')).upper()}\t"
+            f"{r.get('component', '')}\t{r.get('correlation_id', '')}\t{r.get('event', '')}"
+            for r in records
+        )
+    path.write_text(body + ("\n" if body else ""), encoding="utf-8")
+    return {"filename": filename, "path": str(path), "count": len(records)}
+
+
+def file_sink_state() -> dict[str, Any]:
+    """Return whether the shared file sink is active and where it writes."""
+    settings = _settings()
+    path = ""
+    if settings.log_file_dir:
+        path = str(Path(settings.log_file_dir) / settings.log_file_name)
+    return {"enabled": _FILE_HANDLER is not None, "path": path}
+
+
+def set_file_sink_enabled(enabled: bool) -> dict[str, Any]:
+    """Enable or disable the shared JSONL file sink at runtime.
+
+    Args:
+        enabled: True to (re)create the sink, False to close it.
+
+    Returns:
+        The resulting :func:`file_sink_state`.
+    """
+    global _FILE_HANDLER
+    if enabled:
+        _configure_file_sink(_settings())
+    elif _FILE_HANDLER is not None:
+        try:
+            _FILE_HANDLER.close()
+        except Exception:
+            pass
+        _FILE_HANDLER = None
+    return file_sink_state()
+
+
+def list_components() -> list[str]:
+    """Return the known components, the registry plus any seen in the ring."""
+    with _LOCK:
+        known = set(_COMPONENT_LEVELS)
+    with _LOCK:
+        seen = {str(r.get("component")) for r in _RING_BUFFER if r.get("component")}
+    return sorted(known | seen)

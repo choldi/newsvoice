@@ -22,6 +22,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import trace
@@ -220,6 +221,53 @@ def get_inmem_spans(
     if component:
         items = [i for i in items if i.get("component") == component]
     return items[-limit:]
+
+
+def summarize_traces(limit: int = 50) -> list[dict[str, Any]]:
+    """Group recent spans into per-trace summaries, newest first.
+
+    Args:
+        limit: Maximum number of trace summaries to return.
+
+    Returns:
+        List of dicts with trace id, span count, root name, component and
+        timing.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+    for span in _INMEM_SPANS:
+        trace_id = span.get("trace_id")
+        if not trace_id:
+            continue
+        entry = grouped.setdefault(
+            trace_id,
+            {
+                "trace_id": trace_id,
+                "count": 0,
+                "start_time": span.get("start_time"),
+                "total_duration_ms": 0.0,
+                "component": span.get("component"),
+                "root_name": span.get("name"),
+            },
+        )
+        entry["count"] += 1
+        entry["total_duration_ms"] = round(
+            entry["total_duration_ms"] + (span.get("duration_ms") or 0.0), 3
+        )
+        start = span.get("start_time")
+        if start and (not entry["start_time"] or start < entry["start_time"]):
+            entry["start_time"] = start
+            entry["component"] = span.get("component")
+            entry["root_name"] = span.get("name")
+    ordered = sorted(grouped.values(), key=lambda e: e.get("start_time") or 0, reverse=True)
+    for entry in ordered:
+        start_ns = entry.get("start_time")
+        if start_ns:
+            entry["start_iso"] = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=UTC).isoformat(
+                timespec="seconds"
+            )
+        else:
+            entry["start_iso"] = ""
+    return ordered[:limit]
 
 
 def clear_spans() -> None:

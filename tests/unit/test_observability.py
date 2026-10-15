@@ -295,3 +295,115 @@ def test_logs_api_levels_endpoint() -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert json.loads(json.dumps(body))["level"] == "INFO"
+
+
+def test_set_level_rejects_unknown_level() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/logs/levels", params={"component": "c.x", "level": "NOPE"})
+    assert resp.status_code == 422
+
+
+def test_query_logs_level_and_component_filters() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    clear_ring_buffer()
+    configure_logging("api")
+    structlog.get_logger("t").info("info-line", component="api.services.alpha")
+    structlog.get_logger("t").error("error-line", component="api.services.beta")
+
+    client = TestClient(app)
+    resp = client.get(
+        "/api/logs/query",
+        params=[("component", "api.services.alpha"), ("level", "INFO")],
+    )
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert any(i.get("event") == "info-line" for i in items)
+    assert all(i.get("component") == "api.services.alpha" for i in items)
+
+
+def test_query_logs_text_filter() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    clear_ring_buffer()
+    configure_logging("api")
+    structlog.get_logger("t").info("unique-needle-event")
+
+    client = TestClient(app)
+    resp = client.get("/api/logs/query", params={"text": "unique-needle"})
+    assert resp.status_code == 200
+    assert any(i.get("event") == "unique-needle-event" for i in resp.json()["items"])
+
+
+def test_export_logs_writes_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+    from src.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "obs_export_dir", str(tmp_path))
+    clear_ring_buffer()
+    configure_logging("api")
+    structlog.get_logger("t").info("export-me")
+
+    client = TestClient(app)
+    resp = client.get("/api/logs/export", params={"fmt": "jsonl", "text": "export-me"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["count"] >= 1
+    assert (tmp_path / body["filename"]).exists()
+
+
+def test_file_sink_toggle_endpoint() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    client = TestClient(app)
+    resp = client.get("/api/logs/file")
+    assert resp.status_code == 200
+    assert "enabled" in resp.json()
+
+
+def test_traces_endpoints() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+    from src.core.tracing import clear_spans, get_tracer
+
+    clear_spans()
+    tracer = get_tracer("test.trace")
+    with tracer.start_as_current_span("root-span") as span:
+        trace_id = format(span.get_span_context().trace_id, "032x")
+
+    client = TestClient(app)
+    listing = client.get("/api/traces")
+    assert listing.status_code == 200
+    assert any(t["trace_id"] == trace_id for t in listing.json()["traces"])
+
+    detail = client.get(f"/api/traces/{trace_id}")
+    assert detail.status_code == 200
+    assert detail.json()["spans"]
+
+    missing = client.get("/api/traces/deadbeef")
+    assert missing.status_code == 404
+
+
+async def test_logs_stream_returns_event_stream() -> None:
+    from src.api.routes.logs import stream_logs
+
+    class _FakeRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    resp = await stream_logs(_FakeRequest())
+    assert resp.media_type == "text/event-stream"
