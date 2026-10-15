@@ -1,6 +1,3 @@
-from __future__ import annotations
-from src.core.tracing import trace_function
-
 """Narration rendering service: multi-speaker audio via the TTS gateway (Phase 7).
 
 The digest TTS path (:mod:`src.api.services.tts`) speaks a whole document with a
@@ -28,6 +25,7 @@ Narration audio is cached by content hash (spec + script) in
 cache, and lives outside ``tts_cache_dir`` so the two caches never collide.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -72,6 +70,7 @@ from src.core.audio import (
 )
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 

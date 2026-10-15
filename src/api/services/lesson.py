@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-from src.core.tracing import trace_function
-
 """Language-teacher lesson helpers (Phase 7.12).
 
 Turns uploaded notes into an LLM lesson (readable Markdown plus a spoken
@@ -9,6 +5,7 @@ script) and prepares it for rendering: the same ``NarrationSpec`` the rest of
 the project uses, so the class is voiced by the operator's cloned voices.
 """
 
+from __future__ import annotations
 
 import json
 import re
@@ -28,6 +25,7 @@ from src.api.services.submit import SubmitError, check_content_length, read_uplo
 from src.api.services.voice_engine import VoiceEngineError, infer_backend
 from src.core.config import get_settings
 from src.core.prompts import LESSON_USER_PROMPT_TEMPLATE, build_lesson_system_prompt
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 

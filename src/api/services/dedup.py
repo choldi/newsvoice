@@ -1,5 +1,3 @@
-from src.core.tracing import trace_function
-
 """Deduplication and URL normalization service."""
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -8,6 +6,7 @@ import structlog
 
 from src.api.db.database import ArticleRepository
 from src.api.models.article import ArticleIn
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 

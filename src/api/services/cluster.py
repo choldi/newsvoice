@@ -1,5 +1,3 @@
-from src.core.tracing import trace_function
-
 """Event clustering service using deterministic fingerprinting."""
 
 import hashlib
@@ -19,6 +17,7 @@ from src.core.prompts import (
     MATERIAL_UPDATE_SYSTEM_PROMPT,
     MATERIAL_UPDATE_USER_PROMPT_TEMPLATE,
 )
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 

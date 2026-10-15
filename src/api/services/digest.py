@@ -1,5 +1,3 @@
-from src.core.tracing import trace_function
-
 """Digest service providing business logic for daily news summarization."""
 
 import structlog
@@ -17,6 +15,7 @@ from src.core.prompts import (
     TEMPLATE_PRIORITY_RULES,
     build_digest_system_prompt,
 )
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 

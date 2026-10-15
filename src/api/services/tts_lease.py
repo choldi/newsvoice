@@ -1,6 +1,3 @@
-from __future__ import annotations
-from src.core.tracing import trace_function
-
 """Priority engine lease serializing TTS synthesis across processes (Phase 8.1).
 
 The digest TTS step and the long-document render are served by the same engines
@@ -36,6 +33,7 @@ This module is imported from activities and services only — never from a
 workflow, which must not do I/O.
 """
 
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -49,6 +47,7 @@ import structlog
 
 from src.api.db.database import get_db
 from src.core.config import get_settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 

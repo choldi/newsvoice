@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-from src.core.tracing import trace_function
-
 """Long-form document TTS (Phase 7.11): chunk, synthesize, join into one MP3.
 
 The digest TTS truncates to ``tts_max_chars`` because a digest is bounded; a
@@ -19,6 +15,7 @@ digest's lease-waiter row (see :mod:`src.api.services.tts_lease`), never a
 clock, so a paused or disabled collection never pauses a book for nothing.
 """
 
+from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -41,6 +38,7 @@ from src.api.services.tts import estimate_duration_seconds, resolve_edge_voice, 
 from src.api.services.tts_estimate import SynthesisEstimate, estimate_synthesis
 from src.api.services.tts_lease import RenderGate
 from src.core.config import get_settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
