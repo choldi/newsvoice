@@ -466,7 +466,7 @@ so there is no spend.
    ```
 3. Opt a collection into a Modal backend in `collections.toml`:
    ```toml
-   narration_tts_backend = "qwen3_tts"   # or "zonos2" once the gate passes
+   narration_tts_backend = "qwen3_tts"   # or "zonos2"/"voxcpm2" once the gate passes
    narration_voice_source = "qwen_design"
    ```
 
@@ -844,7 +844,7 @@ the same time.
 ```toml
 [[collections]]
 name = "ai"
-tts_backend = "omni_voice"   # edge | omni_voice | qwen3_tts | zonos2
+tts_backend = "omni_voice"   # edge | omni_voice | qwen3_tts | zonos2 | voxcpm2
 voice = "es-mx-male"         # id in THAT engine's vocabulary
 ```
 

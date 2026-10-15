@@ -310,6 +310,26 @@ async def test_render_activity_raises_when_zonos2_disabled(
     assert excinfo.value.non_retryable is True
 
 
+async def test_render_activity_raises_when_voxcpm2_disabled(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    monkeypatch.setattr(narration_activities.settings, "modal_enabled", True)
+    monkeypatch.setattr(narration_activities.settings, "voxcpm2_enabled", False)
+    _patch_service(monkeypatch, _FakeService(RENDER_RESULT))
+    payload = {
+        "run_id": "r",
+        "collection": "tech",
+        "spec": _modal_spec(tts_backend="voxcpm2"),
+        "script": SCRIPT,
+    }
+
+    with pytest.raises(ApplicationError, match="benchmark gate") as excinfo:
+        await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
 async def test_render_activity_allows_a_cache_hit(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

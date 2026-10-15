@@ -85,7 +85,7 @@ def _wav(frames: int = 4800, fmt: object = CANONICAL_FORMAT) -> bytes:
 
 def _spec(**overrides: object) -> NarrationSpec:
     """Build a two-role spec; Modal backends get catalog voices (Phase 9.2)."""
-    modal = str(overrides.get("tts_backend", "")) in {"qwen3_tts", "zonos2"}
+    modal = str(overrides.get("tts_backend", "")) in {"qwen3_tts", "zonos2", "voxcpm2"}
     anchor, guest = (
         ("anchor_neutral_m", "anchor_neutral_f") if modal else ("es-mx-male", "es-mx-female")
     )
@@ -1088,6 +1088,62 @@ async def test_render_skips_atempo_for_zonos2(
     await service.render(spec, script)
 
     assert not [c for c in ffmpeg_calls if any("atempo" in part for part in c)]
+    await service.aclose()
+
+
+async def test_synthesize_turn_dispatches_to_voxcpm2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_voxcpm2(**kwargs: object) -> bytes:
+        assert kwargs["voice_ref"] == "anchor_neutral_m"
+        return _wav(frames=2400)
+
+    monkeypatch.setattr("src.core.modal_client.modal_voxcpm2_tts", fake_voxcpm2)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Hola", "anchor_neutral_m", "es", backend=TTSBackend.VOXCPM2
+    )
+
+    assert used_edge is False
+    assert wav_format(audio).framerate == CANONICAL_RATE
+    await service.aclose()
+
+
+async def test_post_modal_tts_wraps_voxcpm2_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def failing_voxcpm2(**kwargs: object) -> bytes:
+        raise RuntimeError("voxcpm2 down")
+
+    monkeypatch.setattr("src.core.modal_client.modal_voxcpm2_tts", failing_voxcpm2)
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+
+    with pytest.raises(NarrationGatewayError, match="modal tts call failed"):
+        await service.synthesize_turn("Hola", "anchor", "es", backend=TTSBackend.VOXCPM2)
+    await service.aclose()
+
+
+async def test_render_applies_atempo_for_voxcpm2_with_speed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_voxcpm2(**kwargs: object) -> bytes:
+        return _wav(frames=2400)
+
+    ffmpeg_calls: list[list[str]] = []
+    monkeypatch.setattr("src.core.modal_client.modal_voxcpm2_tts", fake_voxcpm2)
+    monkeypatch.setattr(subprocess, "run", fake_ffmpeg_run(_wav(frames=2400), calls=ffmpeg_calls))
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=_wav()))
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec(tts_backend=TTSBackend.VOXCPM2)
+    script = _script(spec)
+
+    await service.render(spec, script)
+
+    atempo_calls = [c for c in ffmpeg_calls if any("atempo" in part for part in c)]
+    assert len(atempo_calls) == 1
+    assert any("atempo=1.1" in part for part in atempo_calls[0])
     await service.aclose()
 
 

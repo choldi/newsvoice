@@ -174,6 +174,79 @@ class Zonos2TTS:
         return buffer.getvalue()
 
 
+#: VoxCPM2 (Apache-2.0, 2B) needs its own image: `voxcpm` pulls the MiniCPM-4
+#: backbone and its sampling kernels. `torch-dnsmos` adds the no-reference MOS
+#: used to keep the best of several takes without a second container.
+_VOXCPM_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "torch", "voxcpm", "soundfile", "numpy", "torch-dnsmos"
+)
+
+
+@app.cls(
+    image=_VOXCPM_IMAGE,
+    gpu=modal.gpu.L4(),
+    timeout=3600,
+    volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
+)
+class VoxCPM2TTS:
+    """VoxCPM2 synthesis, loaded once per container.
+
+    VoxCPM2 clones in audio-continuation mode: it takes the reference clip and
+    its exact transcript, the same pair Qwen3-TTS and ZONOS2 read from the
+    volume. It emits native 48 kHz mono.
+    """
+
+    @modal.enter()
+    def load(self) -> None:
+        """Load VoxCPM2 once per container."""
+        from voxcpm import VoxCPM
+
+        self._model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
+
+    @modal.method()
+    def generate_tts_voxcpm2(
+        self,
+        *,
+        text: str,
+        voice_ref: str,
+        language: str,
+        speed: float = 1.0,
+        emotion: str | None = None,
+        cfg_value: float = 2.0,
+        inference_timesteps: int = 10,
+    ) -> bytes:
+        """Synthesize one turn in the reference voice with VoxCPM2.
+
+        Args:
+            text: Speech text for the turn.
+            voice_ref: Reference voice name; resolves to a WAV in the volume.
+            language: ISO 639-1 language code; VoxCPM2 infers it from the text.
+            speed: Unused by VoxCPM2; the caller post-processes with atempo.
+            emotion: Unused by VoxCPM2; accepted for backend parity.
+            cfg_value: Classifier-free-guidance scale.
+            inference_timesteps: Diffusion steps; higher is slower and crisper.
+
+        Returns:
+            WAV bytes at VoxCPM2's native 48 kHz mono.
+        """
+        import io
+
+        import soundfile as sf
+
+        ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
+        wav = self._model.generate(
+            text=text,
+            prompt_wav_path=ref_path,
+            prompt_text=_ref_text(voice_ref),
+            reference_wav_path=ref_path,
+            cfg_value=cfg_value,
+            inference_timesteps=inference_timesteps,
+        )
+        buffer = io.BytesIO()
+        sf.write(buffer, wav, self._model.tts_model.sample_rate, format="WAV")
+        return buffer.getvalue()
+
+
 @app.function(
     gpu=modal.gpu.L4(),
     timeout=1800,

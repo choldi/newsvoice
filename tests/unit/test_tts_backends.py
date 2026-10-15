@@ -29,11 +29,12 @@ from src.api.services.tts_backends import (
 
 
 def test_resolve_backend_accepts_every_documented_name() -> None:
-    """The four engines and their aliases land on the same enum."""
+    """The five engines and their aliases land on the same enum."""
     assert resolve_backend("edge") is TTSBackend.EDGE
     assert resolve_backend("omni_voice") is TTSBackend.OMNIVOICE
     assert resolve_backend("qwen3_tts") is TTSBackend.QWEN3_TTS
     assert resolve_backend("zonos2") is TTSBackend.ZONOS2
+    assert resolve_backend("voxcpm2") is TTSBackend.VOXCPM2
 
 
 def test_resolve_backend_maps_operator_spellings() -> None:
@@ -42,6 +43,7 @@ def test_resolve_backend_maps_operator_spellings() -> None:
     assert resolve_backend("tts_api") is TTSBackend.OMNIVOICE
     assert resolve_backend("OmniVoice") is TTSBackend.OMNIVOICE
     assert resolve_backend("edgetts") is TTSBackend.EDGE
+    assert resolve_backend("voxcpm") is TTSBackend.VOXCPM2
 
 
 def test_resolve_backend_empty_uses_the_configured_default(
@@ -74,12 +76,14 @@ def test_ext_for_follows_the_engine() -> None:
     assert ext_for(TTSBackend.OMNIVOICE) == ".wav"
     assert ext_for(TTSBackend.QWEN3_TTS) == ".wav"
     assert ext_for(TTSBackend.ZONOS2) == ".wav"
+    assert ext_for(TTSBackend.VOXCPM2) == ".wav"
 
 
 def test_is_modal_classifies_the_paid_engines() -> None:
     """Only the Modal engines cost money, so only they are gated by the budget."""
     assert is_modal(TTSBackend.QWEN3_TTS) is True
     assert is_modal(TTSBackend.ZONOS2) is True
+    assert is_modal(TTSBackend.VOXCPM2) is True
     assert is_modal(TTSBackend.EDGE) is False
     assert is_modal(TTSBackend.OMNIVOICE) is False
 
@@ -279,6 +283,15 @@ async def test_synthesize_modal_requires_the_kill_switch(monkeypatch) -> None:
 
     with pytest.raises(TTSBackendError, match="modal is disabled"):
         await synthesize(TTSBackend.QWEN3_TTS, "hola", "voice", "es")
+
+
+async def test_synthesize_voxcpm2_requires_the_gate(monkeypatch) -> None:
+    """VoxCPM2 stays inert until its gate is flipped, like ZONOS2."""
+    monkeypatch.setattr(tts_backends.get_settings(), "modal_enabled", True)
+    monkeypatch.setattr(tts_backends.get_settings(), "voxcpm2_enabled", False)
+
+    with pytest.raises(TTSBackendError, match="voxcpm2 is behind the benchmark gate"):
+        await synthesize(TTSBackend.VOXCPM2, "hola", "voice", "es")
 
 
 async def test_gateway_tts_posts_the_documented_payload() -> None:

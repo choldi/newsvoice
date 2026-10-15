@@ -292,7 +292,7 @@ class Settings(BaseSettings):
     # Engine a collection inherits when it declares no `tts_backend`. Collections
     # override it per entry in collections.toml; this only sets the floor.
     # 'edge' (client-side edge-tts) | 'omni_voice' (tts-api gateway) |
-    # 'qwen3_tts' | 'zonos2' (both on Modal, see modal_enabled).
+    # 'qwen3_tts' | 'zonos2' | 'voxcpm2' (all on Modal, see modal_enabled).
     tts_default_backend: str = "edge"
     # Degrade to edge when the gateway or Modal fails. Off by default: a clone
     # or a designed voice silently replaced by a stock Edge voice is a product
@@ -411,6 +411,9 @@ class Settings(BaseSettings):
     # Gate for the ZONOS2 backend. ZONOS2 is implemented but inactive until
     # scripts/benchmark_zonos.py passes every criterion with a real voice.
     zonos2_enabled: bool = False
+    # Gate for the VoxCPM2 backend (Apache-2.0, 2B, 48 kHz). Implemented but
+    # inactive until a benchmark confirms quality on a real reference voice.
+    voxcpm2_enabled: bool = False
     modal_app_name: str = "news-engine"
     modal_token_id: str = ""
     modal_token_secret: str = ""
@@ -435,6 +438,14 @@ class Settings(BaseSettings):
     # flash-attn, which keeps the worker off the CUDA runtime.
     qwen_tts_device: str = "cuda:0"
     qwen_tts_attn_implementation: str = "sdpa"
+    # VoxCPM2 runs in its own Modal image (Python 3.12, voxcpm). It clones in
+    # audio-continuation mode, so it reuses the catalog reference plus its
+    # transcript for the highest sample similarity, and emits native 48 kHz.
+    voxcpm2_model: str = "openbmb/VoxCPM2"
+    # Classifier-free-guidance scale and diffusion steps: the values the model
+    # card recommends for natural, artifact-free speech.
+    voxcpm2_cfg_value: float = Field(default=2.0, gt=0.0, le=10.0)
+    voxcpm2_inference_timesteps: int = Field(default=10, ge=1, le=100)
     # Audible AI disclosure (EU AI Act Art. 50(4)). Empty text disables it even
     # when the collection flag is on, which is the escape hatch if a legal
     # review concludes the duty does not apply.

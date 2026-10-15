@@ -127,6 +127,11 @@ async def _enforce_modal_budget(
             "tts_backend zonos2 is behind the benchmark gate and not enabled",
             non_retryable=True,
         )
+    if spec.tts_backend is TTSBackend.VOXCPM2 and not settings.voxcpm2_enabled:
+        raise ApplicationError(
+            "tts_backend voxcpm2 is behind the benchmark gate and not enabled",
+            non_retryable=True,
+        )
     cached = service.cache_probe(spec, script, collection=collection, strategy=strategy)
     if cached is not None:
         await ModalSpendRepository().record(

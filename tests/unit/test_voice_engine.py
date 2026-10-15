@@ -46,8 +46,8 @@ def test_clone_uuid_is_gateway_only() -> None:
     assert engines_for_voice(uuid) == {"omni_voice"}
 
 
-def test_modal_catalog_names_select_both_modal_engines(modal_catalog: None) -> None:
-    assert engines_for_voice(MODAL_NAME) == {"qwen3_tts", "zonos2"}
+def test_modal_catalog_names_select_all_modal_engines(modal_catalog: None) -> None:
+    assert engines_for_voice(MODAL_NAME) == {"qwen3_tts", "zonos2", "voxcpm2"}
 
 
 def test_unknown_and_empty_voices_are_wildcards() -> None:

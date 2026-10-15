@@ -554,11 +554,19 @@ class NarrationTTSService:
             NarrationGatewayError: When Modal is disabled, unconfigured, or the
                 call fails.
         """
-        from src.core.modal_client import modal_tts, modal_zonos2_tts
+        from src.core.modal_client import modal_tts, modal_voxcpm2_tts, modal_zonos2_tts
 
         try:
             if backend is TTSBackend.ZONOS2:
                 return await modal_zonos2_tts(
+                    text=text,
+                    voice_ref=voice_ref,
+                    language=language,
+                    speed=speed,
+                    emotion=emotion,
+                )
+            if backend is TTSBackend.VOXCPM2:
+                return await modal_voxcpm2_tts(
                     text=text,
                     voice_ref=voice_ref,
                     language=language,
@@ -1230,7 +1238,7 @@ class NarrationTTSService:
                 )
                 fallbacks += int(used_edge)
                 audio = await self._to_canonical(audio)
-                if spec.tts_backend is TTSBackend.QWEN3_TTS and speed != 1.0:
+                if spec.tts_backend in (TTSBackend.QWEN3_TTS, TTSBackend.VOXCPM2) and speed != 1.0:
                     audio = await self._apply_atempo(audio, speed)
                 parts.append((audio, 0))
             pause_ms = (

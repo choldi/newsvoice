@@ -559,6 +559,7 @@ TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("omni_voice", "tts-api gateway"),
     ("qwen3_tts", "Qwen3-TTS (Modal)"),
     ("zonos2", "ZONOS2 (Modal)"),
+    ("voxcpm2", "VoxCPM2 (Modal)"),
 )
 
 
@@ -649,7 +650,7 @@ async def _tts_voice_options(backend: str) -> dict:
     """
     if backend == "edge":
         return await _edge_voice_options()
-    if backend in ("qwen3_tts", "zonos2"):
+    if backend in ("qwen3_tts", "zonos2", "voxcpm2"):
         return _modal_voice_options()
     gateway = await _omni_options()
     return {
@@ -1204,6 +1205,7 @@ ENGINE_FILTERS: tuple[tuple[str, str], ...] = (
     ("omni_voice", "tts-api gateway"),
     ("qwen3_tts", "qwen3_tts"),
     ("zonos2", "zonos2"),
+    ("voxcpm2", "voxcpm2"),
 )
 
 

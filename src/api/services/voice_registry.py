@@ -30,8 +30,12 @@ logger = structlog.get_logger(__name__)
 CATEGORY_ORDER: tuple[str, ...] = ("stock", "cloned", "generated")
 _CATEGORY_RANK = {name: index for index, name in enumerate(CATEGORY_ORDER)}
 
-#: Engines of the Modal catalog: one reference WAV serves both backends.
-MODAL_ENGINES: tuple[str, ...] = (TTSBackend.QWEN3_TTS.value, TTSBackend.ZONOS2.value)
+#: Engines of the Modal catalog: one reference WAV serves every Modal backend.
+MODAL_ENGINES: tuple[str, ...] = (
+    TTSBackend.QWEN3_TTS.value,
+    TTSBackend.ZONOS2.value,
+    TTSBackend.VOXCPM2.value,
+)
 
 
 def _dedupe(voices: list[VoiceOption]) -> list[VoiceOption]:

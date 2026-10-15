@@ -55,6 +55,7 @@ _BACKEND_PREFERENCE: tuple[TTSBackend, ...] = (
     TTSBackend.EDGE,
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
+    TTSBackend.VOXCPM2,
 )
 
 
@@ -112,7 +113,7 @@ def engines_for_voice(voice: str) -> set[str]:
     if _CLONE_UUID.match(name):
         engines.add(str(TTSBackend.OMNIVOICE))
     if name in _modal_names():
-        engines.update((str(TTSBackend.QWEN3_TTS), str(TTSBackend.ZONOS2)))
+        engines.update((str(TTSBackend.QWEN3_TTS), str(TTSBackend.ZONOS2), str(TTSBackend.VOXCPM2)))
     return engines
 
 

@@ -12,8 +12,9 @@ backend      call                                         output
 ===========  ==========================================  ========
 edge         ``edge_tts.Communicate`` (local process)     ``.mp3``
 omni_voice   ``POST {tts_api_base_url}/tts`` (tts-api)    ``.wav``
-qwen3_tts /  ``modal_client.modal_tts()`` / ``_zonos2``   ``.wav``
-zonos2
+qwen3_tts /  ``modal_client.modal_tts()`` / ``_zonos2`` ``.wav``
+zonos2 /     / ``_voxcpm2``
+voxcpm2
 ===========  ==========================================  ========
 
 Downstream steps are format-agnostic: ``AudioCompressService`` feeds whatever
@@ -54,6 +55,8 @@ BACKEND_ALIASES: dict[str, str] = {
     "qwen3_tts": TTSBackend.QWEN3_TTS,
     "qwen3": TTSBackend.QWEN3_TTS,
     "zonos2": TTSBackend.ZONOS2,
+    "voxcpm2": TTSBackend.VOXCPM2,
+    "voxcpm": TTSBackend.VOXCPM2,
 }
 
 #: Every value a collection may declare for ``tts_backend``.
@@ -62,6 +65,7 @@ ALLOWED_BACKENDS: tuple[str, ...] = (
     TTSBackend.OMNIVOICE,
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
+    TTSBackend.VOXCPM2,
 )
 
 #: Edge ShortName -> gateway stock id. Inverse of ``tts.LEGACY_VOICE_ALIASES``,
@@ -169,9 +173,9 @@ def is_modal(backend: TTSBackend) -> bool:
         backend: Engine to classify.
 
     Returns:
-        True for qwen3_tts and zonos2.
+        True for qwen3_tts, zonos2 and voxcpm2.
     """
-    return backend in (TTSBackend.QWEN3_TTS, TTSBackend.ZONOS2)
+    return backend in (TTSBackend.QWEN3_TTS, TTSBackend.ZONOS2, TTSBackend.VOXCPM2)
 
 
 def wall_seconds_for(backend: TTSBackend, char_count: float) -> float:
@@ -511,7 +515,7 @@ async def _modal_synthesize(backend: TTSBackend, text: str, voice_ref: str, lang
     """Synthesize through Modal, enforcing the Phase 7.8 guards first.
 
     Args:
-        backend: qwen3_tts or zonos2.
+        backend: qwen3_tts, zonos2 or voxcpm2.
         text: Speech-ready plain text.
         voice_ref: Reference voice name from the catalog.
         language: ISO 639-1 language code.
@@ -520,22 +524,26 @@ async def _modal_synthesize(backend: TTSBackend, text: str, voice_ref: str, lang
         The WAV payload returned by Modal.
 
     Raises:
-        TTSBackendError: When Modal is off, zonos2 is gated, credentials are
-            missing or the call fails.
+        TTSBackendError: When Modal is off, zonos2/voxcpm2 is gated,
+            credentials are missing or the call fails.
     """
     settings = get_settings()
     if not settings.modal_enabled:
         raise TTSBackendError(f"tts backend {backend} requires modal, but modal is disabled")
     if backend is TTSBackend.ZONOS2 and not settings.zonos2_enabled:
         raise TTSBackendError("tts backend zonos2 is behind the benchmark gate and not enabled")
+    if backend is TTSBackend.VOXCPM2 and not settings.voxcpm2_enabled:
+        raise TTSBackendError("tts backend voxcpm2 is behind the benchmark gate and not enabled")
     if not settings.modal_token_id or not settings.modal_token_secret:
         raise TTSBackendError("modal credentials are not configured")
 
-    from src.core.modal_client import modal_tts, modal_zonos2_tts
+    from src.core.modal_client import modal_tts, modal_voxcpm2_tts, modal_zonos2_tts
 
     try:
         if backend is TTSBackend.ZONOS2:
             return await modal_zonos2_tts(text=text, voice_ref=voice_ref, language=language)
+        if backend is TTSBackend.VOXCPM2:
+            return await modal_voxcpm2_tts(text=text, voice_ref=voice_ref, language=language)
         return await modal_tts(text=text, voice_ref=voice_ref, language=language)
     except Exception as exc:  # noqa: BLE001 - re-raised as a typed backend error
         raise TTSBackendError(f"modal tts call failed: {exc}") from exc

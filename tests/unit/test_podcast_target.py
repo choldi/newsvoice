@@ -45,6 +45,13 @@ def test_zonos2_is_also_modal() -> None:
     assert podcast_target(spec.model_dump()).modal is True
 
 
+def test_voxcpm2_is_also_modal() -> None:
+    """VoxCPM2 renders on Modal too, so it must not land on the local side."""
+    spec = LOCAL_SPEC.model_copy(update={"tts_backend": TTSBackend.VOXCPM2})
+
+    assert podcast_target(spec.model_dump()).modal is True
+
+
 def test_a_missing_spec_renders_locally() -> None:
     """No spec means no Modal backend, so the local side is the safe default."""
     for spec in (None, {}, {"roles": []}):

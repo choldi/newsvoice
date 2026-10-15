@@ -132,8 +132,8 @@ def test_lesson_options_tag_engines_and_categories() -> None:
         EDGE_VOICE.id: "edge · stock",
         GATEWAY_STOCK: "omni_voice · stock",
         CLONE_UUID: "omni_voice · cloned",
-        MODAL_COMMITTED: "qwen3_tts/zonos2 · stock",
-        MODAL_CUSTOM: "qwen3_tts/zonos2 · generated",
+        MODAL_COMMITTED: "qwen3_tts/zonos2/voxcpm2 · stock",
+        MODAL_CUSTOM: "qwen3_tts/zonos2/voxcpm2 · generated",
     }
     client = _client()
     for voice, tag in expected.items():

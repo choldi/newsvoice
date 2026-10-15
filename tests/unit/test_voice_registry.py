@@ -108,7 +108,7 @@ def test_modal_options_separates_stock_and_generated(
     by_id = {voice.id: voice for voice in voices}
     assert by_id["anchor_m"].category == "stock"
     assert by_id["custom_es"].category == "generated"
-    assert by_id["custom_es"].engines == ["qwen3_tts", "zonos2"]
+    assert by_id["custom_es"].engines == ["qwen3_tts", "zonos2", "voxcpm2"]
 
 
 async def test_list_all_merges_sources_and_dedupes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,7 +155,7 @@ async def test_list_all_keeps_catalog_origin_over_gateway_clone(
             _option(
                 "anchor_neutral_m",
                 language="en",
-                engines=["qwen3_tts", "zonos2"],
+                engines=["qwen3_tts", "zonos2", "voxcpm2"],
                 category="stock",
             )
         ]
@@ -167,7 +167,7 @@ async def test_list_all_keeps_catalog_origin_over_gateway_clone(
     stock = await voice_registry.list_all_voices(engine="zonos2", category="stock")
 
     assert [voice.id for voice in stock] == ["anchor_neutral_m"]
-    assert sorted(stock[0].engines) == ["omni_voice", "qwen3_tts", "zonos2"]
+    assert sorted(stock[0].engines) == ["omni_voice", "qwen3_tts", "voxcpm2", "zonos2"]
 
 
 async def test_list_all_filters_by_engine_and_category(

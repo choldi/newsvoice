@@ -55,10 +55,9 @@ class VoiceProfile(BaseModel):
         label: Human-readable name for the admin GUI.
         language: ISO 639-1 code the voice speaks.
         instruct: Natural-language persona description for VoiceDesign.
-        ref_segments: Reference text spoken in order, each with a short silence
-            after it. Splitting the ~25 s reference in two keeps every
-            generation call short while landing inside the 10-30 s window
-            ZONOS2 needs to clone.
+        ref_segments: Reference text spoken in order, joined into one clip.
+            Keeping the whole reference inside the 10-30 s window is what the
+            Modal clone backends (Qwen3-TTS, ZONOS2, VoxCPM2) need.
         ref_text: Exact transcript of the sample as a whole. Derived from
             ``ref_segments`` and asserted equal to them, because the clone is
             conditioned on exactly what the voice reads.
@@ -184,7 +183,7 @@ class VoiceOption(BaseModel):
         label: Human-readable name shown in the dropdown.
         language: Language code in the engine's own vocabulary ('es', 'es-ES').
         engines: Engines that accept this id. A Modal catalog voice serves
-            both qwen3_tts and zonos2; an edge/gateway alias id serves both.
+            qwen3_tts, zonos2 and voxcpm2; an edge/gateway alias id serves both.
         category: 'stock' (shipped by an engine), 'cloned' (gateway clone) or
             'generated' (custom voice created from the GUI).
     """

@@ -46,6 +46,7 @@ SAMPLE_TIMEOUT_SECONDS = 30.0
 _PREFERENCE: tuple[TTSBackend, ...] = (
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
+    TTSBackend.VOXCPM2,
     TTSBackend.OMNIVOICE,
     TTSBackend.EDGE,
 )

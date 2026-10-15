@@ -79,6 +79,7 @@ asked for** (`tts_backend`, resolved outside the workflow by
 | `omni_voice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
 | `qwen3_tts` | local gateway `engine=qwen3_tts` (default) or `modal_client.modal_tts()` when `run_in_modal` | `.wav` |
 | `zonos2` | `modal_client.modal_zonos2_tts()` | `.wav` |
+| `voxcpm2` | `modal_client.modal_voxcpm2_tts()` (48 kHz, Apache-2.0) | `.wav` |
 
 `qwen3_tts` runs locally on the gateway unless `run_in_modal` is set (Phase 10).
 The local engine has **no stock voices**, so a catalog profile name (committed

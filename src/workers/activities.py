@@ -528,7 +528,7 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     Args:
         digest: Dict containing the digest text under the 'digest' key, optional
             'language'/'voice' overrides for this podcast, optional 'backend'
-            (edge | omni_voice | qwen3_tts | zonos2), plus 'run_id' and
+            (edge | omni_voice | qwen3_tts | zonos2 | voxcpm2), plus 'run_id' and
             'collection' used to key the audio job status.
 
     Returns:

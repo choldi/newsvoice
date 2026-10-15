@@ -166,7 +166,7 @@
 
 - One vocabulary for engines across the project: `TTSBackend`
   (`src/api/models/narration.py`) = `edge` | `omni_voice` (the rebranded
-  `tts-api` gateway) | `qwen3_tts` | `zonos2`. `TTSBackend.EDGE` was added in
+  `tts-api` gateway) | `qwen3_tts` | `zonos2` | `voxcpm2` (gated). `TTSBackend.EDGE` was added in
   Phase 8; `podcast_target` must map it to the **local** namespace/queue, never
   to Modal.
 - The digest engine is a per-collection choice (`tts_backend` in

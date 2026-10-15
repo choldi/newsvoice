@@ -85,7 +85,7 @@ def test_voices_all_returns_tagged_options() -> None:
     assert by_id["es-mx-male"]["category"] == "stock"
     assert by_id["uuid-1"]["category"] == "cloned"
     assert by_id["anchor_m"]["category"] == "stock"
-    assert by_id["anchor_m"]["engines"] == ["qwen3_tts", "zonos2"]
+    assert by_id["anchor_m"]["engines"] == ["qwen3_tts", "zonos2", "voxcpm2"]
     assert by_id["custom_es"]["category"] == "generated"
 
 

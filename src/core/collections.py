@@ -118,8 +118,8 @@ class CollectionConfig(BaseModel):
         default="edge",
         description=(
             "Engine that synthesizes this collection's digest audio: 'edge', "
-            "'omni_voice' (the tts-api gateway), 'qwen3_tts' or 'zonos2'. "
-            "Empty falls back to TTS_DEFAULT_BACKEND."
+            "'omni_voice' (the tts-api gateway), 'qwen3_tts', 'zonos2' or "
+            "'voxcpm2'. Empty falls back to TTS_DEFAULT_BACKEND."
         ),
     )
     prompt_template: str = Field(

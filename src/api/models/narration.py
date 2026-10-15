@@ -42,12 +42,17 @@ class TTSBackend(StrEnum):
         QWEN3_TTS: Qwen3-TTS on Modal. Synthetic voices from the catalog; no
             emotion or speed control (speed is post-processed with atempo).
         ZONOS2: ZONOS2 on Modal. Adds native speed and emotion control.
+        VOXCPM2: VoxCPM2 on Modal (Apache-2.0, 2B, 48 kHz). Clones the catalog
+            voice in audio-continuation mode and keeps the best of several
+            takes by a no-reference MOS; no native speed or emotion control
+            (speed is post-processed with atempo).
     """
 
     EDGE = "edge"
     OMNIVOICE = "omni_voice"
     QWEN3_TTS = "qwen3_tts"
     ZONOS2 = "zonos2"
+    VOXCPM2 = "voxcpm2"
 
 
 class SpeakerRole(BaseModel):

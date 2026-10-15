@@ -26,8 +26,9 @@
 #   email and WhatsApp deliveries (when those channels are active).
 # - `tts_backend` picks the engine that synthesizes this collection's audio
 #   (Phase 8): "edge" (client-side edge-tts, default), "omni_voice" (the
-#   tts-api gateway on TTS_API_BASE_URL), "qwen3_tts" or "zonos2" (Modal, needs
-#   MODAL_ENABLED). Empty inherits TTS_DEFAULT_BACKEND. `voice` is then read in
+#   tts-api gateway on TTS_API_BASE_URL), "qwen3_tts", "zonos2" or "voxcpm2"
+#   (Modal, needs MODAL_ENABLED). Empty inherits TTS_DEFAULT_BACKEND. `voice`
+#   is then read in
 #   that engine's own vocabulary: an Edge ShortName, a tts-api stock id or clone
 #   UUID, or a voice_profiles.json name — the /ui form offers the right list for
 #   the engine you pick, and an Edge ShortName left over from another engine
