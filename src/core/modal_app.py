@@ -198,10 +198,47 @@ class VoxCPM2TTS:
 
     @modal.enter()
     def load(self) -> None:
-        """Load VoxCPM2 once per container."""
+        """Load VoxCPM2 and the DNSMOS scorer once per container."""
+        import torch_dnsmos
         from voxcpm import VoxCPM
 
         self._model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
+        # P.835 SIG/BAK/OVRL; OVRL is the single figure used to rank takes.
+        self._mos = torch_dnsmos.load("sig_bak_ovr")
+
+    def _mos_score(self, wav: object, sample_rate: int) -> float | None:
+        """Rank one take with the no-reference DNSMOS P.835 overall score.
+
+        The take is resampled to the 16 kHz DNSMOS expects with a plain
+        linear interpolation: the takes share a speaker and a text, so only
+        their relative order matters and any dependency-free resampler works.
+
+        Args:
+            wav: One take as a float array of samples.
+            sample_rate: Sample rate of the take.
+
+        Returns:
+            The overall MOS, or None when the take could not be scored.
+        """
+        import numpy as np
+        import torch
+
+        try:
+            waveform = torch.from_numpy(np.asarray(wav, dtype=np.float32)).flatten()
+            if sample_rate != 16000:
+                length = int(round(waveform.shape[-1] * 16000 / sample_rate))
+                if length < 1:
+                    return None
+                waveform = torch.nn.functional.interpolate(
+                    waveform[None, None], size=length, mode="linear", align_corners=False
+                )[0, 0]
+            prediction = self._mos.predict(waveform, sample_rate=16000)
+            scores = prediction.get("scores") if isinstance(prediction, dict) else None
+            if isinstance(scores, dict) and "OVRL" in scores:
+                return float(scores["OVRL"])
+            return None
+        except Exception:
+            return None
 
     @modal.method()
     def generate_tts_voxcpm2(
@@ -214,6 +251,7 @@ class VoxCPM2TTS:
         emotion: str | None = None,
         cfg_value: float = 2.0,
         inference_timesteps: int = 10,
+        num_candidates: int = 1,
     ) -> bytes:
         """Synthesize one turn in the reference voice with VoxCPM2.
 
@@ -225,25 +263,42 @@ class VoxCPM2TTS:
             emotion: Unused by VoxCPM2; accepted for backend parity.
             cfg_value: Classifier-free-guidance scale.
             inference_timesteps: Diffusion steps; higher is slower and crisper.
+            num_candidates: Takes to synthesize before DNSMOS picks the best.
 
         Returns:
-            WAV bytes at VoxCPM2's native 48 kHz mono.
+            WAV bytes at VoxCPM2's native 48 kHz mono. When several takes are
+            requested, the one with the highest no-reference DNSMOS overall
+            score is returned.
         """
         import io
 
         import soundfile as sf
 
         ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
-        wav = self._model.generate(
-            text=text,
-            prompt_wav_path=ref_path,
-            prompt_text=_ref_text(voice_ref),
-            reference_wav_path=ref_path,
-            cfg_value=cfg_value,
-            inference_timesteps=inference_timesteps,
-        )
+        sample_rate = self._model.tts_model.sample_rate
+        takes = [
+            self._model.generate(
+                text=text,
+                prompt_wav_path=ref_path,
+                prompt_text=_ref_text(voice_ref),
+                reference_wav_path=ref_path,
+                cfg_value=cfg_value,
+                inference_timesteps=inference_timesteps,
+            )
+            for _ in range(max(1, num_candidates))
+        ]
+        wav = takes[0]
+        if len(takes) > 1:
+
+            def _rank(index: int) -> tuple[bool, float]:
+                """Prefer a scored take; an unscoreable one ranks last."""
+                score = self._mos_score(takes[index], sample_rate)
+                return (score is not None, score if score is not None else 0.0)
+
+            wav = takes[max(range(len(takes)), key=_rank)]
+
         buffer = io.BytesIO()
-        sf.write(buffer, wav, self._model.tts_model.sample_rate, format="WAV")
+        sf.write(buffer, wav, sample_rate, format="WAV")
         return buffer.getvalue()
 
 

@@ -446,6 +446,9 @@ class Settings(BaseSettings):
     # card recommends for natural, artifact-free speech.
     voxcpm2_cfg_value: float = Field(default=2.0, gt=0.0, le=10.0)
     voxcpm2_inference_timesteps: int = Field(default=10, ge=1, le=100)
+    # How many takes to synthesize per turn; a no-reference DNSMOS (P.835 OVRL)
+    # score ranks them and the best is kept. 1 disables scoring entirely.
+    voxcpm2_candidates: int = Field(default=3, ge=1, le=8)
     # Audible AI disclosure (EU AI Act Art. 50(4)). Empty text disables it even
     # when the collection flag is on, which is the escape hatch if a legal
     # review concludes the duty does not apply.

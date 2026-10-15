@@ -60,6 +60,25 @@ def test_narration_base_url_rejects_own_api_port() -> None:
         )
 
 
+def test_voxcpm2_settings_default_to_a_gated_best_of_three() -> None:
+    """VoxCPM2 ships off, on the model card's sampling, keeping 3 takes."""
+    settings = Settings()
+
+    assert settings.voxcpm2_enabled is False
+    assert settings.voxcpm2_model == "openbmb/VoxCPM2"
+    assert settings.voxcpm2_cfg_value == 2.0
+    assert settings.voxcpm2_inference_timesteps == 10
+    assert settings.voxcpm2_candidates == 3
+
+
+def test_voxcpm2_candidates_is_bounded() -> None:
+    """An absurd take count is rejected instead of multiplying the spend."""
+    with pytest.raises(ValidationError, match="voxcpm2_candidates"):
+        Settings(voxcpm2_candidates=0)
+    with pytest.raises(ValidationError, match="voxcpm2_candidates"):
+        Settings(voxcpm2_candidates=99)
+
+
 def test_narration_base_url_allows_shared_port_when_tts_also_there() -> None:
     """A shared port is legitimate when TTS and narration use the same host:port."""
     settings = Settings(

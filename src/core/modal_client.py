@@ -111,7 +111,8 @@ async def modal_voxcpm2_tts(
         emotion: Optional emotion tag, accepted for parity.
 
     Returns:
-        The WAV payload returned by Modal, at 48 kHz.
+        The WAV payload returned by Modal, at 48 kHz. VoxCPM2 synthesizes a few
+        takes and keeps the one a no-reference DNSMOS score ranks best.
 
     Raises:
         RuntimeError: When Modal is disabled or credentials are missing.
@@ -133,6 +134,7 @@ async def modal_voxcpm2_tts(
         emotion=emotion,
         cfg_value=settings.voxcpm2_cfg_value,
         inference_timesteps=settings.voxcpm2_inference_timesteps,
+        num_candidates=settings.voxcpm2_candidates,
     )
 
 
