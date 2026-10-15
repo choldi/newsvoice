@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -72,8 +73,8 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     Args:
         payload: Dict with ``name``, ``instruct``, ``ref_text`` and
             ``language``. Optional ``ref_segments`` replaces ``ref_text`` as
-            the list of segments to speak (they are concatenated with a short
-            silence, which keeps a long reference inside one generation).
+            the list of segments to speak (they are joined into one utterance
+            so a single voice is sampled for the whole reference).
 
     Returns:
         Dict with ``name``, ``sha256``, ``sample_rate``, ``duration_seconds``,
@@ -104,10 +105,11 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         f"Designing voice name={name} language={language} segments={len(segments)}"
     )
     started = time.monotonic()
+    seed = zlib.crc32(f"qwen-voice-design:{name}".encode())
     try:
         # The synthesis is a blocking GPU call; keep the event loop free so the
         # worker can still heartbeat while the model generates.
-        wav, sample_rate = await asyncio.to_thread(design_voice, segments, instruct, language)
+        wav, sample_rate = await asyncio.to_thread(design_voice, segments, instruct, language, seed)
     except Exception as exc:
         raise ApplicationError(f"voice design failed for {name}: {exc}") from exc
     elapsed = time.monotonic() - started

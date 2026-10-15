@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,9 @@ async def test_design_voice_activity_ships_the_audio_without_touching_disk(
 ) -> None:
     seen: dict[str, Any] = {}
 
-    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+    def fake_design(
+        segments: list[str], instruct: str, language: str, seed: int | None = None
+    ) -> tuple[bytes, int]:
         seen["segments"] = segments
         seen["instruct"] = instruct
         seen["language"] = language
@@ -95,7 +98,9 @@ async def test_design_voice_activity_ships_the_audio_without_touching_disk(
 async def test_design_voice_activity_marks_an_unconfigured_staging_key_as_fatal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+    def fake_design(
+        segments: list[str], instruct: str, language: str, seed: int | None = None
+    ) -> tuple[bytes, int]:
         return WAV, 24000
 
     monkeypatch.setattr("src.core.local_tts.design_voice", fake_design)
@@ -110,7 +115,9 @@ async def test_design_voice_activity_marks_an_unconfigured_staging_key_as_fatal(
 async def test_design_voice_activity_keeps_transport_errors_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+    def fake_design(
+        segments: list[str], instruct: str, language: str, seed: int | None = None
+    ) -> tuple[bytes, int]:
         return WAV, 24000
 
     async def failing_stage(name: str, wav: bytes) -> int:
@@ -125,13 +132,16 @@ async def test_design_voice_activity_keeps_transport_errors_retryable(
     assert excinfo.value.non_retryable is False
 
 
-async def test_design_voice_activity_speaks_each_segment_separately(
+async def test_design_voice_activity_forwards_segments_and_a_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seen: dict[str, list[str]] = {}
+    seen: dict[str, object] = {}
 
-    def fake_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+    def fake_design(
+        segments: list[str], instruct: str, language: str, seed: int | None = None
+    ) -> tuple[bytes, int]:
         seen["segments"] = segments
+        seen["seed"] = seed
         return WAV, 24000
 
     async def fake_stage(name: str, wav: bytes) -> int:
@@ -144,6 +154,7 @@ async def test_design_voice_activity_speaks_each_segment_separately(
     await ActivityEnvironment().run(voice_activities.design_voice_activity, payload)
 
     assert seen["segments"] == ["first half", "second half"]
+    assert seen["seed"] == zlib.crc32(b"qwen-voice-design:anchor_neutral_m")
 
 
 async def test_design_voice_activity_rejects_incomplete_payload() -> None:
@@ -157,7 +168,9 @@ async def test_design_voice_activity_rejects_incomplete_payload() -> None:
 async def test_design_voice_activity_wraps_model_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def failing_design(segments: list[str], instruct: str, language: str) -> tuple[bytes, int]:
+    def failing_design(
+        segments: list[str], instruct: str, language: str, seed: int | None = None
+    ) -> tuple[bytes, int]:
         raise RuntimeError("cuda out of memory")
 
     monkeypatch.setattr("src.core.local_tts.design_voice", failing_design)

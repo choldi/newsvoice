@@ -1047,6 +1047,15 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       gateway tiene un clon del mismo nombre (antes se etiquetaba `cloned` y
       desaparecía del filtro `stock` de qwen3_tts/zonos2). Catálogo: 32
       perfiles (16 en + 8 es + 8 fr).
+- [x] **10.9 Calidad del diseño de voces**: `QwenVoiceDesign.generate` sintetiza
+      ahora toda la referencia en **una sola llamada** (une `ref_segments` con un
+      espacio) en vez de generar cada segmento por separado y concatenarlos con
+      un silencio: samplear por segmentos daba un timbre distinto por llamada y
+      dejaba una referencia "muddy" para clonar. Además se bajan los parámetros
+      de sampling desde los defaults del modelo (temperature `0.9`→`0.7`,
+      top_p `1.0`→`0.9`, configurables con `QWEN_TTS_DESIGN_TEMPERATURE` /
+      `QWEN_TTS_DESIGN_TOP_P`) y se fija una **semilla estable por perfil**
+      (`crc32("qwen-voice-design:<name>")`) para reproducibilidad.
 
 **Success criteria:** narraciones QWEN3_TTS pueden renderizarse vía gateway
 local sin Modal habilitado; UI expone el switch; lint + tests verdes.

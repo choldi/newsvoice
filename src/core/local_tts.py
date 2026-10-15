@@ -17,11 +17,9 @@ import threading
 from typing import Any
 
 from src.core.audio import (
-    CANONICAL_FORMAT,
     CANONICAL_RATE,
     WavFormat,
     build_wav,
-    concat_wavs,
 )
 from src.core.config import settings
 
@@ -38,9 +36,6 @@ QWEN_LANGUAGE_NAMES: dict[str, str] = {
     "ko": "korean",
     "ru": "russian",
 }
-
-#: Silence inserted between reference segments so the join is not audible.
-SEGMENT_GAP_MS = 200
 
 #: Scale factor for float audio in [-1.0, 1.0] to signed 16-bit PCM.
 _FLOAT_TO_PCM16 = 32767.0
@@ -70,6 +65,22 @@ def resolve_language(language: str) -> str:
         return QWEN_LANGUAGE_NAMES[language]
     except KeyError:
         raise LocalTTSError(f"no Qwen3-TTS language mapping for {language!r}") from None
+
+
+def _seed_rng(seed: int) -> None:
+    """Seed torch's RNG so a designed voice is reproducible.
+
+    torch only exists on the GPU box; the test suite runs without it, so a
+    missing torch is a no-op rather than an error.
+
+    Args:
+        seed: Seed for ``torch.manual_seed``.
+    """
+    try:
+        import torch
+    except Exception:
+        return
+    torch.manual_seed(seed)
 
 
 def _looks_like_float(samples: list[Any]) -> bool:
@@ -192,13 +203,22 @@ class QwenVoiceDesign:
         segments: list[str],
         instruct: str,
         language: str,
+        seed: int | None = None,
     ) -> tuple[bytes, int]:
-        """Synthesize each segment in the designed voice and concatenate them.
+        """Synthesize the whole reference in one VoiceDesign call.
+
+        The segments are joined into a single utterance so the sampled voice
+        stays consistent. Designing each segment separately produced a
+        different timbre per call, and gluing those into one reference left a
+        muddy sample to clone from. Sampling parameters are lowered from the
+        model defaults (temperature 0.9, top_p 1.0) because the hot defaults
+        added artifacts.
 
         Args:
             segments: Reference text segments, spoken in order.
             instruct: VoiceDesign persona description.
             language: ISO 639-1 code.
+            seed: Optional RNG seed for a reproducible voice.
 
         Returns:
             Tuple of ``(wav_bytes, sample_rate)`` in the canonical format.
@@ -209,17 +229,19 @@ class QwenVoiceDesign:
         if not segments:
             raise LocalTTSError("at least one reference segment is required")
         qwen_language = resolve_language(language)
+        text = " ".join(segments)
+        if seed is not None:
+            _seed_rng(seed)
         try:
-            parts: list[tuple[bytes, int]] = []
-            for text in segments:
-                wavs, sample_rate = self._model.generate_voice_design(
-                    text=text,
-                    instruct=instruct,
-                    language=qwen_language,
-                )
-                audio = resample(wavs[0], sample_rate, CANONICAL_RATE)
-                parts.append((to_wav_bytes(audio, CANONICAL_RATE), SEGMENT_GAP_MS))
-            return concat_wavs(parts, CANONICAL_FORMAT), CANONICAL_RATE
+            wavs, sample_rate = self._model.generate_voice_design(
+                text=text,
+                instruct=instruct,
+                language=qwen_language,
+                temperature=settings.qwen_tts_design_temperature,
+                top_p=settings.qwen_tts_design_top_p,
+            )
+            audio = resample(wavs[0], sample_rate, CANONICAL_RATE)
+            return to_wav_bytes(audio, CANONICAL_RATE), CANONICAL_RATE
         except LocalTTSError:
             raise
         except Exception as exc:
@@ -275,6 +297,7 @@ def design_voice(
     segments: list[str],
     instruct: str,
     language: str,
+    seed: int | None = None,
 ) -> tuple[bytes, int]:
     """Design a voice by synthesizing reference segments locally.
 
@@ -282,6 +305,7 @@ def design_voice(
         segments: Reference text segments, spoken in order.
         instruct: VoiceDesign persona description.
         language: ISO 639-1 code.
+        seed: Optional RNG seed for a reproducible voice.
 
     Returns:
         Tuple of ``(wav_bytes, sample_rate)`` in the canonical format.
@@ -289,4 +313,4 @@ def design_voice(
     Raises:
         LocalTTSError: On any failure.
     """
-    return get_backend().generate(segments, instruct, language)
+    return get_backend().generate(segments, instruct, language, seed)

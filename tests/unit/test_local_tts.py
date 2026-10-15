@@ -8,8 +8,8 @@ import pytest
 
 from src.core import local_tts
 from src.core.audio import CANONICAL_RATE, wav_duration, wav_peak_ratio
+from src.core.config import settings
 from src.core.local_tts import (
-    SEGMENT_GAP_MS,
     LocalTTSError,
     QwenVoiceDesign,
     design_voice,
@@ -26,15 +26,15 @@ class _FakeModel:
     def __init__(self, audio: list[float], sample_rate: int = CANONICAL_RATE) -> None:
         self._audio = audio
         self._sample_rate = sample_rate
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, object]] = []
 
     def get_supported_languages(self) -> list[str]:
         return ["english", "spanish"]
 
     def generate_voice_design(
-        self, text: str, instruct: str, language: str
+        self, text: str, instruct: str, language: str, **kwargs: object
     ) -> tuple[list[list[float]], int]:
-        self.calls.append({"text": text, "instruct": instruct, "language": language})
+        self.calls.append({"text": text, "instruct": instruct, "language": language, **kwargs})
         return [list(self._audio)], self._sample_rate
 
 
@@ -103,18 +103,32 @@ def test_resample_keeps_float_audio_in_float_range() -> None:
 # --- generate ---------------------------------------------------------------
 
 
-def test_generate_concatenates_segments_with_a_gap() -> None:
+def test_generate_designs_the_whole_reference_in_one_call() -> None:
     model = _FakeModel([0.0] * 2400)
     wav, sample_rate = _backend(model).generate(
         ["first segment", "second segment"], "a warm voice", "en"
     )
 
     assert sample_rate == CANONICAL_RATE
-    assert wav_duration(wav) == round((2400 * 2 + SEGMENT_GAP_MS * 24) / 24000, 3)
+    assert wav_duration(wav) == round(2400 / 24000, 3)
     assert model.calls == [
-        {"text": "first segment", "instruct": "a warm voice", "language": "english"},
-        {"text": "second segment", "instruct": "a warm voice", "language": "english"},
+        {
+            "text": "first segment second segment",
+            "instruct": "a warm voice",
+            "language": "english",
+            "temperature": settings.qwen_tts_design_temperature,
+            "top_p": settings.qwen_tts_design_top_p,
+        }
     ]
+
+
+def test_generate_seeds_the_rng_when_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    seeded: list[int] = []
+    monkeypatch.setattr(local_tts, "_seed_rng", seeded.append)
+
+    _backend(_FakeModel([0.0] * 2400)).generate(["text"], "instruct", "en", seed=42)
+
+    assert seeded == [42]
 
 
 def test_generate_resamples_a_foreign_sample_rate() -> None:
@@ -164,7 +178,8 @@ def test_design_voice_delegates_to_the_backend(monkeypatch: pytest.MonkeyPatch) 
     model = _FakeModel([0.0] * 2400)
     monkeypatch.setattr(local_tts, "get_backend", lambda: _backend(model))
 
-    wav, sample_rate = design_voice(["hello"], "instruct", "en")
+    wav, sample_rate = design_voice(["hello"], "instruct", "en", seed=7)
 
     assert sample_rate == CANONICAL_RATE
     assert wav_duration(wav) == round(2400 / 24000, 3)
+    assert model.calls[0]["text"] == "hello"
