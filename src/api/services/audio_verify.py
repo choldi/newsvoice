@@ -25,6 +25,7 @@ import structlog
 
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
@@ -233,6 +234,7 @@ def _transcribe_block(model: object, block: np.ndarray, language: str) -> tuple[
     return text.strip(), str(detected)
 
 
+@trace_function(component="api.services.audio_verify")
 async def verify_audio(
     audio_path: str,
     expected_text: str,

@@ -19,6 +19,7 @@ import trafilatura
 
 from src.api.models.article import ArticleIn
 from src.core.config import settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 
@@ -184,6 +185,7 @@ class UrlArticleService:
             raise UrlExtractionError("article server answered an empty body")
         return response.text
 
+    @trace_function(component="api.services.url_article")
     async def extract_from_url(self, url: str) -> ArticleIn:
         """Fetch and extract one article, off the event loop.
 

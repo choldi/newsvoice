@@ -27,6 +27,7 @@ import structlog
 
 from src.core.config import Settings, get_settings
 from src.core.prompts import strip_emotion_tags
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 
@@ -247,6 +248,7 @@ class WhatsAppService:
                 f"Baileys gateway error for {path}: {response.status_code} {response.text[:200]}"
             )
 
+    @trace_function(component="api.services.whatsapp")
     async def send_text(
         self,
         message: str,
@@ -288,6 +290,7 @@ class WhatsAppService:
         logger.info("whatsapp_text_sent", recipients=len(targets))
         return {"status": "ok", "recipients": len(targets)}
 
+    @trace_function(component="api.services.whatsapp")
     async def send_audio(
         self,
         audio_path: str,

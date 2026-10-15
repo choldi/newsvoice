@@ -22,6 +22,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.config import Settings, get_settings
 from src.core.prompts import strip_emotion_tags
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 
@@ -299,6 +300,7 @@ class EmailService:
         """
         await asyncio.to_thread(self.send_login_code, email, code)
 
+    @trace_function(component="api.services.email")
     async def send_digest_email(
         self,
         recipients: list[str],

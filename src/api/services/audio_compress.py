@@ -14,6 +14,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import get_settings
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
@@ -36,6 +37,7 @@ class AudioCompressService:
         self._ffmpeg = ffmpeg_path or settings.ffmpeg_path
         self._bitrate = bitrate_kbps or settings.tts_audio_bitrate_kbps
 
+    @trace_function(component="api.services.audio_compress")
     async def compress(self, source_path: str) -> str:
         """Transcode a WAV file to a mono AAC M4A placed next to the source.
 

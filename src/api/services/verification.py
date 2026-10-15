@@ -52,6 +52,7 @@ from src.core.prompts import (
     VERIFY_CLAIMS_SYSTEM_PROMPT,
     VERIFY_CLAIMS_USER_PROMPT_TEMPLATE,
 )
+from src.core.tracing import trace_function
 
 logger = structlog.get_logger()
 
@@ -787,6 +788,7 @@ class VerificationService:
             return self._judge
         return LlmJudge(backend=backend, model=model)
 
+    @trace_function(component="api.services.verification")
     async def verify_digest(self, payload: VerifyDigestIn) -> VerificationReportOut:
         """Verify a digest and return its verdict.
 
