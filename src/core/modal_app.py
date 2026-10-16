@@ -83,7 +83,16 @@ def _dnsmos_ovrl(mos: object, wav: object, sample_rate: int) -> float | None:
         return None
 
 
+#: Qwen3-TTS Base needs its own image: ``qwen-tts`` pulls transformers and the
+#: audio stack. ``sdpa`` attention is used instead of flash-attn, which has no
+#: reliable prebuilt wheel for every torch/CUDA pair.
+_QWEN_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "torch", "qwen-tts", "soundfile"
+)
+
+
 @app.cls(
+    image=_QWEN_IMAGE,
     gpu="L4",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
@@ -101,7 +110,7 @@ class QwenTTS:
             "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
             device_map="cuda:0",
             dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
+            attn_implementation="sdpa",
         )
 
     @modal.method()
@@ -142,7 +151,23 @@ class QwenTTS:
         return buffer.getvalue()
 
 
+#: ZONOS2 is not on PyPI: it ships as a git project whose CUDA kernels come
+#: from ``flashinfer`` (installed straight from its release wheel because the
+#: ``flashinfer-jit-cache`` sdist is not published).
+_ZONOS_IMAGE = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git")
+    .pip_install(
+        "flashinfer-jit-cache @ https://github.com/flashinfer-ai/flashinfer/releases/"
+        "download/v0.5.3/flashinfer_jit_cache-0.5.3+cu128-cp39-abi3-manylinux_2_28_x86_64.whl",
+        "git+https://github.com/Zyphra/ZONOS2.git",
+        "soundfile",
+    )
+)
+
+
 @app.cls(
+    image=_ZONOS_IMAGE,
     gpu="L4",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
@@ -307,6 +332,7 @@ class VoxCPM2TTS:
 
 
 @app.function(
+    image=_ZONOS_IMAGE,
     gpu="L4",
     timeout=1800,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
@@ -521,16 +547,37 @@ def benchmark_voxcpm2(voice_ref: str, text: str, language: str, num_candidates: 
     timeout=600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
-def upload_voice(name: str, wav: bytes) -> None:
+def upload_voice(name: str, wav: bytes, ref_text: str = "") -> None:
     """Store a reference voice in the Modal Volume.
+
+    The reference WAV is not enough on its own: the clone backends read the
+    reference transcript from ``manifest.json`` (see :func:`_ref_text`), so the
+    entry is merged into the volume manifest right next to the audio. Voices
+    already designed keep their other keys; only ``ref_text`` is refreshed.
 
     Args:
         name: Reference voice name.
         wav: Reference WAV bytes.
+        ref_text: Transcript that produced the reference; skipped when empty.
     """
     target = Path(_VOLUME_PATH) / _REFS_DIR / f"{name}.wav"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(wav)
+    if not ref_text:
+        return
+    manifest_path = Path(_VOLUME_PATH) / _MANIFEST
+    manifest: dict = {}
+    if manifest_path.is_file():
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            manifest = loaded
+    entry = manifest.get(name)
+    entry = entry if isinstance(entry, dict) else {}
+    manifest[name] = {**entry, "ref_text": ref_text}
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # --- Phase 7.13: LLM judge for digest verification ---------------------------

@@ -152,6 +152,7 @@ async def test_voice_catalog_workflow_uploads_when_requested() -> None:
 
     assert len(SEEN["upload"]) == 1
     assert SEEN["upload"][0]["name"] == "a"
+    assert SEEN["upload"][0]["ref_text"] == _profile("a")["ref_text"]
 
 
 async def test_voice_catalog_workflow_honours_the_name_subset() -> None:

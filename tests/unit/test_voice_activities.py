@@ -279,19 +279,22 @@ async def test_upload_voice_activity_uploads(
     monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
     seen: dict[str, Any] = {}
 
-    async def fake_upload(name: str, wav: bytes) -> None:
+    async def fake_upload(name: str, wav: bytes, ref_text: str = "") -> None:
         seen["name"] = name
         seen["wav"] = wav
+        seen["ref_text"] = ref_text
 
     monkeypatch.setattr("src.core.modal_client.upload_voice", fake_upload)
 
     result = await ActivityEnvironment().run(
-        voice_activities.upload_voice_activity, {"name": "anchor_neutral_m"}
+        voice_activities.upload_voice_activity,
+        {"name": "anchor_neutral_m", "ref_text": "hola mundo"},
     )
 
     assert result == {"name": "anchor_neutral_m", "uploaded": True}
     assert seen["name"] == "anchor_neutral_m"
     assert seen["wav"] == WAV
+    assert seen["ref_text"] == "hola mundo"
 
 
 async def test_upload_voice_activity_rejects_missing_reference(

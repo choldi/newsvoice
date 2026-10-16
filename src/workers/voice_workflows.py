@@ -118,7 +118,7 @@ class VoiceCatalogWorkflow:
                 if config.upload:
                     await workflow.execute_activity(
                         UPLOAD_VOICE_ACTIVITY,
-                        {"name": profile["name"]},
+                        {"name": profile["name"], "ref_text": profile["ref_text"]},
                         task_queue=config.task_queue,
                         start_to_close_timeout=UPLOAD_VOICE_TIMEOUT,
                         retry_policy=UPLOAD_VOICE_RETRY_POLICY,

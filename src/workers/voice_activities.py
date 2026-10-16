@@ -238,7 +238,7 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Upload a reference voice to the Modal Volume for cloning.
 
     Args:
-        payload: Dict with ``name``.
+        payload: Dict with ``name`` and ``ref_text``.
 
     Returns:
         Dict with ``name`` and ``uploaded``.
@@ -249,6 +249,7 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("name") or "")
     if not name:
         raise ApplicationError("upload_voice_activity needs a name", non_retryable=True)
+    ref_text = str(payload.get("ref_text") or "")
 
     from src.core.modal_client import upload_voice
 
@@ -256,7 +257,7 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     if not ref_path.is_file():
         raise ApplicationError(f"voice '{name}' has no reference at {ref_path}", non_retryable=True)
     try:
-        await upload_voice(name, ref_path.read_bytes())
+        await upload_voice(name, ref_path.read_bytes(), ref_text)
     except Exception as exc:
         raise ApplicationError(f"voice upload failed for {name}: {exc}") from exc
     activity.logger.info(f"Voice uploaded name={name}")

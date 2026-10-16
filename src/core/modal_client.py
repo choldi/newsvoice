@@ -138,16 +138,18 @@ async def modal_voxcpm2_tts(
     )
 
 
-async def upload_voice(name: str, wav: bytes) -> None:
+async def upload_voice(name: str, wav: bytes, ref_text: str = "") -> None:
     """Upload a reference voice to the Modal Volume.
 
     Args:
         name: Reference voice name.
         wav: Reference WAV bytes.
+        ref_text: Transcript that produced the reference; the clone backends
+            read it from the volume manifest, so it is uploaded alongside.
 
     Raises:
         RuntimeError: When Modal is disabled or credentials are missing.
-        Exception: Whatever the Modal call raises.
+        Exception: Whatever the Modal call raises, for the caller to wrap.
     """
     if not settings.modal_enabled:
         raise RuntimeError("modal is disabled")
@@ -157,7 +159,7 @@ async def upload_voice(name: str, wav: bytes) -> None:
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "upload_voice")
-    await function.remote.aio(name=name, wav=wav)
+    await function.remote.aio(name=name, wav=wav, ref_text=ref_text)
 
 
 @trace_function(component="modal.client")
