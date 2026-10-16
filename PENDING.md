@@ -137,12 +137,28 @@ Los 4 criterios deben pasar:
 | Criterio | Umbral |
 |---|---|
 | Similitud de hablante (cosine ECAPA) | ≥ 0.75 |
-| Clipping con `emotion_cfg_scale=1.5` | peak ≤ 0.99 |
+| Clipping en modo expresivo | peak ≤ 0.99 |
 | `speed=1.2` acelera | ratio ≥ 1.1 |
 | Energía > 12 kHz | < 5% |
 
 Si **pasa**: `ZONOS2_ENABLED=true` en `.env`.
 Si **falla**: ZONOS2 queda inactivo; Qwen3-TTS sigue siendo el renderer.
+
+### Notas de la puesta en marcha de ZONOS2 en Modal
+
+- **GPU**: `sgl_kernel` (Mini-SGLang) solo trae kernels `sm90`/`sm100`, así que
+  ZONOS2 **no corre en L4 (SM89)**; la clase usa `gpu="H100"`.
+- **Imagen**: base `nvidia/cuda:12.8.1-devel-ubuntu22.04` (nvcc hace falta para
+  el JIT de los kernels) + `ffmpeg` (decodifica los WAV de referencia) +
+  `libnuma1` (sgl_kernel) y `CUDA_HOME=/usr/local/cuda`.
+- **Idioma**: `generate_one(language=...)` valida contra los códigos del servidor
+  (`fr_fr`, `en_us`, ...), no ISO 639-1.
+- **Emoción**: la API offline `TTSLLM.generate_one` **no** acepta
+  `emotion_enabled`/`emotion_sliders`/`emotion_cfg_scale`; el delta de emoción
+  solo se inyecta en el transporte servidor. La clase acepta `emotion` por
+  paridad pero lo ignora, y el gate mide el peak de una toma en modo expresivo
+  en su lugar.
+
 
 ## 8. Correr el gate de VoxCPM2
 
