@@ -52,6 +52,34 @@ def _qwen_language(language: str) -> str:
     return _QWEN_LANGUAGE_NAMES.get((language or "").lower(), language)
 
 
+#: ZONOS2's text normalizer keys on server codes (``fr_fr``, ``en_us``), not
+#: ISO 639-1. Mirrors ``zonos2.tokenizer.textnorm.SERVER_TO_NEMO_LANG``.
+_ZONOS_LANGUAGE_NAMES = {
+    "en": "en_us",
+    "es": "es",
+    "fr": "fr_fr",
+    "pt": "pt_br",
+    "de": "de",
+    "it": "it",
+    "ja": "ja",
+    "ko": "ko",
+    "zh": "cmn",
+}
+
+
+def _zonos_language(language: str) -> str:
+    """Map an ISO 639-1 code to the language code ZONOS2 accepts.
+
+    Args:
+        language: ISO 639-1 code, or a server code ZONOS2 already understands.
+
+    Returns:
+        The ZONOS2 server language code; unrecognised values pass through so
+        the model can validate them itself.
+    """
+    return _ZONOS_LANGUAGE_NAMES.get((language or "").lower(), language)
+
+
 def _ref_text(voice_ref: str) -> str:
     """Read the transcript that produced a reference sample.
 
@@ -182,10 +210,12 @@ class QwenTTS:
 
 #: ZONOS2 is not on PyPI: it ships as a git project whose CUDA kernels come
 #: from ``flashinfer`` (installed straight from its release wheel because the
-#: ``flashinfer-jit-cache`` sdist is not published).
+#: ``flashinfer-jit-cache`` sdist is not published). It also JIT-compiles its
+#: own kernels at model load, so the image ships the full CUDA toolkit (nvcc).
 _ZONOS_IMAGE = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")
+    modal.Image.from_registry("nvidia/cuda:12.8.1-devel-ubuntu22.04", add_python="3.12")
+    .env({"CUDA_HOME": "/usr/local/cuda"})
+    .apt_install("git", "libnuma1", "ffmpeg")
     .pip_install(
         "flashinfer-jit-cache @ https://github.com/flashinfer-ai/flashinfer/releases/"
         "download/v0.5.3/flashinfer_jit_cache-0.5.3+cu128-cp39-abi3-manylinux_2_28_x86_64.whl",
@@ -200,7 +230,7 @@ _ZONOS_IMAGE = (
 
 @app.cls(
     image=_ZONOS_IMAGE,
-    gpu="L4",
+    gpu="H100",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -236,7 +266,10 @@ class Zonos2TTS:
             voice_ref: Reference voice name; resolves to a WAV in the volume.
             language: ISO 639-1 language code.
             speed: Speaking rate multiplier; native ZONOS2 conditioning.
-            emotion: Optional emotion tag (happy, sad, angry, surprised).
+            emotion: Emotion tag (happy, sad, angry, surprised). Accepted for
+                API parity but not applied here: the offline ``TTSLLM`` API
+                exposes no emotion conditioning (that delta is only injected
+                on the ZONOS2 server transport).
 
         Returns:
             WAV bytes at 44.1 kHz.
@@ -249,20 +282,18 @@ class Zonos2TTS:
 
         ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
         emb = self._tts.embed_speaker_file(ref_path)
-        emotion_sliders = {emotion: 1.0} if emotion else None
         result = self._tts.generate_one(
             text,
             TTSSamplingParams(seed=42),
             speaker_embedding=emb,
-            language=language,
+            language=_zonos_language(language),
             speed=speed,
-            emotion_enabled=emotion is not None,
-            emotion_sliders=emotion_sliders,
             accurate_mode=False,
-            emotion_cfg_scale=1.5 if emotion else 1.0,
         )
         audio = result["audio"]
-        if hasattr(audio, "detach"):
+        if isinstance(audio, (bytes, bytearray)):
+            audio = np.frombuffer(audio, dtype=np.float32)
+        elif hasattr(audio, "detach"):
             audio = audio.detach().cpu().numpy()
         buffer = io.BytesIO()
         sf.write(buffer, np.asarray(audio), 44100, format="WAV")
@@ -365,7 +396,7 @@ class VoxCPM2TTS:
 
 @app.function(
     image=_ZONOS_IMAGE,
-    gpu="L4",
+    gpu="H100",
     timeout=1800,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -395,6 +426,8 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
     ref_emb = tts.embed_speaker_file(ref_path)
 
     def _to_numpy(audio) -> np.ndarray:
+        if isinstance(audio, (bytes, bytearray)):
+            return np.frombuffer(audio, dtype=np.float32)
         if hasattr(audio, "detach"):
             return audio.detach().cpu().numpy()
         return np.asarray(audio)
@@ -407,7 +440,10 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
     criteria: dict[str, dict] = {}
 
     result = tts.generate_one(
-        text, TTSSamplingParams(seed=42), speaker_embedding=ref_emb, language=language
+        text,
+        TTSSamplingParams(seed=42),
+        speaker_embedding=ref_emb,
+        language=_zonos_language(language),
     )
     gen = _to_numpy(result["audio"])
     gen_emb = _embed(gen, 44100)
@@ -420,15 +456,15 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
         "pass": similarity >= 0.75,
     }
 
+    # The offline API has no emotion conditioning, so this measures the peak of
+    # an expressive-mode take instead: it still catches the clipping artifacts
+    # the criterion is meant to guard against.
     result_emo = tts.generate_one(
         text,
         TTSSamplingParams(seed=42),
         speaker_embedding=ref_emb,
-        language=language,
-        emotion_enabled=True,
-        emotion_sliders={"happy": 1.0},
+        language=_zonos_language(language),
         accurate_mode=False,
-        emotion_cfg_scale=1.5,
     )
     emo = _to_numpy(result_emo["audio"])
     peak = float(np.max(np.abs(emo))) if emo.size else 0.0
@@ -442,7 +478,7 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
             text,
             TTSSamplingParams(seed=42),
             speaker_embedding=ref_emb,
-            language=language,
+            language=_zonos_language(language),
             speed=1.0,
         )["audio"]
     )
@@ -451,7 +487,7 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
             text,
             TTSSamplingParams(seed=42),
             speaker_embedding=ref_emb,
-            language=language,
+            language=_zonos_language(language),
             speed=1.2,
         )["audio"]
     )
