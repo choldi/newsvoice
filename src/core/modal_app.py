@@ -423,6 +423,7 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
 
 
 @app.function(
+    image=_VOXCPM_IMAGE,
     gpu="L4",
     timeout=1800,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
