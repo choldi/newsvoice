@@ -84,7 +84,7 @@ def _dnsmos_ovrl(mos: object, wav: object, sample_rate: int) -> float | None:
 
 
 @app.cls(
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -143,7 +143,7 @@ class QwenTTS:
 
 
 @app.cls(
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -222,7 +222,7 @@ _VOXCPM_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
 
 @app.cls(
     image=_VOXCPM_IMAGE,
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=3600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -307,7 +307,7 @@ class VoxCPM2TTS:
 
 
 @app.function(
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=1800,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -423,7 +423,7 @@ def benchmark_zonos(voice_ref: str, text: str, language: str) -> dict:
 
 
 @app.function(
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=1800,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -516,7 +516,7 @@ def benchmark_voxcpm2(voice_ref: str, text: str, language: str, num_candidates: 
 
 
 @app.function(
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=600,
     volumes={_VOLUME_PATH: modal.Volume.from_name("news-engine-voices", create_if_missing=True)},
 )
@@ -545,7 +545,7 @@ _JUDGE_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
 
 @app.function(
     image=_JUDGE_IMAGE,
-    gpu=modal.gpu.L4(),
+    gpu="L4",
     timeout=900,
     # 30 GB of disk keeps the 8B weights cached across container reuse.
     block_network=False,
