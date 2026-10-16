@@ -470,10 +470,36 @@ class Settings(BaseSettings):
     modal_max_chunks_per_episode: int = Field(default=20, ge=1, le=100)
     # L4 on Modal Starter, used only to estimate cost before a call.
     modal_usd_per_gpu_second: float = Field(default=0.000222, gt=0.0)
+    # H100 SXM5 (\$3.95/GPU-hr), the GPU the ZONOS2 backend runs on. Only a
+    # fallback: the live rate card (Modal.billing.rates) wins when reachable.
+    modal_usd_per_gpu_second_h100: float = Field(default=0.001097, gt=0.0)
     # Throughput model for the estimate: measured chars/s and RTF on L4.
     modal_estimated_chars_per_second: float = Field(default=17.5, gt=0.0)
     modal_estimated_rtf: float = Field(default=0.65, gt=0.0, le=10.0)
     modal_budget_alert_percent: list[int] = Field(default_factory=lambda: [50, 80, 100])
+    # --- Modal cost measurement (Phase 7.17) --------------------------------
+    # Measure the real cost of every Modal call from wall-clock time times the
+    # live rate card, and reconcile it against Modal's billing summary. All
+    # four flags are best-effort: a failure degrades to logging, never to a
+    # failed render.
+    modal_cost_tracking_enabled: bool = True
+    # Reconcile the measured wall-clock cost against Workspace.billing.summary().
+    # ``_per_call`` snapshots around every single call (two extra Modal API
+    # calls per call, and the cycle summary may lag); the episode-level
+    # snapshot in the narration activity always runs when tracking is on.
+    modal_billing_tracking_enabled: bool = True
+    modal_billing_snapshot_per_call: bool = True
+    # Attach ``project``/``collection``/``run_id`` tags to the Modal app so
+    # ``modal billing report --tag-names`` can attribute cost per episode.
+    modal_tags_enabled: bool = True
+    modal_project_tag: str = "news-engine"
+    # How long to cache the live rate card, in seconds. Rates change rarely.
+    modal_rates_cache_seconds: int = Field(default=86400, ge=60)
+    # CPU cores and memory GiB billed alongside the GPU for one call. Modal
+    # defaults are used because the function decorators do not request
+    # resources explicitly; these only feed the estimate, GPU dominates it.
+    modal_cpu_cores_per_call: float = Field(default=0.125, gt=0.0)
+    modal_memory_gib_per_call: float = Field(default=4.0, gt=0.0)
     # Runtime voice catalog: profiles are versionable in the repo, generated
     # references and the manifest live here and are never committed.
     voices_dir: str = "data/voices"

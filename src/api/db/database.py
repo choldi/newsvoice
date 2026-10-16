@@ -1031,6 +1031,10 @@ class ModalSpendRepository:
         run_id: str | None = None,
         audio_seconds: float | None = None,
         cache_hit: bool = False,
+        wall_seconds: float | None = None,
+        cost_source: str = "estimate",
+        gpu_type: str | None = None,
+        billed_delta_usd: float | None = None,
     ) -> None:
         """Persist one Modal spend record.
 
@@ -1043,13 +1047,19 @@ class ModalSpendRepository:
             run_id: Optional digest run id.
             audio_seconds: Optional audio duration produced.
             cache_hit: True when the call was served from cache (zero cost).
+            wall_seconds: Optional client-observed wall-clock seconds.
+            cost_source: How cost_usd was derived ('estimate', 'runtime_rates'
+                or 'billing_delta').
+            gpu_type: Optional short GPU name ('l4', 'h100').
+            billed_delta_usd: Optional billing-summary delta across the call.
         """
         query = """
             INSERT INTO modal_spend (
                 ts, collection, stage, backend, run_id,
-                gpu_seconds, cost_usd, audio_seconds, cache_hit
+                gpu_seconds, cost_usd, audio_seconds, cache_hit,
+                wall_seconds, cost_source, gpu_type, billed_delta_usd
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         async with get_db(self.db_path) as db:
             await db.execute(
@@ -1064,6 +1074,10 @@ class ModalSpendRepository:
                     cost_usd,
                     audio_seconds,
                     int(cache_hit),
+                    wall_seconds,
+                    cost_source,
+                    gpu_type,
+                    billed_delta_usd,
                 ),
             )
             await db.commit()
