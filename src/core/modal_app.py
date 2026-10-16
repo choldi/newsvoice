@@ -53,7 +53,7 @@ def _dnsmos_ovrl(mos: object, wav: object, sample_rate: int) -> float | None:
     speaker and text, so any dependency-free resampler preserves the ordering.
 
     Args:
-        mos: The loaded ``torch_dnsmos`` scorer.
+        mos: The loaded ``speechmos`` DNSMOS scorer (a module with ``run``).
         wav: Audio as a float array of samples.
         sample_rate: Sample rate of the clip.
 
@@ -61,23 +61,23 @@ def _dnsmos_ovrl(mos: object, wav: object, sample_rate: int) -> float | None:
         The overall MOS, or None when the clip could not be scored.
     """
     import numpy as np
-    import torch
 
     try:
-        waveform = torch.from_numpy(np.asarray(wav, dtype=np.float32)).flatten()
-        if waveform.numel() == 0:
+        waveform = np.asarray(wav, dtype=np.float32).flatten()
+        if waveform.size == 0:
             return None
         if sample_rate != 16000:
-            length = int(round(waveform.shape[-1] * 16000 / sample_rate))
+            length = int(round(waveform.size * 16000 / sample_rate))
             if length < 1:
                 return None
-            waveform = torch.nn.functional.interpolate(
-                waveform[None, None], size=length, mode="linear", align_corners=False
-            )[0, 0]
-        prediction = mos.predict(waveform, sample_rate=16000)
-        scores = prediction.get("scores") if isinstance(prediction, dict) else None
-        if isinstance(scores, dict) and "OVRL" in scores:
-            return float(scores["OVRL"])
+            source_index = np.arange(waveform.size, dtype=np.float64)
+            target_index = np.linspace(0.0, waveform.size - 1, length)
+            waveform = np.interp(target_index, source_index, waveform).astype(np.float32)
+        # speechmos rejects values outside [-1, 1]; VoxCPM output already sits there.
+        waveform = np.clip(waveform, -1.0, 1.0)
+        result = mos.run(waveform, 16000)
+        if isinstance(result, dict) and "ovrl_mos" in result:
+            return float(result["ovrl_mos"])
         return None
     except Exception:
         return None
@@ -213,10 +213,10 @@ class Zonos2TTS:
 
 
 #: VoxCPM2 (Apache-2.0, 2B) needs its own image: `voxcpm` pulls the MiniCPM-4
-#: backbone and its sampling kernels. `torch-dnsmos` adds the no-reference MOS
-#: used to keep the best of several takes without a second container.
+#: backbone and its sampling kernels. `speechmos` adds the no-reference DNSMOS
+#: MOS used to keep the best of several takes without a second container.
 _VOXCPM_IMAGE = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "torch", "voxcpm", "soundfile", "numpy", "torch-dnsmos"
+    "torch", "voxcpm", "soundfile", "numpy", "speechmos", "librosa", "onnxruntime"
 )
 
 
@@ -237,12 +237,12 @@ class VoxCPM2TTS:
     @modal.enter()
     def load(self) -> None:
         """Load VoxCPM2 and the DNSMOS scorer once per container."""
-        import torch_dnsmos
+        from speechmos import dnsmos
         from voxcpm import VoxCPM
 
         self._model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
         # P.835 SIG/BAK/OVRL; OVRL is the single figure used to rank takes.
-        self._mos = torch_dnsmos.load("sig_bak_ovr")
+        self._mos = dnsmos
 
     @modal.method()
     def generate_tts_voxcpm2(
@@ -444,11 +444,11 @@ def benchmark_voxcpm2(voice_ref: str, text: str, language: str, num_candidates: 
         Dict with the per-criterion results and an overall ``pass``.
     """
     import numpy as np
-    import torch_dnsmos
+    from speechmos import dnsmos
     from voxcpm import VoxCPM
 
     model = VoxCPM.from_pretrained("openbmb/VoxCPM2", load_denoiser=False)
-    mos = torch_dnsmos.load("sig_bak_ovr")
+    mos = dnsmos
     ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
     sample_rate = model.tts_model.sample_rate
 
