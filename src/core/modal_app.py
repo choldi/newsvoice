@@ -192,6 +192,9 @@ _ZONOS_IMAGE = (
         "git+https://github.com/Zyphra/ZONOS2.git",
         "soundfile",
     )
+    # One of the ZONOS2 dependencies pins protobuf 3.19, which predates the
+    # enums Modal's runtime uses to mount the volume. Restore a modern one.
+    .run_commands("python -m pip install --upgrade 'protobuf>=5'")
 )
 
 
