@@ -1,7 +1,7 @@
 # MERGE_PLAN.md — Unificar `news-engine` y `tts-api` en un único repo
 
 **Fecha:** 2026-10-16
-**Estado:** plan aprobado, ejecutando **P0**
+**Estado:** plan aprobado; **P0 completado** (2026-10-16). Pendiente **P1**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -144,7 +144,7 @@ arrancar hasta instalarlo.
 
 | Fase | Trabajo | Aceptación |
 |---|---|---|
-| **P0** Reconciliar y congelar | Purgar la basura (§7); diff del `dd874e3` desplegado (paquete `omnivoice_api`, engine real `qwen3_tts`) vs local; recuperar el commit del engine `qwen3_tts`; backup en debwk de `data/`, `storage/`, `.env`s | `git log` sin `MagicMock/` ni `*.egg-info`; tarball de backup en debwk; engine `qwen3_tts` presente en el fuente del gateway |
+| **P0** Reconciliar y congelar | Purgar la basura (§7); diff del `dd874e3` desplegado (paquete `omnivoice_api`, engine real `qwen3_tts`) vs local; recuperar el commit del engine `qwen3_tts`; backup en debwk de `data/`, `storage/`, `.env`s | ✅ `git log` sin `MagicMock/` ni `*.egg-info`; tarball de backup en debwk; `dd874e3` **recuperado** en el repo del gateway como ref `deployed/main` (queda aquí, **no en `main`**). **Decisión:** portarlo a `main` (rename `omnivoice_api`→`tts_api` + conflictos) es **P3**, no P0 |
 | **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | `git log --follow apps/gateway/tts_api/main.py` alcanza la historia pre-rename |
 | **P2** Un solo compose + GPU | `deploy/docker-compose.yml` (+ overlays gpu/split); servicio `gateway`; contrato de puerto 8001; instalar toolkit | Shape A verde en debwk: `curl /health` (news) + `curl :8001/api/v1/health` OK |
 | **P3** Engines | Portar `qwen3_tts` (desde `dd874e3`), `voxcpm2`, `zonos2` respaldado por Modal a `apps/gateway`; **P3b Piper + P3c Chatterbox ya hechos** | cada engine accesible vía config routed; los gates de benchmark siguen siendo la autoridad |
@@ -166,7 +166,8 @@ En `omni_api` (verificado con `git ls-files`):
 - `storage/omnivoice.db` + `storage/voices/**/reference.wav` (DB y datos de voz)
 - `tts_api.egg-info/**` (5 ficheros)
 - `mensaje*.txt` (7 ficheros de notas)
-- `uv.lock` trackeado **y** gitignored → decidir: se trackea (necesario para el workspace)
+- `uv.lock` trackeado **y** gitignored → **decidido: se trackea** (el Dockerfile usa
+  `uv sync --frozen` y el workspace lo necesita); la línea se quitó de `.gitignore`
 
 En `news_sumary`: limpio (solo `data/.gitkeep`).
 
@@ -201,12 +202,25 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
 
 ---
 
-## 10. Próximo paso
+## 10. Estado de la ejecución
 
-Ejecutando **P0**:
-1. commit de higiene en `omni_api` (§7)
-2. push de los 3 commits pendientes + merge de PR #1 en `choldi/ov_api`
-3. reconciliar `dd874e3` y recuperar el engine `qwen3_tts`
-4. backup en debwk
+**P0 — completado (2026-10-16):**
 
-**Se para antes de P1** (la importación con subtree que crea el monorepo).
+1. ✅ commit de higiene en `omni_api`: `2a8f10f` — 31 ficheros dejados de trackear
+   (`MagicMock/**`, `tts_api.egg-info/**`, `mensaje2-8.txt`, `storage/`), artefactos
+   borrados del disco, `.gitignore` corregido.
+2. ✅ push `e5b7900..2a8f10f` y **PR #1 mergeado** en `choldi/ov_api/main` (`8a9d6f5`).
+   CI ahora pasa `uv sync --dev`, `ruff check .` y `ruff format --check .`; se detiene
+   en `mypy tts_api` (**P9**, aplazado a propósito).
+3. ✅ `dd874e3` recuperado del servidor como ref **`deployed/main`** en el repo local;
+   delta sin commitear de debwk capturado en
+   `~/news-transfer/debkw-ov_api-uncommitted.patch` (+`pyproject.toml`, `uv.lock` +726,
+   docs). El **port** del engine a `main` queda para **P3** (decisión: opción a).
+4. ✅ backup en debwk `~/news-transfer/newsvoice-P0-backup-2026-10-16.tar.gz` (296M)
+   con `news.db`, `manifest.json`, `collections.toml`, ambos `.env` y
+   `storage/omnivoice.db`; 90 ficheros root-owned no legibles quedan en
+   `…-skipped.log` (regenerables).
+
+**Siguiente: P1** — crear `jordi/newsvoice` en Gitea e importar las dos historias con
+`git subtree add --prefix=…` **sin `--squash`**, añadir la raíz uv workspace y el
+esqueleto de `libs/tts_contract`. Requiere aprobación explícita.
