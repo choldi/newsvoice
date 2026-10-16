@@ -22,6 +22,35 @@ _VOLUME_PATH = "/voices"
 _MANIFEST = "manifest.json"
 _REFS_DIR = "refs"
 
+#: Qwen3-TTS expects full lowercase language names, not ISO 639-1 codes.
+#: Mirrors ``src.core.local_tts.QWEN_LANGUAGE_NAMES``; this module never
+#: imports ``src.*`` because it ships as a standalone Modal app.
+_QWEN_LANGUAGE_NAMES = {
+    "en": "english",
+    "es": "spanish",
+    "fr": "french",
+    "ca": "french",
+    "pt": "portuguese",
+    "de": "german",
+    "it": "italian",
+    "ja": "japanese",
+    "ko": "korean",
+    "ru": "russian",
+}
+
+
+def _qwen_language(language: str) -> str:
+    """Map an ISO 639-1 code to the language name Qwen3-TTS accepts.
+
+    Args:
+        language: ISO 639-1 code, or a name the model already understands.
+
+    Returns:
+        The Qwen3-TTS language name; unrecognised values pass through so the
+        model can validate them itself.
+    """
+    return _QWEN_LANGUAGE_NAMES.get((language or "").lower(), language)
+
 
 def _ref_text(voice_ref: str) -> str:
     """Read the transcript that produced a reference sample.
@@ -142,7 +171,7 @@ class QwenTTS:
         ref_path = f"{_VOLUME_PATH}/{_REFS_DIR}/{voice_ref}.wav"
         wavs, sample_rate = self._model.generate_voice_clone(
             text=text,
-            language=language,
+            language=_qwen_language(language),
             ref_audio=ref_path,
             ref_text=_ref_text(voice_ref),
         )
