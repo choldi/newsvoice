@@ -43,7 +43,7 @@ from src.api.models.verification import (
     VerificationTarget,
     VerifyDigestIn,
 )
-from src.core.budget import estimate_judge_cost, preflight
+from src.core.budget import preflight
 from src.core.config import settings
 from src.core.llm import generate_completion
 from src.core.prompts import (
@@ -461,8 +461,8 @@ class LlmJudge:
             VerificationError: When Modal is unusable, the budget blocks the call
                 or the remote function fails.
         """
-        from src.api.db.database import ModalSpendRepository
         from src.core.modal_client import modal_judge
+        from src.core.modal_cost import set_cost_context
 
         if not settings.modal_enabled:
             raise VerificationError("judge backend 'modal' requires modal_enabled=true")
@@ -472,7 +472,9 @@ class LlmJudge:
         decision = await preflight(char_count=prompt_chars, cache_hit=False)
         if not decision.allowed:
             raise VerificationError(f"modal budget guard blocked the judge: {decision.reason}")
-        started = time.monotonic()
+        # The Modal client measures and records the real cost of this call; the
+        # context only labels the ledger row.
+        set_cost_context(collection=collection, run_id=run_id or "", stage="llm_verify")
         try:
             payload = await modal_judge(
                 system_prompt=system_prompt,
@@ -482,14 +484,6 @@ class LlmJudge:
             )
         except Exception as exc:
             raise VerificationError(f"modal judge call failed: {exc}") from exc
-        await ModalSpendRepository().record(
-            collection=collection,
-            stage="llm_verify",
-            backend=f"modal:{self.model}",
-            run_id=run_id or None,
-            gpu_seconds=round(time.monotonic() - started, 2),
-            cost_usd=estimate_judge_cost(prompt_chars, settings.llm_max_tokens),
-        )
         content = payload.get("content") if isinstance(payload, dict) else None
         if not content:
             raise VerificationError("modal judge returned no content")

@@ -8,6 +8,7 @@ Modal code path touches this module.
 from __future__ import annotations
 
 from src.core.config import settings
+from src.core.modal_cost import measure
 from src.core.tracing import trace_function
 
 
@@ -44,13 +45,17 @@ async def modal_tts(
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "generate_tts")
-    return await function.remote.aio(
-        text=text,
-        voice_ref=voice_ref,
-        language=language,
-        speed=speed,
-        emotion=emotion,
+    audio, _cost = await measure(
+        function.remote.aio(
+            text=text,
+            voice_ref=voice_ref,
+            language=language,
+            speed=speed,
+            emotion=emotion,
+        ),
+        backend="qwen3_tts",
     )
+    return audio
 
 
 @trace_function(component="modal.client")
@@ -86,9 +91,13 @@ async def modal_zonos2_tts(
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "generate_tts_zonos2")
-    return await function.remote.aio(
-        text=text, voice_ref=voice_ref, language=language, speed=speed, emotion=emotion
+    audio, _cost = await measure(
+        function.remote.aio(
+            text=text, voice_ref=voice_ref, language=language, speed=speed, emotion=emotion
+        ),
+        backend="zonos2",
     )
+    return audio
 
 
 @trace_function(component="modal.client")
@@ -126,16 +135,20 @@ async def modal_voxcpm2_tts(
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "generate_tts_voxcpm2")
-    return await function.remote.aio(
-        text=text,
-        voice_ref=voice_ref,
-        language=language,
-        speed=speed,
-        emotion=emotion,
-        cfg_value=settings.voxcpm2_cfg_value,
-        inference_timesteps=settings.voxcpm2_inference_timesteps,
-        num_candidates=settings.voxcpm2_candidates,
+    audio, _cost = await measure(
+        function.remote.aio(
+            text=text,
+            voice_ref=voice_ref,
+            language=language,
+            speed=speed,
+            emotion=emotion,
+            cfg_value=settings.voxcpm2_cfg_value,
+            inference_timesteps=settings.voxcpm2_inference_timesteps,
+            num_candidates=settings.voxcpm2_candidates,
+        ),
+        backend="voxcpm2",
     )
+    return audio
 
 
 async def upload_voice(name: str, wav: bytes, ref_text: str = "") -> None:
@@ -159,7 +172,10 @@ async def upload_voice(name: str, wav: bytes, ref_text: str = "") -> None:
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "upload_voice")
-    await function.remote.aio(name=name, wav=wav, ref_text=ref_text)
+    await measure(
+        function.remote.aio(name=name, wav=wav, ref_text=ref_text),
+        backend="upload_voice",
+    )
 
 
 @trace_function(component="modal.client")
@@ -193,9 +209,13 @@ async def modal_judge(
     import modal
 
     function = modal.Function.from_name(settings.modal_app_name, "judge")
-    return await function.remote.aio(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        model=model,
-        max_tokens=max_tokens,
+    result, _cost = await measure(
+        function.remote.aio(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model,
+            max_tokens=max_tokens,
+        ),
+        backend="judge",
     )
+    return result

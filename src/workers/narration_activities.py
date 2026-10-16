@@ -34,6 +34,13 @@ from src.api.services.narration_tts import (
 )
 from src.core.budget import preflight
 from src.core.config import settings
+from src.core.modal_cost import (
+    billing_delta,
+    billing_snapshot,
+    episode_tags,
+    record_billing_delta,
+    set_cost_context,
+)
 
 #: ``audio_jobs.kind`` discriminator owned by this module. The digest TTS job
 #: keeps ``'tts'`` so the two audio paths never overwrite each other.
@@ -270,12 +277,19 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     await jobs.set_generating(run_id, kind=NARRATION_JOB_KIND)
     started = time.monotonic()
     service = NarrationTTSService()
-    if spec.tts_backend is not TTSBackend.OMNIVOICE:
+    uses_modal = spec.tts_backend is not TTSBackend.OMNIVOICE
+    if uses_modal:
         await _enforce_modal_budget(
             service, spec, script, collection=collection, run_id=run_id, strategy=strategy
         )
+    # Measure the real Modal cost of this episode: tag the app so the billing
+    # report attributes the interval, snapshot the billing summary before and
+    # after, and let each call record its own wall-clock cost.
+    set_cost_context(collection=collection, run_id=run_id, stage="tts")
+    before = await billing_snapshot() if uses_modal else None
     try:
-        result = await service.render(spec, script, collection=collection, strategy=strategy)
+        async with episode_tags(collection, run_id):
+            result = await service.render(spec, script, collection=collection, strategy=strategy)
     except Exception as exc:
         await jobs.finish_job(
             run_id,
@@ -293,6 +307,14 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
     elapsed = round(time.monotonic() - started, 2)
+    if before is not None:
+        await record_billing_delta(
+            billing_delta(before, await billing_snapshot()),
+            collection=collection,
+            run_id=run_id,
+            backend=str(spec.tts_backend),
+            wall_seconds=elapsed,
+        )
     await jobs.finish_job(
         run_id,
         status="FINISHED_OK",

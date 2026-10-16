@@ -16,7 +16,10 @@ from pathlib import Path
 
 import modal
 
-app = modal.App("news-engine")
+app = modal.App(
+    "news-engine",
+    tags={"project": "news-engine", "managed-by": "news-engine"},
+)
 
 _VOLUME_PATH = "/voices"
 _MANIFEST = "manifest.json"
