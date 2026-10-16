@@ -1,5 +1,9 @@
 # PHASES.MD - Incremental Delivery Plan (Temporal-based)
 
+> **Merge monorepo:** la unificación de `news-engine` con el gateway `tts-api` en un
+> único repo desplegable en 1..N servidores se documenta en **[MERGE_PLAN.md](MERGE_PLAN.md)**
+> como las fases **P0–P10**, en paralelo a las fases de este fichero.
+
 Each phase is **independently shippable**. Do NOT start phase N+1 until N is
 running reliably for **3+ days**.
 
