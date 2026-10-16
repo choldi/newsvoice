@@ -172,6 +172,22 @@ async def test_preview_uses_the_profile_language_for_the_phrase(
     assert synthesize.await_args.args[1] == voice_preview._SAMPLE_TEXTS["en"]
 
 
+async def test_preview_uses_the_french_phrase_for_french_voices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    save_custom_profile(_profile("mi_voz_fr", language="fr"))
+    voice_for = AsyncMock(return_value="mi_voz_fr")
+    synthesize = AsyncMock(return_value=b"FR-AUDIO")
+    monkeypatch.setattr(voice_preview, "voice_for", voice_for)
+    monkeypatch.setattr(voice_preview, "synthesize", synthesize)
+
+    result = await voice_preview.preview("mi_voz_fr")
+
+    assert result["engine"] == "qwen3_tts"
+    assert synthesize.await_args.args[1] == voice_preview._SAMPLE_TEXTS["fr"]
+
+
 # --- helpers ------------------------------------------------------------------
 
 

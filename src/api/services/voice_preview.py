@@ -63,6 +63,10 @@ _SAMPLE_TEXTS = {
     "en": (
         "Hello! This is a quick voice preview from your news engine. Listen to how I sound today."
     ),
+    "fr": (
+        "Bonjour, ceci est un aperçu rapide de votre moteur d'actualités. "
+        "Écoutez à quel point je sonne aujourd'hui."
+    ),
 }
 
 _MEDIA_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav"}
