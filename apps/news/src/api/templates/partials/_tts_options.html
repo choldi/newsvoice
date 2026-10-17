@@ -1,0 +1,48 @@
+{% set opts = tts_options.get(current_backend, {"languages": [], "voices": []}) %}
+<div class="col">
+  <label>Motor TTS</label>
+  {# The catalogue follows the engine, so changing it re-fetches this partial.
+     `closest` keeps the swap working from both the static include and a
+     fragment response, without the partial having to know the container id
+     or the form id of the row that triggered it. #}
+  <select name="tts_backend"
+          hx-get="/ui/fragments/tts_options"
+          hx-trigger="change"
+          hx-target="closest div[id^='tts-options']"
+          hx-include="closest form"
+          hx-swap="innerHTML">
+    {% for value, label in tts_backends %}
+    <option value="{{ value }}" {{ 'selected' if value == current_backend else '' }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</div>
+{% if opts.languages %}
+<div class="col">
+  <label>Idioma</label>
+  <select name="language">
+    {% for lang in opts.languages %}
+    <option value="{{ lang }}" {{ 'selected' if lang == current_language else '' }}>{{ lang }}</option>
+    {% endfor %}
+  </select>
+</div>
+{% else %}
+<div class="col">
+  <label>Idioma (es/en/…)</label>
+  <input type="text" name="language" value="{{ current_language }}">
+</div>
+{% endif %}
+{% if opts.voices %}
+<div class="col">
+  <label>Voz</label>
+  <select name="voice">
+    {% for v in opts.voices %}
+    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
+    {% endfor %}
+  </select>
+</div>
+{% else %}
+<div class="col">
+  <label>Voz</label>
+  <input type="text" name="voice" value="{{ current_voice }}">
+</div>
+{% endif %}

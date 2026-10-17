@@ -1,0 +1,67 @@
+{# Unified voice table of /ui/voices (Phase 9.6).
+
+   Rendered inline on first paint and swapped into #voices-table by
+   GET /ui/fragments/voices_table on every filter/page change. `rows` carry
+   the status/badge of the Modal profiles (join with the manifest through
+   generated_voices) so designed voices show whether their reference WAV is
+   usable; `qs` is the urlencoded filter state the pager links ride on. #}
+<div class="muted" style="font-size:12px;margin:10px 0 4px">
+  {{ page_obj.total }} {{ 'voz' if page_obj.total == 1 else 'voces' }} ·
+  página {{ page_obj.page }} de {{ page_obj.total_pages }}
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Voz</th>
+      <th>ID</th>
+      <th>Idioma</th>
+      <th>Tipo</th>
+      <th>Motores</th>
+      <th>Estado</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for v in rows %}
+    <tr>
+      <td>{{ v.label }}</td>
+      <td><code>{{ v.id }}</code></td>
+      <td>{{ v.language or '—' }}</td>
+      <td>{{ {'stock': 'stock', 'cloned': 'clonada', 'generated': 'diseñada'}.get(v.category, v.category) }}</td>
+      <td>{{ v.engines | join(' · ') or '—' }}</td>
+      <td>{% if v.status %}<span class="badge {{ v.badge }}">{{ v.status }}</span>{% else %}—{% endif %}</td>
+      <td style="white-space:nowrap">
+        {% if is_admin %}
+        <form hx-post="/ui/voices/test" hx-target="#voice-sample" hx-swap="innerHTML" style="display:inline">
+          <input type="hidden" name="voice" value="{{ v.id }}">
+          <button type="submit">Probar</button>
+        </form>
+        {% endif %}
+        {% if v.has_audio %}
+        <a class="btn" href="/ui/voices/audio/{{ v.id }}.wav" target="_blank" rel="noopener">WAV</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">Ninguna voz coincide con los filtros</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if page_obj.total_pages > 1 %}
+{% set sep = '&' if qs else '' %}
+<div style="display:flex;gap:4px;align-items:center;margin-top:8px;font-size:13px">
+  {% if page_obj.has_prev %}
+  <a class="btn" href="#" hx-get="/ui/fragments/voices_table?{{ qs }}{{ sep }}page=1" hx-target="#voices-table" hx-swap="innerHTML">«</a>
+  <a class="btn" href="#" hx-get="/ui/fragments/voices_table?{{ qs }}{{ sep }}page={{ page_obj.page - 1 }}" hx-target="#voices-table" hx-swap="innerHTML">‹</a>
+  {% else %}
+  <span class="muted" style="padding:0 6px">«‹</span>
+  {% endif %}
+  <span class="muted" style="padding:0 6px">Página {{ page_obj.page }} / {{ page_obj.total_pages }}</span>
+  {% if page_obj.has_next %}
+  <a class="btn" href="#" hx-get="/ui/fragments/voices_table?{{ qs }}{{ sep }}page={{ page_obj.page + 1 }}" hx-target="#voices-table" hx-swap="innerHTML">›</a>
+  <a class="btn" href="#" hx-get="/ui/fragments/voices_table?{{ qs }}{{ sep }}page={{ page_obj.total_pages }}" hx-target="#voices-table" hx-swap="innerHTML">»</a>
+  {% else %}
+  <span class="muted" style="padding:0 6px">›»</span>
+  {% endif %}
+</div>
+{% endif %}

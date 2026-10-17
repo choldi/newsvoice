@@ -1,0 +1,36 @@
+{% if error %}
+<div class="empty">No se pudo leer el catálogo: {{ error }}</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Voz</th>
+      <th>Etiqueta</th>
+      <th>Idioma</th>
+      <th>Origen</th>
+      <th>Estado</th>
+      <th>Referencia</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in voices %}
+    <tr>
+      <td><code>{{ row.profile.name }}</code></td>
+      <td>{{ row.profile.label }}</td>
+      <td>{{ row.profile.language }}</td>
+      <td>{{ 'personalizada' if row.custom else 'catálogo' }}</td>
+      <td><span class="badge {{ row.badge }}">{{ row.status }}</span></td>
+      <td>
+        {% if row.status == 'generada' %}
+        <audio controls preload="none"
+               src="/ui/voices/audio/{{ row.profile.name }}.wav"
+               style="height:28px;max-width:220px"></audio>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">Sin voces en el catálogo</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

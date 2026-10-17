@@ -1,0 +1,28 @@
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Hora</th>
+        {% for day in weekday_names %}<th>{{ day }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for hour in hour_range %}
+      <tr>
+        <td class="muted">{{ '%02d:00'|format(hour) }}</td>
+        {% for day in collections %}
+        <td>
+          {% for slot in day.slots %}
+            {% if slot.hour == hour %}
+            <span class="badge ok" title="Colección {{ slot.name }} a las {{ '%02d:%02d'|format(slot.hour, slot.minute) }} UTC">
+              {{ slot.name }}
+            </span>
+            {% endif %}
+          {% endfor %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

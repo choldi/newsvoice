@@ -1,0 +1,6 @@
+{% if error %}
+<p class="muted" style="color:var(--err)">{{ error }}</p>
+{% else %}
+<p class="muted">Muestra de <code>{{ voice }}</code> · motor {{ engine }} · {{ note }}</p>
+<audio controls autoplay src="{{ url }}" style="width:100%"></audio>
+{% endif %}

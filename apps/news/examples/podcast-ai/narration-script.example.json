@@ -1,0 +1,87 @@
+{
+  "title": "AI Pulse",
+  "language": "en",
+  "source": "llm",
+  "segments": [
+    {
+      "role": "michael",
+      "text": "Welcome to AI Pulse, your daily AI briefing. Today we're talking about a new open-weight model that just dropped and is already beating the big labs on reasoning benchmarks.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "The model is called Qwen 3 Max, released yesterday by Alibaba. It scores 81.2 on the GPQA Diamond benchmark, which puts it ahead of GPT-5 and Claude Opus 4. The weights are available under a permissive license, and the smallest variant runs on a single consumer GPU.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "michael",
+      "text": "An open model beating the frontier labs? Dwight, you sound almost impressed. But benchmarks are one thing — what does it actually do well in practice?",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "The paper reports strong results on agentic coding and tool use. In the SWE-bench Verified suite it resolves 62 percent of real GitHub issues, up from 47 percent for the previous open leader. The context window is 256 thousand tokens, which is enough to hold an entire codebase.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "michael",
+      "text": "That is genuinely useful. A model that can read a whole repository and fix a bug without a six-figure API bill. Let's move to our second story.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "Google announced Gemini 3.1 Flash with a new latency optimization. The first token arrives in 180 milliseconds, down from 340. They call it speculative decoding with a distilled draft model, and it is now the default in the API.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "michael",
+      "text": "Half the wait time for the same price. That is the kind of incremental improvement that actually changes how a product feels. Next up, the research corner.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "A paper from MIT introduces a method for compressing transformer attention without fine-tuning. They report a 40 percent reduction in memory at inference with less than one percent accuracy loss on standard benchmarks. The code is open source.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "michael",
+      "text": "Forty percent less memory for free. That is the kind of paper that ends up in every production stack within a year. Let's hit the headlines rapid-fire style.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "Headline one: Anthropic released a Claude plugin for spreadsheet analysis that reads formulas and flags inconsistencies.",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline two: the EU AI Act transparency rules now apply to all general-purpose models released in the market.",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline three: a startup called Cognition raised two hundred million dollars to build autonomous software engineers.",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "Headline four: Hugging Face now hosts more than two million public models, doubling in the last eighteen months.",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "dwight",
+      "text": "Headline five: researchers demonstrated a robot that learns to fold laundry from a single video demonstration.",
+      "pause_after_ms": 200
+    },
+    {
+      "role": "michael",
+      "text": "That wraps today's briefing. Thanks for listening to AI Pulse. I'm Michael, and remember — the benchmark is not the product.",
+      "pause_after_ms": 300
+    },
+    {
+      "role": "dwight",
+      "text": "And I'm Dwight. See you tomorrow for more AI news. AI Pulse and out.",
+      "pause_after_ms": 300
+    }
+  ]
+}

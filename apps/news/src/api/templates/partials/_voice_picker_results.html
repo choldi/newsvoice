@@ -1,0 +1,39 @@
+{# Radio results of a voice picker (Phase 9.7).
+
+   Rendered inline by _voice_picker.html and alone by
+   GET /ui/fragments/voice_picker (wrapped as `picker` either way). The
+   current selection is always in the list — kept even when it falls past the
+   cap or belongs to no catalogue — so a re-render never drops what was
+   picked. With a non-empty query and zero matches the literal option lets
+   the operator send the text as-is (an unknown id the guards treat as a
+   wildcard). #}
+{% if picker.empty_label %}
+<label class="voice-option">
+  <input type="radio" name="{{ picker.field }}" value="" {{ 'checked' if not picker.current else '' }}>
+  <span>{{ picker.empty_label }}</span>
+</label>
+{% endif %}
+{% for entry in picker.shown %}
+<label class="voice-option">
+  <input type="radio" name="{{ picker.field }}" value="{{ entry.id }}" {{ 'checked' if entry.id == picker.current else '' }}>
+  <span>{{ entry.label }}<small>{{ entry.id }}{% if entry.language %} · {{ entry.language }}{% endif %}{% if entry.tag %} · {{ entry.tag }}{% endif %}</small></span>
+</label>
+{% endfor %}
+{% if not picker.shown and not picker.literal %}
+<div class="empty">{{ 'Sin voces en el catálogo' if not picker.q else 'Ninguna voz coincide con «' ~ picker.q ~ '»' }}</div>
+{% endif %}
+{% if picker.literal %}
+<label class="voice-option">
+  <input type="radio" name="{{ picker.field }}" value="{{ picker.q }}" {{ 'checked' if not picker.current else '' }}>
+  <span>Usar «{{ picker.q }}» tal cual<small>id no registrado en ningún catálogo</small></span>
+</label>
+{% endif %}
+{% if picker.total %}
+<div class="muted voice-hint">
+  {% if picker.q or picker.lang %}
+  {{ picker.total }} {{ 'coincidencia' if picker.total == 1 else 'coincidencias' }}{% if picker.total > picker.limit %} · mostrando las {{ picker.limit }} primeras{% endif %}
+  {% else %}
+  {{ picker.total }} {{ 'voz' if picker.total == 1 else 'voces' }} · escribe para filtrar
+  {% endif %}
+</div>
+{% endif %}

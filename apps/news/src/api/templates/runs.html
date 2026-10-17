@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Ejecuciones{% endblock %}
+{% block app %}
+<h1>Ejecuciones</h1>
+<div class="card">
+  <p class="muted">Últimas ejecuciones del pipeline (estados en vivo desde Temporal). Se refresca automáticamente.</p>
+</div>
+<div id="runs-table" hx-get="/ui/fragments/runs" hx-trigger="load, every 15s" hx-swap="outerHTML">
+  <div class="empty">Cargando…</div>
+</div>
+{% endblock %}

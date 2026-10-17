@@ -1,0 +1,29 @@
+<table>
+  <thead>
+    <tr>
+      <th>Hora</th>
+      <th>Nivel</th>
+      <th>Componente</th>
+      <th>Correlation</th>
+      <th>Trace</th>
+      <th>Evento</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in items|reverse %}
+    <tr>
+      <td class="muted">{{ r.timestamp }}</td>
+      <td>
+        {% set lvl = (r.level or '')|lower %}
+        <span class="badge {{ 'failed' if lvl in ('error', 'critical') else 'terminated' if lvl == 'warning' else 'no_new_articles' if lvl in ('debug', 'trace') else 'ok' }}">{{ r.level }}</span>
+      </td>
+      <td>{{ r.component }}</td>
+      <td class="muted">{{ r.correlation_id or '' }}</td>
+      <td class="muted">{{ r.trace_id or '' }}</td>
+      <td>{{ r.event }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">Sin registros</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

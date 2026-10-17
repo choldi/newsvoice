@@ -1,0 +1,38 @@
+# collections.gaming.toml
+# Configuración del podcast diario "Game Over" (videojuegos)
+# Copia este bloque [[collections]] a tu collections.toml principal
+
+[collection_defaults]
+tts_enabled = false
+deliver_audio = false
+language = "en"
+voice = ""
+narration_enabled = false
+narration_strategy = "turns"
+narration_deliver_audio = true
+main_story_count = 5
+headline_count = 5
+
+[[collections]]
+name = "gaming"
+time = "10:00"
+enabled = true
+feed_urls = [
+    "https://feeds.feedburner.com/ign/all",
+    "https://www.polygon.com/rss/index.xml",
+    "https://kotaku.com/rss",
+    "https://www.vg247.com/feed",
+]
+language = "en"
+main_story_count = 5
+headline_count = 10
+tts_enabled = false
+deliver_audio = false
+podcast_name = "Game Over"
+podcast_behavior = "Dos co-hosts: Michael (entusiasta, conduce) y Dwight (analista escéptico, deadpan). Diálogo natural, turnos cortos, terminología gamer (patch, meta, nerf, speedrun, NPC, grind). Michael abre con 'Welcome to Game Over, your daily gaming briefing.' Dwight aporta contexto técnico y escepticismo. Titulares: ida y vuelta rápida, una frase por item."
+prompt_template = "gaming"
+narration_enabled = true
+narration_strategy = "turns"
+narration_deliver_audio = true
+narration_spec = { title = "Game Over", language = "en", roles = [{name="michael",voice_id="3e47fbcc-53a8-4551-be91-48f93d62a19f",speed=1.0,emotion="excited"},{name="dwight",voice_id="f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8",speed=1.0,emotion="calm"}], pause_ms = 350 }
+delivery_channels = ["telegram"]

@@ -1,0 +1,573 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Colecciones{% endblock %}
+{% block app %}
+<h1>Colecciones</h1>
+{% if is_admin %}
+<div class="tags">
+  <a class="btn" href="#nueva">Nueva colección</a>
+  <form method="post" action="/ui/schedules/resync" style="display:inline">
+    <button type="submit" class="primary">Resincronizar schedules</button>
+  </form>
+</div>
+{% endif %}
+
+{% for c in collections %}
+<details class="card" id="d-{{ c.name }}">
+  <summary>
+    <span class="triangle">▶</span>
+    <span style="flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <strong>{{ c.name }}</strong>
+      {% if not c.enabled %}<span class="badge no_new_articles">pausada</span>{% endif %}
+      {% if c.tts_enabled %}<span class="badge ok">🎙 TTS</span>{% endif %}
+      <span class="muted" style="font-size:13px">
+        Hora: {{ c.time }} UTC ·
+        Feeds: {{ c.feed_urls|length }} ·
+        Idioma: {{ c.language or '—' }} ·
+        Voz: {{ c.voice or '—' }}
+      </span>
+    </span>
+    <span style="display:flex;gap:4px;align-items:center">
+      {% if can_operate %}
+      <form method="post" action="/ui/collections/{{ c.name }}/run" onclick="event.stopPropagation()" style="display:inline">
+        <button type="submit" class="btn primary" style="margin:0">Ejecutar ahora</button>
+      </form>
+      {% endif %}
+      {% if is_admin %}
+      <button class="btn"
+              onclick="event.preventDefault();event.stopPropagation();var d=document.getElementById('d-{{ c.name }}');d.open=true;setTimeout(function(){var el=document.getElementById('edit-form-{{ c.name }}');if(el)el.scrollIntoView({behavior:'smooth',block:'center'});},100);">Editar</button>
+      <form method="post" action="/ui/collections/{{ c.name }}/delete" onclick="event.stopPropagation()" style="display:inline"
+            onsubmit="return confirm('¿Eliminar la colección {{ c.name }}?')">
+        <button type="submit" class="btn danger" style="margin:0">Eliminar</button>
+      </form>
+      {% endif %}
+    </span>
+  </summary>
+  <div class="inner">
+    {% if is_admin %}
+    <form method="post" action="/ui/collections/{{ c.name }}/update" id="edit-form-{{ c.name }}">
+      <div class="row">
+        <div class="col">
+          <label>Nombre</label>
+          <input type="text" name="new_name" value="{{ c.name }}" required>
+        </div>
+        <div class="col">
+          <label>Hora (HH:MM UTC)</label>
+          <input type="text" name="time" value="{{ c.time }}" required>
+        </div>
+      </div>
+      <label>Feed URLs (una por línea)</label>
+      <textarea name="feed_urls">{{ c.feed_urls|join('\n') }}</textarea>
+      <div class="row">
+        <div class="col">
+          <label>Podcast name</label>
+          <input type="text" name="podcast_name" value="{{ c.podcast_name }}">
+        </div>
+        {% set tts_enabled = c.tts_enabled %}
+        {% set current_language = c.language %}
+        {% set current_voice = c.voice %}
+        {% set current_backend = c.tts_backend or 'edge' %}
+        <div id="tts-options-{{ c.name }}" style="display:contents">
+          {% include "partials/_tts_options.html" %}
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Prompt template</label>
+          <select name="prompt_template">
+            {% for t in ['default', 'finance', 'health', 'investigative', 'gaming'] %}
+            <option value="{{ t }}" {{ 'selected' if c.prompt_template == t else '' }}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col">
+          <label>Chat ID (opcional)</label>
+          <input type="text" name="chat_id" value="{{ c.chat_id or '' }}">
+        </div>
+        <div class="col">
+          <label>Email recipients (uno por línea, vacío = sin email)</label>
+          <textarea name="email_recipients">{{ c.email_recipients|join('\n') }}</textarea>
+        </div>
+      </div>
+      <label>Custom prompt (opcional, sustituye a la plantilla)</label>
+      <textarea name="custom_prompt" rows="4">{{ c.custom_prompt }}</textarea>
+      <label>Comportamiento del podcaster</label>
+      <input type="text" name="podcast_behavior" value="{{ c.podcast_behavior }}">
+      <div class="row">
+        <div class="col">
+          <label>Canales de entrega</label>
+          <div style="display:flex;gap:14px">
+            <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" {{ 'checked' if 'telegram' in c.delivery_channels else '' }}><label>Telegram</label></div>
+            <div class="check"><input type="checkbox" name="delivery_channels" value="email" {{ 'checked' if 'email' in c.delivery_channels else '' }}><label>Email</label></div>
+            <div class="check"><input type="checkbox" name="delivery_channels" value="whatsapp" {{ 'checked' if 'whatsapp' in c.delivery_channels else '' }}><label>WhatsApp</label></div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>WhatsApp recipients (E.164, uno por línea, vacío = sin WhatsApp)</label>
+          <textarea name="whatsapp_recipients">{{ c.whatsapp_recipients|join('\n') }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp group id (opcional)</label>
+          <input type="text" name="whatsapp_group_id" value="{{ c.whatsapp_group_id or '' }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Canales de la lógica de selección (opcional)</label>
+          <div style="display:flex;gap:14px">
+            {% for ch in ['telegram', 'email', 'whatsapp'] %}
+            <div class="check"><input type="checkbox" name="logic_channels" value="{{ ch }}" {{ 'checked' if c.logic_delivery and ch in c.logic_delivery.channels else '' }}><label>{{ ch|capitalize }}</label></div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="col">
+          <label>Chat ID de la lógica</label>
+          <input type="text" name="logic_chat_id" value="{{ c.logic_delivery.chat_id if c.logic_delivery and c.logic_delivery.chat_id else '' }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label>Email recipients de la lógica</label>
+          <textarea name="logic_email_recipients">{{ c.logic_delivery.email_recipients|join('\n') if c.logic_delivery else '' }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp recipients de la lógica</label>
+          <textarea name="logic_whatsapp_recipients">{{ c.logic_delivery.whatsapp_recipients|join('\n') if c.logic_delivery else '' }}</textarea>
+        </div>
+        <div class="col">
+          <label>WhatsApp group id de la lógica</label>
+          <input type="text" name="logic_whatsapp_group_id" value="{{ c.logic_delivery.whatsapp_group_id if c.logic_delivery and c.logic_delivery.whatsapp_group_id else '' }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-{{ c.name }}" hx-swap="innerHTML" hx-include="#edit-form-{{ c.name }}" {{ 'checked' if c.tts_enabled else '' }}><label>TTS habilitado</label></div>
+          <div class="check"><input type="checkbox" name="deliver_audio" {{ 'checked' if c.deliver_audio else '' }}><label>Entregar audio</label></div>
+          <div class="check"><input type="checkbox" name="enabled" {{ 'checked' if c.enabled else '' }}><label>Habilitada</label></div>
+        </div>
+        <div class="col" style="display:flex;align-items:flex-end">
+          <button type="submit" class="primary">Guardar</button>
+        </div>
+      </div>
+
+      <details class="card" style="margin-top:16px">
+        <summary><strong>🎙 Narración multi-hablante (Fase 7)</strong></summary>
+        <div class="inner">
+          <div class="row">
+            <div class="col">
+              <div class="check"><input type="checkbox" name="narration_enabled" {{ 'checked' if c.narration_enabled else '' }}><label>Narración habilitada para esta colección</label></div>
+            </div>
+            <div class="col">
+              <label>Estrategia de render</label>
+              <select name="narration_strategy">
+                <option value="turns" {{ 'selected' if c.narration_strategy == 'turns' else '' }}>Por turnos (TURNS)</option>
+                <option value="conversations" {{ 'selected' if c.narration_strategy == 'conversations' else '' }}>Conversaciones (CONVERSATIONS)</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label>Historias principales</label>
+              <input type="number" name="main_story_count" value="{{ c.main_story_count }}" min="1" max="20">
+            </div>
+            <div class="col">
+              <label>Titulares</label>
+              <input type="number" name="headline_count" value="{{ c.headline_count }}" min="1" max="40">
+            </div>
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" {{ 'checked' if c.narration_deliver_audio else '' }}><label>Entregar audio de narración</label></div>
+            </div>
+          </div>
+          <label>Cast — roles que dan la clase</label>
+          <table>
+            <thead>
+              <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+            </thead>
+            <tbody>
+            {% set roles = c.narration_spec.roles if c.narration_spec else [] %}
+            {% set rows = roles|length + 1 if roles|length < 8 else 8 %}
+            {% set rows = rows if rows > 1 else 2 %}
+            {% set cast_engine = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
+            {% for i in range(rows) %}
+              {% set r = roles[i] if roles|length > i else None %}
+              <tr>
+                <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
+                <td><div id="cast-voice-{{ c.name }}-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
+                <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+                <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+                <td>
+                  <select name="role{{ i }}_emotion">
+                    <option value="">(ninguna)</option>
+                    {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if r and r.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+                  </select>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          <div class="row">
+            <div class="col">
+              <label>Título del programa</label>
+              <input name="narr_title" value="{{ c.narration_spec.title if c.narration_spec else '' }}">
+            </div>
+            <div class="col">
+              <label>Idioma del spec</label>
+              <input name="narr_language" list="lang-list" value="{{ c.narration_spec.language if c.narration_spec else 'es' }}">
+            </div>
+            <div class="col">
+              <label>Pausa entre turnos (ms)</label>
+              <input type="number" name="narr_pause_ms" min="0" max="5000" value="{{ c.narration_spec.pause_ms if c.narration_spec else 400 }}">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label>Velocidad por defecto</label>
+              <input type="number" name="narr_speed" min="0.5" max="2" step="0.1" value="{{ c.narration_spec.speed if c.narration_spec else 1.0 }}">
+            </div>
+            <div class="col">
+              <label>Emoción por defecto</label>
+              <select name="narr_emotion">
+                <option value="">(ninguna)</option>
+                {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if c.narration_spec and c.narration_spec.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col">
+              <label>Backend TTS</label>
+              <span id="cast-voices-{{ c.name }}" hidden></span>
+              {% set backend = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
+              <select name="narr_backend"
+                      hx-get="/ui/fragments/cast_voices?cast={{ c.name }}&rows={{ rows }}"
+                      hx-trigger="change"
+                      hx-target="#cast-voices-{{ c.name }}"
+                      hx-swap="innerHTML">
+                <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+                <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
+                <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <div class="check"><input type="checkbox" name="narr_disclosure" {{ 'checked' if c.narration_spec and c.narration_spec.ai_disclosure else '' }}><label>Divulgación de IA audible</label></div>
+                        <div class="check"><input type="checkbox" name="narr_run_in_modal" {{ 'checked' if c.narration_spec and c.narration_spec.run_in_modal else '' }}><label>Ejecutar en Modal</label></div>
+            </div>
+          </div>
+          <details style="margin-top:8px">
+            <summary class="muted" style="cursor:pointer">JSON avanzado (solo se usa si el cast de arriba está vacío)</summary>
+            <label>Spec de narración (JSON — música, límites y opciones no expuestas arriba)</label>
+            <textarea name="narration_spec" rows="8" style="font-family:monospace;font-size:12px">{{ c.narration_spec.model_dump(mode='json')|tojson(indent=2) if c.narration_spec else '' }}</textarea>
+            <p class="muted" style="font-size:12px">Voces: <a href="/admin/narration/voices" target="_blank">catálogo</a>. Guardar el cast de arriba tiene prioridad; campos del JSON como <code>music</code> o <code>max_chars_per_request</code> se conservan al editar.</p>
+          </details>
+          <hr>
+          <h3>Verificación LLM (Fase 7.13)</h3>
+          <div class="row">
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="llm_verify" {{ 'checked' if c.llm_verify else '' }}><label>Verificar digest antes de entregar</label></div>
+            </div>
+            <div class="col">
+              <label>Umbral faithfulness (vacío = global)</label>
+              <input type="number" name="llm_verify_threshold" value="{{ c.llm_verify_threshold if c.llm_verify_threshold is not none else '' }}" min="0" max="1" step="0.05">
+            </div>
+            <div class="col">
+              <label>Backend del juez</label>
+              <select name="llm_verify_backend">
+                <option value="">(global)</option>
+                <option value="local" {{ 'selected' if c.llm_verify_backend == 'local' else '' }}>local</option>
+                <option value="modal" {{ 'selected' if c.llm_verify_backend == 'modal' else '' }}>modal</option>
+                <option value="api" {{ 'selected' if c.llm_verify_backend == 'api' else '' }}>api</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <div class="check" style="margin-top:26px"><input type="checkbox" name="audio_verify" {{ 'checked' if c.audio_verify else '' }}><label>Verificar audio con Whisper (retiene el audio mal transcrito)</label></div>
+            </div>
+            <div class="col">
+              <label>Umbral WER máximo (vacío = global, 0.30)</label>
+              <input type="number" name="audio_verify_threshold" value="{{ c.audio_verify_threshold if c.audio_verify_threshold is not none else '' }}" min="0" max="1" step="0.05">
+            </div>
+          </div>
+          <div class="row">
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="audio_verify"><label>Verificar audio con Whisper (retiene el audio mal transcrito)</label></div>
+          </div>
+          <div class="col">
+            <label>Umbral WER máximo (vacío = global, 0.30)</label>
+            <input type="number" name="audio_verify_threshold" min="0" max="1" step="0.05">
+          </div>
+        </div>
+        <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
+          <textarea name="source_reliability" rows="3">{% for url, score in c.source_reliability.items() %}{{ url }}={{ score }}
+{% endfor %}</textarea>
+          <label>Hosts extra por feed (URL=host1,host2, una por línea)</label>
+          <textarea name="source_hosts" rows="3">{% for url, hosts in c.source_hosts.items() %}{{ url }}={{ hosts|join(',') }}
+{% endfor %}</textarea>
+          <p class="muted" style="font-size:12px">Las fuentes con fiabilidad inferior a <code>min_source_reliability</code> se excluyen antes del clustering. Los hosts extra cubren agregadores (p. ej. Google News publica artículos de otros dominios).</p>
+        </div>
+      </details>
+    </form>
+    {% endif %}
+    {% if can_operate %}
+    <form method="post" action="/ui/collections/{{ c.name }}/narrate" style="margin-top:10px">
+      <button type="submit" class="primary">🎙 Generar podcast ahora</button>
+      <span class="muted" style="font-size:12px">usa el cast de arriba y el último digesto de la colección</span>
+    </form>
+    {% endif %}
+  </div>
+</details>
+{% endfor %}
+
+{% if is_admin %}
+<div class="card" id="nueva">
+  <h2>Nueva colección</h2>
+  <form method="post" action="/ui/collections" id="create-form">
+    <div class="row">
+      <div class="col">
+        <label>Nombre</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="col">
+        <label>Hora (HH:MM UTC)</label>
+        <input type="text" name="time" value="08:00" required>
+      </div>
+    </div>
+    <label>Feed URLs (una por línea)</label>
+    <textarea name="feed_urls"></textarea>
+    <div class="row">
+      <div class="col">
+        <label>Podcast name</label>
+        <input type="text" name="podcast_name">
+      </div>
+      {% set tts_enabled = false %}
+      {% set current_language = 'es' %}
+      {% set current_voice = '' %}
+      {% set current_backend = 'edge' %}
+      <div id="tts-options-nueva" style="display:contents">
+        {% include "partials/_tts_options.html" %}
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Prompt template</label>
+        <select name="prompt_template">
+          {% for t in ['default', 'finance', 'health', 'investigative', 'gaming'] %}
+          <option value="{{ t }}" {{ 'selected' if t == 'default' else '' }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label>Chat ID (opcional)</label>
+        <input type="text" name="chat_id">
+      </div>
+      <div class="col">
+        <label>Email recipients (uno por línea, vacío = sin email)</label>
+        <textarea name="email_recipients"></textarea>
+      </div>
+    </div>
+    <label>Custom prompt (opcional, sustituye a la plantilla)</label>
+    <textarea name="custom_prompt" rows="4"></textarea>
+    <label>Comportamiento del podcaster</label>
+    <input type="text" name="podcast_behavior">
+    <div class="row">
+      <div class="col">
+        <label>Canales de entrega</label>
+        <div style="display:flex;gap:14px">
+          <div class="check"><input type="checkbox" name="delivery_channels" value="telegram" checked><label>Telegram</label></div>
+          <div class="check"><input type="checkbox" name="delivery_channels" value="email"><label>Email</label></div>
+          <div class="check"><input type="checkbox" name="delivery_channels" value="whatsapp"><label>WhatsApp</label></div>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>WhatsApp recipients (E.164, uno por línea, vacío = sin WhatsApp)</label>
+        <textarea name="whatsapp_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp group id (opcional)</label>
+        <input type="text" name="whatsapp_group_id">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Canales de la lógica de selección (opcional)</label>
+        <div style="display:flex;gap:14px">
+          {% for ch in ['telegram', 'email', 'whatsapp'] %}
+          <div class="check"><input type="checkbox" name="logic_channels" value="{{ ch }}"><label>{{ ch|capitalize }}</label></div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="col">
+        <label>Chat ID de la lógica</label>
+        <input type="text" name="logic_chat_id">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Email recipients de la lógica</label>
+        <textarea name="logic_email_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp recipients de la lógica</label>
+        <textarea name="logic_whatsapp_recipients"></textarea>
+      </div>
+      <div class="col">
+        <label>WhatsApp group id de la lógica</label>
+        <input type="text" name="logic_whatsapp_group_id">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <div class="check"><input type="checkbox" name="tts_enabled" hx-get="/ui/fragments/tts_options" hx-trigger="change" hx-target="#tts-options-nueva" hx-swap="innerHTML" hx-include="#create-form"><label>TTS habilitado</label></div>
+        <div class="check"><input type="checkbox" name="deliver_audio"><label>Entregar audio</label></div>
+        <div class="check"><input type="checkbox" name="enabled" checked><label>Habilitada</label></div>
+      </div>
+      <div class="col" style="display:flex;align-items:flex-end">
+        <button type="submit" class="primary">Crear</button>
+      </div>
+    </div>
+
+    <details class="card" style="margin-top:16px">
+      <summary><strong>🎙 Narración multi-hablante (Fase 7)</strong></summary>
+      <div class="inner">
+        <div class="row">
+          <div class="col">
+            <div class="check"><input type="checkbox" name="narration_enabled"><label>Narración habilitada para esta colección</label></div>
+          </div>
+          <div class="col">
+            <label>Estrategia de render</label>
+            <select name="narration_strategy">
+              <option value="turns" selected>Por turnos (TURNS)</option>
+              <option value="conversations">Conversaciones (CONVERSATIONS)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Historias principales</label>
+            <input type="number" name="main_story_count" value="5" min="1" max="20">
+          </div>
+          <div class="col">
+            <label>Titulares</label>
+            <input type="number" name="headline_count" value="5" min="1" max="40">
+          </div>
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="narration_deliver_audio" checked><label>Entregar audio de narración</label></div>
+          </div>
+        </div>
+        <label>Cast — roles que dan la clase</label>
+        <table>
+          <thead>
+            <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+          </thead>
+          <tbody>
+          {% set roles = [] %}
+          {% set rows = 2 %}
+          {% set cast_engine = 'omni_voice' %}
+          {% for i in range(rows) %}
+            {% set r = roles[i] if roles|length > i else None %}
+            <tr>
+              <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
+              <td><div id="cast-voice-nueva-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
+              <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+              <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+              <td>
+                <select name="role{{ i }}_emotion">
+                <option value="">(ninguna)</option>
+                {% for e in emotion_tags %}<option value="{{ e }}" {{ 'selected' if r and r.emotion == e else '' }}>{{ e }}</option>{% endfor %}
+                </select>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <div class="row">
+          <div class="col">
+            <label>Título del programa</label>
+            <input name="narr_title" value="{{ '' }}">
+          </div>
+          <div class="col">
+            <label>Idioma del spec</label>
+            <input name="narr_language" list="lang-list" value="es">
+          </div>
+          <div class="col">
+            <label>Pausa entre turnos (ms)</label>
+            <input type="number" name="narr_pause_ms" min="0" max="5000" value="400">
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label>Velocidad por defecto</label>
+            <input type="number" name="narr_speed" min="0.5" max="2" step="0.1" value="1.0">
+          </div>
+          <div class="col">
+            <label>Emoción por defecto</label>
+            <select name="narr_emotion">
+              <option value="">(ninguna)</option>
+              {% for e in emotion_tags %}<option value="{{ e }}" >{{ e }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col">
+            <label>Backend TTS</label>
+            <span id="cast-voices-nueva" hidden></span>
+            {% set backend = 'omni_voice' %}
+            <select name="narr_backend"
+                    hx-get="/ui/fragments/cast_voices?cast=nueva&rows={{ rows }}"
+                    hx-trigger="change"
+                    hx-target="#cast-voices-nueva"
+                    hx-swap="innerHTML">
+              <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+              <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
+              <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <div class="check"><input type="checkbox" name="narr_disclosure" ><label>Divulgación de IA audible</label></div>
+                        <div class="check"><input type="checkbox" name="narr_run_in_modal" ><label>Ejecutar en Modal</label></div>
+            
+          </div>
+        </div>
+        <details style="margin-top:8px">
+          <summary class="muted" style="cursor:pointer">JSON avanzado (solo se usa si el cast de arriba está vacío)</summary>
+          <label>Spec de narración (JSON — música, límites y opciones no expuestas arriba)</label>
+          <textarea name="narration_spec" rows="8" style="font-family:monospace;font-size:12px"></textarea>
+          <p class="muted" style="font-size:12px">Voces: <a href="/admin/narration/voices" target="_blank">catálogo</a>. Guardar el cast de arriba tiene prioridad; campos del JSON como <code>music</code> o <code>max_chars_per_request</code> se conservan al editar.</p>
+        </details>
+        <hr>
+        <h3>Verificación LLM (Fase 7.13)</h3>
+        <div class="row">
+          <div class="col">
+            <div class="check" style="margin-top:26px"><input type="checkbox" name="llm_verify"><label>Verificar digest antes de entregar</label></div>
+          </div>
+          <div class="col">
+            <label>Umbral faithfulness (vacío = global)</label>
+            <input type="number" name="llm_verify_threshold" min="0" max="1" step="0.05">
+          </div>
+          <div class="col">
+            <label>Backend del juez</label>
+            <select name="llm_verify_backend">
+              <option value="">(global)</option>
+              <option value="local">local</option>
+              <option value="modal">modal</option>
+              <option value="api">api</option>
+            </select>
+          </div>
+        </div>
+        <label>Fiabilidad por feed (URL=0.9, una por línea)</label>
+        <textarea name="source_reliability" rows="3"></textarea>
+        <label>Hosts extra por feed (URL=host1,host2, una por línea)</label>
+        <textarea name="source_hosts" rows="3"></textarea>
+      </div>
+    </details>
+  </form>
+</div>
+{% endif %}
+
+<datalist id="lang-list">
+  {% for l in omni.languages %}<option value="{{ l }}">{% endfor %}
+  <option value="es"><option value="en">
+</datalist>
+{% endblock %}

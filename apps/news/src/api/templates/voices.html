@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Voces{% endblock %}
+{% block app %}
+<h1>Voces OmniVoice</h1>
+
+<div class="card">
+  <h2>Voces generadas</h2>
+  <div id="voices-generated"
+       hx-get="/ui/fragments/voices_generated"
+       hx-trigger="load, every 15s"
+       hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Todas las voces</h2>
+  <p class="muted">Clonadas, stock y diseñadas de todos los motores. El texto
+    admite comodines: <code>Mich*clo</code> encuentra "Michael_sss en(glish)
+    Voz clonada".</p>
+  <div class="row" id="voices-filter-fields">
+    <div class="col" style="min-width:240px">
+      <label>Nombre o ID</label>
+      <input type="text" name="q" value="{{ q }}" placeholder="Mich*clo"
+             hx-get="/ui/fragments/voices_table" hx-trigger="keyup changed delay:300ms"
+             hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+    </div>
+    <div class="col">
+      <label>Idioma</label>
+      <select name="lang" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        <option value="">Todos</option>
+        {% for option in lang_options %}
+        <option value="{{ option.code }}" {{ 'selected' if option.code == lang else '' }}>
+          {{ option.code }} ({{ option.count }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col">
+      <label>Tipo</label>
+      <select name="category" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for value, text in category_filters %}
+        <option value="{{ value }}" {{ 'selected' if value == category else '' }}>{{ text }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col">
+      <label>Motor</label>
+      <select name="engine" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for value, text in engine_filters %}
+        <option value="{{ value }}" {{ 'selected' if value == engine else '' }}>{{ text }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col" style="min-width:120px">
+      <label>Por página</label>
+      <select name="size" hx-get="/ui/fragments/voices_table" hx-trigger="change"
+              hx-target="#voices-table" hx-include="#voices-filter-fields" hx-swap="innerHTML">
+        {% for option in (25, 50, 100) %}
+        <option value="{{ option }}" {{ 'selected' if option == size else '' }}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col" style="flex:0;min-width:90px">
+      <label>&nbsp;</label>
+      <a href="/ui/voices">Limpiar</a>
+    </div>
+  </div>
+  <div id="voice-sample" style="margin-top:8px"></div>
+  <div id="voices-table">
+    {% include "partials/_voices_table.html" %}
+  </div>
+</div>
+
+{% if is_admin %}
+<div class="card">
+  <h2>Nueva voz personalizada</h2>
+  <p class="muted">Diseña una voz nueva con Qwen3-TTS VoiceDesign; el WAV de
+    referencia queda en <code>data/voices/refs/</code> y se usa para narrar
+    con qwen3_tts, zonos2 y voxcpm2.</p>
+  <form method="post" action="/ui/voices/custom">
+    <div class="row">
+      <div class="col">
+        <label>Nombre (slug: [a-z0-9_-])</label>
+        <input type="text" name="name" required maxlength="64" placeholder="mi_voz_es">
+      </div>
+      <div class="col">
+        <label>Etiqueta (opcional)</label>
+        <input type="text" name="label" maxlength="128" placeholder="Mi voz">
+      </div>
+      <div class="col">
+        <label>Idioma</label>
+        <input type="text" name="language" value="es" required maxlength="2">
+      </div>
+    </div>
+    <label>Descripción de la personalidad (instruct)</label>
+    <textarea name="instruct" rows="2" required minlength="10" maxlength="2000"
+              placeholder="Femenina, 30s, tono cercano y ágil, claridad de locución"></textarea>
+    <label>Texto de referencia (una frase por línea; 100–600 caracteres en total)</label>
+    <textarea name="ref_text" rows="4" required minlength="100" maxlength="600"
+              placeholder="Hola, soy tu profe de inglés de siempre.&#10;Hoy practicamos el presente simple con ejemplos del día a día."></textarea>
+    <div class="row">
+      <div class="col">
+        <label>Rol sugerido (opcional)</label>
+        <input type="text" name="role_hint" maxlength="64" placeholder="anchor">
+      </div>
+      <div class="col">
+        <div style="margin-top:26px">
+          <input type="checkbox" id="custom-generate" name="generate" checked>
+          <label for="custom-generate" style="display:inline">Diseñar ahora</label>
+        </div>
+      </div>
+    </div>
+    <button type="submit" class="primary">Crear voz</button>
+  </form>
+</div>
+{% endif %}
+
+{% if is_admin %}
+<div class="card">
+  <h2>Clonar nueva voz</h2>
+  <p class="muted">Sube audio de referencia (WAV, 5–30s) codificado en base64.</p>
+  <form method="post" action="/ui/voices/clone">
+    <div class="row">
+      <div class="col">
+        <label>Nombre (^[a-zA-Z0-9_-]+$)</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="col">
+        <label>Idioma</label>
+        <input type="text" name="language" value="es" required>
+      </div>
+    </div>
+    <label>Audio en base64</label>
+    <textarea name="audio_base64" required></textarea>
+    <label>Nombre de archivo</label>
+    <input type="text" name="filename" value="reference.wav">
+    <label>Transcripción (opcional, mejora calidad del clonado)</label>
+    <textarea name="ref_text" rows="3" placeholder="Texto dicho en el audio de referencia..."></textarea>
+    <button type="submit" class="primary">Clonar</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

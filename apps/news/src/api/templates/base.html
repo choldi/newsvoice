@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}News Engine{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #171a21; --panel2: #1e2230; --border: #2a3040;
+      --text: #e6e9ef; --muted: #8b93a3; --accent: #4f8cff; --ok: #35c66b;
+      --warn: #e5b53c; --err: #ef6161;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text); font-size: 14px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    .layout { display: flex; min-height: 100vh; }
+    nav {
+      width: 210px; background: var(--panel); border-right: 1px solid var(--border);
+      padding: 18px 10px; flex-shrink: 0;
+    }
+    nav .brand { font-weight: 600; font-size: 16px; margin: 0 8px 18px; color: var(--accent); }
+    nav a.nav {
+      display: block; padding: 8px 10px; border-radius: 6px; margin: 2px 0;
+      color: var(--muted);
+    }
+    nav a.nav:hover, nav a.nav.active { background: var(--panel2); color: var(--text); }
+    main { flex: 1; padding: 22px 28px; max-width: 1180px; }
+    h1 { font-size: 20px; margin: 0 0 18px; font-weight: 600; }
+    .flash {
+      padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; border: 1px solid var(--border);
+    }
+    .flash.ok { border-color: var(--ok); color: var(--ok); }
+    .flash.warn { border-color: var(--warn); color: var(--warn); }
+    .flash.error { border-color: var(--err); color: var(--err); }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      padding: 16px; margin-bottom: 16px;
+    }
+    .card h2 { font-size: 15px; margin: 0 0 12px; }
+    details.card { padding: 0; }
+    details.card summary {
+      list-style: none; cursor: pointer; padding: 14px 16px; border-radius: 8px;
+      user-select: none;
+    }
+    details.card summary::-webkit-details-marker { display: none; }
+    details.card summary .triangle {
+      display: inline-block; margin-right: 8px; transition: transform .15s; color: var(--muted);
+    }
+    details.card[open] summary { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+    details.card[open] summary .triangle { transform: rotate(90deg); }
+    details.card > .inner { padding: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+    input[type=text], input[type=password], input[type=email], textarea, select {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--panel2); color: var(--text); font-size: 14px;
+    }
+    textarea { min-height: 70px; resize: vertical; font-family: inherit; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .col { flex: 1; min-width: 200px; }
+    .check { display: flex; align-items: center; gap: 6px; margin: 12px 0 4px; }
+    .check label { margin: 0; }
+    button, .btn {
+      display: inline-block; border: 1px solid var(--accent); background: transparent;
+      color: var(--accent); padding: 7px 12px; border-radius: 6px; cursor: pointer;
+      font-size: 13px; margin: 2px;
+    }
+    button:hover, .btn:hover { background: var(--accent); color: #fff; }
+    .btn.primary { background: var(--accent); color: #fff; }
+    .btn.danger { border-color: var(--err); color: var(--err); }
+    .btn.danger:hover { background: var(--err); color: #fff; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
+    .badge.ok, .badge.completed { background: rgba(53,198,107,.15); color: var(--ok); }
+    .badge.failed { background: rgba(239,97,97,.15); color: var(--err); }
+    .badge.running { background: rgba(79,140,255,.15); color: var(--accent); }
+    .badge.terminated { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.paused { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.canceled { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.timed_out { background: rgba(239,97,97,.15); color: var(--err); }
+    .badge.verification_failed { background: rgba(229,181,60,.15); color: var(--warn); }
+    .badge.no_new_articles { background: rgba(139,147,163,.15); color: var(--muted); }
+    .muted { color: var(--muted); }
+    .tags { margin-bottom: 16px; }
+    .tags a { display: inline-block; margin: 2px 4px 2px 0; }
+    .empty { color: var(--muted); padding: 14px; text-align: center; }
+    .voice-picker input[type="text"], .voice-picker select { flex: 1; }
+    .voice-results {
+      max-height: 280px; overflow-y: auto; border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px; margin-top: 6px; background: var(--panel2);
+    }
+    .voice-option {
+      display: flex; gap: 8px; align-items: baseline; padding: 5px 8px; margin: 0;
+      border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text);
+    }
+    .voice-option:hover { background: var(--panel); }
+    .voice-option input { width: auto; flex-shrink: 0; margin: 0; }
+    .voice-option small { display: block; font-size: 11px; color: var(--muted); }
+    .voice-hint { font-size: 11px; padding: 4px 8px 0; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+    .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .login-box { width: 320px; }
+  </style>
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  {% if active != 'login' %}
+  <div class="layout">
+    <nav>
+      <div class="brand">News Engine</div>
+      <a class="nav {{ 'active' if active == 'collections' else '' }}" href="/ui/collections">Colecciones</a>
+      <a class="nav {{ 'active' if active == 'calendar' else '' }}" href="/ui/calendar">Calendario</a>
+      <a class="nav {{ 'active' if active == 'runs' else '' }}" href="/ui/runs">Ejecuciones</a>
+      <a class="nav {{ 'active' if active == 'tools' else '' }}" href="/ui/tools">Herramientas</a>
+      <a class="nav {{ 'active' if active == 'voices' else '' }}" href="/ui/voices">Voces</a>
+      {% if is_admin %}
+      <a class="nav {{ 'active' if active == 'logs' else '' }}" href="/ui/logs">Observabilidad</a>
+      <a class="nav {{ 'active' if active == 'settings' else '' }}" href="/ui/settings">Ajustes</a>
+      <a class="nav {{ 'active' if active == 'users' else '' }}" href="/ui/users">Usuarios</a>
+      {% endif %}
+      {% if current_user %}
+      <div class="muted" style="padding:8px 10px;font-size:12px">{{ current_user }} · {{ role }}</div>
+      {% endif %}
+      <form method="post" action="/ui/logout" style="margin-top:24px">
+        <button type="submit" class="danger">Cerrar sesión</button>
+      </form>
+    </nav>
+    <main>
+      {% if flash %}<div class="flash {{ flash_level }}">{{ flash }}</div>{% endif %}
+      {% block app %}{% endblock %}
+    </main>
+  </div>
+  {% else %}
+  <div class="login-wrap">
+    {% if flash %}<div class="flash {{ flash_level }}" style="width:320px">{{ flash }}</div>{% endif %}
+    {% block login %}{% endblock %}
+  </div>
+  {% endif %}
+</body>
+</html>

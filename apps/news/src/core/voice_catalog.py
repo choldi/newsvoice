@@ -1,0 +1,383 @@
+"""Voice catalog: load profiles, resolve references, detect drift.
+
+The catalog is the source of truth for which voices exist and how they were
+produced. Profiles live in a versionable JSON file; the generated references
+and their manifest live under the runtime voices directory and are never
+committed.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from src.api.models.voices import VoiceManifestEntry, VoiceProfile
+
+DEFAULT_PROFILES_FILE = "voice_profiles.json"
+DEFAULT_VOICES_DIR = "data/voices"
+MANIFEST_NAME = "manifest.json"
+REFS_DIR = "refs"
+#: Runtime file holding the operator-created profiles (Phase 9.3). It lives
+#: under the voices directory, which is gitignored: a custom voice is data, not
+#: catalog shipped with the repo.
+CUSTOM_PROFILES_NAME = "custom_profiles.json"
+
+
+class VoiceCatalogError(RuntimeError):
+    """Base error for the voice catalog."""
+
+
+def sha256_text(text: str) -> str:
+    """Return the SHA-256 digest of a text string.
+
+    Args:
+        text: Text to digest.
+
+    Returns:
+        Hex SHA-256 digest.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sha256_bytes(data: bytes) -> str:
+    """Return the SHA-256 digest of raw bytes.
+
+    Args:
+        data: Bytes to digest.
+
+    Returns:
+        Hex SHA-256 digest.
+    """
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
+    """Load and validate the voice catalog.
+
+    The catalog may declare reference segments once per language under a
+    ``languages`` block, which every profile of that language then inherits:
+    all voices of a language are cloned from the same transcript, so it only
+    makes sense to write it once. A profile may still spell out its own text,
+    but it must then agree with the block, so the two can never drift apart.
+
+    With no explicit ``path`` the committed catalog is merged with the
+    operator-created profiles (Phase 9.3), so every reader of this function
+    sees the full set of voices. An explicit ``path`` reads only that file,
+    which keeps tests and one-off inspections pinned to the committed catalog.
+
+    Args:
+        path: Catalog JSON path. Defaults to ``voice_profiles.json`` plus the
+            custom profiles file under ``settings.voices_dir``.
+
+    Returns:
+        The validated profiles: committed ones in file order, then the custom
+        ones.
+
+    Raises:
+        VoiceCatalogError: If the file is missing, unreadable, not valid JSON,
+            contains duplicate names (within or across the two files), or
+            leaves a profile without any reference text.
+    """
+    if path is not None:
+        return _load_committed_profiles(Path(path))
+    profiles = _load_committed_profiles(Path(DEFAULT_PROFILES_FILE))
+    custom = load_custom_profiles()
+    known = {profile.name for profile in profiles}
+    clashes = sorted(known & {profile.name for profile in custom})
+    if clashes:
+        raise VoiceCatalogError(f"duplicate voice profile names: {clashes}")
+    return [*profiles, *custom]
+
+
+def _load_committed_profiles(catalog: Path) -> list[VoiceProfile]:
+    """Read and validate one committed catalog file.
+
+    Args:
+        catalog: Path of the catalog JSON file.
+
+    Returns:
+        The validated profiles, in file order.
+
+    Raises:
+        VoiceCatalogError: If the file is missing, unreadable, not valid JSON,
+            contains duplicate names, or leaves a profile without any
+            reference text.
+    """
+    if not catalog.is_file():
+        raise VoiceCatalogError(f"voice catalog not found: {catalog}")
+    try:
+        raw = json.loads(catalog.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VoiceCatalogError(f"voice catalog is not readable JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("profiles"), list):
+        raise VoiceCatalogError("voice catalog needs a 'profiles' list")
+    languages = raw.get("languages") or {}
+    if not isinstance(languages, dict):
+        raise VoiceCatalogError("voice catalog 'languages' must be an object")
+
+    profiles: list[VoiceProfile] = []
+    for item in raw["profiles"]:
+        if not isinstance(item, dict):
+            raise VoiceCatalogError("voice catalog profiles must be objects")
+        profile = dict(item)
+        language = str(profile.get("language") or "").strip().lower()
+        block = languages.get(language)
+        if isinstance(block, dict) and block.get("ref_segments"):
+            profile["ref_segments"] = [str(part) for part in block["ref_segments"]]
+        elif not profile.get("ref_segments") and not profile.get("ref_text"):
+            raise VoiceCatalogError(
+                f"voice profile {profile.get('name')!r} has no reference text: "
+                f"declare 'languages.{language}.ref_segments' or a profile ref_text"
+            )
+        profiles.append(VoiceProfile.model_validate(profile))
+
+    names = [profile.name for profile in profiles]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise VoiceCatalogError(f"duplicate voice profile names: {duplicates}")
+    return profiles
+
+
+def custom_profiles_path(path: str | Path | None = None) -> Path:
+    """Return where the operator-created profiles are stored.
+
+    Args:
+        path: Explicit file path. Defaults to ``<voices_dir>/custom_profiles.json``
+            (``settings.voices_dir``, ``data/voices`` by default).
+
+    Returns:
+        Path of the custom profiles file (which may not exist yet).
+    """
+    if path is not None:
+        return Path(path)
+    try:
+        from src.core.config import get_settings
+
+        voices_dir = Path(get_settings().voices_dir)
+    except Exception:  # noqa: BLE001 - settings must never break catalog reads
+        voices_dir = Path(DEFAULT_VOICES_DIR)
+    return voices_dir / CUSTOM_PROFILES_NAME
+
+
+def load_custom_profiles(path: str | Path | None = None) -> list[VoiceProfile]:
+    """Load the operator-created profiles (read side of Phase 9.3).
+
+    Unlike the committed catalog, a custom profile always carries its own
+    reference text: the shared ``languages.<lang>.ref_segments`` block is not
+    applied, because the whole point of a custom voice is its own transcript.
+
+    Args:
+        path: Custom profiles file. Defaults to :func:`custom_profiles_path`.
+
+    Returns:
+        The validated custom profiles in file order; empty when the file does
+        not exist yet.
+
+    Raises:
+        VoiceCatalogError: If the file exists but is not readable JSON, lacks
+            a 'profiles' list, holds a non-object entry or duplicate names.
+    """
+    catalog = custom_profiles_path(path)
+    if not catalog.is_file():
+        return []
+    try:
+        raw = json.loads(catalog.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VoiceCatalogError(f"custom voice catalog is not readable JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("profiles"), list):
+        raise VoiceCatalogError("custom voice catalog needs a 'profiles' list")
+
+    profiles: list[VoiceProfile] = []
+    for item in raw["profiles"]:
+        if not isinstance(item, dict):
+            raise VoiceCatalogError("custom voice catalog profiles must be objects")
+        try:
+            profiles.append(VoiceProfile.model_validate(item))
+        except ValueError as exc:
+            name = item.get("name", "?")
+            raise VoiceCatalogError(f"custom voice profile {name!r} is invalid: {exc}") from exc
+
+    names = [profile.name for profile in profiles]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise VoiceCatalogError(f"duplicate custom voice profile names: {duplicates}")
+    return profiles
+
+
+def save_custom_profile(profile: VoiceProfile, path: str | Path | None = None) -> VoiceProfile:
+    """Persist one operator-created profile (write side of Phase 9.3).
+
+    The write is atomic (temp file plus ``os.replace``) so a crash can never
+    leave a half-written catalog behind, and it refuses to clobber either an
+    existing custom voice or a name the committed catalog already owns.
+
+    Args:
+        profile: Validated profile to append.
+        path: Custom profiles file. Defaults to :func:`custom_profiles_path`.
+
+    Returns:
+        The saved profile.
+
+    Raises:
+        VoiceCatalogError: If the name is already taken (custom or committed)
+            or an existing custom file is unreadable (never overwritten).
+    """
+    target = custom_profiles_path(path)
+    existing = load_custom_profiles(target)
+    if any(saved.name == profile.name for saved in existing):
+        raise VoiceCatalogError(f"custom voice profile already exists: {profile.name!r}")
+    committed = {saved.name for saved in _load_committed_profiles(Path(DEFAULT_PROFILES_FILE))}
+    if profile.name in committed:
+        raise VoiceCatalogError(f"voice profile name already in the catalog: {profile.name!r}")
+
+    payload = {"profiles": [saved.model_dump(mode="json") for saved in [*existing, profile]]}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
+    return profile
+
+
+def load_manifest(path: str | Path | None = None) -> dict[str, VoiceManifestEntry]:
+    """Load the generated-voices manifest.
+
+    A missing manifest is not an error: it simply means no voice has been
+    generated yet.
+
+    Args:
+        path: Manifest JSON path. Defaults to ``data/voices/manifest.json``.
+
+    Returns:
+        Mapping of profile name to its manifest entry.
+
+    Raises:
+        VoiceCatalogError: If the manifest exists but is not valid JSON.
+    """
+    manifest_path = Path(path) if path else Path(DEFAULT_VOICES_DIR) / MANIFEST_NAME
+    if not manifest_path.is_file():
+        return {}
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VoiceCatalogError(f"voice manifest is not readable JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise VoiceCatalogError("voice manifest must be a JSON object")
+    return {name: VoiceManifestEntry.model_validate(entry) for name, entry in raw.items()}
+
+
+def is_stale(profile: VoiceProfile, entry: VoiceManifestEntry) -> bool:
+    """Report whether a profile changed after its reference was generated.
+
+    Args:
+        profile: The current catalog profile.
+        entry: The manifest entry for that profile.
+
+    Returns:
+        True when the instruct or ref_text no longer match the reference.
+    """
+    return entry.instruct_sha256 != sha256_text(
+        profile.instruct
+    ) or entry.ref_text_sha256 != sha256_text(profile.ref_text)
+
+
+def missing_or_stale(
+    profiles: list[VoiceProfile],
+    manifest: dict[str, VoiceManifestEntry],
+) -> list[str]:
+    """List enabled profiles that need (re)generation.
+
+    A profile is listed when it has no manifest entry at all, or when its
+    profile text drifted from the reference that was generated.
+
+    Args:
+        profiles: Catalog profiles.
+        manifest: Generated-voices manifest.
+
+    Returns:
+        Sorted profile names that the design flow should (re)generate.
+    """
+    pending: list[str] = []
+    for profile in profiles:
+        if not profile.enabled:
+            continue
+        entry = manifest.get(profile.name)
+        if entry is None or is_stale(profile, entry):
+            pending.append(profile.name)
+    return sorted(pending)
+
+
+def resolve_reference(
+    profile: VoiceProfile,
+    manifest: dict[str, VoiceManifestEntry],
+    voices_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the reference WAV path for a profile.
+
+    Args:
+        profile: Catalog profile to resolve.
+        manifest: Generated-voices manifest.
+        voices_dir: Root of the runtime voices directory.
+
+    Returns:
+        The reference path, or None when the voice has not been generated.
+
+    Raises:
+        VoiceCatalogError: If the manifest entry is stale, because cloning
+            with a mismatched transcript degrades quality silently.
+    """
+    base = Path(voices_dir) if voices_dir else Path(DEFAULT_VOICES_DIR)
+    entry = manifest.get(profile.name)
+    if entry is None:
+        return None
+    if is_stale(profile, entry):
+        raise VoiceCatalogError(
+            f"voice '{profile.name}' is stale: regenerate the reference before cloning"
+        )
+    return base / entry.file
+
+
+def write_manifest(
+    manifest: dict[str, VoiceManifestEntry],
+    path: str | Path | None = None,
+) -> None:
+    """Persist the generated-voices manifest.
+
+    Args:
+        manifest: Mapping of profile name to manifest entry.
+        path: Manifest JSON path. Defaults to ``data/voices/manifest.json``.
+    """
+    manifest_path = Path(path) if path else Path(DEFAULT_VOICES_DIR) / MANIFEST_NAME
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {name: entry.model_dump(mode="json") for name, entry in manifest.items()}
+    manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def ref_text_for(profile: VoiceProfile) -> str:
+    """Return the transcript that must accompany a reference sample.
+
+    Qwen3-TTS clones in in-context-learning mode, which requires the exact
+    text that produced the reference. ZONOS2 does not need it, but the field is
+    mandatory either way so a recording can be used as a source too.
+
+    Args:
+        profile: Catalog profile.
+
+    Returns:
+        The reference transcript.
+    """
+    return profile.ref_text
+
+
+def profile_dict(profile: VoiceProfile) -> dict[str, Any]:
+    """Return a JSON-serializable dump of a profile.
+
+    Args:
+        profile: Catalog profile.
+
+    Returns:
+        The profile as a plain dict.
+    """
+    return profile.model_dump(mode="json")

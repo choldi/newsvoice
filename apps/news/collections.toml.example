@@ -1,0 +1,98 @@
+# collections.toml.example
+#
+# Copy to collections.toml to define multiple independent news digests, each on
+# its own Temporal schedule. Inspired by Better Morning.
+#
+# - Shared defaults can live in the optional [collection_defaults] table.
+# - Each [[collections]] block overrides those defaults for one collection.
+# - `time` is HH:MM 24-hour UTC — this collection's digest will run daily at it.
+# - `enabled = false` pauses a collection without deleting its config.
+# - `prompt_template` selects a system prompt from src/core/prompts.py
+#   (built-in: default, finance, health, investigative, gaming).
+# - `custom_prompt` (optional) replaces prompt_template entirely: when set, the
+#   collection uses this full custom system prompt instead of any built-in one.
+# - `chat_id` overrides the global TELEGRAM_CHAT_ID for this collection's delivery.
+# - `email_recipients` enables HTML email delivery (SMTP from .env) to these
+#   addresses; leave empty (default) to send no email for this collection.
+# - `whatsapp_recipients` enables WhatsApp delivery (self-hosted Baileys gateway
+#   "there", .env WHATSAPP_*) to these E.164 numbers ("+34612345678"); numbers
+#   must be in WHATSAPP_ALLOWLIST. `whatsapp_group_id` sends to a WhatsApp group
+#   (delivered as <id>@g.us); groups are always allowed.
+# - `delivery_channels` selects which channels deliver this digest: "telegram",
+#   "email", "whatsapp", or any combination. Defaults to ["telegram"] (email and
+#   whatsapp must be explicitly enabled in addition to configuring their
+#   recipients / group).
+# - `deliver_audio = true` attaches the generated audio to Telegram AND to the
+#   email and WhatsApp deliveries (when those channels are active).
+# - `tts_backend` picks the engine that synthesizes this collection's audio
+#   (Phase 8): "edge" (client-side edge-tts, default), "omni_voice" (the
+#   tts-api gateway on TTS_API_BASE_URL), "qwen3_tts", "zonos2" or "voxcpm2"
+#   (Modal, needs MODAL_ENABLED). Empty inherits TTS_DEFAULT_BACKEND. `voice`
+#   is then read in
+#   that engine's own vocabulary: an Edge ShortName, a tts-api stock id or clone
+#   UUID, or a voice_profiles.json name — the /ui form offers the right list for
+#   the engine you pick, and an Edge ShortName left over from another engine
+#   resolves to the language default instead of failing the run.
+# - Configurable story counts (Phase 7.6):
+#   `main_story_count` (1-20, default 5) — number of main stories in the digest.
+#   `headline_count` (1-40, default 5) — number of quick headlines in the digest.
+# - Narration (Phase 7): `narration_enabled = true` generates a multi-speaker
+#   audio piece from the same digest. Requires `narration_spec` with the cast,
+#   music bed, and defaults. `narration_strategy` selects the render mode:
+#   "turns" (default, one request per segment) or "conversations" (single
+#   request, requires homogeneous cast). The global kill switch is
+#   `NARRATION_ENABLED` in .env.
+# - `narration_deliver_audio = true` (default) delivers the narration M4A to the
+#   configured `delivery_channels`. When false, the narration audio is only stored
+#   in `data/narration/` and the DB, not sent to any channel.
+
+[collection_defaults]
+tts_enabled = false
+deliver_audio = false
+tts_backend = "edge"
+language = "es"
+voice = "es-mx-male"
+narration_enabled = false
+narration_strategy = "turns"
+narration_deliver_audio = true
+main_story_count = 5
+headline_count = 5
+# narration_spec = { title = "Briefing", language = "es", roles = [{name="anchor",voice_id="es-mx-male"}], pause_ms = 400, music = null }
+
+[[collections]]
+name = "tech"
+time = "08:00"
+feed_urls = [
+    "https://techcrunch.com/feed/",
+    "https://www.theverge.com/rss/index.xml",
+]
+prompt_template = "default"
+# custom_prompt = "You are a senior tech editor. Emphasize startups and venture deals."
+# email_recipients = ["you@example.com", "teammate@example.com"]
+# whatsapp_recipients = ["+34612345678"]
+# whatsapp_group_id = "1234567890@g.us"
+# delivery_channels = ["telegram", "email", "whatsapp"]
+# narration_enabled = true
+# narration_strategy = "turns"
+# narration_spec = { title = "Tech Brief", language = "es", roles = [{name="anchor",voice_id="es-mx-male"},{name="expert",voice_id="es-mx-female"}], pause_ms = 400, music = {track="bed.mp3",volume_db=-18,fade_in_ms=2000,fade_out_ms=3000} }
+
+[[collections]]
+name = "health"
+time = "09:30"
+feed_urls = [
+    "https://www.healthline.com/rss",
+]
+language = "en"
+voice = "en-gb-female"
+prompt_template = "health"
+
+[[collections]]
+name = "finance"
+time = "17:15"
+feed_urls = [
+    "https://feeds.bloomberg.com/markets/news.rss",
+]
+prompt_template = "finance"
+# chat_id = "optional_per_collection_chat_id"
+# tts_backend = "omni_voice"   # this digest is spoken by the tts-api gateway
+enabled = false

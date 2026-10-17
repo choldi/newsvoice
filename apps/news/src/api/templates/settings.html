@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Ajustes{% endblock %}
+{% block app %}
+<style>
+  .setting {
+    display: grid;
+    grid-template-columns: minmax(280px, 42%) 1fr;
+    gap: 4px 14px;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .setting:last-child { border-bottom: none; }
+  .setting .name code { color: var(--accent); font-size: 12px; }
+  .setting .meta { font-size: 11px; color: var(--muted); }
+  .setting input { width: 100%; }
+  .setting.bad input { border-color: var(--err); }
+  .setting .err { grid-column: 2; color: var(--err); font-size: 11px; }
+  .sec-count { font-weight: 400; color: var(--muted); font-size: 12px; }
+</style>
+<h1>Ajustes</h1>
+<div class="card">
+  {% set total = sections | map(attribute='fields') | map('length') | sum %}
+  <p class="muted" style="margin-top:0">
+    Editor del <code>.env</code> del servidor ({{ total }} variables). El esquema
+    se deriva del modelo <code>Settings</code>: lo que aquí valida es exactamente
+    lo que arranca el servicio. <strong>Nada se guarda</strong> si alguna
+    variable no valida; solo cambian las líneas modificadas (comentarios
+    intactos, copia de seguridad en <code>.env.bak</code>).
+  </p>
+  <div class="flash warn" style="margin:8px 0 0">
+    Los settings viven cacheados en cada proceso: tras guardar, aplica con
+    <code>docker compose restart api worker narration-worker doc-tts-worker teacher-worker voice-catalog-worker</code>.
+  </div>
+  {% if errors %}
+  <div class="flash error" style="margin:8px 0 0">
+    <strong>No se ha guardado nada.</strong> Corrige:
+    <ul style="margin:6px 0 0 18px">
+      {% for e in errors %}<li><code>{{ e.env_name }}</code> — {{ e.message }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+
+<form method="post" action="/ui/settings">
+  <div class="tags" style="margin-bottom:8px">
+    <button type="submit" class="primary">Guardar cambios</button>
+    <span class="muted" style="font-size:12px">🔒 los secretos con valor vacío conservan el actual</span>
+  </div>
+  {% for section in sections %}
+  <details class="card" {{ 'open' if (section.fields | selectattr('error') | list) else '' }}>
+    <summary><strong>{{ section.name }}</strong> <span class="sec-count">{{ section.fields|length }} variables</span></summary>
+    <div class="inner">
+      {% for f in section.fields %}
+      <div class="setting {{ 'bad' if f.error else '' }}">
+        <div class="name">
+          <div><code>{{ f.env_name }}</code>{% if f.is_secret %} 🔒{% endif %}</div>
+          {% if f.description %}<div class="meta">{{ f.description }}</div>{% endif %}
+          {% if f.hint %}<div class="meta">{{ f.hint }}</div>{% endif %}
+        </div>
+        <input
+          type="{{ 'password' if f.is_secret else 'text' }}"
+          name="env_{{ f.env_name }}"
+          value="{{ f.value }}"
+          placeholder="{{ f.placeholder }}"
+          autocomplete="off"
+          spellcheck="false"
+        >
+        {% if f.error %}<div class="err">{{ f.error }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+  {% endfor %}
+  <div class="tags">
+    <button type="submit" class="primary">Guardar cambios</button>
+  </div>
+</form>
+{% endblock %}

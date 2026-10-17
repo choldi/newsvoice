@@ -1,0 +1,8 @@
+{# Out-of-band <option> payloads for every cast voice select (Phase 9.5).
+
+   One hx-swap-oob div per row of the cast table: the engine select fetches
+   GET /ui/fragments/cast_voices?cast=...&rows=... and htmx writes these into
+   each <select> (ids match cast-voice-<cast>-<i> on the collections page),
+   so switching the narration engine replaces every row's options at once. #}
+{% for i in range(rows) %}<div id="cast-voice-{{ cast }}-{{ i }}" hx-swap-oob="innerHTML">{% include "partials/_cast_options.html" %}</div>
+{% endfor %}

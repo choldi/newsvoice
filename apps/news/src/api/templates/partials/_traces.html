@@ -1,0 +1,30 @@
+<table>
+  <thead>
+    <tr>
+      <th>Inicio</th>
+      <th>Componente</th>
+      <th>Raíz</th>
+      <th>Spans</th>
+      <th>Duración</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in traces %}
+    <tr>
+      <td class="muted">{{ t.start_iso }}</td>
+      <td>{{ t.component or '' }}</td>
+      <td>{{ t.root_name or '' }}</td>
+      <td>{{ t.count }}</td>
+      <td>{{ t.total_duration_ms }} ms</td>
+      <td>
+        <button class="btn" style="margin:0;padding:2px 8px;font-size:11px"
+                hx-get="/ui/fragments/trace_detail?trace_id={{ t.trace_id }}"
+                hx-target="#trace-detail" hx-swap="innerHTML">Ver</button>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty">Sin trazas</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

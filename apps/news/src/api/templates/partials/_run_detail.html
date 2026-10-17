@@ -1,0 +1,90 @@
+<div style="background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin:6px 0;font-size:13px">
+  <div class="muted" style="margin-bottom:6px">
+    <strong>{{ workflow_id }}</strong>
+  </div>
+  {% if error %}
+  <div class="muted" style="margin-bottom:6px">Error:</div>
+  <pre style="color:var(--err)">{{ error }}</pre>
+  {% endif %}
+  {% if digest_preview %}
+  <div class="muted" style="margin-bottom:6px">Resumen:</div>
+  <pre>{{ digest_preview }}</pre>
+  {% endif %}
+  {% if article_count is not none or cluster_count is not none %}
+  <div class="muted">
+    Artículos: <strong>{{ article_count if article_count is not none else '—' }}</strong> ·
+    Clústeres: <strong>{{ cluster_count if cluster_count is not none else '—' }}</strong>
+    {% if started_at %} · Inicio: <strong>{{ started_at[:19].replace('T', ' ') }} UTC</strong>{% endif %}
+    {% if completed_at %} · Fin: <strong>{{ completed_at[:19].replace('T', ' ') }} UTC</strong>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if verifications %}
+  <hr style="margin:12px 0;border-color:var(--border)">
+  <div class="muted" style="margin-bottom:6px">🧪 Verificaciones</div>
+  <table style="width:100%;font-size:12px">
+    <thead>
+      <tr><th>Capa</th><th>Veredicto</th><th>Score</th><th>Umbral</th><th>Apto</th></tr>
+    </thead>
+    <tbody>
+      {% for v in verifications %}
+      <tr>
+        <td>{{ v.target }}
+          <div class="muted" style="font-size:11px">{{ v.method }}</div>
+        </td>
+        <td><span class="badge {{ 'ok' if v.verdict == 'valid' else ('running' if v.verdict == 'error' else 'failed') }}">{{ v.verdict }}</span></td>
+        <td>
+          {{ '%.3f'|format(v.score) if v.score is not none else '—' }}
+          {% if v.method == 'asr_wer' %}<span class="muted" title="Word Error Rate: cuanto más bajo, mejor">WER ↓</span>{% endif %}
+        </td>
+        <td>{{ '%.3f'|format(v.threshold) if v.threshold is not none else '—' }}</td>
+        <td>{{ 'sí' if v.passed else 'no' }}</td>
+      </tr>
+      {% if v.details %}
+      <tr>
+        <td colspan="5" style="padding-left:8px">
+          <details>
+            <summary class="muted" style="cursor:pointer;font-size:11px">detalles</summary>
+            <pre style="white-space:pre-wrap;font-size:11px">{{ v.details | tojson(indent=2) }}</pre>
+          </details>
+        </td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if verifications|selectattr('method', 'equalto', 'asr_wer')|list %}
+  <div class="muted" style="font-size:11px;margin-top:4px">WER: menor es mejor (transcripción vs. guion).</div>
+  {% endif %}
+  {% endif %}
+
+  {% if narration_path or narration_job %}
+  <hr style="margin:12px 0;border-color:var(--border)">
+  <div class="muted" style="margin-bottom:6px">🎙 Narración multi-hablante</div>
+  {% if narration_job %}
+    <div class="muted" style="margin-bottom:6px">
+      Estado: <strong>{{ narration_job.status }}</strong>
+      {% if narration_job.elapsed_seconds is not none %} · {{ narration_job.elapsed_seconds }}s{% endif %}
+      {% if narration_job.error %} · Error: {{ narration_job.error }}{% endif %}
+    </div>
+  {% endif %}
+  {% if narration_path %}
+    <div style="margin-top:8px">
+      <audio controls preload="metadata" style="width:100%;max-width:480px">
+        <source src="/static/{{ narration_path }}" type="audio/mp4">
+        Tu navegador no soporta el elemento de audio.
+      </audio>
+      <div class="muted" style="font-size:12px;margin-top:4px">
+        <a href="/static/{{ narration_path }}" target="_blank">Descargar M4A</a>
+        · Guardado en <code>{{ narration_path }}</code>
+      </div>
+    </div>
+  {% else %}
+    <div class="muted">Narración pendiente o sin archivo generado.</div>
+  {% endif %}
+  {% endif %}
+
+  {% if not error and not digest_preview and article_count is none and cluster_count is none and not narration_path and not narration_job %}
+  <span class="muted">Sin detalles adicionales.</span>
+  {% endif %}
+</div>

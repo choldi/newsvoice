@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Usuarios{% endblock %}
+{% block app %}
+<h1>Usuarios</h1>
+<p class="muted">
+  Cuentas auto-registradas. La cuenta local del administrador vive en el
+  <code>.env</code> y no aparece aquí. Los usuarios aprobados inician sesión
+  con un código de un solo uso enviado por email.
+</p>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Rol</th>
+        <th>Estado</th>
+        <th>Registrado</th>
+        <th>Aprobado</th>
+        <th>Último acceso</th>
+        <th>Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.email }}</td>
+        <td>
+          {% if u.role == 'user' %}usuario{% else %}lector{% endif %}
+        </td>
+        <td>
+          {% if u.status == 'active' %}
+          <span class="badge ok">activo</span>
+          {% elif u.status == 'pending' %}
+          <span class="badge paused">pendiente</span>
+          {% else %}
+          <span class="badge no_new_articles">deshabilitado</span>
+          {% endif %}
+        </td>
+        <td class="muted">{{ (u.created_at or '')[:16].replace('T', ' ') or '—' }}</td>
+        <td class="muted">{{ (u.approved_at or '')[:16].replace('T', ' ') or '—' }}</td>
+        <td class="muted">{{ (u.last_login_at or '')[:16].replace('T', ' ') or '—' }}</td>
+        <td style="white-space:nowrap">
+          {% if u.status == 'pending' %}
+          <form method="post" action="/ui/users/{{ u.id }}/approve" style="display:inline">
+            <select name="role" style="width:auto">
+              {% for r in assignable_roles %}
+              <option value="{{ r }}" {{ 'selected' if u.role == r else '' }}>
+                {{ 'usuario' if r == 'user' else 'lector' }}
+              </option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn primary" style="margin:0">Aprobar</button>
+          </form>
+          {% elif u.status == 'active' %}
+          <form method="post" action="/ui/users/{{ u.id }}/role" style="display:inline">
+            <select name="role" style="width:auto">
+              {% for r in assignable_roles %}
+              <option value="{{ r }}" {{ 'selected' if u.role == r else '' }}>
+                {{ 'usuario' if r == 'user' else 'lector' }}
+              </option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn" style="margin:0">Guardar rol</button>
+          </form>
+          <form method="post" action="/ui/users/{{ u.id }}/disable" style="display:inline">
+            <button type="submit" class="btn" style="margin:0">Deshabilitar</button>
+          </form>
+          {% else %}
+          <form method="post" action="/ui/users/{{ u.id }}/enable" style="display:inline">
+            <button type="submit" class="btn" style="margin:0">Habilitar</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/ui/users/{{ u.id }}/delete" style="display:inline"
+                onsubmit="return confirm('¿Eliminar la cuenta {{ u.email }}?')">
+            <button type="submit" class="btn danger" style="margin:0">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">Sin usuarios registrados todavía</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
