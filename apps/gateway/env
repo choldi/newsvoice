@@ -1,0 +1,77 @@
+# =============================================================================
+# OmniVoice API — Variables de entorno
+# =============================================================================
+# Copia este archivo a `.env` y ajusta los valores según tu entorno.
+# Los tipos y valores por defecto están definidos en `omnivoice_api/settings.py`.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Bloque 1 — Variables OBLIGATORIAS (sin valor por defecto útil en producción)
+# -----------------------------------------------------------------------------
+
+# URL de conexión a la base de datos (str)
+# Por defecto usa SQLite local. Reservado para migrar a Postgres.
+# Ejemplo Postgres: postgresql+asyncpg://user:pass@localhost:5432/omnivoice
+DATABASE_URL=sqlite:///storage/omnivoice.db
+
+
+# -----------------------------------------------------------------------------
+# Bloque 2 — Variables OPCIONALES (con valor por defecto razonable)
+# -----------------------------------------------------------------------------
+
+# --- App ---
+APP_NAME=OmniVoice API
+APP_VERSION=0.1.0
+DEBUG=false
+API_PREFIX=/api/v1
+
+# --- OmniVoice Engine (API Python) ---
+# ID del modelo a cargar con OmniVoice.from_pretrained(...).
+# Puede ser un ID de HuggingFace (ej. "k2-fsa/OmniVoice") o una ruta local.
+OMNIVOICE_MODEL_ID=k2-fsa/OmniVoice
+# Dispositivo PyTorch para inferencia (str)
+# Valores: "cuda:0", "cpu", "mps", "xpu"
+OMNIVOICE_DEVICE=cuda:0
+# Dtype del modelo (str)
+# Valores: "float16", "float32", "bfloat16"
+OMNIVOICE_DTYPE=float16
+# Si True, hace una síntesis de prueba al arrancar (puede ser lento).
+# Por defecto False para acelerar el arranque.
+OMNIVOICE_WARMUP_ON_START=false
+# Lista de códigos de idioma ISO 639-1 soportados (list[str], separados por coma)
+OMNIVOICE_LANGUAGES=es,en,zh,ja,ko,fr,de
+# Duración máxima permitida para audio de referencia en segundos (int)
+MAX_REFERENCE_DURATION_SEC=30
+# Número máximo de síntesis simultáneas (int). P2000 = 1
+ENGINE_CONCURRENCY=1
+# Timeout por petición al engine en segundos (int)
+ENGINE_REQUEST_TIMEOUT_SEC=120
+
+# --- Mock / Real engine toggle ---
+# Si True, usa generación de tonos mock (útil para tests sin GPU/modelo).
+# Si False (por defecto), usa la API Python de OmniVoice directamente
+# (`from omnivoice import OmniVoice`).
+OMNIVOICE_USE_MOCK=false
+
+# --- Storage ---
+STORAGE_BASE_PATH=storage
+VOICES_DIR=storage/voices
+OUTPUTS_DIR=storage/outputs
+CACHE_DIR=storage/cache
+# TTL para archivos de output temporales en segundos (int)
+OUTPUT_TTL_SECONDS=3600
+
+# --- Security ---
+# API Key opcional para proteger endpoints (str). Vacío = desactivado
+API_KEY=
+# Orígenes permitidos para CORS (list[str], separados por coma). "*" = todos
+CORS_ORIGINS=*
+# Tamaño máximo de upload en MB (int)
+MAX_UPLOAD_SIZE_MB=10
+
+# --- Observability ---
+# Nivel de logging: DEBUG, INFO, WARNING, ERROR (str)
+LOG_LEVEL=INFO
+# Formato de logs: json o console (str)
+LOG_FORMAT=json

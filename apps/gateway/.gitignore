@@ -1,0 +1,57 @@
+# ─── Entornos virtuales Python ───
+venv/
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# ─── Docker ───
+.dockerignore
+#docker-compose*.yml
+
+# ─── Aider ───
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v4/
+.aider_fresh_context.md
+
+# ─── Configuración sensible ───
+.env
+*.local
+secrets/
+
+# ─── Sistema operativo ───
+.DS_Store
+Thumbs.db
+
+# ─── Logs y temporales ───
+*.log
+tmp/
+mensaje*.txt
+missatge.txt
+data/
+.env
+./scripts
+.aider*
+.aider_model_selection.yml
+
+# ─── Datos y modelos (pesados, no versionar) ───
+data/models/
+data/voices/
+*.pt
+*.bin
+*.safetensors
+*.onnx
+
+# ─── Cache de Python/HuggingFace ───
+.cache/
+.huggingface/
+.transformers/
+.coverage
+coverage.xml
+storage/
+
+# Artificios de tests/formatter
+MagicMock/
+debug_*.py

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniVoice Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50:'#f5f3ff',100:'#ede9fe',200:'#ddd6fe',300:'#c4b5fd',400:'#a78bfa',500:'#8b5cf6',600:'#7c3aed',700:'#6d28d9',800:'#5b21b6',900:'#4c1d95' }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col">
+
+<!-- Toast container -->
+<div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+<!-- Header -->
+<header class="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-3">
+        <button id="sidebar-toggle" class="lg:hidden p-1 rounded hover:bg-zinc-800">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <h1 class="text-lg font-bold text-brand-400">OmniVoice Studio</h1>
+    </div>
+    <div id="health-badge" class="flex items-center gap-2 text-xs">
+        <span class="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" id="health-dot"></span>
+        <span id="health-text" class="text-zinc-400">Checking...</span>
+    </div>
+</header>
+
+<div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="w-56 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 lg:relative absolute inset-y-0 left-0 z-40 -translate-x-full lg:translate-x-0 transition-transform">
+        <nav class="flex-1 p-2 space-y-1">
+            <button data-tab="tts" class="nav-btn active w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+                Text to Speech
+            </button>
+            <button data-tab="design" class="nav-btn w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Voice Design
+            </button>
+            <button data-tab="clone" class="nav-btn w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                Voice Cloning
+            </button>
+            <button data-tab="conversations" class="nav-btn w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"/></svg>
+                Conversations
+            </button>
+            <button data-tab="library" class="nav-btn w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                Voice Library
+            </button>
+        </nav>
+        <div class="p-2 border-t border-zinc-800 text-xs text-zinc-500">
+            <a href="/docs" target="_blank" class="hover:text-brand-400">API Docs (Swagger)</a>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-y-auto p-4 lg:p-6 pb-32">
+
+        <!-- TTS Section -->
+        <section id="tab-tts" class="tab-content space-y-4">
+            <h2 class="text-xl font-semibold">Text to Speech</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <!-- Left: Controls -->
+                <div class="lg:col-span-2 space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Text</label>
+                        <textarea id="tts-text" rows="4" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-y" placeholder="Enter text to synthesize..."></textarea>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-zinc-400 mb-1">Language</label>
+                            <select id="tts-language" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"></select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-zinc-400 mb-1">Voice</label>
+                            <select id="tts-voice" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"></select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Gender Filter</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" id="tts-gender-male" checked class="accent-brand-500 w-4 h-4"> Male
+                            </label>
+                            <label class="flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" id="tts-gender-female" checked class="accent-brand-500 w-4 h-4"> Female
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Speed: <span id="tts-speed-val">1.0</span>x</label>
+                        <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-brand-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-2">Emotion</label>
+                        <div id="tts-emotions" class="flex flex-wrap gap-2"></div>
+                    </div>
+
+                    <!-- Advanced Params -->
+                    <details class="bg-zinc-800/50 rounded-lg border border-zinc-700">
+                        <summary class="px-3 py-2 text-sm font-medium text-zinc-400 cursor-pointer hover:text-zinc-300">Advanced Parameters</summary>
+                        <div class="p-3 grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                                <label class="text-zinc-500">Steps (1-100)</label>
+                                <input type="number" id="tts-num-step" value="32" min="1" max="100" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 mt-1">
+                            </div>
+                            <div>
+                                <label class="text-zinc-500">Guidance Scale (0-10)</label>
+                                <input type="number" id="tts-guidance" value="2.0" min="0" max="10" step="0.1" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 mt-1">
+                            </div>
+                            <div>
+                                <label class="text-zinc-500">Duration (sec, optional)</label>
+                                <input type="number" id="tts-duration" min="0.5" max="120" step="0.5" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 mt-1" placeholder="Auto">
+                            </div>
+                            <div class="flex items-center gap-4 mt-4">
+                                <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="tts-denoise" checked class="accent-brand-500"> Denoise</label>
+                                <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="tts-postprocess" checked class="accent-brand-500"> Post-process</label>
+                                <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="tts-preprocess" class="accent-brand-500"> Pre-process ref</label>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Right: Preview -->
+                <div class="space-y-4">
+                    <div class="bg-zinc-800 rounded-lg border border-zinc-700 p-4">
+                        <h3 class="text-sm font-medium text-zinc-400 mb-2">Voice Preview</h3>
+                        <div id="tts-voice-info" class="text-sm text-zinc-500">Select a voice to see details</div>
+                    </div>
+                    <button id="tts-synthesize" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        Synthesize
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Voice Design Section -->
+        <section id="tab-design" class="tab-content hidden space-y-4">
+            <h2 class="text-xl font-semibold">Voice Design (Instruct)</h2>
+            <p class="text-sm text-zinc-400">Create custom voices by selecting attributes. The instruct string is built from your selections.</p>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="lg:col-span-2 space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Text</label>
+                        <textarea id="design-text" rows="3" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-y" placeholder="Enter text to synthesize..."></textarea>
+                    </div>
+                    <div id="design-tokens" class="space-y-3"></div>
+                </div>
+                <div class="space-y-4">
+                    <div class="bg-zinc-800 rounded-lg border border-zinc-700 p-4">
+                        <h3 class="text-sm font-medium text-zinc-400 mb-2">Instruct Preview</h3>
+                        <div id="design-instruct-preview" class="text-sm font-mono text-brand-400 min-h-[2rem] break-words">Select attributes...</div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Language</label>
+                        <select id="design-language" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"></select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Speed: <span id="design-speed-val">1.0</span>x</label>
+                        <input type="range" id="design-speed" min="0.5" max="2.0" step="0.1" value="1.0" class="w-full accent-brand-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-2">Emotion</label>
+                        <div id="design-emotions" class="flex flex-wrap gap-2"></div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="design-synthesize" class="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50">Synthesize</button>
+                        <button id="design-save" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50">Save Preset</button>
+                    </div>
+                    <!-- Save preset dialog -->
+                    <div id="design-save-dialog" class="hidden bg-zinc-800 rounded-lg border border-zinc-700 p-3 space-y-2">
+                        <label class="text-sm text-zinc-400">Preset Name</label>
+                        <input type="text" id="design-preset-name" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm" placeholder="My Custom Voice">
+                        <button id="design-save-confirm" class="w-full bg-brand-600 hover:bg-brand-700 text-white text-sm py-1.5 rounded-lg">Confirm Save</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Voice Cloning Section -->
+        <section id="tab-clone" class="tab-content hidden space-y-4">
+            <h2 class="text-xl font-semibold">Voice Cloning</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <!-- Clone form -->
+                <div class="space-y-4">
+                    <div id="clone-dropzone" class="border-2 border-dashed border-zinc-700 rounded-lg p-8 text-center hover:border-brand-500 transition-colors cursor-pointer">
+                        <svg class="w-10 h-10 mx-auto text-zinc-500 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                        <p class="text-sm text-zinc-400">Drop audio file here or click to browse</p>
+                        <p class="text-xs text-zinc-600 mt-1">WAV or FLAC, 1-30 seconds</p>
+                        <input type="file" id="clone-file" accept=".wav,.flac" class="hidden">
+                    </div>
+                    <div id="clone-audio-preview" class="hidden bg-zinc-800 rounded-lg p-3">
+                        <audio id="clone-audio" controls class="w-full"></audio>
+                        <p id="clone-file-info" class="text-xs text-zinc-500 mt-1"></p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-sm font-medium text-zinc-400 mb-1">Name</label>
+                            <input type="text" id="clone-name" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500" placeholder="my_voice">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-zinc-400 mb-1">Language</label>
+                            <select id="clone-language" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500"></select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Reference text <span class="text-zinc-600">(optional, improves quality)</span></label>
+                        <input type="text" id="clone-ref-text" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500" placeholder="Transcription of the reference audio...">
+                    </div>
+                    <button id="clone-submit" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>Clone Voice</button>
+
+                    <!-- Test section -->
+                    <div class="bg-zinc-800/50 rounded-lg border border-zinc-700 p-3 space-y-2">
+                        <h3 class="text-sm font-medium text-zinc-400">Test Cloned Voice</h3>
+                        <textarea id="clone-test-text" rows="2" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm" placeholder="Enter test text..."></textarea>
+                        <button id="clone-test-btn" class="w-full bg-zinc-700 hover:bg-zinc-600 text-white text-sm py-2 rounded-lg disabled:opacity-50" disabled>Test Synthesis</button>
+                    </div>
+                </div>
+
+                <!-- Cloned voices list -->
+                <div>
+                    <h3 class="text-sm font-medium text-zinc-400 mb-2">Cloned Voices</h3>
+                    <div id="clone-voices-list" class="space-y-2"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Conversations Section -->
+        <section id="tab-conversations" class="tab-content hidden space-y-4">
+            <h2 class="text-xl font-semibold">Multi-Voice Conversations</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="lg:col-span-2 space-y-3">
+                    <div id="convo-turns" class="space-y-3"></div>
+                    <button id="convo-add-turn" class="w-full border-2 border-dashed border-zinc-700 rounded-lg py-2 text-sm text-zinc-400 hover:border-brand-500 hover:text-brand-400 transition-colors">+ Add Turn</button>
+                </div>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-zinc-400 mb-1">Pause between turns: <span id="convo-pause-val">300</span>ms</label>
+                        <input type="range" id="convo-pause" min="0" max="5000" step="100" value="300" class="w-full accent-brand-500">
+                    </div>
+                    <button id="convo-generate" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-3 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Generate Conversation</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Voice Library Section -->
+        <section id="tab-library" class="tab-content hidden space-y-4">
+            <h2 class="text-xl font-semibold">Voice Library</h2>
+            <div class="flex gap-2 border-b border-zinc-800 pb-2">
+                <button data-lib-tab="stock" class="lib-tab active px-3 py-1.5 text-sm rounded-lg">Stock Voices</button>
+                <button data-lib-tab="cloned" class="lib-tab px-3 py-1.5 text-sm rounded-lg">Cloned</button>
+                <button data-lib-tab="designed" class="lib-tab px-3 py-1.5 text-sm rounded-lg">Designed</button>
+            </div>
+            <div id="lib-stock" class="lib-content">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2" id="lib-stock-grid"></div>
+            </div>
+            <div id="lib-cloned" class="lib-content hidden"></div>
+            <div id="lib-designed" class="lib-content hidden"></div>
+        </section>
+    </main>
+</div>
+
+<!-- Persistent Audio Player Bar -->
+<div id="player-bar" class="fixed bottom-0 left-0 right-0 bg-zinc-900 border-t border-zinc-800 px-4 py-3 z-30">
+    <div class="max-w-7xl mx-auto flex items-center gap-4">
+        <!-- Controls -->
+        <div class="flex items-center gap-2">
+            <button id="player-play" class="w-10 h-10 rounded-full bg-brand-600 hover:bg-brand-700 flex items-center justify-center transition-colors disabled:opacity-30" disabled>
+                <svg id="player-play-icon" class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <svg id="player-pause-icon" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <button id="player-stop" class="w-8 h-8 rounded-full bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors disabled:opacity-30" disabled>
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            </button>
+        </div>
+
+        <!-- Waveform -->
+        <div class="flex-1 relative">
+            <canvas id="player-waveform" class="w-full h-10 rounded bg-zinc-800"></canvas>
+            <div id="player-progress" class="absolute top-0 left-0 h-full bg-brand-600/20 rounded pointer-events-none" style="width:0%"></div>
+        </div>
+
+        <!-- Time -->
+        <div class="text-xs text-zinc-400 font-mono whitespace-nowrap">
+            <span id="player-current">0:00</span> / <span id="player-total">0:00</span>
+        </div>
+
+        <!-- Volume -->
+        <div class="flex items-center gap-1">
+            <svg class="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
+            <input type="range" id="player-volume" min="0" max="1" step="0.05" value="1" class="w-16 accent-brand-500">
+        </div>
+
+        <!-- Download -->
+        <div class="relative">
+            <button id="player-download-btn" class="bg-zinc-800 hover:bg-zinc-700 text-sm px-3 py-1.5 rounded-lg flex items-center gap-1 disabled:opacity-30" disabled>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Download
+            </button>
+            <div id="player-download-menu" class="hidden absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl overflow-hidden">
+                <button data-format="wav" class="dl-option w-full text-left px-4 py-2 text-sm hover:bg-zinc-700">WAV (Lossless)</button>
+                <button data-format="mp3" class="dl-option w-full text-left px-4 py-2 text-sm hover:bg-zinc-700">MP3</button>
+                <button data-format="ogg" class="dl-option w-full text-left px-4 py-2 text-sm hover:bg-zinc-700">OGG (WhatsApp Android)</button>
+                <button data-format="m4a" class="dl-option w-full text-left px-4 py-2 text-sm hover:bg-zinc-700">M4A (WhatsApp iPhone)</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+    environment:
+      - TTS_USE_MOCK=${TTS_USE_MOCK:-false}
+      - TTS_FALLBACK_TO_MOCK=true
+      - DATABASE_URL=sqlite:///storage/omnivoice.db
+      - API_KEY=${API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TTS_INSTALL_DIR=/omnivoice-external
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/api/v1/health/live'); exit(0 if r.status_code==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
