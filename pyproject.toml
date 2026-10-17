@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "newsvoice"
+version = "0.0.1"
+description = "Unified monorepo (news-engine + tts-api gateway) with uv workspace"
+requires-python = ">=3.11,<3.13"
+readme = "README.md"
+
+[tool.uv.workspace]
+members = ["apps/news", "apps/gateway", "libs/tts_contract"]
+resolver = "lowest-direct"
+
+[tool.uv.sources]
+tts-contract = { workspace = true }
