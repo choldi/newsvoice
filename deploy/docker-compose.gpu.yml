@@ -1,0 +1,23 @@
+# =============================================================================
+# Overlay: GPU reservation for the gateway (Shape A on a GPU host)
+# =============================================================================
+# Usage:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d
+#
+# Requires `nvidia-container-toolkit` on the host (root, one-off):
+#   sudo apt-get install -y nvidia-container-toolkit
+#   sudo nvidia-ctk runtime configure --runtime=docker
+#   sudo systemctl restart docker
+# Without it the gateway container starts without a GPU and synthesis falls back
+# to CPU (or fails, depending on TTS_ENGINE).
+# =============================================================================
+
+services:
+  gateway:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

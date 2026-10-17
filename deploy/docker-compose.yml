@@ -1,0 +1,273 @@
+# =============================================================================
+# newsvoice — unified stack (Shape A: everything on one host)
+# =============================================================================
+# Run from the repo root:
+#   docker compose -f deploy/docker-compose.yml up -d
+# Compose resolves build contexts / env_file / volumes relative to THIS file.
+# Compose-level interpolation variables (ports, TTS_PATH, COMPOSE_PROFILES)
+# come from deploy/.env; the containers' own variables come from each app's
+# .env (apps/news/.env, apps/gateway/.env) — they are kept separate on purpose
+# because both apps define VOICES_DIR with different meanings/paths.
+#
+# Overlays:
+#   -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml    (GPU reserve)
+#   -f deploy/docker-compose.yml -f deploy/docker-compose.split.yml  (multi-host)
+# =============================================================================
+
+name: newsvoice
+
+services:
+  # ---------------------------------------------------------------------------
+  # news-engine (apps/news)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_api
+    depends_on:
+      temporal:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+      # Read-only Docker socket so the system monitor can inspect the container
+      # health of every news-engine service. Root-equivalent on the host: only
+      # mount in trusted/self-hosted deploys.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["python", "-m", "src.workers.run_worker"]
+    restart: unless-stopped
+
+  narration-worker:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_narration_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_narration_worker"]
+    restart: unless-stopped
+
+  # Document TTS worker (Phase 7.11). Own queue so a 300-page render can never
+  # occupy the digest worker's activity slots; same namespace (the API schedules
+  # there) and the shared ./data volume (upload, extracted text, audio).
+  doc-tts-worker:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_doc_tts_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_doc_tts_worker"]
+    restart: unless-stopped
+
+  # Language-teacher worker (Phase 7.12). Own queue: the LLM call plus a full
+  # narration render must never occupy the digest worker's slots.
+  teacher-worker:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_teacher_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_teacher_worker"]
+    restart: unless-stopped
+
+  # Modal narration worker (Phase 7.8). Behind the "modal" profile so it is
+  # created but NOT started: start it with
+  #   docker compose -f deploy/docker-compose.yml --profile modal up -d narration-modal-worker
+  narration-modal-worker:
+    profiles: ["modal"]
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_narration_modal_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_modal_worker"]
+    restart: unless-stopped
+
+  # Voice catalog worker (Phase 7.9). Hosts VoiceCatalogWorkflow plus the
+  # status/store/upload activities in the voices namespace, which owns
+  # data/voices. The design half runs outside the compose network, on the GPU
+  # box (Deploy.md section 8).
+  voice-catalog-worker:
+    build:
+      context: ../apps/news
+      dockerfile: Dockerfile
+    container_name: news_engine_voice_catalog_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - ../apps/news/.env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../apps/news/data:/app/data
+      - ../apps/news/collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_voice_worker", "--role", "catalog"]
+    restart: unless-stopped
+
+  # WhatsApp delivery gateway (Baileys, blakegt/whatsapp-web-api-rest). Not
+  # reachable from outside the compose network; the worker talks to it as
+  # http://there:8085. The gateway exposes NO auth, so it must stay internal.
+  # The container user is uid 1001, so the host dir must be owned by 1001.
+  there:
+    image: blakegt/whatsapp-web-api-rest:latest
+    container_name: news_engine_there
+    volumes:
+      - ../apps/news/data/there:/app/auth_info
+    restart: unless-stopped
+
+  temporal-postgres:
+    image: postgres:13
+    container_name: news_engine_temporal_postgres
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - temporal_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: news_engine_temporal
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/$(hostname -i)/7233' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    container_name: news_engine_temporal_ui
+    depends_on:
+      - temporal
+    ports:
+      - "8081:8080"
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8081
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # tts gateway (apps/gateway)
+  # ---------------------------------------------------------------------------
+  # Listens on 8000 inside the container and is published as 8001 by default, so
+  # it matches TTS_API_BASE_URL=http://gateway:8001/api/v1 (Shape A), the
+  # GET /disk disk probe and the historical systemd :8001. In Shape B the same
+  # service is published directly on the GPU host's 8001.
+  gateway:
+    build:
+      context: ../apps/gateway
+      dockerfile: Dockerfile
+    container_name: news_engine_gateway
+    ports:
+      - "${GATEWAY_PORT:-8001}:8000"
+    env_file:
+      - ../apps/gateway/.env
+    environment:
+      - TTS_INSTALL_DIR=/omnivoice-external
+      - DATABASE_URL=sqlite:///storage/omnivoice.db
+      - TTS_FALLBACK_TO_MOCK=true
+    volumes:
+      - ../apps/gateway/storage:/app/storage
+      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import httpx; r=httpx.get('http://localhost:8000/api/v1/health/live'); exit(0 if r.status_code==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  temporal_pg_data:
