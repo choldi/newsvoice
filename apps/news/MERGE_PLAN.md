@@ -162,6 +162,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P7** Ops unificados | un `Makefile`, `scripts/` fusionados, `make status` cubre ambas apps | `make status` reporta los 12 servicios + salud del gateway |
 | **P8** Lease de GPU | formalizar `design_window.sh` como lease explícito para que síntesis y diseño no colisionen | test del lease + tabla `tts_leases` extendida |
 | **P9** Docs + CI | Deploy.md reescrito para Shapes A/B; jobs de CI por app; arreglar `mypy tts_api` (133 errores) | CI verde en el monorepo |
+| **P9.5** Export/Import de configuración y voces | Crear `scripts/export_config.sh` y `scripts/import_config.sh` (volcar `apps/news/.env.example` + `deploy/.env.example`, `collections.toml`, `data/voices/manifest.json`, `data/voices/voice_profiles.json`, secretos requeridos documentados). Verificar export en local y producir tarball `newsvoice-config-<ts>.tar.gz` listo para import en el nuevo monorepo | Export generado, checksum, tarball en `backups/` o path documentado, y probado `import_config.sh --dry-run`; rutas del gateway actualizadas para leer catálogo desde `apps/gateway/data/voices/` o path unificado |
 | **P10** Cutover | desplegar el monorepo en debwk, retirar los checkouts `~/news-summary` y `~/ov_api`, archivar remotos | `make status` verde; digest diario entregado |
 
 ---
