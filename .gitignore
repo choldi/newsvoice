@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Runtime data
+data/
+!data/.gitkeep
+storage/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Models / binaries
+models/
+*.gguf
+*.bin
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
