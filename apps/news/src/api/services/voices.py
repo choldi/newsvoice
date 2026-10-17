@@ -15,6 +15,7 @@ import httpx
 import structlog
 from tts_contract import ClonedVoice, CloneVoiceResponse, StockVoice
 
+from src.api.services.gateway import gateway_headers
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -25,16 +26,17 @@ CACHE_TTL_SECONDS = 60
 def _headers(settings: Any) -> dict[str, str]:
     """Build the OmniVoice request headers.
 
+    The GUI only ever reads JSON, so it asks for JSON alone; the shared builder
+    still owns the X-API-Key rule so no second copy can drift from the two
+    synthesis clients.
+
     Args:
         settings: Application settings.
 
     Returns:
         Header dict, including X-API-Key when configured.
     """
-    headers = {"Accept": "application/json"}
-    if settings.tts_api_key:
-        headers["X-API-Key"] = settings.tts_api_key
-    return headers
+    return gateway_headers(settings.tts_api_key, accept="application/json")
 
 
 class VoicesService:

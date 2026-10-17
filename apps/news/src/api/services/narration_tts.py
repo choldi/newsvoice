@@ -64,6 +64,7 @@ from src.api.models.narration import (
 )
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
+from src.api.services.gateway import GatewayClient, GatewayError, gateway_headers
 from src.api.services.gateway_voices import resolve_gateway_qwen_voice
 from src.api.services.tts import DEFAULT_VOICE_BY_LANGUAGE, LEGACY_VOICE_ALIASES
 from src.core.audio import (
@@ -108,26 +109,21 @@ class NarrationError(RuntimeError):
     """Base error for the narration pipeline."""
 
 
-class NarrationGatewayError(NarrationError):
+class NarrationGatewayError(NarrationError, GatewayError):
     """Raised when the TTS gateway rejects a request or cannot be reached.
+
+    Subclasses :class:`~src.api.services.gateway.GatewayError`, so the whole
+    narration pipeline can catch it as :class:`NarrationError` (Temporal marks
+    it non-retryable) while callers that handle the gateway generically can
+    catch the shared base.
 
     Attributes:
         status_code: HTTP status returned by the gateway, or 0 for transport errors.
         error_type: Machine-readable type from the gateway error body, e.g.
             'unsupported_language' or 'voice_not_found'.
+        valid_voice_ids: Voice ids the gateway suggested when it did not
+            recognise the requested one.
     """
-
-    def __init__(self, message: str, status_code: int = 0, error_type: str = "") -> None:
-        """Initialize the error.
-
-        Args:
-            message: Human-readable description.
-            status_code: HTTP status code, or 0 for transport failures.
-            error_type: Machine-readable gateway error type.
-        """
-        super().__init__(message)
-        self.status_code = status_code
-        self.error_type = error_type
 
 
 class NarrationRenderError(NarrationError, AudioError):
@@ -425,7 +421,7 @@ class NarrationTTSService:
             ffmpeg_path=self._ffmpeg, bitrate_kbps=bitrate_kbps
         )
         self._client = client
-        self._owns_client = client is None
+        self._gw: GatewayClient | None = None
         self._timeout = settings.narration_request_timeout
         self._max_chars = settings.narration_max_chars_per_request
         self._fallback_to_edge = settings.narration_fallback_to_edge
@@ -444,30 +440,34 @@ class NarrationTTSService:
         Returns:
             Header dict including X-API-Key when configured.
         """
-        headers = {"Accept": "audio/wav, application/json"}
-        if self._api_key:
-            headers["X-API-Key"] = self._api_key
-        return headers
+        return gateway_headers(self._api_key)
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Return the HTTP client, creating it on first use.
+    def _gateway(self) -> GatewayClient:
+        """Return the gateway dispatcher, building it on first use.
+
+        Built lazily so the transport picks up a base URL, key or timeout set
+        after construction (the tests adjust ``_api_key`` before the first
+        call), and kept for the life of the service so connections are reused.
 
         Returns:
-            An httpx.AsyncClient bound to the configured base URL.
+            A dispatcher bound to this service's settings that raises
+            :class:`NarrationGatewayError`.
         """
-        if self._client is None:
-            self._client = httpx.AsyncClient(
+        if self._gw is None:
+            self._gw = GatewayClient(
                 base_url=self._api_base_url,
+                api_key=self._api_key,
                 timeout=self._timeout,
-                headers=self._headers(),
+                client=self._client,
+                error_cls=NarrationGatewayError,
             )
-        return self._client
+        return self._gw
 
     async def aclose(self) -> None:
         """Close the HTTP client when the service owns it."""
-        if self._client is not None and self._owns_client:
-            await self._client.aclose()
-            self._client = None
+        if self._gw is not None:
+            await self._gw.aclose()
+            self._gw = None
 
     @staticmethod
     def _error_from_response(response: httpx.Response) -> NarrationGatewayError:
@@ -505,17 +505,8 @@ class NarrationTTSService:
         Raises:
             NarrationGatewayError: On transport errors or non-2xx responses.
         """
-        client = await self._get_client()
         async with self._semaphore:
-            try:
-                response = await client.post(path, json=payload)
-            except httpx.HTTPError as exc:
-                raise NarrationGatewayError(f"gateway request to {path} failed: {exc}") from exc
-        if response.status_code >= 400:
-            raise self._error_from_response(response)
-        if not response.content:
-            raise NarrationGatewayError(f"gateway returned an empty body for {path}")
-        return response.content
+            return await self._gateway().post_audio(path, payload)
 
     async def _post_modal_tts(
         self,
@@ -584,11 +575,11 @@ class NarrationTTSService:
         Returns:
             The gateway health.
         """
-        client = await self._get_client()
+        dispatcher = self._gateway()
         try:
             async with self._semaphore:
-                response = await client.get("health")
-        except httpx.HTTPError as exc:
+                response = await dispatcher.get("health")
+        except GatewayError as exc:
             logger.warning("narration_gateway_unreachable", error=str(exc))
             return GatewayHealthOut(reachable=False, status="unreachable", error=str(exc))
         try:
@@ -630,11 +621,11 @@ class NarrationTTSService:
         Raises:
             NarrationGatewayError: On non-2xx responses or transport errors.
         """
-        client = await self._get_client()
+        dispatcher = self._gateway()
         try:
             async with self._semaphore:
-                response = await client.get("voices/stock")
-        except httpx.HTTPError as exc:
+                response = await dispatcher.get("voices/stock")
+        except GatewayError as exc:
             logger.warning("narration_voices_unreachable", error=str(exc))
             return []
         if response.status_code >= 400:

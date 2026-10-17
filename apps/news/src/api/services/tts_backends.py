@@ -22,9 +22,12 @@ ffmpeg can read, ``verify_audio`` decodes with ffmpeg, and the Telegram sender
 picks the MIME type from the extension. The only code that cared about "MP3"
 was the cache filename and the byte-wise chunk join, both made extension-aware.
 
-The gateway contract (headers, the nested error body it answers with) is
-shared with the narration renderer so the two cannot drift apart: the digest
-and the podcast talk to the same ``tts-api`` process.
+The gateway contract (the request headers, the base-URL/timeout resolution and
+the nested error body it answers with) lives in
+:mod:`src.api.services.gateway`, shared with the narration renderer so the two
+cannot drift apart: the digest and the podcast talk to the same ``tts-api``
+process. :data:`gateway_headers` is re-exported here because the digest tests
+assert the headers at the service boundary.
 
 This module must stay importable from activities without pulling in Temporal.
 """
@@ -37,6 +40,13 @@ from tts_contract import TTSRequest
 from tts_contract import parse_gateway_error as parse_gateway_error_body
 
 from src.api.models.narration import TTSBackend
+from src.api.services.gateway import (
+    GatewayClient,
+    GatewayError,
+)
+from src.api.services.gateway import (
+    gateway_headers as gateway_headers,
+)
 from src.core.config import get_settings
 from src.core.tracing import trace_function
 
@@ -99,8 +109,12 @@ class TTSBackendError(RuntimeError):
     """
 
 
-class TTSGatewayError(RuntimeError):
+class TTSGatewayError(GatewayError):
     """The tts-api gateway rejected a request or could not be reached.
+
+    A subclass of :class:`~src.api.services.gateway.GatewayError`, so callers
+    can catch this type on the digest path or the shared base when they only
+    care that the gateway refused.
 
     Attributes:
         status_code: HTTP status returned, or 0 for transport errors.
@@ -109,26 +123,6 @@ class TTSGatewayError(RuntimeError):
         valid_voice_ids: Ids the gateway offered back when it did not know the
             requested one, so the message can say what *would* have worked.
     """
-
-    def __init__(
-        self,
-        message: str,
-        status_code: int = 0,
-        error_type: str = "",
-        valid_voice_ids: tuple[str, ...] = (),
-    ) -> None:
-        """Initialize the error.
-
-        Args:
-            message: Human-readable description.
-            status_code: HTTP status, or 0 for transport failures.
-            error_type: Gateway error type, when the body carried one.
-            valid_voice_ids: Voice ids the gateway suggested.
-        """
-        super().__init__(message)
-        self.status_code = status_code
-        self.error_type = error_type
-        self.valid_voice_ids = valid_voice_ids
 
 
 def resolve_backend(value: str | None) -> TTSBackend:
@@ -209,21 +203,6 @@ def wall_seconds_for(backend: TTSBackend, char_count: float) -> float:
 # --- gateway plumbing --------------------------------------------------------
 
 
-def gateway_headers(api_key: str = "") -> dict[str, str]:
-    """Build the request headers the tts-api gateway expects.
-
-    Args:
-        api_key: Optional key; an empty value sends no credential.
-
-    Returns:
-        Header dict including Accept and, when configured, X-API-Key.
-    """
-    headers = {"Accept": "audio/wav, application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    return headers
-
-
 def parse_gateway_error(response: httpx.Response) -> TTSGatewayError:
     """Translate a non-2xx gateway answer into a typed error.
 
@@ -284,43 +263,17 @@ async def gateway_tts(
     base = (api_base_url or settings.tts_api_base_url).rstrip("/")
     key = settings.tts_api_key if api_key is None else api_key
     limit = timeout if timeout is not None else float(settings.tts_request_timeout)
+    request = TTSRequest(text=text, voice_id=voice_id, language=language)
+    payload = request.model_dump(exclude_none=True)
 
     if client is not None:
-        return await _post_gateway(client, text, voice_id, language)
+        injected = GatewayClient(client=client, error_cls=TTSGatewayError)
+        return await injected.post_audio("tts", payload)
 
-    async with httpx.AsyncClient(
-        base_url=base, timeout=limit, headers=gateway_headers(key)
-    ) as owned:
-        return await _post_gateway(owned, text, voice_id, language)
-
-
-async def _post_gateway(
-    client: httpx.AsyncClient, text: str, voice_id: str, language: str
-) -> bytes:
-    """POST one synthesis request to the gateway's ``tts`` endpoint.
-
-    Args:
-        client: Client already bound to the gateway base URL and headers.
-        text: Speech-ready plain text.
-        voice_id: Gateway stock id or clone UUID.
-        language: ISO 639-1 language code.
-
-    Returns:
-        The raw WAV payload.
-
-    Raises:
-        TTSGatewayError: On transport errors, non-2xx answers or an empty body.
-    """
-    try:
-        request = TTSRequest(text=text, voice_id=voice_id, language=language)
-        response = await client.post("tts", json=request.model_dump(exclude_none=True))
-    except httpx.HTTPError as exc:
-        raise TTSGatewayError(f"gateway request to tts failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise parse_gateway_error(response)
-    if not response.content:
-        raise TTSGatewayError("gateway returned an empty body for tts")
-    return response.content
+    async with GatewayClient(
+        base_url=base, api_key=key, timeout=limit, error_cls=TTSGatewayError
+    ) as dispatcher:
+        return await dispatcher.post_audio("tts", payload)
 
 
 # --- voice resolution --------------------------------------------------------
