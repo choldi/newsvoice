@@ -1,7 +1,8 @@
 # MERGE_PLAN.md — Unificar `news-engine` y `tts-api` en un único repo
 
 **Fecha:** 2026-10-16
-**Estado:** plan aprobado; **P0 completado** (2026-10-16). Pendiente **P1**.
+**Estado:** plan aprobado; **P0 completado** (2026-10-16); **P1 completado**
+(2026-10-17, repo `jordi/newsvoice`). Pendiente **P2**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -145,7 +146,7 @@ arrancar hasta instalarlo.
 | Fase | Trabajo | Aceptación |
 |---|---|---|
 | **P0** Reconciliar y congelar | Purgar la basura (§7); diff del `dd874e3` desplegado (paquete `omnivoice_api`, engine real `qwen3_tts`) vs local; recuperar el commit del engine `qwen3_tts`; backup en debwk de `data/`, `storage/`, `.env`s | ✅ `git log` sin `MagicMock/` ni `*.egg-info`; tarball de backup en debwk; `dd874e3` **recuperado** en el repo del gateway como ref `deployed/main` (queda aquí, **no en `main`**). **Decisión:** portarlo a `main` (rename `omnivoice_api`→`tts_api` + conflictos) es **P3**, no P0 |
-| **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | `git log --follow apps/gateway/tts_api/main.py` alcanza la historia pre-rename |
+| **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | Ambas historias preservadas (149 gateway + 240 news commits alcanzables). `git log --follow 003d584^2 -- tts_api/main.py` alcanza la historia pre-rename (subtree: --follow desde HEAD no cruza el prefijo `apps/gateway/` por limitación de git; historia 100% conservada). |
 | **P2** Un solo compose + GPU | `deploy/docker-compose.yml` (+ overlays gpu/split); servicio `gateway`; contrato de puerto 8001; instalar toolkit | Shape A verde en debwk: `curl /health` (news) + `curl :8001/api/v1/health` OK |
 | **P3** Engines | Portar `qwen3_tts` (desde `dd874e3`), `voxcpm2`, `zonos2` respaldado por Modal a `apps/gateway`; **P3b Piper + P3c Chatterbox ya hechos** | cada engine accesible vía config routed; los gates de benchmark siguen siendo la autoridad |
 | **P4** `libs/tts_contract` | modelos Pydantic compartidos de `/tts`, `/conversations`, `/voices/*`; ambas apps lo importan | news-engine deja de parsear JSON del gateway a mano |
@@ -221,6 +222,22 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
    `storage/omnivoice.db`; 90 ficheros root-owned no legibles quedan en
    `…-skipped.log` (regenerables).
 
-**Siguiente: P1** — crear `jordi/newsvoice` en Gitea e importar las dos historias con
-`git subtree add --prefix=…` **sin `--squash`**, añadir la raíz uv workspace y el
-esqueleto de `libs/tts_contract`. Requiere aprobación explícita.
+**P1 — completado (2026-10-17, repo `jordi/newsvoice`):**
+
+1. ✅ repo creado en Gitea (`POST /api/v1/user/repos`, sin `auto_init`).
+2. ✅ precondición: los 2 commits pendientes de news-engine empujados
+   (`cc28af5..3e58fca`) para que el remoto lleve este plan.
+3. ✅ `git subtree add --prefix=apps/news news main` (`d03accc`) y
+   `--prefix=apps/gateway gateway main` (`003d584`) — **sin `--squash`**, ambas
+   historias completas alcanzables (240 news + 149 gateway commits).
+4. ✅ raíz uv workspace (`pyproject.toml`) + `libs/tts_contract` (esqueleto) — `f9fa52c`.
+5. ✅ **criterio de aceptación ajustado** (decisión cerrada con el usuario): el
+   `git log --follow apps/gateway/tts_api/main.py` de la §4 **no puede pasar** con
+   `subtree add` (el graft pone el prefijo solo en el commit de merge; el histórico
+   guarda rutas sin prefijo, `tts_api/main.py`). Se valida con
+   `git log --follow 003d584^2 -- tts_api/main.py`, que sí alcanza la historia
+   pre-rename. La historia 100% conservada; nada reescrito.
+
+**Siguiente: P2** — un solo `deploy/docker-compose.yml` con servicio `gateway`,
+contrato de puerto `8001:8000`, overlays gpu/split, y **prerrequisito root**:
+instalar `nvidia-container-toolkit` en debwk.
