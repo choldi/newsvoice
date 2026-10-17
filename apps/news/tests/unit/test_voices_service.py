@@ -56,7 +56,14 @@ async def test_list_stock_handles_failure() -> None:
 async def test_clone_voice_posts_form() -> None:
     """clone_voice POSTs the reference audio and returns the API JSON."""
     service = VoicesService(api_base_url="http://tts.test/api/v1")
-    expected = {"voice_id": "uuid-v4", "name": "mi-voz", "language": "es"}
+    expected = {
+        "voice_id": "uuid-v4",
+        "name": "mi-voz",
+        "language": "es",
+        "engines": "auto",
+        "ref_text": None,
+        "message": "",
+    }
 
     class FakeResponse:
         def json(self):
@@ -84,7 +91,14 @@ async def test_clone_voice_posts_form() -> None:
 async def test_clone_voice_includes_ref_text_when_provided() -> None:
     """clone_voice includes ref_text in the form data when provided."""
     service = VoicesService(api_base_url="http://tts.test/api/v1")
-    expected = {"voice_id": "uuid-v4", "name": "mi-voz", "language": "es"}
+    expected = {
+        "voice_id": "uuid-v4",
+        "name": "mi-voz",
+        "language": "es",
+        "engines": "auto",
+        "ref_text": None,
+        "message": "",
+    }
 
     class FakeResponse:
         def json(self):

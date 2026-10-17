@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog
+from pydantic import ValidationError
+from tts_contract import DiskUsage
 
 from src.api.db.database import RunsRepository
 from src.api.models.monitoring import CheckResult
@@ -140,8 +142,9 @@ async def check_edge_tts(ctx: CheckContext) -> CheckResult:
 async def check_tts_server_disk(ctx: CheckContext) -> CheckResult:
     """Probe the TTS server's disk endpoint.
 
-    Expects ``GET <tts_api_base_url>/<monitor_tts_disk_path>`` to return
-    ``{"total": int, "free": int, "used": int}`` (bytes).
+    Expects ``GET <tts_api_base_url>/<monitor_tts_disk_path>`` to return the
+    :class:`tts_contract.DiskUsage` payload (bytes): ``total`` and ``free``
+    are required, ``path``/``used`` are not.
 
     Args:
         ctx: Shared check dependencies.
@@ -164,14 +167,14 @@ async def check_tts_server_disk(ctx: CheckContext) -> CheckResult:
             detail=f"TTS disk endpoint unavailable: {exc}",
         )
     try:
-        total = int(data["total"])
-        free = int(data["free"])
-    except (KeyError, TypeError, ValueError) as exc:
+        disk = DiskUsage.model_validate(data)
+    except ValidationError as exc:
         return CheckResult(
             check="tts_server_disk",
             status="skipped",
             detail=f"TTS disk payload malformed ({exc}): {data}",
         )
+    total, free = disk.total, disk.free
     pct_free = free / total * 100 if total else 100.0
     if pct_free < ctx.settings.monitor_disk_threshold_percent:
         return CheckResult(

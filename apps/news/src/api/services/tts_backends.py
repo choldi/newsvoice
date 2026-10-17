@@ -31,10 +31,10 @@ This module must stay importable from activities without pulling in Temporal.
 
 from __future__ import annotations
 
-from typing import Any
-
 import httpx
 import structlog
+from tts_contract import TTSRequest
+from tts_contract import parse_gateway_error as parse_gateway_error_body
 
 from src.api.models.narration import TTSBackend
 from src.core.config import get_settings
@@ -227,10 +227,11 @@ def gateway_headers(api_key: str = "") -> dict[str, str]:
 def parse_gateway_error(response: httpx.Response) -> TTSGatewayError:
     """Translate a non-2xx gateway answer into a typed error.
 
-    The gateway answers with a nested body
-    (``{"detail": {"detail": ..., "error_type": ...}}``), so both the nested and
-    the flat shape are handled; an unparseable body still yields a useful
-    message instead of a bare status code.
+    The unwrapping of the gateway's error body (nested
+    ``{"detail": {"detail": ..., "error_type": ...}}``, the flat string detail,
+    the middleware's top-level ``error_type`` and the rate limiter's ``error``)
+    lives in :func:`tts_contract.parse_gateway_error`, shared with the narration
+    renderer so the two cannot drift apart.
 
     Args:
         response: The non-2xx response.
@@ -239,34 +240,16 @@ def parse_gateway_error(response: httpx.Response) -> TTSGatewayError:
         A TTSGatewayError carrying status, type, message and any suggested
         voice ids.
     """
-    error_type = ""
-    message = ""
-    valid_voice_ids: tuple[str, ...] = ()
     try:
-        body: Any = response.json()
+        body = response.json()
     except ValueError:
         body = None
-    if isinstance(body, dict):
-        detail = body.get("detail")
-        if isinstance(detail, dict):
-            error_type = str(detail.get("error_type", ""))
-            message = str(detail.get("detail", ""))
-            valid = detail.get("valid_voice_ids")
-            if isinstance(valid, list):
-                valid_voice_ids = tuple(str(item) for item in valid)
-        elif isinstance(detail, str):
-            message = detail
-        if not message:
-            message = str(body.get("error", ""))
-    if not message:
-        message = f"gateway returned {response.status_code}"
-    if valid_voice_ids:
-        message = f"{message} (valid voice ids: {', '.join(valid_voice_ids[:8])})"
+    info = parse_gateway_error_body(body, status_code=response.status_code)
     return TTSGatewayError(
-        message,
+        info.message,
         status_code=response.status_code,
-        error_type=error_type,
-        valid_voice_ids=valid_voice_ids,
+        error_type=info.error_type,
+        valid_voice_ids=tuple(info.valid_voice_ids),
     )
 
 
@@ -329,10 +312,8 @@ async def _post_gateway(
         TTSGatewayError: On transport errors, non-2xx answers or an empty body.
     """
     try:
-        response = await client.post(
-            "tts",
-            json={"text": text, "voice_id": voice_id, "language": language, "speed": 1.0},
-        )
+        request = TTSRequest(text=text, voice_id=voice_id, language=language)
+        response = await client.post("tts", json=request.model_dump(exclude_none=True))
     except httpx.HTTPError as exc:
         raise TTSGatewayError(f"gateway request to tts failed: {exc}") from exc
     if response.status_code >= 400:

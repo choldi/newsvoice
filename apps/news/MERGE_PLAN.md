@@ -2,8 +2,9 @@
 
 **Fecha:** 2026-10-16
 **Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
-(compose, 2026-10-17) y **P3** (engines, 2026-10-17) completados. El **cutover en
-debwk se difiere a P10**. Pendiente **P4**.
+(compose, 2026-10-17), **P3** (engines, 2026-10-17) y **P4** (contrato, 2026-10-17)
+completados. El **cutover en
+debwk se difiere a P10**. Pendiente **P5**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -155,7 +156,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | Ambas historias preservadas (149 gateway + 240 news commits alcanzables). `git log --follow 003d584^2 -- tts_api/main.py` alcanza la historia pre-rename (subtree: --follow desde HEAD no cruza el prefijo `apps/gateway/` por limitación de git; historia 100% conservada). |
 | **P2** Un solo compose + GPU | ✅ `deploy/docker-compose.yml` (+ overlays gpu/split) + `deploy/.env.example`; servicio `gateway`; contrato `8001:8000`; proyecto `newsvoice` | ✅ validado con `docker compose config` (11 servicios + gateway; split `news`=10 / `gateway`=1) y GPU-in-container verificado en debwk. **El Shape A verde en debwk se difiere a P10** (downtime + port del engine) |
 | **P3** Engines | ✅ portar `qwen3_tts` (desde `dd874e3`) a `apps/gateway` renombrado, con catálogo `GET /api/v1/engines` (`locations`) y override `engine` en `/tts`; **P3b Piper + P3c Chatterbox ya hechos**. `voxcpm2`/`zonos2` **diferidos** (Modal-only, sin runtime local en debwk) | ✅ `ruff check` + `ruff format` limpios y **378 tests verdes**; `qwen3_tts` accesible vía `TTS_ENGINE` y por pinning en `routed`; los gates de benchmark siguen siendo la autoridad |
-| **P4** `libs/tts_contract` | modelos Pydantic compartidos de `/tts`, `/conversations`, `/voices/*`; ambas apps lo importan | news-engine deja de parsear JSON del gateway a mano |
+| **P4** `libs/tts_contract` | ✅ `libs/tts_contract` **0.1.0** con `errors`, `voices`, `engines`, `system` y `requests`; el gateway declara `response_model` con ellos y news-engine parsea/escribe con ellos | ✅ news-engine ya no parsea JSON del gateway a mano (`tts_backends`, `narration_tts`, `voices`, `monitoring/checks`); gates **1510** (news) + **380** (gateway) tests verdes, ruff limpio |
 | **P5** Consolidación de dispatch | reescribir `src/api/services/tts_backends.py` (549 líneas) sobre `tts_contract`; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
 | **P6** Catálogo de voces → gateway | `data/voices/manifest.json` + `voice_profiles.json` pasan a ser responsabilidad del gateway | `GET /admin/voices/catalog` servido desde el gateway |
 | **P7** Ops unificados | un `Makefile`, `scripts/` fusionados, `make status` cubre ambas apps | `make status` reporta los 12 servicios + salud del gateway |
@@ -297,5 +298,35 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
    que deja de ser un "port". Candidato de fase futura; el gateway conserva su
    stub `zono2`.
 
-**Siguiente: P4** — `libs/tts_contract` (modelos Pydantic compartidos de
-`/tts`, `/conversations` y `/voices/*`, consumidos por ambas apps).
+**P4 — completado (2026-10-17):**
+
+1. ✅ `libs/tts_contract` **0.1.0** con cinco módulos: `errors`
+   (`GatewayErrorDetail`/`GatewayErrorBody` + `parse_gateway_error`, que absorbe
+   a la vez el `detail` anidado, el `detail` plano, el `error_type` de nivel
+   superior del middleware 401 y el `error` del 429 de slowapi), `voices`
+   (`StockVoice`, `ClonedVoice`, `CloneVoiceResponse`, `DesignedVoice`,
+   `DesignedVoiceResponse`), `engines` (`EnginesResponse`), `system`
+   (`HealthResponse`, `DiskUsage`) y `requests` (`TTSRequest`,
+   `ConversationRequest`/`ConversationTurn`).
+2. ✅ gateway: `tts-contract` añadido a `dependencies`; `response_model` declarado
+   en `/disk`, `/engines`, `POST /voices/clone` y `POST /voices/design` (el
+   cuerpo de éxito de `/tts` y `/conversations` es WAV, así que lo compartible de
+   esos endpoints es su petición y su cuerpo de error — ya ambos cubiertos).
+3. ✅ news-engine: `tts_backends.parse_gateway_error` y
+   `narration_tts._error_from_response` delegan en el contrato (una sola
+   implementación de desanidado); `voices`, `narration_tts` (health / stock /
+   conversaciones) y `monitoring/checks` validan con los modelos; las peticiones
+   a `/tts` y `/conversations` se construyen con `TTSRequest` y
+   `ConversationRequest` en lugar de dicts literales.
+4. ✅ tests nuevos: `apps/news/tests/unit/test_tts_contract.py` (13 casos, las
+   cuatro formas de error + `DiskUsage` estricto) y
+   `apps/gateway/tests/test_contract_models.py` (2 casos que parsean las
+   respuestas reales). Gate: **1510 passed** (news) + **380 passed** (gateway),
+   `ruff check` y `ruff format --check` limpios en las tres piezas.
+5. 📌 Ejecutar tests locales con
+   `PYTHONPATH=.:../../libs/tts_contract` (en build, el workspace `uv` resuelve
+   `tts-contract` a partir de `[tool.uv.sources]` de la raíz).
+
+**Siguiente: P5** — consolidar el dispatch de
+`src/api/services/tts_backends.py` sobre `tts_contract`, conservando Edge por
+defecto, el kill switch `TTS_API_ENABLED` y la regla `410 Gone`.

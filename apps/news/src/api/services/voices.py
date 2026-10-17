@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 import structlog
+from tts_contract import ClonedVoice, CloneVoiceResponse, StockVoice
 
 from src.core.config import get_settings
 
@@ -89,7 +90,11 @@ class VoicesService:
             try:
                 data = await self._get("voices/stock")
                 if isinstance(data, list):
-                    self._stock_cache = [dict(item) for item in data]
+                    self._stock_cache = [
+                        StockVoice.model_validate(item).model_dump()
+                        for item in data
+                        if isinstance(item, dict)
+                    ]
                     self._cache_ts = now
             except httpx.HTTPError as exc:
                 logger.warning("voices_stock_fetch_failed", error=str(exc))
@@ -126,7 +131,11 @@ class VoicesService:
             try:
                 data = await self._get("voices/cloned")
                 if isinstance(data, list):
-                    self._cloned_cache = [dict(item) for item in data]
+                    self._cloned_cache = [
+                        ClonedVoice.model_validate(item).model_dump()
+                        for item in data
+                        if isinstance(item, dict)
+                    ]
                     self._cache_ts = now
             except httpx.HTTPError as exc:
                 logger.warning("voices_cloned_fetch_failed", error=str(exc))
@@ -170,4 +179,4 @@ class VoicesService:
         async with httpx.AsyncClient(timeout=settings.api_request_timeout) as client:
             response = await client.post(url, data=data, files=files, headers=headers)
             response.raise_for_status()
-            return response.json()
+            return CloneVoiceResponse.model_validate(response.json()).model_dump()

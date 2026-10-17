@@ -33,6 +33,7 @@ dependencies = [
     "markdown>=3.0.0",
     "bcrypt>=4.1.0",
     "modal>=1.0.0",
+    "tts-contract",
 ]
 
 [project.optional-dependencies]

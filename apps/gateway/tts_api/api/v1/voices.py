@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 from loguru import logger
+from tts_contract import CloneVoiceResponse, DesignedVoiceResponse
 
 from tts_api.core.engine_client import OmniVoiceEngineClient, StockVoice
 from tts_api.core.exceptions import (
@@ -61,6 +62,7 @@ async def list_stock_voices(
 @router.post(
     "/clone",
     status_code=status.HTTP_201_CREATED,
+    response_model=CloneVoiceResponse,
     summary="Clonar voz desde audio de referencia",
     description=(
         "Clona una voz a partir de un archivo de audio de referencia. "
@@ -86,7 +88,7 @@ async def clone_voice(
         ),
     ),
     voice_service: VoiceService = Depends(get_voice_service),
-) -> dict:
+) -> CloneVoiceResponse:
     # Validate file type
     if not reference_audio.filename:
         raise HTTPException(
@@ -130,14 +132,14 @@ async def clone_voice(
             engine=engine_param,
         )
 
-        return {
-            "voice_id": voice_id,
-            "name": name,
-            "language": language,
-            "engines": engine_param or "auto",
-            "ref_text": ref_text,
-            "message": f"Voz '{name}' clonada exitosamente",
-        }
+        return CloneVoiceResponse(
+            voice_id=voice_id,
+            name=name,
+            language=language,
+            engines=engine_param or "auto",
+            ref_text=ref_text,
+            message=f"Voz '{name}' clonada exitosamente",
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (UnsupportedLanguageError, InvalidReferenceAudioError) as e:
@@ -232,6 +234,7 @@ async def delete_cloned_voice(
 @router.post(
     "/design",
     status_code=status.HTTP_201_CREATED,
+    response_model=DesignedVoiceResponse,
     summary="Crear voz por voice design (instruct)",
     description=(
         "Crea una voz a partir de un instruct de voice design. "
@@ -246,20 +249,20 @@ async def create_designed_voice(
     ),
     language: str = Body(..., description="Idioma principal (ISO 639-1)"),
     voice_service: VoiceService = Depends(get_voice_service),
-) -> dict:
+) -> DesignedVoiceResponse:
     try:
         voice_id = await voice_service.create_designed_voice(
             name=name,
             instruct=instruct,
             language=language,
         )
-        return {
-            "voice_id": voice_id,
-            "name": name,
-            "instruct": instruct,
-            "language": language,
-            "message": f"Voz diseñada '{name}' creada exitosamente",
-        }
+        return DesignedVoiceResponse(
+            voice_id=voice_id,
+            name=name,
+            instruct=instruct,
+            language=language,
+            message=f"Voz diseñada '{name}' creada exitosamente",
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

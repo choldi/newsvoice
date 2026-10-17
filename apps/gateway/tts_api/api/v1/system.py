@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter
+from tts_contract import DiskUsage
 
 from tts_api.settings import get_settings
 
@@ -14,18 +15,18 @@ router = APIRouter(tags=["system"])
 
 @router.get(
     "/disk",
-    response_model=dict,
+    response_model=DiskUsage,
     summary="Consultar espacio en disco",
     description=(
         "Devuelve el uso de disco del directorio de salida (OUTPUTS_DIR) en bytes. "
         "Endpoint público para que sistemas externos (ej. monitor) lo consulten."
     ),
 )
-async def get_disk() -> dict:
+async def get_disk() -> DiskUsage:
     """Consulta el uso de disco del directorio de salida.
 
     Returns:
-        Diccionario con total, free y used en bytes.
+        Uso de disco (path, total, free, used) en bytes.
     """
     target = get_settings().OUTPUTS_DIR
 
@@ -37,9 +38,9 @@ async def get_disk() -> dict:
             break
 
     usage = shutil.disk_usage(probe_dir)
-    return {
-        "path": str(probe_dir),
-        "total": usage.total,
-        "free": usage.free,
-        "used": usage.used,
-    }
+    return DiskUsage(
+        path=str(probe_dir),
+        total=usage.total,
+        free=usage.free,
+        used=usage.used,
+    )

@@ -47,6 +47,7 @@ dependencies = [
     # Seguridad / DX
     "slowapi>=0.1.9",
     "httpx>=0.27.0",
+    "tts-contract",
 ]
 
 [project.optional-dependencies]

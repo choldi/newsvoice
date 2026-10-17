@@ -43,6 +43,16 @@ from typing import Any
 import edge_tts
 import httpx
 import structlog
+from tts_contract import (
+    ConversationRequest,
+    ConversationTurn,
+    HealthResponse,
+    StockVoice,
+    TTSRequest,
+)
+from tts_contract import (
+    parse_gateway_error as parse_gateway_error_body,
+)
 
 from src.api.models.narration import (
     GatewayHealthOut,
@@ -463,9 +473,9 @@ class NarrationTTSService:
     def _error_from_response(response: httpx.Response) -> NarrationGatewayError:
         """Translate a gateway error response into a typed error.
 
-        The gateway answers with a nested body
-        (``{"detail": {"detail": ..., "error_type": ...}}``), so both the nested
-        and the flat shape are handled.
+        The unwrapping of the gateway body (nested, flat, middleware and
+        rate-limit shapes) lives in :func:`tts_contract.parse_gateway_error`,
+        shared with the digest path so the two clients cannot drift apart.
 
         Args:
             response: The non-2xx response.
@@ -473,31 +483,13 @@ class NarrationTTSService:
         Returns:
             A NarrationGatewayError carrying status, type and message.
         """
-        error_type = ""
-        message = ""
-        valid_voice_ids: list[str] = []
         try:
             body = response.json()
         except ValueError:
             body = None
-        if isinstance(body, dict):
-            detail = body.get("detail")
-            if isinstance(detail, dict):
-                error_type = str(detail.get("error_type", ""))
-                message = str(detail.get("detail", ""))
-                valid = detail.get("valid_voice_ids")
-                if isinstance(valid, list):
-                    valid_voice_ids = [str(item) for item in valid]
-            elif isinstance(detail, str):
-                message = detail
-            if not message:
-                message = str(body.get("error", ""))
-        if not message:
-            message = f"gateway returned {response.status_code}"
-        if valid_voice_ids:
-            message = f"{message} (valid voice ids: {', '.join(valid_voice_ids[:8])})"
+        info = parse_gateway_error_body(body, status_code=response.status_code)
         return NarrationGatewayError(
-            message, status_code=response.status_code, error_type=error_type
+            info.message, status_code=response.status_code, error_type=info.error_type
         )
 
     async def _post_audio(self, path: str, payload: dict[str, Any]) -> bytes:
@@ -612,14 +604,15 @@ class NarrationTTSService:
                 engine=str(body.get("engine", "")),
                 error=f"gateway health returned {response.status_code}",
             )
+        report = HealthResponse.model_validate(body)
         health = GatewayHealthOut(
             reachable=True,
-            status=str(body.get("status", "unknown")),
-            engine=str(body.get("engine", "")),
-            device=str(body.get("device", "")),
-            mode=str(body.get("mode", "")),
-            stock_voices_count=int(body.get("stock_voices_count", 0) or 0),
-            gpu_available=bool(body.get("gpu_available", False)),
+            status=report.status,
+            engine=report.engine,
+            device=report.device,
+            mode=report.mode,
+            stock_voices_count=report.stock_voices_count,
+            gpu_available=report.gpu_available,
         )
         if health.status != "ok":
             health.error = f"gateway status is {health.status}"
@@ -652,10 +645,10 @@ class NarrationTTSService:
             raise NarrationGatewayError("gateway returned a non-JSON voice list") from exc
         if not isinstance(data, list):
             raise NarrationGatewayError("gateway returned an unexpected voice list")
-        voices = [dict(item) for item in data if isinstance(item, dict)]
+        voices = [StockVoice.model_validate(item) for item in data if isinstance(item, dict)]
         if language:
-            voices = [v for v in voices if v.get("language") == language]
-        return voices
+            voices = [voice for voice in voices if voice.language == language]
+        return [voice.model_dump() for voice in voices]
 
     # --- Synthesis ----------------------------------------------------------
 
@@ -712,15 +705,14 @@ class NarrationTTSService:
                 )
             # Route to gateway local qwen3_tts engine
             resolved_voice = await resolve_gateway_qwen_voice(voice_id, language)
-            payload: dict[str, Any] = {
-                "text": text,
-                "voice_id": resolved_voice,
-                "language": language,
-                "speed": speed,
-                "engine": "qwen3_tts",
-            }
-            if emotion:
-                payload["emotion"] = emotion
+            payload: dict[str, Any] = TTSRequest(
+                text=text,
+                voice_id=resolved_voice,
+                language=language,
+                speed=speed,
+                engine="qwen3_tts",
+                emotion=emotion or None,
+            ).model_dump(exclude_none=True)
             try:
                 return await self._post_audio("tts", payload), False
             except NarrationGatewayError as exc:
@@ -751,14 +743,13 @@ class NarrationTTSService:
                 ),
                 False,
             )
-        payload: dict[str, Any] = {
-            "text": text,
-            "voice_id": voice_id,
-            "language": language,
-            "speed": speed,
-        }
-        if emotion:
-            payload["emotion"] = emotion
+        payload: dict[str, Any] = TTSRequest(
+            text=text,
+            voice_id=voice_id,
+            language=language,
+            speed=speed,
+            emotion=emotion or None,
+        ).model_dump(exclude_none=True)
         try:
             return await self._post_audio("tts", payload), False
         except NarrationGatewayError as exc:
@@ -826,8 +817,13 @@ class NarrationTTSService:
         )
         parts: list[tuple[bytes, int]] = []
         for index, block in enumerate(blocks):
+            conversation = ConversationRequest(
+                turns=[ConversationTurn.model_validate(turn) for turn in block],
+                pause_ms=pause_ms,
+                speed=speed,
+            )
             audio = await self._post_conversation_block(
-                {"turns": block, "pause_ms": pause_ms, "speed": speed}, index=index
+                conversation.model_dump(exclude_none=True), index=index
             )
             parts.append((await self._to_canonical(audio), pause_ms))
         return concat_wavs(parts)
