@@ -81,6 +81,7 @@ class TtsService:
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> AudioResult:
         """Sintetiza texto con voz stock, designed o clonada.
 
@@ -88,6 +89,10 @@ class TtsService:
           1. Cloned voice (reference audio)
           2. Designed voice (instruct preset from DB)
           3. Stock voice (hardcoded mapping)
+
+        Args:
+            engine_name: Optional engine override propagated to the router
+                (per-voice engine pinning).
         """
         self._validate_language(language)
         self._validate_emotion(emotion)
@@ -113,13 +118,16 @@ class TtsService:
             voice_service = await self._get_voice_service()
             designed = await voice_service.get_designed_voice(voice_id)
             engine = await self._get_engine_client()
-            return await engine.synthesize_instruct(
-                text=text,
-                instruct=designed["instruct"],
-                speed=speed,
-                emotion=emotion,
-                language=language,
-            )
+            instruct_kwargs = {
+                "text": text,
+                "instruct": designed["instruct"],
+                "speed": speed,
+                "emotion": emotion,
+                "language": language,
+            }
+            if engine_name is not None:
+                instruct_kwargs["engine_name"] = engine_name
+            return await engine.synthesize_instruct(**instruct_kwargs)
         except VoiceNotFoundError:
             pass
         except Exception as e:
@@ -137,13 +145,16 @@ class TtsService:
             err.valid_voice_ids = valid_ids
             raise err
 
-        return await engine.synthesize_stock(
-            text=text,
-            voice_id=voice_id,
-            speed=speed,
-            emotion=emotion,
-            language=language,
-        )
+        stock_kwargs = {
+            "text": text,
+            "voice_id": voice_id,
+            "speed": speed,
+            "emotion": emotion,
+            "language": language,
+        }
+        if engine_name is not None:
+            stock_kwargs["engine_name"] = engine_name
+        return await engine.synthesize_stock(**stock_kwargs)
 
     async def synthesize_instruct(
         self,
@@ -153,18 +164,22 @@ class TtsService:
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> AudioResult:
         """Sintetiza texto con instruct personalizado (voice design libre)."""
         self._validate_language(language)
         self._validate_emotion(emotion)
         engine = await self._get_engine_client()
-        return await engine.synthesize_instruct(
-            text=text,
-            instruct=instruct,
-            speed=speed,
-            emotion=emotion,
-            language=language,
-        )
+        instruct_kwargs = {
+            "text": text,
+            "instruct": instruct,
+            "speed": speed,
+            "emotion": emotion,
+            "language": language,
+        }
+        if engine_name is not None:
+            instruct_kwargs["engine_name"] = engine_name
+        return await engine.synthesize_instruct(**instruct_kwargs)
 
     async def synthesize_clone(
         self,
@@ -182,18 +197,24 @@ class TtsService:
         # Use the voice's own language from the DB, with the API parameter as fallback.
         voice_language = voice_data.get("language") or language
 
+        # Pin the engine the voice was registered for (routed engines honour it).
+        engine_name = voice_data.get("engine")
+
         # Retrieve ref_text (pre-computed transcription) from metadata
         ref_text = voice_data.get("metadata", {}).get("ref_text")
 
         engine = await self._get_engine_client()
 
-        return await engine.synthesize_clone(
-            text=text,
-            reference_audio_path=reference_audio_path,
-            ref_text=ref_text,
-            speed=speed,
-            language=voice_language,
-        )
+        clone_kwargs = {
+            "text": text,
+            "reference_audio_path": reference_audio_path,
+            "ref_text": ref_text,
+            "speed": speed,
+            "language": voice_language,
+        }
+        if engine_name:
+            clone_kwargs["engine_name"] = engine_name
+        return await engine.synthesize_clone(**clone_kwargs)
 
     async def close(self) -> None:
         """Suelta la referencia al cliente sin descargar el engine.

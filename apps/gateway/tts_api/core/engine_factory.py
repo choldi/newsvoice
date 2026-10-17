@@ -27,6 +27,10 @@ def _create_single_engine(name: str) -> TtsEngineBase:
         from tts_api.core.engines.edgetts_engine import EdgeTTSEngine
 
         engine_class = EdgeTTSEngine
+    elif name == "qwen3_tts":
+        from tts_api.core.engines.qwen3_tts_engine import Qwen3TTSEngine
+
+        engine_class = Qwen3TTSEngine
     elif name == "omnivoice":
         from tts_api.core.engines.omnivoice_engine_adapter import OmniVoiceAdapter
 

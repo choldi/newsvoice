@@ -16,6 +16,8 @@ class EngineCapabilities:
     emotions: bool = False
     streaming: bool = False
     supported_languages: list[str] = field(default_factory=list)
+    #: Where the engine can run: "local" (in this gateway) and/or "cloud".
+    locations: list[str] = field(default_factory=lambda: ["local"])
 
 
 class TtsEngineBase(ABC):
@@ -44,8 +46,14 @@ class TtsEngineBase(ABC):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        """Synthesize text with a stock voice. Returns WAV bytes."""
+        """Synthesize text with a stock voice. Returns WAV bytes.
+
+        Args:
+            engine_name: Optional engine override, honoured by routers. Concrete
+                engines ignore it.
+        """
 
     @abstractmethod
     async def synthesize_clone(
@@ -56,8 +64,13 @@ class TtsEngineBase(ABC):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        """Synthesize text cloning a voice from reference audio. Returns WAV bytes."""
+        """Synthesize text cloning a voice from reference audio. Returns WAV bytes.
+
+        Args:
+            engine_name: Optional engine override, honoured by routers.
+        """
 
     @abstractmethod
     async def synthesize_instruct(
@@ -68,8 +81,13 @@ class TtsEngineBase(ABC):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        """Synthesize text with a voice-design instruct. Returns WAV bytes."""
+        """Synthesize text with a voice-design instruct. Returns WAV bytes.
+
+        Args:
+            engine_name: Optional engine override, honoured by routers.
+        """
 
     @abstractmethod
     async def list_stock_voices(self, language: str | None = None) -> list[dict]:

@@ -225,6 +225,7 @@ class OmniVoiceEngineClient:
         speed: float = 1.0,
         emotion: str | None = None,
         language: str | None = None,
+        engine_name: str | None = None,
     ) -> AudioResult:
         """Sintetiza texto con voz stock."""
         if not self._started:
@@ -236,13 +237,16 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            wav_bytes = await self._engine.synthesize(
-                text=text,
-                voice_id=voice_id,
-                language=language or "es",
-                speed=speed,
-                emotion=emotion,
-            )
+            stock_kwargs = {
+                "text": text,
+                "voice_id": voice_id,
+                "language": language or "es",
+                "speed": speed,
+                "emotion": emotion,
+            }
+            if engine_name is not None:
+                stock_kwargs["engine_name"] = engine_name
+            wav_bytes = await self._engine.synthesize(**stock_kwargs)
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))
@@ -273,6 +277,7 @@ class OmniVoiceEngineClient:
         speed: float = 1.0,
         emotion: str | None = None,
         language: str | None = None,
+        engine_name: str | None = None,
     ) -> AudioResult:
         """Sintetiza texto con instruct personalizado (voice design libre)."""
         if not self._started:
@@ -284,13 +289,16 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            wav_bytes = await self._engine.synthesize_instruct(
-                text=text,
-                instruct=instruct,
-                language=language or "es",
-                speed=speed,
-                emotion=emotion,
-            )
+            instruct_kwargs = {
+                "text": text,
+                "instruct": instruct,
+                "language": language or "es",
+                "speed": speed,
+                "emotion": emotion,
+            }
+            if engine_name is not None:
+                instruct_kwargs["engine_name"] = engine_name
+            wav_bytes = await self._engine.synthesize_instruct(**instruct_kwargs)
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))
@@ -320,6 +328,7 @@ class OmniVoiceEngineClient:
         ref_text: str | None = None,
         speed: float = 1.0,
         language: str | None = None,
+        engine_name: str | None = None,
     ) -> AudioResult:
         """Sintetiza texto con voz clonada."""
         if not self._started:
@@ -331,13 +340,16 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            wav_bytes = await self._engine.synthesize_clone(
-                text=text,
-                reference_audio_path=reference_audio_path,
-                language=language or "es",
-                speed=speed,
-                ref_text=ref_text,
-            )
+            clone_kwargs = {
+                "text": text,
+                "reference_audio_path": reference_audio_path,
+                "language": language or "es",
+                "speed": speed,
+                "ref_text": ref_text,
+            }
+            if engine_name is not None:
+                clone_kwargs["engine_name"] = engine_name
+            wav_bytes = await self._engine.synthesize_clone(**clone_kwargs)
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))

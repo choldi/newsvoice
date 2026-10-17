@@ -16,6 +16,7 @@ from tts_api.settings import get_settings
 ENGINE_SAMPLE_RATES: dict[str, int] = {
     "pocket_tts": 24000,
     "edgetts": 24000,
+    "qwen3_tts": 24000,
     "omnivoice": 22050,
     "mock": 22050,
 }

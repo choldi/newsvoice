@@ -171,13 +171,16 @@ unfixable = ["TID252", "PTH118", "PTH120", "PTH123"]
 "tts_api/core/cleanup.py" = ["PLW0603", "PLW0602"]
 "tts_api/core/embedding_cache.py" = ["PLW0603"]
 "tts_api/core/engine_pool.py" = ["PLW0603"]
-"tts_api/core/engine_client.py" = ["PLW0603"]
+"tts_api/core/engine_client.py" = ["PLW0603", "PLR0913", "PLR0917"]
+# Hooks opcionales de la ABC de engines (warmup/close no abstractos a propósito),
+# change_model(model_name) sin usar en las implementaciones y el override de
+# engine (engine_name) que recibe el contrato como kwarg.
+"tts_api/core/engine_base.py" = ["B027", "ARG002", "PLR0913", "PLR0917"]
+# TtsService transporta el engine override (per-voice pinning) como kwarg.
+"tts_api/services/tts.py" = ["PLR0913", "PLR0917"]
 # Scripts y ejemplos de desarrollo (stándalone, no forman parte del paquete).
 "scripts/*" = ["PLR2004", "PLW2901", "PTH123"]
 "docs/examples/*" = ["PLR2004", "PTH123"]
-# Hooks opcionales de la ABC de engines (warmup/close no abstractos a propósito)
-# y change_model(model_name) que las implementaciones no usan.
-"tts_api/core/engine_base.py" = ["B027", "ARG002"]
 # Repositorios: create()/list() con la misma deuda de aridad que api/v1 y engines.
 "tts_api/repositories/voice_repository.py" = ["PLR0913", "PLR0917"]
 # Cache perezoso de whisper en modulo con `global` (mismo motivo que

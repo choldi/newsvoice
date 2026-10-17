@@ -134,6 +134,14 @@ async def synthesize_tts(
     emotion: Annotated[
         str | None, Body(description="Emoción (solo engines que la soporten)")
     ] = None,
+    engine: Annotated[
+        str | None,
+        Body(
+            description=(
+                "Engine override para routers (ej: 'qwen3_tts'). Si se omite, se enruta por idioma."
+            )
+        ),
+    ] = None,
     stream: Annotated[bool, Query(description="Streaming por chunks")] = False,
     accept: Annotated[str | None, Header(description="Tipo de contenido esperado")] = None,
     tts_service: TtsService = Depends(get_tts_service),
@@ -150,6 +158,7 @@ async def synthesize_tts(
                     language=language,
                     speed=speed,
                     emotion=emotion,
+                    engine_name=engine,
                 )
             else:
                 result = await tts_service.synthesize_stock(
@@ -158,6 +167,7 @@ async def synthesize_tts(
                     language=language,
                     speed=speed,
                     emotion=emotion,
+                    engine_name=engine,
                 )
         finally:
             pool.release()
@@ -204,6 +214,10 @@ async def synthesize_instruct(
     emotion: Annotated[
         str | None, Body(description="Emoción (solo engines que la soporten)")
     ] = None,
+    engine: Annotated[
+        str | None,
+        Body(description="Engine override para routers (ej: 'qwen3_tts')."),
+    ] = None,
     stream: Annotated[bool, Query(description="Streaming por chunks")] = False,
     accept: Annotated[str | None, Header(description="Tipo de contenido esperado")] = None,
     tts_service: TtsService = Depends(get_tts_service),
@@ -219,6 +233,7 @@ async def synthesize_instruct(
                 language=language,
                 speed=speed,
                 emotion=emotion,
+                engine_name=engine,
             )
         finally:
             pool.release()

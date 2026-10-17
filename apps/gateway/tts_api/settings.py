@@ -25,10 +25,18 @@ class Settings(BaseSettings):
     # edgetts: cloud, no cloning, 400+ voices including Catalan (ca-ES)
     # piper: CPU-first local neural TTS, incl. Catalan (ca-ES)
     # chatterbox: GPU multilingual TTS, zero-shot cloning (no Catalan)
+    # qwen3_tts: local GPU, voice cloning (Base) + voice design (VoiceDesign)
     # mock: test tones (for development/testing)
     # routed: multi-engine, dispatches by language (requires TTS_ENGINES config)
     TTS_ENGINE: Literal[
-        "omnivoice", "pocket_tts", "edgetts", "piper", "chatterbox", "mock", "routed"
+        "omnivoice",
+        "pocket_tts",
+        "edgetts",
+        "piper",
+        "chatterbox",
+        "qwen3_tts",
+        "mock",
+        "routed",
     ] = "omnivoice"
 
     # Multi-engine routing (when TTS_ENGINE=routed)
@@ -36,6 +44,17 @@ class Settings(BaseSettings):
     # Use "_default" for fallback when language has no explicit mapping.
     # Ejemplo de mapeo: es a pocket_tts, en a pocket_tts, ca a edgetts, y _default a pocket_tts.
     TTS_ENGINES: str = ""
+
+    # --- Qwen3-TTS (when TTS_ENGINE=qwen3_tts, or as a sub-engine of routed) ---
+    # The runtime lives in an external venv (torch + qwen-tts) driven as a
+    # persistent subprocess worker; see core/engines/qwen3_tts_worker.py.
+    QWEN3_TTS_PYTHON: Path | None = None
+    QWEN3_TTS_MODEL: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    QWEN3_TTS_DESIGN_MODEL: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    QWEN3_TTS_CLONE_MODEL: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    QWEN3_TTS_DEVICE: str = "cuda:0"
+    QWEN3_TTS_DTYPE: str = "bfloat16"
+    QWEN3_TTS_ATTN: Literal["sdpa", "flash_attention_2", "eager"] = "sdpa"
 
     # Pocket TTS config (when TTS_ENGINE=pocket_tts)
     # Código de idioma para load_model() (p. ej. "english") o ruta/URL de un
@@ -119,6 +138,16 @@ class Settings(BaseSettings):
         return python_bin_from_venv(default_venv_dir())
 
     @property
+    def qwen3_tts_python(self) -> Path:
+        """Ruta al python del venv externo de qwen-tts.
+
+        Prioridad: ``QWEN3_TTS_PYTHON`` o ``~/qwen3-tts/venv/bin/python``.
+        """
+        if self.QWEN3_TTS_PYTHON:
+            return Path(self.QWEN3_TTS_PYTHON).expanduser()
+        return Path("~/qwen3-tts/venv/bin/python").expanduser()
+
+    @property
     def model_path(self) -> Path:
         """Ruta al modelo OmniVoice descargado."""
         from tts_api.core.engine_paths import default_install_dir
@@ -141,6 +170,10 @@ class Settings(BaseSettings):
                 routing = {}
             if isinstance(routing, dict):
                 langs.extend(code for code in routing if code and code != "_default")
+                if "qwen3_tts" in routing.values():
+                    langs.extend(["ca", "ru"])
+        if self.TTS_ENGINE == "qwen3_tts":
+            langs.extend(["ca", "ru"])
         return sorted(set(langs))
 
 

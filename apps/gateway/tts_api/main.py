@@ -42,7 +42,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from tts_api.api.v1 import conversations, system, tts, voices
+from tts_api.api.v1 import conversations, engines, system, tts, voices
 from tts_api.core.cleanup import start_cleanup_task, stop_cleanup_task
 from tts_api.core.engine_client import (
     reset_shared_engine_client,
@@ -171,6 +171,7 @@ if STATIC_DIR.is_dir():
 # --- Routers ---
 app.include_router(voices.router, prefix="/api/v1")
 app.include_router(tts.router, prefix="/api/v1")
+app.include_router(engines.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
 

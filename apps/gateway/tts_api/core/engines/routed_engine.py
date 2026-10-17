@@ -40,6 +40,7 @@ class RoutedEngine(TtsEngineBase):
         instruct = False
         emotions = False
         streaming = False
+        locations: set[str] = set()
         for engine in self._engines.values():
             cap = engine.capabilities
             langs.update(cap.supported_languages)
@@ -47,6 +48,7 @@ class RoutedEngine(TtsEngineBase):
             instruct = instruct or cap.instruct_voice_design
             emotions = emotions or cap.emotions
             streaming = streaming or cap.streaming
+            locations.update(cap.locations)
 
         return EngineCapabilities(
             stock_voices=True,
@@ -55,15 +57,25 @@ class RoutedEngine(TtsEngineBase):
             emotions=emotions,
             streaming=streaming,
             supported_languages=sorted(langs),
+            locations=sorted(locations),
         )
 
-    def _resolve_engine(self, language: str) -> TtsEngineBase:
-        """Resolve which engine to use for a given language."""
-        engine_name = self._routing.get(language, self._default_engine_name)
-        engine = self._engines.get(engine_name)
+    def _resolve_engine(self, language: str, engine_name: str | None = None) -> TtsEngineBase:
+        """Resolve which engine to use.
+
+        An explicit ``engine_name`` (per-voice engine pinning) wins over the
+        language routing; comma-separated tags pick the first known engine.
+        """
+        if engine_name:
+            for candidate in (c.strip() for c in engine_name.split(",")):
+                if candidate in self._engines:
+                    return self._engines[candidate]
+
+        name = self._routing.get(language, self._default_engine_name)
+        engine = self._engines.get(name)
         if engine is None:
             raise EngineUnavailableError(
-                f"Engine '{engine_name}' no está disponible para el idioma '{language}'. "
+                f"Engine '{name}' no está disponible para el idioma '{language}'. "
                 f"Engines disponibles: {list(self._engines.keys())}"
             )
         return engine
@@ -85,8 +97,9 @@ class RoutedEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        engine = self._resolve_engine(language)
+        engine = self._resolve_engine(language, engine_name)
         return await engine.synthesize(
             text=text,
             voice_id=voice_id,
@@ -103,8 +116,9 @@ class RoutedEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        engine = self._resolve_engine(language)
+        engine = self._resolve_engine(language, engine_name)
         return await engine.synthesize_clone(
             text=text,
             reference_audio_path=reference_audio_path,
@@ -121,8 +135,9 @@ class RoutedEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
-        engine = self._resolve_engine(language)
+        engine = self._resolve_engine(language, engine_name)
         return await engine.synthesize_instruct(
             text=text,
             instruct=instruct,

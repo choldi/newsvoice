@@ -52,6 +52,7 @@ class OmniVoiceAdapter(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         assert self._engine is not None
         return await self._engine.synthesize_stock(
@@ -70,6 +71,7 @@ class OmniVoiceAdapter(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         assert self._engine is not None
 
@@ -130,6 +132,7 @@ class OmniVoiceAdapter(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         assert self._engine is not None
         return await self._engine.synthesize_instruct(

@@ -132,6 +132,7 @@ class ChatterboxEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         self._validate_voice(voice_id)
         self._validate_language(language)
@@ -148,6 +149,7 @@ class ChatterboxEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         self._validate_language(language)
         if not reference_audio_path or not Path(reference_audio_path).exists():
@@ -165,6 +167,7 @@ class ChatterboxEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         self._validate_language(language)
         exaggeration, cfg_weight = self._parse_instruct(instruct)

@@ -172,6 +172,7 @@ class PiperEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         meta = _STOCK_VOICE_MAP.get(voice_id)
         if meta is None:
@@ -192,6 +193,7 @@ class PiperEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         raise FeatureNotSupportedError("voice cloning", self.name)
 
@@ -203,6 +205,7 @@ class PiperEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 

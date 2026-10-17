@@ -219,6 +219,7 @@ class PocketTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         voice = _STOCK_VOICE_MAP.get(voice_id)
         if not voice:
@@ -248,6 +249,7 @@ class PocketTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         if not Path(reference_audio_path).exists():
             raise EngineUnavailableError(f"Reference audio no encontrado: {reference_audio_path}")
@@ -267,6 +269,7 @@ class PocketTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 

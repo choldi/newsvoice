@@ -70,6 +70,7 @@ class KokoroEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         """Synthesize text with a stock voice. Returns WAV bytes."""
         if not self._model_loaded:
@@ -117,6 +118,7 @@ class KokoroEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         """Synthesize text cloning a voice from reference audio. Returns WAV bytes."""
         if not self._supports_cloning:
@@ -140,6 +142,7 @@ class KokoroEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         """Synthesize text with a voice-design instruct. Returns WAV bytes."""
         if not self._supports_instruct:

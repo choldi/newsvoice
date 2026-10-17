@@ -39,6 +39,7 @@ class MockEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         return self._generate_tone(
             duration_sec=max(0.5, len(text) * 0.08),
@@ -53,6 +54,7 @@ class MockEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         return self._generate_tone(
             duration_sec=max(0.5, len(text) * 0.08),
@@ -67,6 +69,7 @@ class MockEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         return self._generate_tone(
             duration_sec=max(0.5, len(text) * 0.08),

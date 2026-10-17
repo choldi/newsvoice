@@ -159,6 +159,7 @@ class EdgeTTSEngine(TtsEngineBase):
             emotions=False,
             streaming=False,
             supported_languages=list(_EDGETTS_LANGUAGES),
+            locations=["cloud"],
         )
 
     async def initialize(self) -> None:
@@ -179,6 +180,7 @@ class EdgeTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         voice = _STOCK_VOICE_MAP.get(voice_id)
         if not voice:
@@ -203,6 +205,7 @@ class EdgeTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         ref_text: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         raise FeatureNotSupportedError("voice cloning", self.name)
 
@@ -214,6 +217,7 @@ class EdgeTTSEngine(TtsEngineBase):
         language: str,
         speed: float = 1.0,
         emotion: str | None = None,
+        engine_name: str | None = None,
     ) -> bytes:
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 
