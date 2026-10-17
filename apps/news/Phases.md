@@ -1013,7 +1013,9 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       con subprocess worker al venv `~/qwen3-tts/venv`, `locations=["local"]`,
       cloning/design soportados, health check no-fatal si falta runtime,
       catálogo `/api/v1/engines` con capacidades y `locations`. (hecho en
-      gateway `dd874e3`; tests añadidos)
+      gateway `dd874e3`; tests añadidos). **Portado al monorepo**
+      (`apps/gateway/tts_api`, rename incluido) en MERGE_PLAN **P3**:
+      378 tests verdes, `ruff` limpio.
 - [x] **10.2 Routing narración**: añadir flag `run_in_modal` a `NarrationSpec`
       (default `false`). Cuando `tts_backend == QWEN3_TTS` y `run_in_modal` es
       `false`, enrutar a gateway con `engine=qwen3_tts` (pin por voz) para
