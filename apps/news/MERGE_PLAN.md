@@ -1,9 +1,9 @@
 # MERGE_PLAN.md — Unificar `news-engine` y `tts-api` en un único repo
 
 **Fecha:** 2026-10-16
-**Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17) y **P2**
-(compose, 2026-10-17) completados. El **cutover en debwk se difiere a P10**.
-Pendiente **P3**.
+**Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
+(compose, 2026-10-17) y **P3** (engines, 2026-10-17) completados. El **cutover en
+debwk se difiere a P10**. Pendiente **P4**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -154,7 +154,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P0** Reconciliar y congelar | Purgar la basura (§7); diff del `dd874e3` desplegado (paquete `omnivoice_api`, engine real `qwen3_tts`) vs local; recuperar el commit del engine `qwen3_tts`; backup en debwk de `data/`, `storage/`, `.env`s | ✅ `git log` sin `MagicMock/` ni `*.egg-info`; tarball de backup en debwk; `dd874e3` **recuperado** en el repo del gateway como ref `deployed/main` (queda aquí, **no en `main`**). **Decisión:** portarlo a `main` (rename `omnivoice_api`→`tts_api` + conflictos) es **P3**, no P0 |
 | **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | Ambas historias preservadas (149 gateway + 240 news commits alcanzables). `git log --follow 003d584^2 -- tts_api/main.py` alcanza la historia pre-rename (subtree: --follow desde HEAD no cruza el prefijo `apps/gateway/` por limitación de git; historia 100% conservada). |
 | **P2** Un solo compose + GPU | ✅ `deploy/docker-compose.yml` (+ overlays gpu/split) + `deploy/.env.example`; servicio `gateway`; contrato `8001:8000`; proyecto `newsvoice` | ✅ validado con `docker compose config` (11 servicios + gateway; split `news`=10 / `gateway`=1) y GPU-in-container verificado en debwk. **El Shape A verde en debwk se difiere a P10** (downtime + port del engine) |
-| **P3** Engines | Portar `qwen3_tts` (desde `dd874e3`), `voxcpm2`, `zonos2` respaldado por Modal a `apps/gateway`; **P3b Piper + P3c Chatterbox ya hechos** | cada engine accesible vía config routed; los gates de benchmark siguen siendo la autoridad |
+| **P3** Engines | ✅ portar `qwen3_tts` (desde `dd874e3`) a `apps/gateway` renombrado, con catálogo `GET /api/v1/engines` (`locations`) y override `engine` en `/tts`; **P3b Piper + P3c Chatterbox ya hechos**. `voxcpm2`/`zonos2` **diferidos** (Modal-only, sin runtime local en debwk) | ✅ `ruff check` + `ruff format` limpios y **378 tests verdes**; `qwen3_tts` accesible vía `TTS_ENGINE` y por pinning en `routed`; los gates de benchmark siguen siendo la autoridad |
 | **P4** `libs/tts_contract` | modelos Pydantic compartidos de `/tts`, `/conversations`, `/voices/*`; ambas apps lo importan | news-engine deja de parsear JSON del gateway a mano |
 | **P5** Consolidación de dispatch | reescribir `src/api/services/tts_backends.py` (549 líneas) sobre `tts_contract`; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
 | **P6** Catálogo de voces → gateway | `data/voices/manifest.json` + `voice_profiles.json` pasan a ser responsabilidad del gateway | `GET /admin/voices/catalog` servido desde el gateway |
@@ -271,5 +271,31 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
    contenedor (imagen con extras vs venv externo) y el port del código desplegado
    (pre-rename) — ambos son P3/P10.
 
-**Siguiente: P3** — portar `qwen3_tts` (desde el ref `deployed/main`/`dd874e3`) +
-`voxcpm2`/`zonos2` al `apps/gateway` renombrado.
+**P3 — completado (2026-10-17, rama `phase-3-engines`):**
+
+1. ✅ `qwen3_tts` portado de `deployed/main` (`dd874e3`) a `apps/gateway/tts_api/`
+   (rename `omnivoice_api`→`tts_api` resuelto): `core/engines/qwen3_tts_engine.py`
+   (driver del worker), `qwen3_tts_worker.py` (protocolo de líneas ejecutado por el
+   venv externo `QWEN3_TTS_PYTHON`, aislado por los pins de `transformers`) y
+   `api/v1/engines.py` (catálogo con `locations`), router montado en `main.py`.
+2. ✅ contrato de engine ampliado: `EngineCapabilities.locations` (`["local"]` por
+   defecto, `edgetts` → `["cloud"]`) y `engine_name` opcional en los 3 `synthesize*`,
+   propagado `engine_client` → `services/tts.py` → `api/v1/tts.py` (param `engine`)
+   y honrado por `RoutedEngine._resolve_engine` (pinning por voz + tags separados
+   por coma).
+3. ✅ `settings.py`: `TTS_ENGINE=qwen3_tts`, bloque `QWEN3_TTS_*` y
+   `qwen3_tts_python` (fallback `~/qwen3-tts/venv/bin/python`); `audio.py` 24000 Hz;
+   `voice_service.CLONE_CAPABLE_ENGINES` con `qwen3_tts`; `omnilang_list` añade
+   `ca`/`ru` cuando el routing lo encamina ahí.
+4. ✅ tests nuevos `test_qwen3_tts_engine.py`, `test_engines_api.py` y
+   `test_routed_engine.py` (unión de `locations` + override). Gate: **378 passed**,
+   `ruff check` y `ruff format --check` limpios.
+5. ⏸️ **`voxcpm2`/`zonos2` diferidos** (decisión del usuario): en debwk no hay
+   runtime local (`zonos2`/`voxcpm` sin instalar en ningún venv) — hoy solo corren
+   como imágenes de Modal y news-engine ya los invoca vía `is_modal()`. Un engine
+   local exigiría venvs nuevos siguiendo el patrón worker de `qwen3_tts`, con lo
+   que deja de ser un "port". Candidato de fase futura; el gateway conserva su
+   stub `zono2`.
+
+**Siguiente: P4** — `libs/tts_contract` (modelos Pydantic compartidos de
+`/tts`, `/conversations` y `/voices/*`, consumidos por ambas apps).
