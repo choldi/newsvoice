@@ -1,8 +1,9 @@
 # MERGE_PLAN.md — Unificar `news-engine` y `tts-api` en un único repo
 
 **Fecha:** 2026-10-16
-**Estado:** plan aprobado; **P0 completado** (2026-10-16); **P1 completado**
-(2026-10-17, repo `jordi/newsvoice`). Pendiente **P2**.
+**Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17) y **P2**
+(compose, 2026-10-17) completados. El **cutover en debwk se difiere a P10**.
+Pendiente **P3**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -91,7 +92,7 @@ newsvoice/
 | # | Decisión | Consecuencia |
 |---|---|---|
 | 1 | **uv workspace** — `apps/news`, `apps/gateway`, `libs/tts_contract` | P4 pasa a ser un paquete real que importan las dos apps; un `uv.lock`; ruff/mypy/pytest en raíz |
-| 2 | **Container + nvidia toolkit** para el gateway | un solo entrypoint de deploy; instalar `nvidia-container-toolkit` en debwk es prerrequisito de P2 (root, una vez); publicado como `8001:8000` |
+| 2 | **Container + nvidia toolkit** para el gateway | un solo entrypoint de deploy; publicado como `8001:8000`. **Verificado 2026-10-17:** el toolkit (1.20.1) y el spec CDI ya existen en debwk → **no hace falta root**; `docker run --gpus all` expone `/dev/nvidia*`. La containerización efectiva se difiere a **P10** (ver §10) |
 | 3 | **Historia completa, sin `--squash`** | `git log --follow` conserva la procedencia por fichero; la purga de basura debe aterrizar **antes** del subtree |
 | 4 | **py3.11 + ruleset de ruff del gateway**, `fail_under=80` mantenido, `mypy --strict` aplazado a P9 | las imágenes de news-engine siguen en 3.11; el Dockerfile del gateway baja de 3.12 a 3.11; la matriz de CI colapsa a una versión |
 
@@ -135,9 +136,14 @@ se queda en la app host; `VOICE_STAGING_URL` apunta a la app host.
 comprobación `GET /disk` del monitor y el 8001 actual de systemd. En Shape B,
 publicación directa al 8001 del host.
 
-**Prerrequisito (root, una vez en debwk):** `nvidia-container-toolkit` +
-`runtime: nvidia` — hoy ausente, así que el contenedor GPU de Shape A no puede
-arrancar hasta instalarlo.
+**Prerrequisito GPU — ya satisfecho:** `nvidia-container-toolkit` 1.20.1 y el spec
+CDI ya están en debwk (verificado 2026-10-17 con `docker run --gpus all`, que expone
+`/dev/nvidia*`); **no hace falta root ni registrar el runtime `nvidia`**.
+
+**Pendiente para P10 (no P2):** decidir cómo obtiene los engines el contenedor —
+imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
+(`~/ov_api/venv-omnivoice`, py3.13). Y migrar el código desplegado (línea pre-rename
+`omnivoice_api` + `OMNIVOICE_*`, ver §10) al `tts_api`/`TTS_*` de `main`.
 
 ---
 
@@ -147,7 +153,7 @@ arrancar hasta instalarlo.
 |---|---|---|
 | **P0** Reconciliar y congelar | Purgar la basura (§7); diff del `dd874e3` desplegado (paquete `omnivoice_api`, engine real `qwen3_tts`) vs local; recuperar el commit del engine `qwen3_tts`; backup en debwk de `data/`, `storage/`, `.env`s | ✅ `git log` sin `MagicMock/` ni `*.egg-info`; tarball de backup en debwk; `dd874e3` **recuperado** en el repo del gateway como ref `deployed/main` (queda aquí, **no en `main`**). **Decisión:** portarlo a `main` (rename `omnivoice_api`→`tts_api` + conflictos) es **P3**, no P0 |
 | **P1** Importar historias | subtree adds de arriba; raíz del workspace + docs de AGENTS/Phases fusionados | Ambas historias preservadas (149 gateway + 240 news commits alcanzables). `git log --follow 003d584^2 -- tts_api/main.py` alcanza la historia pre-rename (subtree: --follow desde HEAD no cruza el prefijo `apps/gateway/` por limitación de git; historia 100% conservada). |
-| **P2** Un solo compose + GPU | `deploy/docker-compose.yml` (+ overlays gpu/split); servicio `gateway`; contrato de puerto 8001; instalar toolkit | Shape A verde en debwk: `curl /health` (news) + `curl :8001/api/v1/health` OK |
+| **P2** Un solo compose + GPU | ✅ `deploy/docker-compose.yml` (+ overlays gpu/split) + `deploy/.env.example`; servicio `gateway`; contrato `8001:8000`; proyecto `newsvoice` | ✅ validado con `docker compose config` (11 servicios + gateway; split `news`=10 / `gateway`=1) y GPU-in-container verificado en debwk. **El Shape A verde en debwk se difiere a P10** (downtime + port del engine) |
 | **P3** Engines | Portar `qwen3_tts` (desde `dd874e3`), `voxcpm2`, `zonos2` respaldado por Modal a `apps/gateway`; **P3b Piper + P3c Chatterbox ya hechos** | cada engine accesible vía config routed; los gates de benchmark siguen siendo la autoridad |
 | **P4** `libs/tts_contract` | modelos Pydantic compartidos de `/tts`, `/conversations`, `/voices/*`; ambas apps lo importan | news-engine deja de parsear JSON del gateway a mano |
 | **P5** Consolidación de dispatch | reescribir `src/api/services/tts_backends.py` (549 líneas) sobre `tts_contract`; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
@@ -190,8 +196,14 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
 
 ## 9. Riesgos
 
-- **`nvidia-container-toolkit` necesita root en debwk** — sin él, Shape A cae a A′
-  (el gateway se queda en systemd). Decisión cerrada: instalarlo.
+- ~~**`nvidia-container-toolkit` necesita root en debwk**~~ — **obsoleto (2026-10-17):**
+  ya está instalado (1.20.1) con spec CDI; `docker run --gpus all` funciona, sin root.
+- **El gateway desplegado es la línea pre-rename** (`omnivoice_api` + `OMNIVOICE_*`,
+  `dd874e3` + delta sin commitear). Containerizar desde `main` cambia la forma del
+  código → requiere el port de P3 y una migración de variables.
+- **`/opt/omnivoice` está VACÍO** en debwk → el bind-mount por defecto del compose
+  montaría un directorio sin contenido; los engines reales viven en
+  `~/ov_api/venv-omnivoice` y `~/qwen3-tts/venv`.
 - **Basura en la historia del gateway** es permanente una vez importada → la purga
   debe aterrizar **antes** de `subtree add`.
 - **Ruptura de tooling:** dos versiones de imagen Python (3.11 / 3.12), dos configs de
@@ -238,6 +250,26 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
    `git log --follow 003d584^2 -- tts_api/main.py`, que sí alcanza la historia
    pre-rename. La historia 100% conservada; nada reescrito.
 
-**Siguiente: P2** — un solo `deploy/docker-compose.yml` con servicio `gateway`,
-contrato de puerto `8001:8000`, overlays gpu/split, y **prerrequisito root**:
-instalar `nvidia-container-toolkit` en debwk.
+**P2 — compose completado (2026-10-17); deploy en debwk diferido a P10:**
+
+1. ✅ `deploy/docker-compose.yml`: los 11 servicios de news + `gateway` (renombrado
+   para no chocar con el `api` de news), `gateway` publicado como `${GATEWAY_PORT:-8001}:8000`,
+   proyecto `newsvoice` fijado con `name:`. Validado con `docker compose config`.
+2. ✅ `deploy/docker-compose.gpu.yml` (reserva nvidia) y `deploy/docker-compose.split.yml`
+   (perfiles `news`/`gateway`). Verificado: `news`→10, `gateway`→1, ambos→11, ninguno→0.
+3. ✅ `deploy/.env.example` — **solo** variables de compose (puertos, `TTS_PATH`,
+   `COMPOSE_PROFILES`). **Desvío consciente de §2:** NO hay un `.env` único; cada app
+   conserva el suyo (`apps/news/.env`, `apps/gateway/.env`) porque ambas definen
+   `VOICES_DIR` con distinto significado/ruta y el gateway añade
+   `CACHE_DIR`/`OUTPUTS_DIR`/`DATABASE_URL`.
+4. ✅ GPU-in-container verificado en debwk vía CDI (`docker run --gpus all` expone
+   `/dev/nvidia0`); el toolkit estaba ya instalado → **el prerrequisito root del plan
+   era obsoleto**.
+5. ⏸️ **Diferido a P10** (decisión del usuario): el cutover real en debwk (parar la
+   pila `news-summary` de 11 contenedores + el `tts-api.service` de usuario, desplegar
+   la pila unificada y verificar los curls). Bloqueantes conocidos: el engine del
+   contenedor (imagen con extras vs venv externo) y el port del código desplegado
+   (pre-rename) — ambos son P3/P10.
+
+**Siguiente: P3** — portar `qwen3_tts` (desde el ref `deployed/main`/`dd874e3`) +
+`voxcpm2`/`zonos2` al `apps/gateway` renombrado.
