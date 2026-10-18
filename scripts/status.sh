@@ -6,6 +6,7 @@
 #   1. All 12 docker-compose services under deploy/docker-compose.yml
 #   2. news-engine FastAPI /health
 #   3. TTS gateway /api/v1/health
+#   3b. GPU engine lease (design window state)
 #   4. Temporal server (UI namespaces API)
 #   5. Temporal workers (log signals) + schedules
 #   6. External LLM backend connectivity
@@ -141,6 +142,41 @@ elif [[ "$GW_PAYLOAD" == *'"status":"degraded"'* ]]; then
     warn "gateway is up but degraded (mock engine or model not loaded): ${GW_PAYLOAD}"
 else
     fail "GET ${GW_HEALTH_URL} reported a non-ok status: ${GW_PAYLOAD}"
+fi
+
+# ---------------------------------------------------------------------------
+# 3b. GPU engine lease (design window)
+# ---------------------------------------------------------------------------
+section "3b. GPU engine lease"
+LEASE_JSON="$("${DC[@]}" exec -T api python -m src.workers.design_lease status 2>/dev/null)"
+if [[ -z "$LEASE_JSON" ]]; then
+    warn "could not read the GPU lease state (api container down?)"
+else
+    LEASE_VIEW="$(printf '%s' "$LEASE_JSON" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("PARSE_ERROR")
+    sys.exit(0)
+if not data.get("enabled"):
+    print("DISABLED")
+    sys.exit(0)
+holder = data.get("holder")
+if not holder:
+    print("FREE")
+elif holder.get("note") == "design-window":
+    print("DESIGN_WINDOW " + str(holder.get("expires_at")))
+else:
+    print("HELD " + str(holder.get("owner")) + " (priority " + str(holder.get("priority")) + ")")
+' 2>/dev/null)"
+    case "$LEASE_VIEW" in
+        FREE) ok "engine lease free (no digest/render/design holds the GPU)" ;;
+        DESIGN_WINDOW*) info "DESIGN WINDOW OPEN — voice design holds the engine (lease expires ${LEASE_VIEW#DESIGN_WINDOW })" ;;
+        HELD*) info "engine held by ${LEASE_VIEW#HELD }" ;;
+        DISABLED) info "engine lease disabled (TTS_LEASE_ENABLED=0)" ;;
+        *) warn "could not parse the GPU lease state ('${LEASE_JSON:0:60}')" ;;
+    esac
 fi
 
 # ---------------------------------------------------------------------------

@@ -3,9 +3,9 @@
 **Fecha:** 2026-10-16
 **Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
-**P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18) y **P7**
-(ops unificados, 2026-10-18) completados. El **cutover en
-debwk se difiere a P10**. Pendiente **P8**.
+**P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18), **P7**
+(ops unificados, 2026-10-18) y **P8** (lease de GPU, 2026-10-18) completados. El
+**cutover en debwk se difiere a P10**. Pendiente **P9**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -161,7 +161,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P5** Consolidación de dispatch | ✅ extraído `src/api/services/gateway.py` (dispatcher único) sobre `tts_contract`; `tts_backends`, `narration_tts` y `voices` usan el dispatcher; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | ✅ **148 passed** (gateway + afectados) + **1523 passed** (news full); ruff limpio; se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
 | **P6** Catálogo de voces → gateway | ✅ `voice_profiles.json` movido a `apps/gateway/`; gateway dueño del catálogo (`VoiceCatalogService` + `GET/POST /api/v1/voices/catalog` y `.../refs/{name}`); news-engine lo lee con `voice_catalog_client` (snapshot + HTTP, sin filesystem local); uploads de referencias y voces custom pasan por el gateway | ✅ gates **1550 passed** (news full) + **403 passed** (gateway) verdes; `ruff check` + `ruff format --check` limpios en las tres piezas; `GET /admin/voices/catalog` sigue respondiendo (servido desde el snapshot del gateway) |
 | **P7** Ops unificados | ✅ raíz con `Makefile` unificado (`help/venv/lint/format/format-check/test/test-news/test-gateway/coverage/check/commit/up/down/ps/health/logs-*/status/deploy/urls/clean`) y `scripts/` (`status.sh`, `deploy.sh`, `auto_commit.sh`); los Makefiles y scripts por app se conservan para desarrollo local; rutas apuntan al compose raíz (`deploy/docker-compose.yml`) y al catálogo del gateway | ✅ `make status` enumera los **12 servicios** + salud del gateway (y el resto de checks); `make lint` + `make format-check` limpios en las tres piezas; `make test` = **1550** (news) + **403** (gateway) verdes. Los scripts de export/import de P9.5 se integran cuando existan |
-| **P8** Lease de GPU | formalizar `design_window.sh` como lease explícito para que síntesis y diseño no colisionen | test del lease + tabla `tts_leases` extendida |
+| **P8** Lease de GPU | ✅ la ventana de diseño entra en el lease de prioridad: `PRIORITY_DESIGN = 20` (por encima de digest 10 y render 0) + columna `note` en `tts_leases` (migración `014`) para saber *por qué* se tiene el motor; CLI nueva `python -m src.workers.design_lease {open,status,close}` que pide/renueva/libera el lease desde el host (Shape A, con cwd = raíz de la app; el worker de diseño sigue sin tocar la DB); `design_window.sh` lo invoca **antes** de parar el gateway (los renders en vuelo ceden en lugar de morir) y lo libera en el trap **después** de restaurarlo; escape hatch `DESIGN_WINDOW_NO_LEASE=1` para Shape B; `scripts/status.sh` con sección «3b. GPU engine lease» | ✅ **1570 passed** (news full, +20 sobre P7) + **403 passed** (gateway) verdes; `ruff check`/`format --check` limpios en las tres piezas; `bash -n` de `design_window.sh` y `status.sh`; docs: `Deploy.md` (orden de la ventana), `CONVENTIONS.md` (prioridades + `note`) |
 | **P9** Docs + CI | Deploy.md reescrito para Shapes A/B; jobs de CI por app; arreglar `mypy tts_api` (133 errores) | CI verde en el monorepo |
 | **P9.5** Export/Import de config, voces, programación y boletines | `scripts/export_config.sh` → tarball `backups/newsvoice-config-<ts>.tar.gz` + `manifest.json` con checksums y conteos: **configuración** (`deploy/.env`, `apps/news/.env`, `apps/gateway/.env` —secretos documentados como sensibles— y `collections.toml`), **programación** (snapshot JSON de los schedules Temporal; la fuente de verdad sigue siendo `collections.toml` y al importar se re-registran con `python -m src.workers.schedule`), **voces** (catálogo runtime del gateway: `apps/gateway/storage/voice_catalog/` = `custom_profiles.json` + `manifest.json` + `refs/*.wav`, más checksum de `voice_profiles.json` commiteado) y **boletines/historial** (`data/news.db`: `deliveries`, `digest_runs`, `clusters`, …; el audio de `digest_runs.audio_path` solo con `--with-audio`). `scripts/import_config.sh`: `--dry-run` inventaría **lo que existe** vs lo que llega (crear/actualizar/conflicto/borrar); por defecto fusiona sin borrar lo local que no está en el tarball (lo sobrescrito guarda `.bak-<ts>`); **`--wipe` borra todo** lo gestionado antes de importar (voces runtime del gateway, schedules `digest-pipeline-*`, tablas de historial de `news.db`); `--with-env` para aplicar los `.env` (sin él solo informa diffs) | Export probado en local con tarball + checksums; `import_config.sh --dry-run` informa existentes/faltantes; `--wipe` verificado en local; schedules re-registrados y verificados contra el snapshot |
 | **P10** Cutover | desplegar el monorepo en debwk, retirar los checkouts `~/news-summary` y `~/ov_api`, archivar remotos | `make status` verde; digest diario entregado |
@@ -397,3 +397,47 @@ la raíz orquesta ambos.
 
 **Siguiente: P8** — lease de GPU: formalizar `design_window.sh` como lease
 explícito para que síntesis y diseño no colisionen.
+
+---
+
+## P8 — Lease de GPU: la ventana de diseño entra en el lease (2026-10-18)
+
+La ventana de diseño (síntesis de voces en la GPU) pasaba por parar el gateway
+y descargar Ollama a mano, con dos riesgos: matar una síntesis en vuelo y que un
+digest intentara sintetizar contra un gateway parado. Ahora la ventana es otro
+participante del lease de prioridad de Fase 8.1.
+
+1. ✅ **`PRIORITY_DESIGN = 20`** en `tts_lease.py` (por encima de digest 10 y
+   render 0): al ponerse en cola, un render vivo *cede* antes de que el script
+   pare el gateway, y los claims posteriores de digest esperan a la ventana.
+2. ✅ **Migración `014_tts_lease_note.sql`**: `tts_leases.note` para registrar
+   *por qué* se tiene el motor (`design-window` vs un `run_id` de digest).
+   `acquire`/`hold` aceptan `note` (se escribe al reclamar y al takeover, el
+   renew lo conserva); nuevos `holder_info()` y `waiters()` para introspección.
+3. ✅ **CLI `python -m src.workers.design_lease {open,status,close}`**:
+   `open` espera el turno (`wait_for_turn` con prioridad de diseño, por defecto
+   900 s) y renueva hasta SIGINT/SIGTERM, liberando siempre en `finally`
+   (incluye el caso de cancelación dentro de la limpieza de `wait_for_turn`);
+   `status` imprime JSON (`enabled`/`holder`/`waiters`); `close` es idempotente.
+   Se ejecuta desde el host con cwd = raíz de la app (**Shape A**): el worker de
+   diseño no toca la base de datos — se mantiene el invariante de Fase 8.
+4. ✅ **`design_window.sh`**: paso `0/5` pide el lease **antes** de tocar el
+   gateway (y aborta sin tocar nada si no lo consigue); el `trap` lo libera
+   **después** de restaurar el gateway; `DESIGN_WINDOW_NO_LEASE=1` es el escape
+   hatch para Shape B (GPU box sin `data/news.db` compartida); `NEWS_PYTHON`
+   permite apuntar al intérprete del venv.
+5. ✅ **`scripts/status.sh`**: sección «3b. GPU engine lease» —
+   `DESIGN WINDOW OPEN` destacado, motor libre, hold de digest/render o lease
+   deshabilitado.
+6. ✅ **Tests**: bloqueo cruzado diseño↔digest↔render, cesión del render ante
+   un waiter de diseño, handoff sin solape, round-trip del `note` (claim,
+   renew, takeover, `holder_info`), orden de `waiters()` y los flujos de la
+   CLI (adquisición, cancelación en los tres puntos críticos, timeout, cierre
+   idempotente).
+7. 📌 Exclusiones conscientes (sin cambio de alcance): narración y clases siguen
+   sin tomar el lease (decisión de Fase 8.x; con el gateway parado fallan con
+   retries limpios); previews de GUI sin lease; sin endpoint de GUI para el
+   lease (estado vía CLI y `make status`).
+
+**Siguiente: P9** — docs + CI: `Deploy.md` reescrito para Shapes A/B y jobs de
+CI por app.

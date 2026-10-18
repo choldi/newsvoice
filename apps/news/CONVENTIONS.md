@@ -201,10 +201,11 @@
   lives in the shared SQLite file because the digest worker and the doc-tts
   worker are **different containers**: an `asyncio.Semaphore` inside either one
   coordinates nothing.
-- Priorities: `PRIORITY_RENDER = 0` (documents, lessons, narration) and
-  `PRIORITY_DIGEST = 10`. A **live lease is never stolen** — hand-over goes
-  through the yield protocol, and the TTL is only the safety net for a holder
-  that stopped renewing.
+- Priorities: `PRIORITY_RENDER = 0` (documents, lessons, narration),
+  `PRIORITY_DIGEST = 10` and `PRIORITY_DESIGN = 20` — the voice design window
+  (merge P8) queues ahead of both. A **live lease is never stolen** — hand-over
+  goes through the yield protocol, and the TTL is only the safety net for a
+  holder that stopped renewing.
 - The digest writes its row into `tts_lease_waiters` **before** asking for the
   engine. That row *is* the event: a render polling `waiter_above(0)` lets go
   the moment it appears, so the two never synthesize concurrently. The waiter
@@ -217,6 +218,16 @@
   never sees a digest arriving later), then `yield_and_wait()` releases, reports
   `PAUSED`, waits, re-acquires and reports `GENERATING`. Chunks already in
   flight are never interrupted; at most `doc_tts_concurrency` of them overlap.
+- `note` (migration `014_tts_lease_note.sql`) records *why* the engine is held:
+  the design window claims with `note="design-window"`, the digest and renders
+  keep `""` and are identified by owner. Read it via `holder_info()` (plus
+  `waiters()` for the queue); renewals preserve it, a takeover overwrites it.
+- The design window is claimed from the host by
+  `python -m src.workers.design_lease {open,status,close}` — cwd = app root, so
+  it resolves `data/news.db`. The voice workers still never touch the
+  database; `design_window.sh` runs the CLI before stopping the gateway and
+  releases it in the trap after restoring it (`DESIGN_WINDOW_NO_LEASE=1` skips
+  this on Shape B hosts without the shared DB).
 - `TTS_LEASE_ENABLED=false` restores the previous, unserialized behaviour on
   every path (all methods become no-ops).
 

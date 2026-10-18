@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ventana de diseño de voces (Fase 7.9b, maquina unica).
+# Ventana de diseño de voces (Fase 7.9b, maquina unica; lease en Fase P8).
 #
 # El diseño de voces necesita la GPU (Qwen3-TTS), asi que el gateway TTS y los
 # modelos cargados de Ollama se detienen (se descargan de VRAM) mientras dura la
@@ -7,10 +7,20 @@
 # este script es la unica via para levantarlo; al arrancar carga el engine
 # Qwen3-TTS VoiceDesign y ejecuta la creación de voces.
 #
+# Desde la Fase P8 la ventana entra en el lease de prioridad del motor: antes de
+# tocar el gateway se pide el lease con prioridad máxima (diseño, 20), lo que
+# hace que las sintesis en vuelo (digest 10, renders 0) cedan en lugar de morir
+# al parar el gateway. El lease se libera al final, despues de restaurarlo.
+#
 # Uso:  ./scripts/design_window.sh [timeout_s]
 # Env:  TTS_GATEWAY_UNIT   unit del gateway (por defecto autodetecta
 #                          tts-api.service y omnivoice-api.service)
 #       DESIGN_WINDOW_POLL    segundos entre comprobaciones (15)
+#       DESIGN_WINDOW_TIMEOUT tiempo de espera de workflows (3600)
+#       DESIGN_WINDOW_LEASE_TIMEOUT  espera del lease (900)
+#       DESIGN_WINDOW_NO_LEASE=1     salta el lease (Shape B: GPU box sin
+#                                    data/news.db compartida)
+#       NEWS_PYTHON      interprete del venv de news (por defecto $PROJECT_DIR/.venv/bin/python)
 #       TTS_WAS_ACTIVE  1|0  fuerza si el gateway debe restaurarse
 set -euo pipefail
 
@@ -20,7 +30,32 @@ TIMEOUT_S="${1:-${DESIGN_WINDOW_TIMEOUT:-3600}}"
 POLL_S="${DESIGN_WINDOW_POLL:-15}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+NEWS_PYTHON="${NEWS_PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+if [[ ! -x "$NEWS_PYTHON" ]]; then
+  NEWS_PYTHON="python3"
+fi
+
+LEASE_OWNER="design-window"
+LEASE_WAIT_TIMEOUT="${DESIGN_WINDOW_LEASE_TIMEOUT:-900}"
+LEASE_PID=""
+
 log() { printf '[design_window] %s\n' "$*"; }
+
+design_lease() {
+  # Se ejecuta con cwd = PROJECT_DIR para resolver data/news.db y .env.
+  ( cd "$PROJECT_DIR" && "$NEWS_PYTHON" -m src.workers.design_lease "$@" )
+}
+
+lease_held() {
+  design_lease status 2>/dev/null |
+    "$NEWS_PYTHON" -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+holder = data.get("holder") or {}
+sys.exit(0 if holder.get("note") == "design-window" else 1)'
+}
 
 unit_exists() {
   systemctl --user list-unit-files --type=service --no-legend 2>/dev/null |
@@ -90,9 +125,45 @@ cleanup() {
     log "restaurando el gateway ($GATEWAY_UNIT)"
     systemctl --user start "$GATEWAY_UNIT" || true
   fi
+  if [[ -n "$LEASE_PID" ]] && kill -0 "$LEASE_PID" 2>/dev/null; then
+    # Liberar el lease DESPUES de restaurar el gateway: si no, un digest que
+    # espera el turno podria arrancar contra un gateway parado.
+    log "liberando el lease de GPU"
+    kill -TERM "$LEASE_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$LEASE_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -KILL "$LEASE_PID" 2>/dev/null || true
+    wait "$LEASE_PID" 2>/dev/null || true
+  fi
   log "Ollama sigue como servicio; sus modelos quedan descargados de VRAM"
 }
 trap cleanup EXIT
+
+if [[ "${DESIGN_WINDOW_NO_LEASE:-0}" == "1" ]]; then
+  log "0/5 DESIGN_WINDOW_NO_LEASE=1: ventana sin lease (Shape B, sin data/news.db compartida)"
+else
+  log "0/5 pidiendo el lease de GPU (prioridad diseño, espera ${LEASE_WAIT_TIMEOUT}s)"
+  ( cd "$PROJECT_DIR" && exec "$NEWS_PYTHON" -m src.workers.design_lease open \
+      --wait-timeout "$LEASE_WAIT_TIMEOUT" ) &
+  LEASE_PID=$!
+  lease_deadline=$((SECONDS + LEASE_WAIT_TIMEOUT + 30))
+  until lease_held; do
+    if ! kill -0 "$LEASE_PID" 2>/dev/null; then
+      wait "$LEASE_PID" 2>/dev/null || true
+      log "ERROR: la CLI del lease terminó sin adquirirlo (timeout o conflicto)"
+      LEASE_PID=""
+      exit 1
+    fi
+    if ((SECONDS > lease_deadline)); then
+      log "ERROR: el lease no se adquirió en ${LEASE_WAIT_TIMEOUT}s"
+      exit 1
+    fi
+    sleep 2
+  done
+  log "lease adquirido por $LEASE_OWNER"
+fi
 
 log "1/5 parando el gateway ($GATEWAY_UNIT) para liberar VRAM"
 systemctl --user stop "$GATEWAY_UNIT" || true

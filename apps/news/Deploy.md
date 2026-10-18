@@ -600,11 +600,34 @@ so do the TTS gateway and Ollama, so the design worker stays stopped and
 `scripts/design_window.sh` is the only thing that starts it:
 
 ```bash
-./scripts/design_window.sh          # stops OmniVoice, unloads Ollama, runs the
-                                    # design worker until the voices namespace
-                                    # has no workflow left, then restores both
+./scripts/design_window.sh          # takes the GPU lease, stops OmniVoice,
+                                    # unloads Ollama, runs the design worker
+                                    # until the voices namespace has no
+                                    # workflow left, then restores both and
+                                    # releases the lease
 ./scripts/design_window.sh 600      # same, with an explicit 600s budget
 ```
+
+**The window runs under the engine lease (P8).** Before it touches the gateway
+it claims the same priority lease the digest and the renders use, at the top
+priority (`PRIORITY_DESIGN = 20`), via:
+
+```bash
+python -m src.workers.design_lease open --wait-timeout 900   # wait for the
+                                                             # turn, renew,
+                                                             # release on exit
+python -m src.workers.design_lease status                    # JSON: holder + waiters
+python -m src.workers.design_lease close                     # idempotent release
+```
+
+While the window waits, in-flight synthesis *yields* instead of being killed by
+the gateway stop, and once the window holds, later digest claims queue up until
+it closes. The script releases the lease in its `trap` **after** restoring the
+gateway, so a queued digest never starts against a stopped gateway. Tune with
+`DESIGN_WINDOW_LEASE_TIMEOUT` (seconds to wait for the turn, default 900), and
+run with `DESIGN_WINDOW_NO_LEASE=1` on a Shape B host whose worker has no
+access to the shared `data/news.db`. `status` is also surfaced by
+`scripts/status.sh` (section «3b. GPU engine lease») and by `make status`.
 
 That way the daily digests and the narration always have the GPU, and the
 design window is the only thing that competes for it. Check the state with:

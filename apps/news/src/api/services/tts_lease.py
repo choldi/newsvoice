@@ -15,6 +15,11 @@ above its own priority it lets go, waits for that waiter to disappear, and
 re-acquires. Because the waiter row lands **before** the acquire, the holder
 releases before the digest starts, so the two never synthesize concurrently.
 
+The voice design window (merge phase P8) is the third participant: it claims
+the same lease at :data:`PRIORITY_DESIGN` with ``note="design-window"``, which
+both blocks later digest claims and makes live renders yield *before* the
+window script stops the gateway.
+
 Acquisition rules (all in single statements, so SQLite's one-writer model makes
 them atomic across processes):
 
@@ -57,6 +62,10 @@ PRIORITY_RENDER = 0
 #: Priority of the daily digest TTS: few thousand characters, but it is the one
 #: with a delivery deadline.
 PRIORITY_DIGEST = 10
+#: Priority of the voice design window (merge phase P8): it holds the engine
+#: for the whole window, outranks the digest, and is what makes renders yield
+#: *before* the window script stops the gateway.
+PRIORITY_DESIGN = 20
 
 #: Callback invoked once per poll while waiting for a turn (activity heartbeat).
 TickCallback = Callable[[], None]
@@ -172,11 +181,26 @@ class TTSLeaseService:
             The owner id, or None when the lease is free, expired (abandoned)
             or the lease is disabled.
         """
+        info = await self.holder_info()
+        return None if info is None else str(info["owner"])
+
+    async def holder_info(self) -> dict[str, Any] | None:
+        """Read who holds the lease and why (merge phase P8).
+
+        Returns:
+            Dict with ``owner``, ``note``, ``priority``, ``acquired_at`` and
+            ``expires_at`` (all strings), or None when the lease is free,
+            expired (abandoned) or disabled. ``note`` is the holder's stated
+            reason — ``"design-window"`` for the voice design window, ``""``
+            for the digest and renders, which are identified by owner alone.
+        """
         if not self._enabled:
             return None
         async with get_db(self._db_path) as db:
             async with db.execute(
-                "SELECT owner, expires_at FROM tts_leases WHERE scope = ?", (self._scope,)
+                "SELECT owner, note, priority, acquired_at, expires_at "
+                "FROM tts_leases WHERE scope = ?",
+                (self._scope,),
             ) as cursor:
                 row = await cursor.fetchone()
         if row is None:
@@ -184,7 +208,13 @@ class TTSLeaseService:
         expires = _parse(str(row["expires_at"]))
         if expires is None or expires <= datetime.now(UTC):
             return None
-        return str(row["owner"])
+        return {
+            "owner": str(row["owner"]),
+            "note": str(row["note"]),
+            "priority": int(row["priority"]),
+            "acquired_at": str(row["acquired_at"]),
+            "expires_at": str(row["expires_at"]),
+        }
 
     # --- waiters ------------------------------------------------------------
 
@@ -232,6 +262,35 @@ class TTSLeaseService:
             await db.execute("DELETE FROM tts_lease_waiters WHERE owner = ?", (owner,))
             await db.commit()
 
+    async def waiters(self) -> list[dict[str, Any]]:
+        """List the live waiters queued for the engine.
+
+        Returns:
+            One dict per live waiter (``owner``, ``priority``,
+            ``requested_at``, ``expires_at``) ordered by priority then request
+            time. Empty when the lease is disabled.
+        """
+        if not self._enabled:
+            return []
+        now = _iso(datetime.now(UTC))
+        async with get_db(self._db_path) as db:
+            async with db.execute(
+                "SELECT owner, priority, requested_at, expires_at "
+                "FROM tts_lease_waiters WHERE expires_at > ? "
+                "ORDER BY priority DESC, requested_at ASC",
+                (now,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            {
+                "owner": str(row["owner"]),
+                "priority": int(row["priority"]),
+                "requested_at": str(row["requested_at"]),
+                "expires_at": str(row["expires_at"]),
+            }
+            for row in rows
+        ]
+
     async def waiter_above(self, priority: int) -> bool:
         """Report whether somebody outranking ``priority`` is waiting.
 
@@ -258,12 +317,14 @@ class TTSLeaseService:
     # --- lease --------------------------------------------------------------
 
     @trace_function(component="api.services.tts_lease")
-    async def acquire(self, owner: str, priority: int) -> bool:
+    async def acquire(self, owner: str, priority: int, *, note: str = "") -> bool:
         """Try to take the lease without blocking.
 
         Args:
             owner: Stable id of the holder (the workflow id).
             priority: Priority of the request.
+            note: Stated reason for holding the engine (``"design-window"``);
+                persisted on claim and takeover, kept as-is on renew.
 
         Returns:
             True when this owner now holds the lease.
@@ -278,8 +339,8 @@ class TTSLeaseService:
             # 1. Nobody holds it, and nobody outranks us in the queue.
             await db.execute(
                 """
-                INSERT INTO tts_leases (scope, owner, priority, acquired_at, expires_at)
-                SELECT ?, ?, ?, ?, ?
+                INSERT INTO tts_leases (scope, owner, priority, note, acquired_at, expires_at)
+                SELECT ?, ?, ?, ?, ?, ?
                 WHERE NOT EXISTS (SELECT 1 FROM tts_leases WHERE scope = ?)
                   AND NOT EXISTS (
                       SELECT 1 FROM tts_lease_waiters
@@ -298,6 +359,7 @@ class TTSLeaseService:
                     self._scope,
                     owner,
                     priority,
+                    note,
                     now_iso,
                     expires,
                     self._scope,
@@ -325,7 +387,7 @@ class TTSLeaseService:
             cursor = await db.execute(
                 """
                 UPDATE tts_leases
-                SET owner = ?, priority = ?, acquired_at = ?, expires_at = ?
+                SET owner = ?, priority = ?, note = ?, acquired_at = ?, expires_at = ?
                 WHERE scope = ? AND expires_at <= ?
                   AND NOT EXISTS (
                       SELECT 1 FROM tts_lease_waiters
@@ -342,6 +404,7 @@ class TTSLeaseService:
                 (
                     owner,
                     priority,
+                    note,
                     now_iso,
                     expires,
                     self._scope,
@@ -415,6 +478,7 @@ class TTSLeaseService:
         *,
         on_tick: TickCallback | None = None,
         timeout_seconds: float | None = None,
+        note: str = "",
     ) -> bool:
         """Register as a waiter and block until the lease can be taken.
 
@@ -432,6 +496,7 @@ class TTSLeaseService:
             on_tick: Called once per poll while waiting (activity heartbeat).
             timeout_seconds: Give up after this long; None waits until the
                 activity's own timeout ends it.
+            note: Stated reason persisted on the claim (see :meth:`acquire`).
 
         Returns:
             True when the lease is now held by ``owner``.
@@ -445,7 +510,7 @@ class TTSLeaseService:
         await self.add_waiter(owner, priority)
         try:
             while True:
-                if await self.acquire(owner, priority):
+                if await self.acquire(owner, priority, note=note):
                     return True
                 if on_tick is not None:
                     on_tick()
@@ -465,6 +530,7 @@ class TTSLeaseService:
         *,
         on_tick: TickCallback | None = None,
         timeout_seconds: float | None = None,
+        note: str = "",
     ) -> AsyncIterator[None]:
         """Hold the lease for the duration of the block, renewing in the background.
 
@@ -473,6 +539,7 @@ class TTSLeaseService:
             priority: Priority of the request.
             on_tick: Called once per poll while waiting for the turn.
             timeout_seconds: Max seconds to wait for the turn.
+            note: Stated reason persisted on the claim (see :meth:`acquire`).
 
         Yields:
             Nothing; the lease is held for the duration of the block.
@@ -487,7 +554,7 @@ class TTSLeaseService:
             return
 
         acquired = await self.wait_for_turn(
-            owner, priority, on_tick=on_tick, timeout_seconds=timeout_seconds
+            owner, priority, on_tick=on_tick, timeout_seconds=timeout_seconds, note=note
         )
         if not acquired:
             raise TTSLeaseTimeoutError(

@@ -7,6 +7,7 @@ import pytest
 
 from src.api.db.database import get_db
 from src.api.services.tts_lease import (
+    PRIORITY_DESIGN,
     PRIORITY_DIGEST,
     PRIORITY_RENDER,
     RenderGate,
@@ -378,3 +379,129 @@ async def test_disabled_lease_is_a_noop() -> None:
 
     async with service.hold("run-4", PRIORITY_DIGEST):
         pass
+
+
+# --- P8: the voice design window joins the lease ------------------------------
+
+
+async def test_design_priority_outranks_digest_and_render() -> None:
+    """The window must queue ahead of the delivery deadline, let alone renders."""
+    assert PRIORITY_DESIGN > PRIORITY_DIGEST > PRIORITY_RENDER
+
+
+async def test_design_holder_blocks_digest_and_render() -> None:
+    """A live design window keeps the engine for itself."""
+    service = _service()
+    await service.acquire("design-window", PRIORITY_DESIGN, note="design-window")
+
+    assert await service.acquire("digest-run", PRIORITY_DIGEST) is False
+    assert await service.acquire("render-run", PRIORITY_RENDER) is False
+    assert await service.holder() == "design-window"
+
+
+async def test_design_waiter_blocks_a_free_claim() -> None:
+    """Even a free engine is withheld while the design window queues."""
+    service = _service()
+    await service.add_waiter("design-window", PRIORITY_DESIGN)
+
+    assert await service.acquire("digest-run", PRIORITY_DIGEST) is False
+    assert await service.acquire("render-run", PRIORITY_RENDER) is False
+    assert await service.holder() is None
+
+
+async def test_render_yields_to_a_design_waiter() -> None:
+    """A render in flight pauses on its own once the window joins the queue."""
+    service = _service()
+    gate = RenderGate(service, "render-run", PRIORITY_RENDER)
+    await service.acquire("render-run", PRIORITY_RENDER)
+    await service.add_waiter("design-window", PRIORITY_DESIGN)
+
+    assert await service.waiter_above(PRIORITY_RENDER) is True
+    assert await gate.should_pause() is True
+
+
+async def test_wait_for_turn_design_takes_over_after_render_releases() -> None:
+    """The window waits out a live render and then holds, with no overlap."""
+    service = _service()
+    await service.acquire("render-run", PRIORITY_RENDER)
+    observed: list[str | None] = []
+
+    async def _watch() -> None:
+        while await service.holder() != "design-window":
+            observed.append(await service.holder())
+            await asyncio.sleep(0.01)
+
+    watcher = asyncio.create_task(_watch())
+
+    async def _render_finishes() -> None:
+        await asyncio.sleep(0.05)
+        await service.release("render-run")
+
+    closer = asyncio.create_task(_render_finishes())
+    granted = await service.wait_for_turn("design-window", PRIORITY_DESIGN, note="design-window")
+    await watcher
+    await closer
+
+    assert granted is True
+    assert await service.holder() == "design-window"
+    # A brief free gap during the handoff is the point; any other *owner*
+    # would mean the two held the engine at the same time.
+    assert set(observed) <= {"render-run", None}
+
+
+async def test_note_round_trips_through_hold_and_holder_info() -> None:
+    """holder_info() reports the stated reason while the window holds."""
+    service = _service()
+
+    async with service.hold("design-window", PRIORITY_DESIGN, note="design-window"):
+        info = await service.holder_info()
+        assert info is not None
+        assert info["owner"] == "design-window"
+        assert info["note"] == "design-window"
+        assert info["priority"] == PRIORITY_DESIGN
+
+
+async def test_renew_preserves_the_note() -> None:
+    """A renew must not wipe why the engine is held."""
+    service = _service()
+    await service.acquire("design-window", PRIORITY_DESIGN, note="design-window")
+
+    assert await service.renew("design-window") is True
+    info = await service.holder_info()
+    assert info is not None and info["note"] == "design-window"
+
+
+async def test_takeover_of_an_expired_lease_records_the_note() -> None:
+    """Stealing an abandoned digest lease rewrites the reason too."""
+    service = _service()
+    await service.acquire("digest-run", PRIORITY_DIGEST)
+    await _expire()
+
+    assert await service.acquire("design-window", PRIORITY_DESIGN, note="design-window") is True
+    info = await service.holder_info()
+    assert info is not None and info["note"] == "design-window"
+
+
+async def test_holder_info_is_none_when_free_or_expired() -> None:
+    """No holder (or a dead one) is reported as no holder at all."""
+    service = _service()
+    assert await service.holder_info() is None
+
+    await service.acquire("render-run", PRIORITY_RENDER)
+    await _expire()
+    assert await service.holder_info() is None
+
+
+async def test_waiters_lists_live_waiters_in_priority_order() -> None:
+    """status only ever shows waiters that are still alive."""
+    service = _service()
+    await service.add_waiter("render-run", PRIORITY_RENDER)
+    await service.add_waiter("design-window", PRIORITY_DESIGN)
+
+    waiters = await service.waiters()
+
+    assert [w["owner"] for w in waiters] == ["design-window", "render-run"]
+    assert waiters[0]["priority"] == PRIORITY_DESIGN
+
+    await _expire_waiter("render-run")
+    assert [w["owner"] for w in await service.waiters()] == ["design-window"]
