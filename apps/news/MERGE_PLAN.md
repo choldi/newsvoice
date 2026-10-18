@@ -3,9 +3,9 @@
 **Fecha:** 2026-10-16
 **Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
-**P5** (dispatch, 2026-10-17) y **P6** (catálogo de voces, 2026-10-18)
-completados. El **cutover en
-debwk se difiere a P10**. Pendiente **P7**.
+**P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18) y **P7**
+(ops unificados, 2026-10-18) completados. El **cutover en
+debwk se difiere a P10**. Pendiente **P8**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -160,7 +160,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P4** `libs/tts_contract` | ✅ `libs/tts_contract` **0.1.0** con `errors`, `voices`, `engines`, `system` y `requests`; el gateway declara `response_model` con ellos y news-engine parsea/escribe con ellos | ✅ news-engine ya no parsea JSON del gateway a mano (`tts_backends`, `narration_tts`, `voices`, `monitoring/checks`); gates **1510** (news) + **380** (gateway) tests verdes, ruff limpio |
 | **P5** Consolidación de dispatch | ✅ extraído `src/api/services/gateway.py` (dispatcher único) sobre `tts_contract`; `tts_backends`, `narration_tts` y `voices` usan el dispatcher; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | ✅ **148 passed** (gateway + afectados) + **1523 passed** (news full); ruff limpio; se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
 | **P6** Catálogo de voces → gateway | ✅ `voice_profiles.json` movido a `apps/gateway/`; gateway dueño del catálogo (`VoiceCatalogService` + `GET/POST /api/v1/voices/catalog` y `.../refs/{name}`); news-engine lo lee con `voice_catalog_client` (snapshot + HTTP, sin filesystem local); uploads de referencias y voces custom pasan por el gateway | ✅ gates **1550 passed** (news full) + **403 passed** (gateway) verdes; `ruff check` + `ruff format --check` limpios en las tres piezas; `GET /admin/voices/catalog` sigue respondiendo (servido desde el snapshot del gateway) |
-| **P7** Ops unificados | Fusionar `Makefile` y `scripts/` de ambos repos en raíz; `make status` cubre ambas apps (news + gateway); `make check`, `make test`, `make up/down` unificados; rutas actualizadas tras P6/P9.5 | `make status` reporta los 12 servicios + salud del gateway; `make check` pasa en ambos paquetes; scripts export/import desde P9.5 integrados |
+| **P7** Ops unificados | ✅ raíz con `Makefile` unificado (`help/venv/lint/format/format-check/test/test-news/test-gateway/coverage/check/commit/up/down/ps/health/logs-*/status/deploy/urls/clean`) y `scripts/` (`status.sh`, `deploy.sh`, `auto_commit.sh`); los Makefiles y scripts por app se conservan para desarrollo local; rutas apuntan al compose raíz (`deploy/docker-compose.yml`) y al catálogo del gateway | ✅ `make status` enumera los **12 servicios** + salud del gateway (y el resto de checks); `make lint` + `make format-check` limpios en las tres piezas; `make test` = **1550** (news) + **403** (gateway) verdes. Los scripts de export/import de P9.5 se integran cuando existan |
 | **P8** Lease de GPU | formalizar `design_window.sh` como lease explícito para que síntesis y diseño no colisionen | test del lease + tabla `tts_leases` extendida |
 | **P9** Docs + CI | Deploy.md reescrito para Shapes A/B; jobs de CI por app; arreglar `mypy tts_api` (133 errores) | CI verde en el monorepo |
 | **P9.5** Export/Import de configuración y voces | Crear `scripts/export_config.sh` y `scripts/import_config.sh` (volcar `apps/news/.env.example` + `deploy/.env.example`, `collections.toml`, `data/voices/manifest.json`, `data/voices/voice_profiles.json`, secretos requeridos documentados). Verificar export en local y producir tarball `newsvoice-config-<ts>.tar.gz` listo para import en el nuevo monorepo | Export generado, checksum, tarball en `backups/` o path documentado, y probado `import_config.sh --dry-run`; rutas del gateway actualizadas para leer catálogo desde `apps/gateway/data/voices/` o path unificado |
@@ -366,3 +366,34 @@ news-engine ya no tiene catálogo en disco.
 
 **Siguiente: P7** — ops unificados en la raíz (`Makefile` + `scripts/`,
 `make status` con los 12 servicios + salud del gateway).
+
+---
+
+## P7 — Ops unificados en la raíz (2026-10-18)
+
+La raíz del monorepo pasa a ser el entrypoint único de operaciones. Los
+Makefiles y scripts de cada app se conservan tal cual para desarrollo local;
+la raíz orquesta ambos.
+
+1. ✅ `Makefile` raíz con targets unificados: `help`, `venv`/`install`,
+   `lint`, `format`, `format-check`, `test`, `test-news`, `test-gateway`,
+   `coverage`, `check`, `commit`, `up`, `down`, `ps`, `health`, `logs`,
+   `logs-api`, `logs-gateway`, `logs-worker`, `logs-temporal`, `status`,
+   `deploy`, `urls`, `clean`. El stack de docker sale de
+   `deploy/docker-compose.yml` (los 12 servicios). Las rutas de
+   catálogo/TTS apuntan al gateway (P6).
+2. ✅ `scripts/status.sh`: health unificado — enumera los **12 servicios**,
+   `/health` de news-engine, `/api/v1/health` del gateway (distingue
+   `ok`/`degraded`), Temporal, workers, schedules, LLM, Telegram y SQLite.
+3. ✅ `scripts/deploy.sh`: `up -d --build` del compose raíz + espera de
+   salud de **ambos** (API news + gateway) + registro de schedules.
+4. ✅ `scripts/auto_commit.sh`: ruff + pytest de news y gateway antes de
+   commitear (equivalente raíz del de news).
+5. 📌 `venv`/`check` asumen un `.venv` por app (o vars `*_PY`/`*_RUF`);
+   en este checkout de validación se apuntó a los venvs externos de news
+   y gateway. `make check` = `lint + format-check + test` en ambos.
+6. 📌 Los scripts de export/import de config/voices (**P9.5**) se añadirán
+   a este mismo `scripts/` cuando toque.
+
+**Siguiente: P8** — lease de GPU: formalizar `design_window.sh` como lease
+explícito para que síntesis y diseño no colisionen.
