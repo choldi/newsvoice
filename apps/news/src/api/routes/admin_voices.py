@@ -16,11 +16,13 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
+from tts_contract import VoiceCatalogResponse
 
 from src.api.models.admin import VoiceCloneIn, VoiceCloneOut, VoicesOut
 from src.api.models.voices import CustomVoiceIn, CustomVoiceOut, VoicesAllOut
 from src.api.services import voice_catalog_admin
 from src.api.services.tts_backends import ALLOWED_BACKENDS
+from src.api.services.voice_catalog_client import VoiceCatalogRequestError
 from src.api.services.voice_registry import CATEGORY_ORDER, list_all_voices
 from src.api.services.voices import VoicesService
 from src.core.voice_catalog import VoiceCatalogError
@@ -143,14 +145,25 @@ class VoiceCatalogGenerateIn(BaseModel):
     upload: bool = Field(default=False, description="Also upload to the Modal Volume")
 
 
-@router.get("/admin/voices/catalog")
-async def voice_catalog_status() -> dict[str, Any]:
+@router.get("/admin/voices/catalog", response_model=VoiceCatalogResponse)
+async def voice_catalog_status() -> VoiceCatalogResponse:
     """List the voice catalog with its generation status.
 
+    The payload comes straight from the gateway, which owns the catalog: it
+    carries the profiles, the manifest and which references are generated,
+    missing or stale.
+
     Returns:
-        Dict with the profiles and which are generated, missing or stale.
+        The catalog payload.
+
+    Raises:
+        HTTPException: 502 when the gateway that owns the catalog is
+            unreachable or refuses to answer it.
     """
-    return await voice_catalog_admin.catalog_status()
+    try:
+        return await voice_catalog_admin.catalog_status()
+    except VoiceCatalogError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("/admin/voices/catalog/generate")
@@ -192,7 +205,8 @@ async def create_custom_voice(payload: CustomVoiceIn) -> CustomVoiceOut:
         (when one could be queued).
 
     Raises:
-        HTTPException: 422 on an invalid profile, 409 when the name is taken.
+        HTTPException: 422 on an invalid profile, 409 when the name is taken,
+            502 when the gateway that owns the catalog is unreachable.
     """
     try:
         result = await voice_catalog_admin.create_custom_voice(payload)
@@ -203,6 +217,13 @@ async def create_custom_voice(payload: CustomVoiceIn) -> CustomVoiceOut:
                 {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
                 for error in exc.errors()
             ],
+        ) from exc
+    except VoiceCatalogRequestError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY if exc.retryable else status.HTTP_409_CONFLICT
+            ),
+            detail=str(exc),
         ) from exc
     except VoiceCatalogError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

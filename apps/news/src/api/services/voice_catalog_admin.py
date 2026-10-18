@@ -4,43 +4,41 @@ The catalog endpoints of ``/api/admin/voices`` and the voice cards of
 ``/ui/voices`` describe the same actions (inspect statuses, queue a design
 run, create a custom voice), so the logic lives here once and the routes
 only translate HTTP to service calls.
+
+Nothing here touches a catalog file: since P6 the gateway owns the profiles,
+the manifest and the reference WAVs, and :mod:`src.api.services.voice_catalog_client`
+is the only path to them.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import structlog
+from tts_contract import (
+    STATUS_GENERATED,
+    STATUS_PENDING,
+    STATUS_STALE,
+    VoiceCatalogError,
+    VoiceCatalogResponse,
+)
 
 from src.api.models.voices import (
     CustomVoiceIn,
-    VoiceManifestEntry,
     VoiceProfile,
     is_voice_slug,
 )
-from src.core.config import settings
-from src.core.voice_catalog import (
-    MANIFEST_NAME,
-    REFS_DIR,
-    VoiceCatalogError,
-    is_stale,
-    load_custom_profiles,
-    load_manifest,
-    load_profiles,
-    missing_or_stale,
+from src.api.services.voice_catalog_client import (
+    fetch_catalog,
+    fetch_reference_audio,
     save_custom_profile,
 )
+from src.core.config import settings
 from src.workers.run_worker import build_client
 from src.workers.voice_workflows import VoiceCatalogConfig, VoiceCatalogWorkflow
 
 logger = structlog.get_logger(__name__)
-
-#: Statuses of a catalog voice's reference audio, in Spanish as shown in the GUI.
-STATUS_PENDING = "pendiente"
-STATUS_GENERATED = "generada"
-STATUS_STALE = "desactualizada"
 
 #: Badge CSS class per status (``base.html`` badge styles).
 STATUS_BADGES = {
@@ -54,111 +52,58 @@ class VoiceCatalogAdminError(RuntimeError):
     """A catalog administration action could not be completed."""
 
 
-def manifest_path() -> Path:
-    """Return the manifest path under the configured voices directory.
+async def reference_audio(name: str) -> bytes | None:
+    """Return one profile's reference WAV (used by audio + preview).
 
-    Returns:
-        Absolute-or-relative path of ``manifest.json`` in ``settings.voices_dir``.
-    """
-    return Path(settings.voices_dir) / MANIFEST_NAME
-
-
-def refs_dir() -> Path:
-    """Return the references directory under the configured voices directory.
-
-    Returns:
-        Path of the ``refs`` directory in ``settings.voices_dir``.
-    """
-    return Path(settings.voices_dir) / REFS_DIR
-
-
-def reference_wav(name: str) -> Path | None:
-    """Resolve one profile's reference WAV safely (used by audio + preview).
+    The profile must exist in the catalog, so an unknown name never reaches
+    the gateway's reference endpoint.
 
     Args:
         name: Profile name, optionally with a ``.wav`` suffix.
 
     Returns:
-        The resolved WAV path, or None when the name is unsafe, the profile
-        is unknown, the manifest entry escapes the voices directory, or the
-        file does not exist.
+        The WAV bytes, or None when the name is unsafe, the profile is unknown
+        or the reference has not been generated.
     """
-    stem = name[:-4] if name.lower().endswith(".wav") else name
+    stem = _stem(name)
     if not is_voice_slug(stem):
         return None
     try:
-        profile = next((p for p in load_profiles() if p.name == stem), None)
+        snapshot = await fetch_catalog()
+        if stem not in {profile.name for profile in snapshot.profiles}:
+            return None
+        return await fetch_reference_audio(stem)
     except VoiceCatalogError:
+        logger.warning("voice_reference_unreadable", voice=name)
         return None
-    if profile is None:
-        return None
-    voices_root = Path(settings.voices_dir).resolve()
-    entry = load_manifest(manifest_path()).get(profile.name)
-    relative = entry.file if entry is not None else f"{REFS_DIR}/{profile.name}.wav"
-    wav = (voices_root / relative).resolve()
-    if not wav.is_relative_to(voices_root) or not wav.is_file():
-        return None
-    return wav
 
 
-def generated_status(
-    profile: VoiceProfile,
-    manifest: dict[str, VoiceManifestEntry],
-    voices_dir: Path | None = None,
-) -> str:
-    """Classify one profile's reference audio for the GUI.
-
-    A voice passes to "generada" as soon as its WAV exists on disk (the
-    decision the user took for Phase 9); a manifest entry that no longer
-    matches the profile is "desactualizada" and a profile with no usable
-    reference is "pendiente".
+def _stem(name: str) -> str:
+    """Strip the optional ``.wav`` suffix the audio routes append.
 
     Args:
-        profile: Profile to classify.
-        manifest: Loaded manifest (missing entries mean not generated).
-        voices_dir: Voices directory; defaults to ``settings.voices_dir``.
+        name: Profile name, with or without the suffix.
 
     Returns:
-        One of ``pendiente``, ``generada`` or ``desactualizada``.
+        The bare profile name.
     """
-    entry = manifest.get(profile.name)
-    if entry is None:
-        return STATUS_PENDING
-    if is_stale(profile, entry):
-        return STATUS_STALE
-    root = Path(voices_dir) if voices_dir is not None else Path(settings.voices_dir)
-    if not (root / entry.file).is_file():
-        return STATUS_PENDING
-    return STATUS_GENERATED
+    return name[:-4] if name.lower().endswith(".wav") else name
 
 
-async def catalog_status() -> dict[str, Any]:
+async def catalog_status() -> VoiceCatalogResponse:
     """Return the catalog with its generation status.
 
+    Always asks the gateway for a fresh payload: this is what the admin page
+    polls after queueing a design run.
+
     Returns:
-        Dict with the profiles and which are generated, missing or stale.
+        Profiles, manifest, per-profile status and the generated/missing name
+        lists.
+
+    Raises:
+        VoiceCatalogError: When the gateway refuses or cannot be reached.
     """
-    profiles = load_profiles()
-    manifest = load_manifest(manifest_path())
-    pending = set(missing_or_stale(profiles, manifest))
-    custom_names = {profile.name for profile in _safe_custom_names()}
-    return {
-        "status": "ok",
-        "profiles": [profile.model_dump(mode="json") for profile in profiles],
-        "generated": sorted(p.name for p in profiles if p.name not in pending and p.enabled),
-        "missing": sorted(pending),
-        "stale": sorted(pending),
-        "custom": sorted(custom_names),
-    }
-
-
-def _safe_custom_names() -> list[VoiceProfile]:
-    """Load the custom profiles, tolerating an unreadable file for listings."""
-    try:
-        return load_custom_profiles()
-    except VoiceCatalogError as exc:
-        logger.warning("custom_voice_profiles_unreadable", error=str(exc))
-        return []
+    return await fetch_catalog(max_age=0)
 
 
 async def generated_voices() -> list[dict[str, Any]]:
@@ -168,13 +113,11 @@ async def generated_voices() -> list[dict[str, Any]]:
         One dict per catalog voice with ``profile``, ``custom``, ``status``
         and ``badge`` keys, custom voices first.
     """
-    profiles = load_profiles()
-    manifest = load_manifest(manifest_path())
-    custom_names = {profile.name for profile in _safe_custom_names()}
-    root = Path(settings.voices_dir)
+    snapshot = await fetch_catalog()
+    custom_names = set(snapshot.custom)
     rows: list[dict[str, Any]] = []
-    for profile in profiles:
-        status = generated_status(profile, manifest, root)
+    for profile in snapshot.profiles:
+        status = snapshot.statuses.get(profile.name, STATUS_PENDING)
         rows.append(
             {
                 "profile": profile,
@@ -241,8 +184,8 @@ async def create_custom_voice(payload: CustomVoiceIn) -> dict[str, Any]:
 
     Raises:
         ValidationError: If the payload is not a valid profile.
-        VoiceCatalogError: If the name is already taken or the existing
-            custom file cannot be read.
+        VoiceCatalogError: If the gateway is unreachable or the name is
+            already taken (the gateway's message is kept).
     """
     segments = [str(part).strip() for part in payload.ref_segments if str(part).strip()]
     if not segments and payload.ref_text.strip():
@@ -258,7 +201,7 @@ async def create_custom_voice(payload: CustomVoiceIn) -> dict[str, Any]:
             "enabled": True,
         }
     )
-    save_custom_profile(profile)
+    await save_custom_profile(profile)
 
     workflow_id = ""
     start_error = ""

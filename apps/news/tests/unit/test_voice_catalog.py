@@ -4,13 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from src.api.models.voices import VoiceManifestEntry, VoiceProfile, VoiceSource
-from src.core.config import settings
+from src.api.services import voice_catalog_client
 from src.core.voice_catalog import (
     VoiceCatalogError,
-    custom_profiles_path,
     is_stale,
     load_custom_profiles,
     load_manifest,
@@ -19,13 +17,18 @@ from src.core.voice_catalog import (
     profile_dict,
     ref_text_for,
     resolve_reference,
-    save_custom_profile,
     sha256_text,
     write_manifest,
 )
+from tests.fake_gateway import (
+    current_gateway,
+    invalidate_client,
+    sample_wav,
+    save_custom_profile,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CATALOG = REPO_ROOT / "voice_profiles.json"
+#: The committed catalog, which the gateway ships and serves since P6.
+CATALOG = Path(__file__).resolve().parents[3] / "gateway" / "voice_profiles.json"
 
 PROFILE = {
     "name": "anchor_neutral_m",
@@ -101,13 +104,13 @@ def test_load_profiles_rejects_duplicate_names(tmp_path: Path) -> None:
 
 def test_load_profiles_rejects_bad_language(tmp_path: Path) -> None:
     path = _write_catalog(tmp_path, [dict(PROFILE, language="eng")])
-    with pytest.raises(ValidationError):
+    with pytest.raises(VoiceCatalogError, match="language must be a two-letter"):
         load_profiles(path)
 
 
 def test_load_profiles_rejects_bad_slug(tmp_path: Path) -> None:
     path = _write_catalog(tmp_path, [dict(PROFILE, name="Not A Slug!")])
-    with pytest.raises(ValidationError):
+    with pytest.raises(VoiceCatalogError, match="is invalid"):
         load_profiles(path)
 
 
@@ -162,7 +165,7 @@ def test_load_profiles_rejects_a_ref_text_that_disagrees_with_the_segments(
         [{**PROFILE, "ref_segments": ["first half", "second half"]}],
     )
 
-    with pytest.raises(ValidationError, match="ref_text must be the ref_segments"):
+    with pytest.raises(VoiceCatalogError, match="ref_text must be the ref_segments"):
         load_profiles(path)
 
 
@@ -301,79 +304,66 @@ def test_voice_source_values() -> None:
 # --- load_custom_profiles --------------------------------------------------
 
 
-def test_load_custom_profiles_returns_empty_when_the_file_is_missing(
-    tmp_path: Path,
-) -> None:
-    assert load_custom_profiles(tmp_path / "custom_profiles.json") == []
+def test_load_custom_profiles_is_empty_when_the_operator_created_none() -> None:
+    assert load_custom_profiles() == []
 
 
-def test_custom_profiles_path_honours_an_explicit_path(tmp_path: Path) -> None:
-    assert custom_profiles_path(tmp_path / "mine.json") == tmp_path / "mine.json"
+def test_load_custom_profiles_returns_the_seeded_profiles() -> None:
+    save_custom_profile(VoiceProfile.model_validate(dict(PROFILE, name="mi_voz_es")))
+
+    assert [profile.name for profile in load_custom_profiles()] == ["mi_voz_es"]
 
 
-def test_load_custom_profiles_returns_validated_profiles(tmp_path: Path) -> None:
-    path = tmp_path / "custom_profiles.json"
-    path.write_text(json.dumps({"profiles": [PROFILE]}), encoding="utf-8")
-
-    profiles = load_custom_profiles(path)
-
-    assert [profile.name for profile in profiles] == ["anchor_neutral_m"]
-
-
-def test_load_custom_profiles_keeps_its_own_reference_text(tmp_path: Path) -> None:
+def test_load_custom_profiles_keeps_its_own_reference_text() -> None:
     """A custom profile is not rewritten by the committed language block."""
-    custom = dict(PROFILE, name="custom_es", language="es")
-    path = tmp_path / "custom_profiles.json"
-    path.write_text(json.dumps({"profiles": [custom]}), encoding="utf-8")
+    save_custom_profile(VoiceProfile.model_validate(dict(PROFILE, name="custom_es", language="es")))
 
-    profile = load_custom_profiles(path)[0]
+    profile = load_custom_profiles()[0]
 
     assert profile.name == "custom_es"
     assert profile.ref_text == PROFILE["ref_text"]
 
 
-def test_load_custom_profiles_rejects_invalid_json(tmp_path: Path) -> None:
-    path = tmp_path / "custom_profiles.json"
-    path.write_text("{not json", encoding="utf-8")
+def test_load_custom_profiles_reports_a_gateway_that_cannot_be_asked() -> None:
+    current_gateway().unavailable = 503
 
-    with pytest.raises(VoiceCatalogError, match="not readable JSON"):
-        load_custom_profiles(path)
-
-
-def test_load_custom_profiles_requires_a_profiles_list(tmp_path: Path) -> None:
-    path = tmp_path / "custom_profiles.json"
-    path.write_text(json.dumps({"voices": []}), encoding="utf-8")
-
-    with pytest.raises(VoiceCatalogError, match="needs a 'profiles' list"):
-        load_custom_profiles(path)
+    with pytest.raises(VoiceCatalogError, match="gateway unavailable"):
+        load_custom_profiles()
 
 
-def test_load_custom_profiles_rejects_duplicate_names(tmp_path: Path) -> None:
-    path = tmp_path / "custom_profiles.json"
-    path.write_text(json.dumps({"profiles": [PROFILE, PROFILE]}), encoding="utf-8")
+def test_load_profiles_keeps_the_gateway_duplicate_message() -> None:
+    """A catalog the gateway cannot assemble surfaces its own wording."""
+    committed_name = load_profiles(CATALOG)[0].name
+    current_gateway().custom.append(VoiceProfile.model_validate(dict(PROFILE, name=committed_name)))
+    invalidate_client()
 
-    with pytest.raises(VoiceCatalogError, match="duplicate custom voice profile names"):
-        load_custom_profiles(path)
+    with pytest.raises(VoiceCatalogError, match="duplicate voice profile names"):
+        load_profiles()
 
 
-def test_load_custom_profiles_rejects_an_invalid_profile(tmp_path: Path) -> None:
-    broken = dict(PROFILE, language="spanish")
-    path = tmp_path / "custom_profiles.json"
-    path.write_text(json.dumps({"profiles": [broken]}), encoding="utf-8")
+def test_load_profiles_reports_an_unreachable_gateway() -> None:
+    current_gateway().unavailable = 503
 
-    with pytest.raises(VoiceCatalogError, match="is invalid"):
-        load_custom_profiles(path)
+    with pytest.raises(VoiceCatalogError, match="gateway unavailable"):
+        load_profiles()
+
+
+def test_load_manifest_without_a_path_serves_the_gateway_manifest() -> None:
+    save_custom_profile(VoiceProfile.model_validate(dict(PROFILE, name="mi_voz_es")))
+    current_gateway().add_reference(
+        "mi_voz_es",
+        sample_wav(),
+        instruct=PROFILE["instruct"],
+        ref_text=PROFILE["ref_text"],
+    )
+
+    manifest = load_manifest()
+
+    assert set(manifest) == {"mi_voz_es"}
+    assert manifest["mi_voz_es"].file == "refs/mi_voz_es.wav"
 
 
 # --- merged load + save_custom_profile (Phase 9.3) ---------------------------
-
-
-def _isolated_voices_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point settings.voices_dir at an empty temp dir and return it."""
-    voices = tmp_path / "voices"
-    voices.mkdir()
-    monkeypatch.setattr(settings, "voices_dir", str(voices))
-    return voices
 
 
 def _custom(name: str = "mi_voz_es") -> VoiceProfile:
@@ -381,13 +371,8 @@ def _custom(name: str = "mi_voz_es") -> VoiceProfile:
     return VoiceProfile.model_validate(dict(PROFILE, name=name))
 
 
-def test_load_profiles_merges_the_custom_file_last(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    voices = _isolated_voices_dir(tmp_path, monkeypatch)
-    custom_profiles_path().write_text(
-        json.dumps({"profiles": [_custom().model_dump(mode="json")]}), encoding="utf-8"
-    )
+def test_load_profiles_merges_the_custom_profiles_last() -> None:
+    save_custom_profile(_custom())
 
     profiles = load_profiles()
     committed = load_profiles(CATALOG)
@@ -397,16 +382,10 @@ def test_load_profiles_merges_the_custom_file_last(
         "mi_voz_es",
     ]
     assert len(committed) == 32
-    assert voices.is_dir()
 
 
-def test_load_profiles_with_an_explicit_path_stays_committed_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
-    custom_profiles_path().write_text(
-        json.dumps({"profiles": [_custom().model_dump(mode="json")]}), encoding="utf-8"
-    )
+def test_load_profiles_with_an_explicit_path_stays_committed_only() -> None:
+    save_custom_profile(_custom())
 
     names = [profile.name for profile in load_profiles(CATALOG)]
 
@@ -414,64 +393,48 @@ def test_load_profiles_with_an_explicit_path_stays_committed_only(
     assert "mi_voz_es" not in names
 
 
-def test_load_profiles_rejects_a_cross_file_duplicate_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
-    committed_name = load_profiles(CATALOG)[0].name
-    custom_profiles_path().write_text(
-        json.dumps({"profiles": [_custom(committed_name).model_dump(mode="json")]}),
-        encoding="utf-8",
-    )
+async def test_save_custom_profile_appends_through_the_gateway() -> None:
+    seed = await voice_catalog_client.save_custom_profile(_custom())
+    await voice_catalog_client.save_custom_profile(_custom("otra_voz"))
 
-    with pytest.raises(VoiceCatalogError, match="duplicate voice profile names"):
-        load_profiles()
-
-
-def test_save_custom_profile_appends_atomically(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
-
-    save_custom_profile(_custom())
-    save_custom_profile(_custom("otra_voz"))
-
+    assert seed.name == "mi_voz_es"
     assert [profile.name for profile in load_custom_profiles()] == [
         "mi_voz_es",
         "otra_voz",
     ]
-    target = custom_profiles_path()
-    assert not target.with_name(f"{target.name}.tmp").exists()
 
 
-def test_save_custom_profile_rejects_an_existing_custom_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
-    save_custom_profile(_custom())
+async def test_save_custom_profile_rejects_an_existing_custom_name() -> None:
+    await voice_catalog_client.save_custom_profile(_custom())
 
     with pytest.raises(VoiceCatalogError, match="already exists"):
-        save_custom_profile(_custom())
+        await voice_catalog_client.save_custom_profile(_custom())
 
 
-def test_save_custom_profile_rejects_a_committed_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
+async def test_save_custom_profile_rejects_a_committed_name() -> None:
     committed_name = load_profiles(CATALOG)[0].name
 
     with pytest.raises(VoiceCatalogError, match="already in the catalog"):
-        save_custom_profile(_custom(committed_name))
+        await voice_catalog_client.save_custom_profile(_custom(committed_name))
 
 
-def test_save_custom_profile_never_clobbers_a_corrupt_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolated_voices_dir(tmp_path, monkeypatch)
-    target = custom_profiles_path()
-    target.write_text("{not json", encoding="utf-8")
+async def test_save_custom_profile_marks_a_refusal_as_not_retryable() -> None:
+    await voice_catalog_client.save_custom_profile(_custom())
 
-    with pytest.raises(VoiceCatalogError, match="not readable JSON"):
-        save_custom_profile(_custom())
+    try:
+        await voice_catalog_client.save_custom_profile(_custom())
+    except voice_catalog_client.VoiceCatalogRequestError as exc:
+        assert exc.retryable is False
+    else:
+        raise AssertionError("the duplicate must be refused")
 
-    assert target.read_text(encoding="utf-8") == "{not json"
+
+async def test_save_custom_profile_marks_an_outage_as_retryable() -> None:
+    current_gateway().unavailable = 503
+
+    try:
+        await voice_catalog_client.save_custom_profile(_custom())
+    except voice_catalog_client.VoiceCatalogRequestError as exc:
+        assert exc.retryable is True
+    else:
+        raise AssertionError("the outage must fail the save")

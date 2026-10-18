@@ -12,7 +12,7 @@ from src.api.models.narration import TTSBackend
 from src.api.models.voices import VoiceProfile
 from src.api.services import voice_preview
 from src.core.config import settings
-from src.core.voice_catalog import save_custom_profile
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
 
 REF_TEXT = "Hola, soy tu profe de ingles de siempre. " * 4
 INSTRUCT = "Femenina, 30s, tono cercano y agil, claridad de locucion"
@@ -41,11 +41,20 @@ def _profile(name: str = "mi_voz_es", language: str = "es") -> VoiceProfile:
     )
 
 
-def _write_reference(name: str, voices: Path) -> Path:
-    """Drop a fake reference WAV for a profile."""
-    wav = voices / "refs" / f"{name}.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF-REFERENCE")
+def _write_reference(name: str) -> bytes:
+    """Store a reference WAV for a profile in the fake gateway."""
+    profile = next(
+        (p for p in current_gateway().payload().profiles if p.name == name),
+        None,
+    )
+    assert profile is not None, f"profile {name!r} must be seeded first"
+    wav = sample_wav()
+    current_gateway().add_reference(
+        name,
+        wav,
+        instruct=profile.instruct,
+        ref_text=profile.ref_text,
+    )
     return wav
 
 
@@ -94,7 +103,7 @@ async def test_preview_falls_back_to_the_reference_when_modal_is_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     save_custom_profile(_profile())
-    _write_reference("mi_voz_es", Path(settings.voices_dir))
+    _write_reference("mi_voz_es")
     voice_for = AsyncMock(side_effect=AssertionError("must not resolve"))
     synthesize = AsyncMock(side_effect=AssertionError("must not synthesize"))
     monkeypatch.setattr(voice_preview, "voice_for", voice_for)
@@ -115,7 +124,7 @@ async def test_preview_falls_back_to_the_reference_when_the_synthesis_fails(
 ) -> None:
     monkeypatch.setattr(settings, "modal_enabled", True)
     save_custom_profile(_profile())
-    _write_reference("mi_voz_es", Path(settings.voices_dir))
+    _write_reference("mi_voz_es")
     voice_for = AsyncMock(return_value="mi_voz_es")
     synthesize = AsyncMock(side_effect=RuntimeError("modal caído"))
     monkeypatch.setattr(voice_preview, "voice_for", voice_for)

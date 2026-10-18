@@ -11,6 +11,7 @@ import pytest_asyncio
 from src.api.db.database import run_migrations
 from src.core.config import settings
 from src.workers.client import configure_temporal_logging
+from tests.fake_gateway import FakeGateway, install_fake_gateway
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -20,6 +21,20 @@ async def setup_test_database(tmp_path: Path) -> AsyncGenerator[None, None]:
     settings.database_path = test_db
     await run_migrations(test_db)
     yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fake_gateway(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[FakeGateway, None]:
+    """Answer every voice-catalog read and write with an in-process gateway.
+
+    news-engine reads the profiles, the manifest and the reference audio from
+    the gateway since P6, so any test that touches a voice needs one to answer
+    — and without this fixture the cold read would open a socket to whichever
+    gateway ``settings.tts_api_base_url`` points at.
+    """
+    gateway = install_fake_gateway(monkeypatch)
+    yield gateway
+    await gateway.http.aclose()
 
 
 @pytest.fixture(autouse=True)

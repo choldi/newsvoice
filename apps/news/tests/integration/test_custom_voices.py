@@ -10,15 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.models.voices import VoiceManifestEntry, VoiceProfile
+from src.api.models.voices import VoiceProfile
 from src.core.config import settings
-from src.core.voice_catalog import (
-    load_custom_profiles,
-    load_profiles,
-    save_custom_profile,
-    sha256_text,
-    write_manifest,
-)
+from src.core.voice_catalog import load_custom_profiles, load_profiles
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
 
 TOKEN = "secret-admin-token"
 REF_TEXT = "Hola, soy tu profe de ingles de siempre. " * 4
@@ -76,20 +71,6 @@ def _profile(name: str = "mi_voz_es") -> VoiceProfile:
     """Build a valid profile for direct saves in listing/audio tests."""
     return VoiceProfile.model_validate(
         {"name": name, "label": name, "language": "es", "instruct": INSTRUCT, "ref_text": REF_TEXT}
-    )
-
-
-def _entry(profile: VoiceProfile, file: str) -> VoiceManifestEntry:
-    """Build a fresh manifest entry for a profile."""
-    return VoiceManifestEntry(
-        file=file,
-        sha256="a" * 64,
-        sample_rate=24000,
-        duration_seconds=15.0,
-        design_model="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-        instruct_sha256=sha256_text(profile.instruct),
-        ref_text_sha256=sha256_text(profile.ref_text),
-        created_at="2026-10-07T00:00:00Z",
     )
 
 
@@ -248,30 +229,26 @@ def test_ui_create_custom_voice_requires_a_reference_text() -> None:
 # --- Generated-voices fragment ------------------------------------------------
 
 
-def test_fragment_reports_generated_pending_and_stale(tmp_path: Path) -> None:
-    voices = tmp_path / "voices"
-    for name in ("generada_es", "pendiente_es", "desactualizada_es"):
-        save_custom_profile(_profile(name))
-    write_manifest(
-        {
-            "generada_es": _entry(_profile("generada_es"), "refs/generada_es.wav"),
-            "desactualizada_es": _entry(
-                _profile("desactualizada_es"), "refs/desactualizada_es.wav"
-            ),
-        },
-        voices / "manifest.json",
+def test_fragment_reports_generated_pending_and_stale() -> None:
+    gateway = current_gateway()
+    generated, pending, drifted = (
+        _profile("generada_es"),
+        _profile("pendiente_es"),
+        _profile("desactualizada_es"),
     )
-    wav = voices / "refs" / "generada_es.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF....WAVE")
-    stale = _entry(_profile("desactualizada_es"), "refs/desactualizada_es.wav")
-    stale.instruct_sha256 = "0" * 64
-    write_manifest(
-        {
-            "generada_es": _entry(_profile("generada_es"), "refs/generada_es.wav"),
-            "desactualizada_es": stale,
-        },
-        voices / "manifest.json",
+    for profile in (generated, pending, drifted):
+        save_custom_profile(profile)
+    gateway.add_reference(
+        generated.name,
+        sample_wav(),
+        instruct=generated.instruct,
+        ref_text=generated.ref_text,
+    )
+    gateway.add_reference(
+        drifted.name,
+        sample_wav(),
+        instruct="Otra descripción de persona bastante más larga",
+        ref_text=drifted.ref_text,
     )
 
     response = _client().get("/ui/fragments/voices_generated")
@@ -305,39 +282,22 @@ def test_fragment_degrades_when_the_catalog_is_unreadable(
 # --- Audio endpoint -----------------------------------------------------------
 
 
-def test_voice_audio_serves_the_reference_wav(tmp_path: Path) -> None:
-    save_custom_profile(_profile("mi_voz_es"))
-    wav = tmp_path / "voices" / "refs" / "mi_voz_es.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF....WAVE")
+def test_voice_audio_serves_the_reference_wav() -> None:
+    profile = _profile("mi_voz_es")
+    save_custom_profile(profile)
+    wav = sample_wav()
+    current_gateway().add_reference(
+        profile.name, wav, instruct=profile.instruct, ref_text=profile.ref_text
+    )
 
     response = _client().get("/ui/voices/audio/mi_voz_es.wav")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("audio/wav")
-    assert response.content == b"RIFF....WAVE"
+    assert response.content == wav
 
 
-def test_voice_audio_prefers_the_manifest_entry(tmp_path: Path) -> None:
-    profile = _profile("mi_voz_es")
-    save_custom_profile(profile)
-    write_manifest(
-        {"mi_voz_es": _entry(profile, "refs/otra_ruta.wav")},
-        tmp_path / "voices" / "manifest.json",
-    )
-    wav = tmp_path / "voices" / "refs" / "otra_ruta.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF-MANIFEST")
-
-    response = _client().get("/ui/voices/audio/mi_voz_es.wav")
-
-    assert response.status_code == 200
-    assert response.content == b"RIFF-MANIFEST"
-
-
-def test_voice_audio_404s_on_unknown_unsafe_and_missing_names(
-    tmp_path: Path,
-) -> None:
+def test_voice_audio_404s_on_unknown_unsafe_and_missing_names() -> None:
     client = _client()
     assert client.get("/ui/voices/audio/no_existe.wav").status_code == 404
     assert client.get("/ui/voices/audio/Bad%20Name.wav").status_code == 404
@@ -345,21 +305,3 @@ def test_voice_audio_404s_on_unknown_unsafe_and_missing_names(
 
     save_custom_profile(_profile("mi_voz_es"))
     assert client.get("/ui/voices/audio/mi_voz_es.wav").status_code == 404
-
-
-def test_voice_audio_refuses_a_manifest_entry_outside_the_voices_dir(
-    tmp_path: Path,
-) -> None:
-    profile = _profile("mi_voz_es")
-    save_custom_profile(profile)
-    outside = tmp_path / "secret.wav"
-    outside.write_bytes(b"TOP SECRET")
-    write_manifest(
-        {"mi_voz_es": _entry(profile, "../secret.wav")},
-        tmp_path / "voices" / "manifest.json",
-    )
-
-    response = _client().get("/ui/voices/audio/mi_voz_es.wav")
-
-    assert response.status_code == 404
-    assert b"TOP SECRET" not in response.content

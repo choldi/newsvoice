@@ -418,15 +418,10 @@ def test_voice_clone_invalid_base64_422() -> None:
 def test_voice_catalog_status_lists_profiles() -> None:
     """GET /admin/voices/catalog returns the catalog and its status.
 
-    The manifest is patched empty and the custom profiles file is neutralised:
-    ``data/voices`` holds state that differs per machine, and this test must
-    pin the committed-catalog behaviour deterministically.
+    The shared fake gateway starts from the committed catalog with an empty
+    manifest and no operator profiles, which is the state this test pins.
     """
-    with (
-        patch("src.api.services.voice_catalog_admin.load_manifest", return_value={}),
-        patch("src.core.voice_catalog.load_custom_profiles", return_value=[]),
-    ):
-        response = client.get("/api/admin/voices/catalog")
+    response = client.get("/api/admin/voices/catalog")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"

@@ -2,9 +2,10 @@
 
 **Fecha:** 2026-10-16
 **Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
-(compose, 2026-10-17), **P3** (engines, 2026-10-17) y **P4** (contrato, 2026-10-17)
+(compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
+**P5** (dispatch, 2026-10-17) y **P6** (catálogo de voces, 2026-10-18)
 completados. El **cutover en
-debwk se difiere a P10**. Pendiente **P5**.
+debwk se difiere a P10**. Pendiente **P7**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -158,7 +159,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P3** Engines | ✅ portar `qwen3_tts` (desde `dd874e3`) a `apps/gateway` renombrado, con catálogo `GET /api/v1/engines` (`locations`) y override `engine` en `/tts`; **P3b Piper + P3c Chatterbox ya hechos**. `voxcpm2`/`zonos2` **diferidos** (Modal-only, sin runtime local en debwk) | ✅ `ruff check` + `ruff format` limpios y **378 tests verdes**; `qwen3_tts` accesible vía `TTS_ENGINE` y por pinning en `routed`; los gates de benchmark siguen siendo la autoridad |
 | **P4** `libs/tts_contract` | ✅ `libs/tts_contract` **0.1.0** con `errors`, `voices`, `engines`, `system` y `requests`; el gateway declara `response_model` con ellos y news-engine parsea/escribe con ellos | ✅ news-engine ya no parsea JSON del gateway a mano (`tts_backends`, `narration_tts`, `voices`, `monitoring/checks`); gates **1510** (news) + **380** (gateway) tests verdes, ruff limpio |
 | **P5** Consolidación de dispatch | ✅ extraído `src/api/services/gateway.py` (dispatcher único) sobre `tts_contract`; `tts_backends`, `narration_tts` y `voices` usan el dispatcher; conservar Edge por defecto, kill switch `TTS_API_ENABLED` y la regla `410 Gone` | ✅ **148 passed** (gateway + afectados) + **1523 passed** (news full); ruff limpio; se mantiene el 80% de cobertura; digests byte-idénticos en `edge` |
-| **P6** Catálogo de voces → gateway | Mover `voice_profiles.json` (y fuentes/manifest del runtime `data/voices/*`) al gateway (`apps/gateway/data/voices/` o `apps/gateway/` según diseño). News-engine debe leer catálogo vía gateway (`GET /admin/voices/catalog` o `GET /api/v1/voices/stock` + catálogo) en lugar de filesystem local; conservar compatibilidad. | `GET /admin/voices/catalog` servido desde gateway; news-engine consume catálogo remoto; `data/voices` gitignored en ambos sitios y export/import cubierto por P9.5 |
+| **P6** Catálogo de voces → gateway | ✅ `voice_profiles.json` movido a `apps/gateway/`; gateway dueño del catálogo (`VoiceCatalogService` + `GET/POST /api/v1/voices/catalog` y `.../refs/{name}`); news-engine lo lee con `voice_catalog_client` (snapshot + HTTP, sin filesystem local); uploads de referencias y voces custom pasan por el gateway | ✅ gates **1550 passed** (news full) + **403 passed** (gateway) verdes; `ruff check` + `ruff format --check` limpios en las tres piezas; `GET /admin/voices/catalog` sigue respondiendo (servido desde el snapshot del gateway) |
 | **P7** Ops unificados | Fusionar `Makefile` y `scripts/` de ambos repos en raíz; `make status` cubre ambas apps (news + gateway); `make check`, `make test`, `make up/down` unificados; rutas actualizadas tras P6/P9.5 | `make status` reporta los 12 servicios + salud del gateway; `make check` pasa en ambos paquetes; scripts export/import desde P9.5 integrados |
 | **P8** Lease de GPU | formalizar `design_window.sh` como lease explícito para que síntesis y diseño no colisionen | test del lease + tabla `tts_leases` extendida |
 | **P9** Docs + CI | Deploy.md reescrito para Shapes A/B; jobs de CI por app; arreglar `mypy tts_api` (133 errores) | CI verde en el monorepo |
@@ -331,3 +332,37 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
 **Siguiente: P5** — consolidar el dispatch de
 `src/api/services/tts_backends.py` sobre `tts_contract`, conservando Edge por
 defecto, el kill switch `TTS_API_ENABLED` y la regla `410 Gone`.
+
+---
+
+## P6 — El catálogo de voces es del gateway (2026-10-18)
+
+Decisión de alcance acordada con el usuario: el gateway es el dueño total del
+catálogo — `voice_profiles.json`, `manifest.json`, `refs/*.wav` y
+`custom_profiles.json` viven en `apps/gateway/` y los sirve por HTTP;
+news-engine ya no tiene catálogo en disco.
+
+1. ✅ `git mv apps/news/voice_profiles.json apps/gateway/voice_profiles.json`
+   (32 perfiles; el committed catalog es la fuente de verdad).
+2. ✅ **contrato** (`libs/tts_contract/tts_contract/catalog.py`): modelos
+   `VoiceProfile`, `VoiceManifestEntry`, `VoiceCatalogResponse` y clasificador
+   `classify_status` (`pendiente` / `generada` / `desactualizada`).
+3. ✅ **gateway**: `VoiceCatalogService` (`apps/gateway/tts_api/services/`)
+   con `catalog()`, `store_reference()`, `save_custom()`, `read_reference()`;
+   router `apps/gateway/tts_api/api/v1/catalog.py`
+   (`GET /api/v1/voices/catalog`, `GET|POST .../refs/{name}`,
+   `POST .../custom`); errores `404/409/422/500` con `detail` plano.
+4. ✅ **news-engine**: `src/api/services/voice_catalog_client.py` (cliente
+   HTTP con snapshot, `fetch_catalog(max_age=...)`, `store_reference`,
+   `save_custom_profile`, errores `VoiceCatalogRequestError.retryable`);
+   `src/core/voice_catalog.py` re-exporta el contract; `voice_catalog_admin`,
+   `voice_activities`, `gateway_voices`, `voice_preview`, `routes_ui` y
+   `routes/admin_voices.py` consumen el cliente en vez del filesystem.
+5. ✅ tests: news migra a `tests/fake_gateway.py` (`FakeGateway` con el
+   catálogo commiteado real) — 1550 passed; gateway añade 8 tests de
+   archivos corruptos/ilegibles — 403 passed.
+6. 📌 `apps/news/data/voices/` ya no se usa; el export/import del catálogo
+   queda para **P9.5**.
+
+**Siguiente: P7** — ops unificados en la raíz (`Makefile` + `scripts/`,
+`make status` con los 12 servicios + salud del gateway).

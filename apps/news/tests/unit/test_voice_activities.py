@@ -1,7 +1,6 @@
 """Unit tests for the voice catalog activities (Phase 7.8/7.9)."""
 
 import gzip
-import json
 import zlib
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from src.core import voice_catalog
 from src.core.audio import CANONICAL_FORMAT, build_wav, wav_duration
 from src.core.config import settings
 from src.workers import voice_activities
+from tests.fake_gateway import current_gateway, save_custom_profile
 
 WAV = build_wav(b"\xff\x7f" * 2400, CANONICAL_FORMAT)
 
@@ -182,10 +182,8 @@ async def test_design_voice_activity_wraps_model_failure(
 # --- store (runs on the server) ---------------------------------------------
 
 
-async def test_store_voice_activity_writes_reference_and_manifest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+async def test_store_voice_activity_writes_reference_and_manifest() -> None:
+    gateway = current_gateway()
 
     result = await ActivityEnvironment().run(
         voice_activities.store_voice_activity, _store_payload(_profile())
@@ -194,22 +192,17 @@ async def test_store_voice_activity_writes_reference_and_manifest(
     assert result["name"] == "anchor_neutral_m"
     assert result["sample_rate"] == 24000
     assert result["duration_seconds"] == wav_duration(WAV)
-    ref_path = tmp_path / "voices" / "refs" / "anchor_neutral_m.wav"
-    assert ref_path.read_bytes() == WAV
-    manifest = json.loads((tmp_path / "voices" / "manifest.json").read_text(encoding="utf-8"))
-    entry = manifest["anchor_neutral_m"]
-    assert entry["sha256"] == voice_catalog.sha256_bytes(WAV)
-    assert entry["design_model"] == "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-    assert entry["modal_cost_usd"] == 0.0
-    assert entry["instruct_sha256"] == voice_catalog.sha256_text(_profile()["instruct"])
+    assert gateway.refs["anchor_neutral_m"] == WAV
+    entry = gateway.manifest["anchor_neutral_m"]
+    assert entry.sha256 == voice_catalog.sha256_bytes(WAV)
+    assert entry.design_model == "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    assert entry.instruct_sha256 == voice_catalog.sha256_text(_profile()["instruct"])
     # the staging area is consumed once the reference is real
     assert not voice_staging.staged_path("anchor_neutral_m").exists()
 
 
-async def test_store_voice_activity_keeps_a_previous_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+async def test_store_voice_activity_keeps_a_previous_entry() -> None:
+    gateway = current_gateway()
     other = _profile("cohost_warm_f")
 
     await ActivityEnvironment().run(
@@ -217,14 +210,11 @@ async def test_store_voice_activity_keeps_a_previous_entry(
     )
     await ActivityEnvironment().run(voice_activities.store_voice_activity, _store_payload(other))
 
-    manifest = json.loads((tmp_path / "voices" / "manifest.json").read_text(encoding="utf-8"))
-    assert sorted(manifest) == ["anchor_neutral_m", "cohost_warm_f"]
+    assert sorted(gateway.manifest) == ["anchor_neutral_m", "cohost_warm_f"]
 
 
-async def test_store_voice_activity_rejects_a_digest_mismatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+async def test_store_voice_activity_rejects_a_digest_mismatch() -> None:
+    gateway = current_gateway()
     payload = _store_payload(_profile())
     payload["sha256"] = "0" * 64
 
@@ -232,7 +222,7 @@ async def test_store_voice_activity_rejects_a_digest_mismatch(
         await ActivityEnvironment().run(voice_activities.store_voice_activity, payload)
 
     assert excinfo.value.non_retryable is True
-    assert not (tmp_path / "voices" / "refs" / "anchor_neutral_m.wav").exists()
+    assert not gateway.has_reference("anchor_neutral_m")
 
 
 async def test_store_voice_activity_rejects_missing_staged_audio(
@@ -261,6 +251,26 @@ async def test_store_voice_activity_rejects_corrupt_staged_audio(
     assert excinfo.value.non_retryable is True
 
 
+async def test_store_voice_activity_marks_a_gateway_refusal_as_fatal() -> None:
+    current_gateway().unavailable = 422
+    payload = _store_payload(_profile())
+
+    with pytest.raises(ApplicationError, match="could not be stored") as excinfo:
+        await ActivityEnvironment().run(voice_activities.store_voice_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
+async def test_store_voice_activity_keeps_an_outage_retryable() -> None:
+    current_gateway().unavailable = 503
+    payload = _store_payload(_profile())
+
+    with pytest.raises(ApplicationError, match="could not be stored") as excinfo:
+        await ActivityEnvironment().run(voice_activities.store_voice_activity, payload)
+
+    assert excinfo.value.non_retryable is False
+
+
 async def test_store_voice_activity_rejects_incomplete_payload() -> None:
     with pytest.raises(ApplicationError, match="needs name, instruct, ref_text") as excinfo:
         await ActivityEnvironment().run(voice_activities.store_voice_activity, {"name": "a"})
@@ -270,13 +280,15 @@ async def test_store_voice_activity_rejects_incomplete_payload() -> None:
 # --- upload -----------------------------------------------------------------
 
 
-async def test_upload_voice_activity_uploads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ref_dir = tmp_path / "voices" / "refs"
-    ref_dir.mkdir(parents=True)
-    (ref_dir / "anchor_neutral_m.wav").write_bytes(WAV)
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+async def test_upload_voice_activity_uploads(monkeypatch: pytest.MonkeyPatch) -> None:
+    gateway = current_gateway()
+    seeded = _profile("anchor_neutral_m")
+    gateway.add_reference(
+        "anchor_neutral_m",
+        WAV,
+        instruct=seeded["instruct"],
+        ref_text=seeded["ref_text"],
+    )
     seen: dict[str, Any] = {}
 
     async def fake_upload(name: str, wav: bytes, ref_text: str = "") -> None:
@@ -297,34 +309,56 @@ async def test_upload_voice_activity_uploads(
     assert seen["ref_text"] == "hola mundo"
 
 
-async def test_upload_voice_activity_rejects_missing_reference(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
-
+async def test_upload_voice_activity_rejects_missing_reference() -> None:
     with pytest.raises(ApplicationError, match="no reference") as excinfo:
         await ActivityEnvironment().run(voice_activities.upload_voice_activity, {"name": "ghost"})
     assert excinfo.value.non_retryable is True
 
 
+async def test_upload_voice_activity_keeps_an_outage_retryable() -> None:
+    current_gateway().unavailable = 503
+
+    with pytest.raises(ApplicationError, match="could not be read") as excinfo:
+        await ActivityEnvironment().run(
+            voice_activities.upload_voice_activity, {"name": "anchor_neutral_m"}
+        )
+
+    assert excinfo.value.non_retryable is False
+
+
 # --- status -----------------------------------------------------------------
 
 
-async def test_voice_catalog_status_activity_reports_pending(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
-    monkeypatch.setattr(
-        voice_activities,
-        "load_profiles",
-        lambda: [
-            voice_catalog.VoiceProfile.model_validate(_profile("a")),
-            voice_catalog.VoiceProfile.model_validate(_profile("b")),
-        ],
-    )
-    monkeypatch.setattr(voice_activities, "load_manifest", lambda: {})
+async def test_voice_catalog_status_activity_reports_pending() -> None:
+    for name in ("voice_a_es", "voice_b_es"):
+        save_custom_profile(voice_catalog.VoiceProfile.model_validate(_profile(name)))
 
-    result = await ActivityEnvironment().run(voice_activities.voice_catalog_status_activity, {})
+    result = await ActivityEnvironment().run(
+        voice_activities.voice_catalog_status_activity, {"names": ["voice_a_es", "voice_b_es"]}
+    )
 
     assert result["generated"] == []
-    assert sorted(result["missing"]) == ["a", "b"]
+    assert sorted(result["missing"]) == ["voice_a_es", "voice_b_es"]
+    assert sorted(profile["name"] for profile in result["profiles"]) == [
+        "voice_a_es",
+        "voice_b_es",
+    ]
+
+
+async def test_voice_catalog_status_activity_reports_generated_references() -> None:
+    gateway = current_gateway()
+    generated = voice_catalog.VoiceProfile.model_validate(_profile("voice_a_es"))
+    save_custom_profile(generated)
+    gateway.add_reference(
+        generated.name,
+        WAV,
+        instruct=generated.instruct,
+        ref_text=generated.ref_text,
+    )
+
+    result = await ActivityEnvironment().run(
+        voice_activities.voice_catalog_status_activity, {"names": ["voice_a_es"]}
+    )
+
+    assert result["generated"] == ["voice_a_es"]
+    assert result["missing"] == []

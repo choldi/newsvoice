@@ -1,12 +1,12 @@
 """Unit tests for the local qwen3_tts gateway voice resolver (Phase 10.5)."""
 
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from src.api.models.voices import VoiceProfile
 from src.api.services import gateway_voices
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
 
 
 def _profile(name: str, language: str = "fr") -> VoiceProfile:
@@ -31,17 +31,17 @@ def _clear_cache() -> None:
     gateway_voices._RESOLVED.clear()
 
 
-def _install_catalog(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wav: bool = True
-) -> Path | None:
-    """Point the resolver at a fake catalog with (or without) a reference WAV."""
-    path = tmp_path / "marie_fr.wav"
+def _install_catalog(wav: bool = True) -> None:
+    """Seed the fake gateway with a catalog profile and (or without) a reference."""
+    profile = _profile("marie_fr")
+    save_custom_profile(profile)
     if wav:
-        path.write_bytes(b"RIFF-fake")
-    monkeypatch.setattr(gateway_voices, "reference_wav", lambda name: path if wav else None)
-    monkeypatch.setattr(gateway_voices, "load_profiles", lambda path=None: [_profile("marie_fr")])
-    monkeypatch.setattr(gateway_voices, "ref_text_for", lambda profile: profile.ref_text)
-    return path
+        current_gateway().add_reference(
+            profile.name,
+            sample_wav(),
+            instruct=profile.instruct,
+            ref_text=profile.ref_text,
+        )
 
 
 async def test_gateway_id_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,10 +57,10 @@ async def test_gateway_id_passes_through(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 async def test_profile_without_reference_passes_through(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A profile with no generated WAV keeps its name (gateway will complain)."""
-    _install_catalog(monkeypatch, tmp_path, wav=False)
+    _install_catalog(wav=False)
     service = AsyncMock()
     monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)
 
@@ -68,11 +68,9 @@ async def test_profile_without_reference_passes_through(
     service.clone_voice.assert_not_called()
 
 
-async def test_existing_qwen_clone_is_reused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_existing_qwen_clone_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
     """A previously registered qwen3_tts clone is found without re-cloning."""
-    _install_catalog(monkeypatch, tmp_path)
+    _install_catalog()
     service = AsyncMock()
     service.list_cloned.return_value = [
         {"id": "uuid-pocket", "name": "marie_fr", "engine": "pocket_tts"},
@@ -87,10 +85,10 @@ async def test_existing_qwen_clone_is_reused(
 
 
 async def test_missing_clone_is_registered_and_cached(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A designed voice is cloned into the gateway once and its id reused."""
-    _install_catalog(monkeypatch, tmp_path)
+    _install_catalog()
     service = AsyncMock()
     service.list_cloned.return_value = []
     service.clone_voice.return_value = {"voice_id": "uuid-new", "name": "marie_fr__qwen3_tts"}
@@ -110,10 +108,10 @@ async def test_missing_clone_is_registered_and_cached(
 
 
 async def test_gateway_failure_degrades_to_original(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unreachable gateway leaves the voice name so the caller can fall back."""
-    _install_catalog(monkeypatch, tmp_path)
+    _install_catalog()
     service = AsyncMock()
     service.list_cloned.side_effect = RuntimeError("gateway down")
     monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)

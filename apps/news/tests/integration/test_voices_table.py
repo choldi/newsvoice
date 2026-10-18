@@ -17,9 +17,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.models.voices import VoiceManifestEntry, VoiceOption, VoiceProfile
+from src.api.models.voices import VoiceOption, VoiceProfile
 from src.core.config import settings
-from src.core.voice_catalog import save_custom_profile, sha256_text, write_manifest
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
 
 TOKEN = "secret-admin-token"
 GATEWAY_STOCK = "es-mx-male"
@@ -75,13 +75,13 @@ def _table_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
     )
     for name in (GENERATED, PENDING):
         save_custom_profile(_profile(name))
-    write_manifest(
-        {GENERATED: _entry(_profile(GENERATED), f"refs/{GENERATED}.wav")},
-        voices / "manifest.json",
+    gateway = current_gateway()
+    gateway.add_reference(
+        GENERATED,
+        sample_wav(),
+        instruct=_profile(GENERATED).instruct,
+        ref_text=REF_TEXT,
     )
-    wav = voices / "refs" / f"{GENERATED}.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF-REFERENCE")
     with patch(
         "src.api.services.voice_registry.edge_options",
         new=AsyncMock(return_value=(["en", "es"], [EDGE_ES, EDGE_EN])),
@@ -93,20 +93,6 @@ def _profile(name: str) -> VoiceProfile:
     """Build a valid custom profile for the seeded catalog voices."""
     return VoiceProfile.model_validate(
         {"name": name, "label": name, "language": "es", "instruct": INSTRUCT, "ref_text": REF_TEXT}
-    )
-
-
-def _entry(profile: VoiceProfile, file: str) -> VoiceManifestEntry:
-    """Build a fresh manifest entry for a profile."""
-    return VoiceManifestEntry(
-        file=file,
-        sha256="a" * 64,
-        sample_rate=24000,
-        duration_seconds=15.0,
-        design_model="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-        instruct_sha256=sha256_text(profile.instruct),
-        ref_text_sha256=sha256_text(profile.ref_text),
-        created_at="2026-10-07T00:00:00Z",
     )
 
 

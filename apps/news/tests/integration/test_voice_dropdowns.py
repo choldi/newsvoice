@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.api.models.voices import VoiceOption, VoiceProfile
 from src.core.config import settings
-from src.core.voice_catalog import save_custom_profile
+from tests.fake_gateway import save_custom_profile
 
 TOKEN = "secret-admin-token"
 GATEWAY_STOCK = "es-mx-male"

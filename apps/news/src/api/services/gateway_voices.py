@@ -21,13 +21,10 @@ from typing import Any
 import structlog
 
 from src.api.models.voices import VoiceProfile
-from src.api.services.voice_catalog_admin import reference_wav
+from src.api.services.voice_catalog_admin import reference_audio
+from src.api.services.voice_catalog_client import fetch_catalog
 from src.api.services.voices import VoicesService
-from src.core.voice_catalog import (
-    VoiceCatalogError,
-    load_profiles,
-    ref_text_for,
-)
+from src.core.voice_catalog import VoiceCatalogError, ref_text_for
 
 logger = structlog.get_logger(__name__)
 
@@ -89,20 +86,21 @@ def _entry_id(entry: dict[str, Any]) -> str:
     return str(entry.get("id") or entry.get("voice_id") or "").strip()
 
 
-def _profile(name: str) -> VoiceProfile | None:
-    """Return one catalog profile by name, tolerating a broken catalog.
+async def _profile(name: str) -> VoiceProfile | None:
+    """Return one catalog profile by name, tolerating an unreachable gateway.
 
     Args:
         name: Profile name.
 
     Returns:
-        The ``VoiceProfile`` or None when unknown/unreadable.
+        The ``VoiceProfile`` or None when unknown or unreadable.
     """
     try:
-        return next((p for p in load_profiles() if p.name == name), None)
+        snapshot = await fetch_catalog()
     except VoiceCatalogError as exc:
         logger.warning("gateway_voice_catalog_failed", error=str(exc))
         return None
+    return next((profile for profile in snapshot.profiles if profile.name == name), None)
 
 
 async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
@@ -129,8 +127,8 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
     cached = _RESOLVED.get(requested)
     if cached is not None:
         return cached
-    wav = reference_wav(requested)
-    profile = _profile(requested)
+    wav = await reference_audio(requested)
+    profile = await _profile(requested)
     if wav is None or profile is None:
         return requested
 
@@ -147,8 +145,8 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
             response = await service.clone_voice(
                 name=clone_name_for(requested),
                 language=profile.language or language,
-                reference_audio=wav.read_bytes(),
-                filename=wav.name,
+                reference_audio=wav,
+                filename=f"{requested}.wav",
                 ref_text=ref_text_for(profile),
                 engines=QWEN_ENGINE,
             )

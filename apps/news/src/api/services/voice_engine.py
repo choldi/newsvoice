@@ -7,8 +7,8 @@ silently falls back to a different voice, so the input surfaces reject the mix
 before anything is stored or queued.
 
 ``engines_for_voice`` is synchronous and offline: it pattern-matches the known
-id shapes and consults the local catalog (committed ``voice_profiles.json`` plus
-operator-created ``custom_profiles.json``). Ids it does not recognize are
+id shapes and consults the catalog snapshot (the committed profiles the gateway
+serves plus the operator-created ones). Ids it does not recognize are
 treated as compatible with every engine — refusing old data on a heuristic miss
 would be a false positive the operator cannot act on, while ``voice_for`` still
 validates at synthesis time.

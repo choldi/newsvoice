@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from src.api.models.voices import CustomVoiceIn, VoiceManifestEntry, VoiceProfile
+from src.api.models.voices import CustomVoiceIn, VoiceProfile
 from src.api.services import voice_catalog_admin
 from src.core.config import settings
 from src.core.voice_catalog import (
     VoiceCatalogError,
-    custom_profiles_path,
     load_custom_profiles,
-    save_custom_profile,
-    sha256_text,
-    write_manifest,
 )
 from src.workers.voice_workflows import VoiceCatalogWorkflow
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
+
+#: The committed catalog the gateway ships with, whose first name the clash
+#: tests ask for.
+CATALOG = Path(__file__).resolve().parents[3] / "gateway" / "voice_profiles.json"
 
 REF_TEXT = "Hola, soy tu profe de ingles de siempre. " * 4
 
@@ -50,29 +50,6 @@ def _payload(name: str = "mi_voz_es", **overrides: object) -> CustomVoiceIn:
     }
     payload.update(overrides)
     return CustomVoiceIn.model_validate(payload)
-
-
-def _entry(profile: VoiceProfile, file: str = "refs/mi_voz_es.wav") -> VoiceManifestEntry:
-    """Build a fresh manifest entry for a profile."""
-    return VoiceManifestEntry(
-        file=file,
-        sha256="a" * 64,
-        sample_rate=24000,
-        duration_seconds=15.0,
-        design_model="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-        instruct_sha256=sha256_text(profile.instruct),
-        ref_text_sha256=sha256_text(profile.ref_text),
-        created_at="2026-10-07T00:00:00Z",
-    )
-
-
-@pytest.fixture(autouse=True)
-def _tmp_voices_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Isolate every read/write of profiles and manifests per test."""
-    voices = tmp_path / "voices"
-    voices.mkdir()
-    monkeypatch.setattr(settings, "voices_dir", str(voices))
-    return voices
 
 
 # --- create_custom_voice ------------------------------------------------------
@@ -133,7 +110,7 @@ async def test_create_custom_voice_rejects_an_existing_custom_name() -> None:
 async def test_create_custom_voice_rejects_a_committed_name() -> None:
     from src.core.voice_catalog import load_profiles
 
-    committed_name = load_profiles("voice_profiles.json")[0].name
+    committed_name = load_profiles(CATALOG)[0].name
 
     with pytest.raises(VoiceCatalogError, match="already in the catalog"):
         await voice_catalog_admin.create_custom_voice(_payload(name=committed_name))
@@ -185,138 +162,98 @@ async def test_start_generate_is_fire_and_forget(
     client.execute_workflow.assert_not_awaited()
 
 
-# --- generated_status / catalog_status / generated_voices ---------------------
+# --- catalog_status / generated_voices -----------------------------------------
 
 
-def test_generated_status_classifies_the_reference(
-    tmp_path: Path,
-) -> None:
-    profile = _profile()
-    manifest: dict[str, VoiceManifestEntry] = {}
-
-    assert (
-        voice_catalog_admin.generated_status(profile, manifest, tmp_path)
-        == voice_catalog_admin.STATUS_PENDING
-    )
-
-    fresh = _entry(profile)
-    manifest[profile.name] = fresh
-    wav = tmp_path / fresh.file
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF....WAVE")
-
-    assert (
-        voice_catalog_admin.generated_status(profile, manifest, tmp_path)
-        == voice_catalog_admin.STATUS_GENERATED
-    )
-
-    wav.unlink()
-    assert (
-        voice_catalog_admin.generated_status(profile, manifest, tmp_path)
-        == voice_catalog_admin.STATUS_PENDING
-    )
-
-    stale = _entry(profile)
-    stale.instruct_sha256 = "0" * 64
-    manifest[profile.name] = stale
-    assert (
-        voice_catalog_admin.generated_status(profile, manifest, tmp_path)
-        == voice_catalog_admin.STATUS_STALE
-    )
-
-
-async def test_catalog_status_reports_generated_and_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    generated, stale = _profile("generated_es"), _profile("stale_es")
-    monkeypatch.setattr(voice_catalog_admin, "load_profiles", lambda: [generated, stale])
-    wav = tmp_path / "voices" / "refs" / "generated_es.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF....WAVE")
-    stale_entry = _entry(stale, file="refs/stale_es.wav")
-    stale_entry.ref_text_sha256 = "0" * 64
-    write_manifest(
-        {
-            "generated_es": _entry(generated),
-            "stale_es": stale_entry,
-        },
-        voice_catalog_admin.manifest_path(),
+async def test_catalog_status_reports_generated_and_missing() -> None:
+    generated, pending = _profile("generated_es"), _profile("pending_es")
+    save_custom_profile(generated)
+    save_custom_profile(pending)
+    current_gateway().add_reference(
+        generated.name,
+        sample_wav(),
+        instruct=generated.instruct,
+        ref_text=generated.ref_text,
     )
 
     status = await voice_catalog_admin.catalog_status()
 
-    assert status["status"] == "ok"
-    assert status["generated"] == ["generated_es"]
-    assert status["missing"] == ["stale_es"]
-    assert status["stale"] == ["stale_es"]
+    assert status.generated == ["generated_es"]
+    assert "pending_es" in status.missing
+    assert "generated_es" not in status.missing
+    assert status.statuses["generated_es"] == voice_catalog_admin.STATUS_GENERATED
+    assert status.statuses["pending_es"] == voice_catalog_admin.STATUS_PENDING
 
 
-async def test_generated_voices_puts_custom_profiles_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    stock, custom = _profile("stock_es"), _profile("custom_es")
-    monkeypatch.setattr(voice_catalog_admin, "load_profiles", lambda: [stock, custom])
-    save_custom_profile(custom)
+async def test_catalog_status_reports_a_reference_that_drifted() -> None:
+    drifted = _profile("drifted_es")
+    save_custom_profile(drifted)
+    current_gateway().add_reference(
+        drifted.name,
+        sample_wav(),
+        instruct="Otra descripción de persona bastante más larga",
+        ref_text=drifted.ref_text,
+    )
+
+    status = await voice_catalog_admin.catalog_status()
+
+    assert status.statuses["drifted_es"] == voice_catalog_admin.STATUS_STALE
+    assert "drifted_es" in status.stale
+    assert status.generated == []
+
+
+async def test_catalog_status_keeps_the_gateway_error() -> None:
+    current_gateway().unavailable = 503
+
+    with pytest.raises(VoiceCatalogError, match="gateway unavailable"):
+        await voice_catalog_admin.catalog_status()
+
+
+async def test_generated_voices_puts_custom_profiles_first() -> None:
+    save_custom_profile(_profile("custom_es"))
 
     rows = await voice_catalog_admin.generated_voices()
 
-    assert [row["profile"].name for row in rows] == ["custom_es", "stock_es"]
+    assert rows[0]["profile"].name == "custom_es"
     assert rows[0]["custom"] is True
     assert rows[0]["status"] == voice_catalog_admin.STATUS_PENDING
-    assert rows[1]["custom"] is False
     assert rows[0]["badge"] == voice_catalog_admin.STATUS_BADGES[voice_catalog_admin.STATUS_PENDING]
-
-
-def test_manifest_path_and_refs_dir_follow_settings(tmp_path: Path) -> None:
-    assert voice_catalog_admin.manifest_path() == tmp_path / "voices" / "manifest.json"
-    assert voice_catalog_admin.refs_dir() == tmp_path / "voices" / "refs"
-
-
-def test_custom_profiles_file_is_written_under_the_voices_dir() -> None:
-    save_custom_profile(_profile())
-
-    raw = json.loads(custom_profiles_path().read_text(encoding="utf-8"))
-    assert [item["name"] for item in raw["profiles"]] == ["mi_voz_es"]
+    assert rows[1]["custom"] is False
+    assert len(rows) == 33
 
 
 def test_workflow_import_is_the_real_catalog_workflow() -> None:
     assert voice_catalog_admin.VoiceCatalogWorkflow is VoiceCatalogWorkflow
 
 
-# --- reference_wav -------------------------------------------------------------
+# --- reference_audio ------------------------------------------------------------
 
 
-def test_reference_wav_resolves_the_reference(tmp_path: Path) -> None:
-    save_custom_profile(_profile())
-    wav = tmp_path / "voices" / "refs" / "mi_voz_es.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF....WAVE")
-
-    resolved = voice_catalog_admin.reference_wav("mi_voz_es.wav")
-
-    assert resolved == wav.resolve()
-    assert voice_catalog_admin.reference_wav("mi_voz_es") == wav.resolve()
-
-
-def test_reference_wav_refuses_unsafe_or_unknown_names(tmp_path: Path) -> None:
-    save_custom_profile(_profile())
-
-    assert voice_catalog_admin.reference_wav("../secret.wav") is None
-    assert voice_catalog_admin.reference_wav("Bad Name.wav") is None
-    assert voice_catalog_admin.reference_wav("no_existe") is None
-    assert voice_catalog_admin.reference_wav("mi_voz_es.wav") is None  # no wav yet
-
-
-def test_reference_wav_refuses_a_manifest_entry_outside_the_voices_dir(
-    tmp_path: Path,
-) -> None:
+async def test_reference_audio_resolves_the_reference() -> None:
     profile = _profile()
     save_custom_profile(profile)
-    outside = tmp_path / "secret.wav"
-    outside.write_bytes(b"TOP SECRET")
-    write_manifest(
-        {"mi_voz_es": _entry(profile, file="../secret.wav")},
-        voice_catalog_admin.manifest_path(),
+    wav = sample_wav()
+    current_gateway().add_reference(
+        profile.name,
+        wav,
+        instruct=profile.instruct,
+        ref_text=profile.ref_text,
     )
 
-    assert voice_catalog_admin.reference_wav("mi_voz_es.wav") is None
+    assert await voice_catalog_admin.reference_audio("mi_voz_es.wav") == wav
+    assert await voice_catalog_admin.reference_audio("mi_voz_es") == wav
+
+
+async def test_reference_audio_refuses_unsafe_or_unknown_names() -> None:
+    save_custom_profile(_profile())
+
+    assert await voice_catalog_admin.reference_audio("../secret.wav") is None
+    assert await voice_catalog_admin.reference_audio("Bad Name.wav") is None
+    assert await voice_catalog_admin.reference_audio("no_existe") is None
+    assert await voice_catalog_admin.reference_audio("mi_voz_es.wav") is None
+
+
+async def test_reference_audio_is_none_when_the_gateway_is_down() -> None:
+    current_gateway().unavailable = 503
+
+    assert await voice_catalog_admin.reference_audio("anchor_neutral_m") is None

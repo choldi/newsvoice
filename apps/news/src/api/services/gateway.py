@@ -20,12 +20,15 @@ once. What is genuinely per-caller stays per-caller:
 
 Two gateway callers deliberately stay outside this module:
 
-- the voice admin GUI keeps its own httpx usage because it answers to a
-  different contract: ``Accept: application/json``, multipart uploads and
-  httpx-native ``HTTPStatusError``/``HTTPError``, which its cache fallback
-  catches as ``httpx.HTTPError``. It shares :func:`gateway_headers` only;
+- the voice admin GUI keeps its own httpx usage because its cache fallback
+  catches httpx-native ``HTTPStatusError``/``HTTPError`` and re-raises them as
+  the httpx type. It shares :func:`gateway_headers` only;
 - the monitoring disk probe carries no credential, uses a hard 10 s budget and
   reports failure as ``skipped`` instead of raising.
+
+The voice catalog client (:mod:`src.api.services.voice_catalog_client`) uses
+this dispatcher for reads and for the multipart writes of
+``/voices/catalog/refs/{name}``.
 """
 
 from __future__ import annotations
@@ -198,6 +201,29 @@ class GatewayClient:
         except httpx.HTTPError as exc:
             raise self.error_cls(f"gateway request to {path} failed: {exc}") from exc
 
+    async def post_json(self, path: str, payload: dict[str, Any]) -> httpx.Response:
+        """POST a JSON body to a gateway endpoint that answers with JSON.
+
+        Args:
+            path: Path relative to the dispatcher's base URL (e.g.
+                ``voices/catalog/custom``).
+            payload: JSON body.
+
+        Returns:
+            The response, already checked to be 2xx.
+
+        Raises:
+            GatewayError: On transport errors or a non-2xx answer.
+        """
+        client = await self._http()
+        try:
+            response = await client.post(path, json=payload, headers=self.headers)
+        except httpx.HTTPError as exc:
+            raise self.error_cls(f"gateway request to {path} failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise self._error(response)
+        return response
+
     async def post_audio(self, path: str, payload: dict[str, Any]) -> bytes:
         """POST a JSON body to a gateway endpoint that answers with WAV bytes.
 
@@ -211,16 +237,41 @@ class GatewayClient:
         Raises:
             GatewayError: On transport errors, non-2xx answers or an empty body.
         """
+        response = await self.post_json(path, payload)
+        if not response.content:
+            raise self.error_cls(f"gateway returned an empty body for {path}")
+        return response.content
+
+    async def post_form(
+        self,
+        path: str,
+        *,
+        files: dict[str, Any],
+        data: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """POST a multipart form to a gateway endpoint that answers with JSON.
+
+        Args:
+            path: Path relative to the dispatcher's base URL (e.g.
+                ``voices/catalog/refs/anchor``).
+            files: Files to send, in httpx's
+                ``{"field": (filename, bytes, content_type)}`` shape.
+            data: Extra form fields sent alongside the files.
+
+        Returns:
+            The response, already checked to be 2xx.
+
+        Raises:
+            GatewayError: On transport errors or a non-2xx answer.
+        """
         client = await self._http()
         try:
-            response = await client.post(path, json=payload, headers=self.headers)
+            response = await client.post(path, files=files, data=data or {}, headers=self.headers)
         except httpx.HTTPError as exc:
             raise self.error_cls(f"gateway request to {path} failed: {exc}") from exc
         if response.status_code >= 400:
             raise self._error(response)
-        if not response.content:
-            raise self.error_cls(f"gateway returned an empty body for {path}")
-        return response.content
+        return response
 
     async def aclose(self) -> None:
         """Close the underlying client when this instance built it."""

@@ -364,7 +364,7 @@ def _modal_voice_for(voice: str, language: str) -> str:
         language: ISO 639-1 language code.
 
     Returns:
-        A profile name that exists in ``voice_profiles.json``.
+        A profile name that exists in the gateway's catalog.
 
     Raises:
         TTSBackendError: When the catalog is missing, a deliberately configured

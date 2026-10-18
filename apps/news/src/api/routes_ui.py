@@ -20,7 +20,7 @@ from urllib.parse import parse_qsl, urlencode
 
 import structlog
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
@@ -1981,26 +1981,29 @@ async def ui_fragment_voices_generated(request: Request) -> HTMLResponse:
 
 
 @router.get("/ui/voices/audio/{name}", include_in_schema=False)
-async def ui_voice_audio(name: str) -> FileResponse:
+async def ui_voice_audio(name: str) -> Response:
     """Serve the reference WAV of one catalog voice (Phase 9.3).
+
+    The gateway owns the reference since P6, so the bytes are fetched from it
+    and streamed back as they arrive; news-engine keeps no ``refs/`` directory.
 
     Args:
         name: Profile name, optionally with a ``.wav`` suffix (the audio tag
             appends one).
 
     Returns:
-        FileResponse with the WAV bytes.
+        The WAV bytes with an ``audio/wav`` content type.
 
     Raises:
-        HTTPException: 404 for an unknown voice, an unsafe name, or a
-            reference that is missing or escapes the voices directory.
+        HTTPException: 404 for an unknown voice, an unsafe name, or a voice
+            whose reference has not been generated.
     """
     from fastapi import HTTPException
 
-    wav = voice_catalog_admin.reference_wav(name)
+    wav = await voice_catalog_admin.reference_audio(name)
     if wav is None:
         raise HTTPException(status_code=404, detail="voice not found")
-    return FileResponse(wav, media_type="audio/wav", filename=f"{wav.stem}.wav")
+    return Response(content=wav, media_type="audio/wav")
 
 
 @router.post("/ui/voices/test", response_class=HTMLResponse, include_in_schema=False)

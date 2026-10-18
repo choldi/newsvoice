@@ -11,7 +11,11 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.api.models.voices import VoiceProfile
 from src.core.config import settings
-from src.core.voice_catalog import load_profiles, save_custom_profile
+from src.core.voice_catalog import load_profiles
+from tests.fake_gateway import current_gateway, sample_wav, save_custom_profile
+
+#: The committed catalog, which the gateway ships and serves since P6.
+CATALOG = Path(__file__).resolve().parents[3] / "gateway" / "voice_profiles.json"
 
 TOKEN = "secret-admin-token"
 REF_TEXT = "Hola, soy tu profe de ingles de siempre. " * 4
@@ -50,12 +54,15 @@ def _profile(name: str = "mi_voz_es") -> VoiceProfile:
     )
 
 
-def _write_reference(name: str, voices: Path) -> Path:
-    """Drop a fake reference WAV for a profile."""
-    wav = voices / "refs" / f"{name}.wav"
-    wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(b"RIFF-REFERENCE")
-    return wav
+def _write_reference(name: str) -> None:
+    """Store a reference WAV for a profile in the fake gateway."""
+    profile = _profile(name)
+    current_gateway().add_reference(
+        name,
+        sample_wav(),
+        instruct=profile.instruct,
+        ref_text=profile.ref_text,
+    )
 
 
 # --- page ---------------------------------------------------------------------
@@ -69,7 +76,7 @@ def test_ui_voices_page_includes_the_preview_picker() -> None:
     assert 'hx-post="/ui/voices/test"' in text
     assert 'hx-target="#voice-sample"' in text
     assert 'id="voice-sample"' in text
-    committed = load_profiles("voice_profiles.json")[0].name
+    committed = load_profiles(CATALOG)[0].name
     assert f'value="{committed}"' in text
 
 
@@ -130,7 +137,7 @@ def test_ui_test_voice_falls_back_to_the_reference_when_modal_is_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     save_custom_profile(_profile())
-    _write_reference("mi_voz_es", Path(settings.voices_dir))
+    _write_reference("mi_voz_es")
     voice_for = AsyncMock(side_effect=AssertionError("must not resolve"))
     synthesize = AsyncMock(side_effect=AssertionError("must not synthesize"))
     monkeypatch.setattr("src.api.services.voice_preview.voice_for", voice_for)

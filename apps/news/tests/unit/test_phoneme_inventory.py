@@ -23,8 +23,8 @@ from src.core.phoneme_inventory import (
 )
 from src.core.voice_catalog import load_profiles
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CATALOG = REPO_ROOT / "voice_profiles.json"
+#: The committed catalog, which the gateway ships and serves since P6.
+CATALOG = Path(__file__).resolve().parents[3] / "gateway" / "voice_profiles.json"
 
 LANGUAGES = ("en", "es", "fr")
 

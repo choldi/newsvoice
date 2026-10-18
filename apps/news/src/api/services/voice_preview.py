@@ -28,7 +28,7 @@ from src.api.services.tts_backends import (
     synthesize,
     voice_for,
 )
-from src.api.services.voice_catalog_admin import reference_wav
+from src.api.services.voice_catalog_admin import reference_audio
 from src.api.services.voice_engine import engines_for_voice
 from src.core.config import get_settings
 from src.core.voice_catalog import VoiceCatalogError, load_profiles, sha256_text
@@ -225,13 +225,14 @@ async def preview(voice: str) -> dict[str, str]:
     language = _language_hint(name)
     text = _sample_text(language)
     errors: list[str] = []
+    reference = await reference_audio(name)
     for backend in _candidates(name):
         filename = sample_filename(name, backend, language, text)
         cached = cached_sample(filename)
         if cached is not None:
             return _result(name, backend, f"/ui/voices/sample/{filename}", "muestra en caché")
         if is_modal(backend) and not get_settings().modal_enabled:
-            if reference_wav(name) is not None:
+            if reference is not None:
                 return _result(
                     name,
                     backend,
@@ -252,7 +253,7 @@ async def preview(voice: str) -> dict[str, str]:
                 backend=backend.value,
                 error=str(exc),
             )
-            if is_modal(backend) and reference_wav(name) is not None:
+            if is_modal(backend) and reference is not None:
                 return _result(
                     name,
                     backend,

@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir uv && \
     uv sync --frozen --no-dev --no-install-project && \
     uv cache clean
 
-# Copiar código fuente
+# Copiar código fuente y el catálogo de voces versionado
 COPY tts_api/ tts_api/
+COPY voice_profiles.json ./
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000

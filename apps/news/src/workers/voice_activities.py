@@ -9,8 +9,9 @@ The activities are split across two machines on purpose:
   the server terminated the run. The result carries only the digest. It never
   touches the server disk.
 * ``store_voice_activity``, ``upload_voice_activity`` and
-  ``voice_catalog_status_activity`` run on the narration queue, which owns
-  ``data/voices``.
+  ``voice_catalog_status_activity`` run on the narration queue, which ships
+  the staged bytes to the gateway: since P6 the gateway owns ``refs/`` and the
+  manifest, so this side uploads and reads them back over HTTP.
 
 Everything with side effects lives here; the workflow only orchestrates.
 """
@@ -20,23 +21,23 @@ from __future__ import annotations
 import asyncio
 import time
 import zlib
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from src.api.models.voices import VoiceManifestEntry
+from src.api.services.voice_catalog_client import (
+    VoiceCatalogRequestError,
+    fetch_catalog,
+    fetch_reference_audio,
+    store_reference,
+)
 from src.core.audio import AudioError, wav_duration, wav_format
 from src.core.config import settings
 from src.core.voice_catalog import (
-    load_manifest,
     load_profiles,
     missing_or_stale,
     sha256_bytes,
-    sha256_text,
-    write_manifest,
 )
 
 #: ``audio_jobs.kind`` discriminator for voice-catalog jobs.
@@ -142,12 +143,13 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
 @activity.defn
 async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
-    """Write a designed reference to the voices directory and the manifest.
+    """Ship a designed reference to the gateway, which stores it with its manifest.
 
-    Runs on the server, which owns ``data/voices``: the design worker never
-    sees that path, so this is the step that makes the reference real. The
-    audio is read back from the staging endpoint the design step wrote to,
-    never from the workflow payload.
+    The design worker only stages bytes, so this is the step that makes the
+    reference real — on the gateway side now, since P6 owns ``refs/`` and the
+    manifest. The audio is read back from the staging endpoint the design step
+    wrote to, never from the workflow payload, and the entry that comes back
+    describes the bytes the gateway measured.
 
     Args:
         payload: The profile fields (``name``, ``instruct``, ``ref_text``)
@@ -162,7 +164,9 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         ApplicationError: When the payload is invalid, nothing was staged, the
             audio cannot be read, or it does not match the digest the design
             step reported. All of them are non-retryable: a retry cannot fix
-            the bytes.
+            the bytes. A gateway refusal keeps the gateway's own message and
+            is non-retryable only when it said so (404/422), so an outage
+            retries and a wrong profile does not.
     """
     name = str(payload.get("name") or "")
     instruct = str(payload.get("instruct") or "")
@@ -189,35 +193,28 @@ async def store_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
             non_retryable=True,
         )
     try:
-        fmt = wav_format(wav)
-        duration = wav_duration(wav)
+        wav_format(wav)
+        wav_duration(wav)
     except AudioError as exc:
         raise ApplicationError(
             f"voice audio for {name} is not a valid WAV: {exc}", non_retryable=True
         ) from exc
-    if duration <= 0.0:
+    if wav_duration(wav) <= 0.0:
         raise ApplicationError(f"voice audio for {name} is empty", non_retryable=True)
 
-    voices_dir = Path(settings.voices_dir)
-    refs_dir = voices_dir / "refs"
-    refs_dir.mkdir(parents=True, exist_ok=True)
-    ref_path = refs_dir / f"{name}.wav"
-    ref_path.write_bytes(wav)
-
-    entry = VoiceManifestEntry(
-        file=f"refs/{name}.wav",
-        sha256=digest,
-        sample_rate=fmt.framerate,
-        duration_seconds=duration,
-        design_model=str(payload.get("design_model") or settings.qwen_tts_design_model),
-        instruct_sha256=sha256_text(instruct),
-        ref_text_sha256=sha256_text(ref_text),
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    manifest_path = voices_dir / "manifest.json"
-    manifest = load_manifest(manifest_path)
-    manifest[name] = entry
-    write_manifest(manifest, manifest_path)
+    try:
+        entry = await store_reference(
+            name,
+            wav,
+            instruct=instruct,
+            ref_text=ref_text,
+            design_model=str(payload.get("design_model") or settings.qwen_tts_design_model),
+        )
+    except VoiceCatalogRequestError as exc:
+        raise ApplicationError(
+            f"voice reference for {name} could not be stored: {exc}",
+            non_retryable=not exc.retryable,
+        ) from exc
 
     clear_staged(name)
 
@@ -253,11 +250,17 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     from src.core.modal_client import upload_voice
 
-    ref_path = Path(settings.voices_dir) / "refs" / f"{name}.wav"
-    if not ref_path.is_file():
-        raise ApplicationError(f"voice '{name}' has no reference at {ref_path}", non_retryable=True)
     try:
-        await upload_voice(name, ref_path.read_bytes(), ref_text)
+        wav = await fetch_reference_audio(name)
+    except VoiceCatalogRequestError as exc:
+        raise ApplicationError(
+            f"voice reference for {name} could not be read: {exc}",
+            non_retryable=not exc.retryable,
+        ) from exc
+    if wav is None:
+        raise ApplicationError(f"voice '{name}' has no reference audio", non_retryable=True)
+    try:
+        await upload_voice(name, wav, ref_text)
     except Exception as exc:
         raise ApplicationError(f"voice upload failed for {name}: {exc}") from exc
     activity.logger.info(f"Voice uploaded name={name}")
@@ -268,8 +271,9 @@ async def upload_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
 async def voice_catalog_status_activity(payload: dict[str, Any]) -> dict[str, Any]:
     """Report which catalog voices are generated, missing or stale.
 
-    Reads the catalog and the manifest so the workflow stays deterministic: a
-    workflow must not do file I/O.
+    Reads the catalog snapshot so the workflow stays deterministic: a workflow
+    must not do I/O. The snapshot is refreshed first, because this activity is
+    what a design run polls to know what is left to do.
 
     Args:
         payload: Dict with ``names`` (optional subset of profile names).
@@ -277,12 +281,16 @@ async def voice_catalog_status_activity(payload: dict[str, Any]) -> dict[str, An
     Returns:
         Dict with ``generated``, ``missing``, ``stale``, ``pending`` and
         ``profiles`` (the full profile dicts for pending names).
+
+    Raises:
+        VoiceCatalogRequestError: When the gateway cannot be reached.
     """
     names = [str(name) for name in (payload.get("names") or [])]
-    profiles = load_profiles()
+    snapshot = await fetch_catalog(max_age=0)
+    profiles = snapshot.profiles
     by_name = {profile.name: profile for profile in profiles}
     targets = [by_name[name] for name in names if name in by_name] if names else profiles
-    manifest = load_manifest()
+    manifest = snapshot.manifest
     pending = set(missing_or_stale(targets, manifest))
     return {
         "generated": sorted(p.name for p in targets if p.name not in pending and p.enabled),

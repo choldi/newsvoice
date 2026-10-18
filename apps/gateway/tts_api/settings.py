@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     CACHE_DIR: Path = Path("storage/cache")
     OUTPUT_TTL_SECONDS: int = 3600
 
+    # --- Voice catalog (owned here, read by news-engine over /voices/catalog) ---
+    # Committed catalog of reference voices, versioned with the code.
+    VOICE_PROFILES_FILE: Path = Path("voice_profiles.json")
+    # Runtime half: manifest.json, refs/*.wav and custom_profiles.json.
+    VOICE_CATALOG_DIR: Path = Path("storage/voice_catalog")
+
     # --- Security ---
     API_KEY: str = ""
     CORS_ORIGINS: str = "*"
