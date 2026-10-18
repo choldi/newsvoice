@@ -31,14 +31,15 @@ import gc
 import json
 import sys
 import traceback
+from typing import Any
 
 RESPONSE_PREFIX = "@@QWEN3TTS@@"
 
 #: One model resident at a time (each 1.7B model is ~3.5 GB in bf16).
-_CACHE: dict = {"model": None, "kind": None}
+_CACHE: dict[str, Any] = {"model": None, "kind": None}
 
 
-def _emit(payload: dict) -> None:
+def _emit(payload: dict[str, Any]) -> None:
     """Write one prefixed response line to stdout."""
     sys.stdout.write(RESPONSE_PREFIX + json.dumps(payload) + "\n")
     sys.stdout.flush()
@@ -46,14 +47,15 @@ def _emit(payload: dict) -> None:
 
 def _repo_for(kind: str, args: argparse.Namespace) -> str:
     """Return the Hugging Face repo id for a model kind."""
-    return {
+    mapping: dict[str, str] = {
         "custom": args.stock_model,
         "design": args.design_model,
         "clone": args.clone_model,
-    }[kind]
+    }
+    return mapping[kind]
 
 
-def _load(kind: str, args: argparse.Namespace):
+def _load(kind: str, args: argparse.Namespace) -> Any:
     """Load (or reuse) the model for ``kind``, evicting any other model."""
     if _CACHE["model"] is not None and _CACHE["kind"] == kind:
         return _CACHE["model"]
@@ -79,7 +81,7 @@ def _load(kind: str, args: argparse.Namespace):
     return _CACHE["model"]
 
 
-def _handle(req: dict, args: argparse.Namespace) -> dict:
+def _handle(req: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     """Run one synthesis request and return the response payload."""
     op = req["op"]
     text = req["text"]
@@ -88,7 +90,7 @@ def _handle(req: dict, args: argparse.Namespace) -> dict:
 
     if op == "clone":
         model = _load("clone", args)
-        kwargs: dict = {"text": text, "language": language, "ref_audio": req["ref_audio"]}
+        kwargs: dict[str, Any] = {"text": text, "language": language, "ref_audio": req["ref_audio"]}
         if req.get("ref_text"):
             kwargs["ref_text"] = req["ref_text"]
             kwargs["x_vector_only_mode"] = False

@@ -5,7 +5,7 @@
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
 **P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18), **P7**
 (ops unificados, 2026-10-18) y **P8** (lease de GPU, 2026-10-18) completados. El
-**cutover en debwk se difiere a P10**. Pendiente **P9**.
+**cutover en debwk se difiere a P10**. Pendiente **P9.5**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -162,7 +162,7 @@ imagen con los extras (`pocket_tts`, etc.) o montar el venv externo
 | **P6** Catálogo de voces → gateway | ✅ `voice_profiles.json` movido a `apps/gateway/`; gateway dueño del catálogo (`VoiceCatalogService` + `GET/POST /api/v1/voices/catalog` y `.../refs/{name}`); news-engine lo lee con `voice_catalog_client` (snapshot + HTTP, sin filesystem local); uploads de referencias y voces custom pasan por el gateway | ✅ gates **1550 passed** (news full) + **403 passed** (gateway) verdes; `ruff check` + `ruff format --check` limpios en las tres piezas; `GET /admin/voices/catalog` sigue respondiendo (servido desde el snapshot del gateway) |
 | **P7** Ops unificados | ✅ raíz con `Makefile` unificado (`help/venv/lint/format/format-check/test/test-news/test-gateway/coverage/check/commit/up/down/ps/health/logs-*/status/deploy/urls/clean`) y `scripts/` (`status.sh`, `deploy.sh`, `auto_commit.sh`); los Makefiles y scripts por app se conservan para desarrollo local; rutas apuntan al compose raíz (`deploy/docker-compose.yml`) y al catálogo del gateway | ✅ `make status` enumera los **12 servicios** + salud del gateway (y el resto de checks); `make lint` + `make format-check` limpios en las tres piezas; `make test` = **1550** (news) + **403** (gateway) verdes. Los scripts de export/import de P9.5 se integran cuando existan |
 | **P8** Lease de GPU | ✅ la ventana de diseño entra en el lease de prioridad: `PRIORITY_DESIGN = 20` (por encima de digest 10 y render 0) + columna `note` en `tts_leases` (migración `014`) para saber *por qué* se tiene el motor; CLI nueva `python -m src.workers.design_lease {open,status,close}` que pide/renueva/libera el lease desde el host (Shape A, con cwd = raíz de la app; el worker de diseño sigue sin tocar la DB); `design_window.sh` lo invoca **antes** de parar el gateway (los renders en vuelo ceden en lugar de morir) y lo libera en el trap **después** de restaurarlo; escape hatch `DESIGN_WINDOW_NO_LEASE=1` para Shape B; `scripts/status.sh` con sección «3b. GPU engine lease» | ✅ **1570 passed** (news full, +20 sobre P7) + **403 passed** (gateway) verdes; `ruff check`/`format --check` limpios en las tres piezas; `bash -n` de `design_window.sh` y `status.sh`; docs: `Deploy.md` (orden de la ventana), `CONVENTIONS.md` (prioridades + `note`) |
-| **P9** Docs + CI | Deploy.md reescrito para Shapes A/B; jobs de CI por app; arreglar `mypy tts_api` (133 errores) | CI verde en el monorepo |
+| **P9** Docs + CI | Deploy.md §1-3 reescrito para Shapes A/B; `.github/workflows/ci.yml` (news/gateway/tts-contract, py3.11, ruff+mypy+pytest); `mypy tts_api` **172 → 0 errores** (strict) | CI verde en el monorepo (validado local) |
 | **P9.5** Export/Import de config, voces, programación y boletines | `scripts/export_config.sh` → tarball `backups/newsvoice-config-<ts>.tar.gz` + `manifest.json` con checksums y conteos: **configuración** (`deploy/.env`, `apps/news/.env`, `apps/gateway/.env` —secretos documentados como sensibles— y `collections.toml`), **programación** (snapshot JSON de los schedules Temporal; la fuente de verdad sigue siendo `collections.toml` y al importar se re-registran con `python -m src.workers.schedule`), **voces** (catálogo runtime del gateway: `apps/gateway/storage/voice_catalog/` = `custom_profiles.json` + `manifest.json` + `refs/*.wav`, más checksum de `voice_profiles.json` commiteado) y **boletines/historial** (`data/news.db`: `deliveries`, `digest_runs`, `clusters`, …; el audio de `digest_runs.audio_path` solo con `--with-audio`). `scripts/import_config.sh`: `--dry-run` inventaría **lo que existe** vs lo que llega (crear/actualizar/conflicto/borrar); por defecto fusiona sin borrar lo local que no está en el tarball (lo sobrescrito guarda `.bak-<ts>`); **`--wipe` borra todo** lo gestionado antes de importar (voces runtime del gateway, schedules `digest-pipeline-*`, tablas de historial de `news.db`); `--with-env` para aplicar los `.env` (sin él solo informa diffs) | Export probado en local con tarball + checksums; `import_config.sh --dry-run` informa existentes/faltantes; `--wipe` verificado en local; schedules re-registrados y verificados contra el snapshot |
 | **P10** Cutover | desplegar el monorepo en debwk, retirar los checkouts `~/news-summary` y `~/ov_api`, archivar remotos | `make status` verde; digest diario entregado |
 
@@ -439,5 +439,24 @@ participante del lease de prioridad de Fase 8.1.
    retries limpios); previews de GUI sin lease; sin endpoint de GUI para el
    lease (estado vía CLI y `make status`).
 
-**Siguiente: P9** — docs + CI: `Deploy.md` reescrito para Shapes A/B y jobs de
-CI por app.
+## P9 — Docs + CI: Deploy.md, CI workflow, mypy strict (2026-10-18)
+
+1. ✅ **`mypy tts_api` strict — 172 → 0 errores**:
+   - `apps/gateway/pyproject.toml`: `mypy_path = ["../../libs/tts_contract"]` + override `ignore_missing_imports` para motores opcionales (`torch`, `torchaudio`, `pocket_tts`, `qwen_tts`, `chatterbox`, `omnivoice`, `edge_tts`, `faster_whisper`, `piper`, `soundfile`, `pydub`).
+   - 148 errores reales corregidos en 25 archivos (tipado genérico `dict[str, Any]`/`list[dict[str, Any]]`, anotaciones de retorno, `cast`/`Protocol` en vez de `Any`, async-generators → `AsyncIterator`).
+   - Validado con mypy 2.3.1 (fijado en `apps/gateway/uv.lock`).
+
+2. ✅ **CI monorepo** — `.github/workflows/ci.yml` (3 jobs paralelos):
+   - `news-engine`: `uv sync --extra dev` → `ruff check/format` → `pytest` (1570 passed).
+   - `tts-api (gateway)`: `uv sync --dev` → `ruff check/format` → `mypy --strict` → `pytest` (403 passed, `TTS_USE_MOCK=true`).
+   - `tts-contract`: `uv sync` + `pip install ruff` → `ruff check/format`.
+   - Python 3.11 único (matriz colapsada), cache de uv habilitado.
+
+3. ✅ **`apps/news/Deploy.md` §1-3 reescrito para Shapes A/B**:
+   - Prerequisitos, configuración (tres `.env` separados + `collections.toml`), arranque.
+   - Shape A (todo en uno, overlay GPU opcional) y Shape B (app host + GPU host con perfiles `news`/`gateway`).
+   - Referencia al root `Makefile` (`make up/status/health/logs/schedule/trigger/deploy`).
+
+4. ✅ **Gates locales** — ruff limpio en las 3 piezas, 1570 + 403 tests, mypy 0, `bash -n` en scripts, YAML válido.
+
+**Siguiente: P9.5** — export/import de config, voces, programación y boletines (`scripts/export_config.sh`, `scripts/import_config.sh`).

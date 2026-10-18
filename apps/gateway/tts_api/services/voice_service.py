@@ -6,6 +6,7 @@ import contextlib
 import shutil
 import uuid
 from pathlib import Path
+from typing import Any, cast
 
 from loguru import logger
 
@@ -139,7 +140,8 @@ class VoiceService:
 
         # Store in repository with engine tag (comma-separated)
         engine_tag = ",".join(engine_list)
-        voice_id = await self._repository.create(
+        repository = cast(VoiceRepository, self._repository)
+        voice_id = await repository.create(
             name=name,
             language=language,
             reference_path=str(dest_path),
@@ -150,16 +152,18 @@ class VoiceService:
 
         # Pre-compute and cache embedding
         try:
-            self._embedding_cache.invalidate(dest_path)
+            cache = cast(EmbeddingCache, self._embedding_cache)
+            cache.invalidate(dest_path)
         except Exception as e:
             logger.warning(f"Failed to precompute embedding for {voice_id}: {e}")
 
         logger.info(f"Voice cloned successfully: {name} ({voice_id}, engines={engine_tag})")
         return voice_id
 
-    async def get_voice(self, voice_id: str) -> dict:
+    async def get_voice(self, voice_id: str) -> dict[str, Any]:
         """Get a cloned voice by ID. Validates engine compatibility."""
-        voice = await self._repository.get_by_id(voice_id)
+        repository = cast(VoiceRepository, self._repository)
+        voice = await repository.get_by_id(voice_id)
         self._validate_engine(voice)
         return voice
 
@@ -169,9 +173,10 @@ class VoiceService:
         limit: int = 100,
         offset: int = 0,
         engine: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """List cloned voices with optional filtering."""
-        return await self._repository.list(
+        repository = cast(VoiceRepository, self._repository)
+        return await repository.list(
             language=language,
             limit=limit,
             offset=offset,
@@ -181,27 +186,30 @@ class VoiceService:
     async def delete_voice(self, voice_id: str) -> bool:
         """Delete a cloned voice."""
         ref_path = None
+        repository = cast(VoiceRepository, self._repository)
         try:
-            voice = await self._repository.get_by_id(voice_id)
+            voice = await repository.get_by_id(voice_id)
             ref_path = Path(voice["reference_path"])
             if ref_path.exists():
                 shutil.rmtree(ref_path.parent, ignore_errors=True)
         except VoiceNotFoundError:
             pass
 
-        deleted = await self._repository.delete(voice_id)
+        deleted = await repository.delete(voice_id)
 
         if deleted and ref_path is not None:
             with contextlib.suppress(Exception):
-                self._embedding_cache.invalidate(ref_path)
+                cache = cast(EmbeddingCache, self._embedding_cache)
+                cache.invalidate(ref_path)
 
         return deleted
 
     async def voice_exists(self, voice_id: str) -> bool:
         """Check if a voice exists."""
-        return await self._repository.voice_exists(voice_id)
+        repository = cast(VoiceRepository, self._repository)
+        return await repository.voice_exists(voice_id)
 
-    def _validate_engine(self, voice: dict) -> None:
+    def _validate_engine(self, voice: dict[str, Any]) -> None:
         """Validate that the voice's engine(s) include the active engine.
 
         The voice's engine column stores comma-separated engines
@@ -241,7 +249,8 @@ class VoiceService:
 
         _validate_instruct(instruct)
 
-        voice_id = await self._repository.create_designed_voice(
+        repository = cast(VoiceRepository, self._repository)
+        voice_id = await repository.create_designed_voice(
             name=name,
             instruct=instruct,
             language=language,
@@ -249,18 +258,20 @@ class VoiceService:
         logger.info(f"Designed voice created: {name} ({voice_id})")
         return voice_id
 
-    async def get_designed_voice(self, voice_id: str) -> dict:
+    async def get_designed_voice(self, voice_id: str) -> dict[str, Any]:
         """Get a designed voice by ID."""
-        return await self._repository.get_designed_voice(voice_id)
+        repository = cast(VoiceRepository, self._repository)
+        return await repository.get_designed_voice(voice_id)
 
     async def list_designed_voices(
         self,
         language: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """List designed voices with optional filtering."""
-        return await self._repository.list_designed_voices(
+        repository = cast(VoiceRepository, self._repository)
+        return await repository.list_designed_voices(
             language=language,
             limit=limit,
             offset=offset,
@@ -268,4 +279,5 @@ class VoiceService:
 
     async def delete_designed_voice(self, voice_id: str) -> bool:
         """Delete a designed voice."""
-        return await self._repository.delete_designed_voice(voice_id)
+        repository = cast(VoiceRepository, self._repository)
+        return await repository.delete_designed_voice(voice_id)

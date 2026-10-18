@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import aiosqlite
@@ -12,6 +13,8 @@ from loguru import logger
 
 from tts_api.core.exceptions import VoiceNotFoundError
 from tts_api.settings import get_settings
+
+_DesignedList = list[dict[str, Any]]
 
 
 class VoiceRepository:
@@ -103,7 +106,7 @@ class VoiceRepository:
         language: str,
         reference_path: str,
         duration_sec: float,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         engine: str = "omnivoice",
     ) -> str:
         """Create a new cloned voice record.
@@ -156,7 +159,7 @@ class VoiceRepository:
         finally:
             await conn.close()
 
-    async def get_by_id(self, voice_id: str) -> dict:
+    async def get_by_id(self, voice_id: str) -> dict[str, Any]:
         """Get a voice by its ID.
 
         Args:
@@ -200,7 +203,7 @@ class VoiceRepository:
         finally:
             await conn.close()
 
-    async def get_by_name(self, name: str) -> dict:
+    async def get_by_name(self, name: str) -> dict[str, Any]:
         """Get a voice by its name.
 
         Args:
@@ -249,7 +252,7 @@ class VoiceRepository:
         limit: int = 100,
         offset: int = 0,
         engine: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """List voices with optional filtering.
 
         Args:
@@ -267,7 +270,7 @@ class VoiceRepository:
             conn.row_factory = aiosqlite.Row
 
             conditions = []
-            params: list = []
+            params: list[Any] = []
             if language:
                 conditions.append("language = ?")
                 params.append(language)
@@ -310,7 +313,7 @@ class VoiceRepository:
             await conn.close()
 
     async def update(
-        self, voice_id: str, name: str | None = None, metadata: dict | None = None
+        self, voice_id: str, name: str | None = None, metadata: dict[str, Any] | None = None
     ) -> bool:
         """Update a voice's metadata.
 
@@ -405,7 +408,7 @@ class VoiceRepository:
         name: str,
         instruct: str,
         language: str,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Create a new designed voice record."""
         voice_id = str(uuid4())
@@ -432,7 +435,7 @@ class VoiceRepository:
         finally:
             await conn.close()
 
-    async def get_designed_voice(self, voice_id: str) -> dict:
+    async def get_designed_voice(self, voice_id: str) -> dict[str, Any]:
         """Get a designed voice by its ID."""
         conn = await self._get_connection()
         try:
@@ -456,7 +459,7 @@ class VoiceRepository:
         finally:
             await conn.close()
 
-    async def get_designed_voice_by_name(self, name: str) -> dict:
+    async def get_designed_voice_by_name(self, name: str) -> dict[str, Any]:
         """Get a designed voice by its name."""
         conn = await self._get_connection()
         try:
@@ -485,7 +488,7 @@ class VoiceRepository:
         language: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict]:
+    ) -> _DesignedList:
         """List designed voices with optional filtering."""
         conn = await self._get_connection()
         try:
@@ -523,7 +526,7 @@ class VoiceRepository:
         voice_id: str,
         name: str | None = None,
         instruct: str | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Update a designed voice."""
         updates = []

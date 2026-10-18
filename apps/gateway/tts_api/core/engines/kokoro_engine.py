@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from tts_api.core.engine_base import EngineCapabilities, TtsEngineBase
 from tts_api.core.exceptions import (
@@ -158,7 +159,7 @@ class KokoroEngine(TtsEngineBase):
         # Kokoro typically doesn't support instruct/voice design
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """Return available stock voices, optionally filtered by language."""
         # In a real implementation, this would return actual Kokoro voices
         # For now, return a placeholder list based on typical Kokoro voices
@@ -193,7 +194,7 @@ class KokoroEngine(TtsEngineBase):
             voices = [v for v in voices if v["language"] == language]
         return voices
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         """Return engine health status dict."""
         return {
             "model_loaded": self._model_loaded,
@@ -210,7 +211,7 @@ class KokoroEngine(TtsEngineBase):
         """List available models for this engine."""
         return self._available_models.copy()
 
-    async def list_available_features(self) -> dict:
+    async def list_available_features(self) -> dict[str, Any]:
         """Return detailed feature information."""
         base_features = self.capabilities.__dict__
         base_features.update(

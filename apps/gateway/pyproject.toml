@@ -211,6 +211,29 @@ show_error_codes = true
 pretty = true
 namespace_packages = true
 explicit_package_bases = true
+# libs/tts_contract es miembro del workspace (no instalado en este entorno);
+# se analiza desde fuente (CWD = apps/gateway en CI y en make lint).
+mypy_path = ["../../libs/tts_contract"]
+
+# Dependencias opcionales/motor no instaladas en el entorno de CI base y
+# paquetes sin py.typed: no analizables, se omiten de forma selectiva.
+[[tool.mypy.overrides]]
+module = [
+    "soundfile",
+    "pydub",
+    "edge_tts",
+    "faster_whisper",
+    "pocket_tts",
+    "piper",
+    "piper.download",
+    "omnivoice",
+    "qwen_tts",
+    "chatterbox",
+    "chatterbox.mtl_tts",
+    "torch",
+    "torchaudio",
+]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["tests.*", "conftest"]

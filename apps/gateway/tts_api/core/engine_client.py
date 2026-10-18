@@ -5,10 +5,24 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from typing import TypedDict
 
 import structlog
 
 from tts_api.core.engine_base import TtsEngineBase
+
+
+class _WavValidationResult(TypedDict):
+    valid: bool
+    sample_rate: int
+    duration_sec: float
+    num_channels: int
+    bits_per_sample: int
+    rms_amplitude: float
+    peak_amplitude: float
+    is_silent: bool
+    error: str | None
+
 
 logger = structlog.get_logger(__name__)
 
@@ -64,9 +78,9 @@ def _parse_wav_header(wav_bytes: bytes) -> tuple[int, float]:
     return sample_rate, duration_sec
 
 
-def _validate_wav_audio(wav_bytes: bytes) -> dict:  # noqa: PLR0911  # validación WAV con short-circuits
+def _validate_wav_audio(wav_bytes: bytes) -> _WavValidationResult:  # noqa: PLR0911  # validación WAV con short-circuits
     """Valida un WAV y devuelve información detallada para debugging."""
-    result = {
+    result: _WavValidationResult = {
         "valid": False,
         "sample_rate": 0,
         "duration_sec": 0.0,
@@ -85,12 +99,12 @@ def _validate_wav_audio(wav_bytes: bytes) -> dict:  # noqa: PLR0911  # validaci�
     try:
         riff = wav_bytes[0:4]
         if riff != b"RIFF":
-            result["error"] = f"Invalid RIFF header: {riff}"
+            result["error"] = f"Invalid RIFF header: {riff!r}"
             return result
 
         wave_fmt = wav_bytes[8:12]
         if wave_fmt != b"WAVE":
-            result["error"] = f"Invalid WAVE format: {wave_fmt}"
+            result["error"] = f"Invalid WAVE format: {wave_fmt!r}"
             return result
 
         fmt_pos = wav_bytes.find(b"fmt ")
@@ -195,10 +209,10 @@ class OmniVoiceEngineClient:
         assert self._engine is not None
         health_dict = await self._engine.health_check()
         return EngineHealth(
-            reachable=health_dict.get("model_loaded", False),
-            model_loaded=health_dict.get("model_loaded", False),
-            gpu_available=health_dict.get("gpu_available", False),
-            vram_free_mb=health_dict.get("vram_free_mb", 0),
+            reachable=bool(health_dict.get("model_loaded", False)),
+            model_loaded=bool(health_dict.get("model_loaded", False)),
+            gpu_available=bool(health_dict.get("gpu_available", False)),
+            vram_free_mb=int(str(health_dict.get("vram_free_mb", 0))),
         )
 
     async def list_stock_voices(self, language: str | None = None) -> list[StockVoice]:
@@ -209,10 +223,10 @@ class OmniVoiceEngineClient:
         voices_dicts = await self._engine.list_stock_voices(language=language)
         return [
             StockVoice(
-                voice_id=v["voice_id"],
-                language=v["language"],
-                gender=v["gender"],
-                name=v["name"],
+                voice_id=str(v["voice_id"]),
+                language=str(v["language"]),
+                gender=str(v["gender"]),
+                name=str(v["name"]),
             )
             for v in voices_dicts
         ]
@@ -237,16 +251,14 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            stock_kwargs = {
-                "text": text,
-                "voice_id": voice_id,
-                "language": language or "es",
-                "speed": speed,
-                "emotion": emotion,
-            }
-            if engine_name is not None:
-                stock_kwargs["engine_name"] = engine_name
-            wav_bytes = await self._engine.synthesize(**stock_kwargs)
+            wav_bytes = await self._engine.synthesize(
+                text=text,
+                voice_id=voice_id,
+                language=language or "es",
+                speed=speed,
+                emotion=emotion,
+                engine_name=engine_name,
+            )
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))
@@ -289,16 +301,14 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            instruct_kwargs = {
-                "text": text,
-                "instruct": instruct,
-                "language": language or "es",
-                "speed": speed,
-                "emotion": emotion,
-            }
-            if engine_name is not None:
-                instruct_kwargs["engine_name"] = engine_name
-            wav_bytes = await self._engine.synthesize_instruct(**instruct_kwargs)
+            wav_bytes = await self._engine.synthesize_instruct(
+                text=text,
+                instruct=instruct,
+                language=language or "es",
+                speed=speed,
+                emotion=emotion,
+                engine_name=engine_name,
+            )
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))
@@ -340,16 +350,14 @@ class OmniVoiceEngineClient:
         start_time = time.perf_counter()
 
         try:
-            clone_kwargs = {
-                "text": text,
-                "reference_audio_path": reference_audio_path,
-                "language": language or "es",
-                "speed": speed,
-                "ref_text": ref_text,
-            }
-            if engine_name is not None:
-                clone_kwargs["engine_name"] = engine_name
-            wav_bytes = await self._engine.synthesize_clone(**clone_kwargs)
+            wav_bytes = await self._engine.synthesize_clone(
+                text=text,
+                reference_audio_path=reference_audio_path,
+                language=language or "es",
+                speed=speed,
+                ref_text=ref_text,
+                engine_name=engine_name,
+            )
         except Exception as e:
             elapsed = time.perf_counter() - start_time
             log.error("engine_generation_failed", elapsed_sec=elapsed, error=str(e))
@@ -381,7 +389,7 @@ class OmniVoiceEngineClient:
             return await self._engine.list_available_models()
         return []
 
-    async def list_available_features(self) -> dict:
+    async def list_available_features(self) -> dict[str, object]:
         """Optional: Return detailed feature information.
         Delegates to engine if implemented, returns capabilities dict otherwise."""
         if not self._started:

@@ -21,7 +21,7 @@ class EnginePool:
         self._active = 0
         self._total = 0
 
-    async def acquire(self):
+    async def acquire(self) -> None:
         """Adquiere un slot del pool."""
         await self._semaphore.acquire()
         self._active += 1
@@ -45,7 +45,7 @@ class EnginePool:
         return self._total
 
     @property
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, object]:
         return {
             "active": self._active,
             "max_concurrent": self._max_concurrent,

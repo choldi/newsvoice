@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
 from tts_api.settings import get_settings
 
-_model = None
+_model: Any = None
 _model_loaded = False
 
 
-def _get_model():
+def _get_model() -> Any:
     """Lazy-load the whisper model."""
     global _model, _model_loaded
     if _model_loaded:
@@ -66,7 +67,7 @@ def transcribe(audio_path: Path | str, language: str | None = None) -> str | Non
             beam_size=5,
             vad_filter=True,
         )
-        text = " ".join(segment.text.strip() for segment in segments).strip()
+        text: str = " ".join(segment.text.strip() for segment in segments).strip()
         if text:
             logger.info("Transcribed reference audio: '%s'", text[:100])
             return text

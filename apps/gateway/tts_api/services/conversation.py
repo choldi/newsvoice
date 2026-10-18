@@ -5,8 +5,10 @@ from __future__ import annotations
 import io
 import wave
 from dataclasses import dataclass
+from typing import cast
 
 from tts_api.core.engine_client import AudioResult, OmniVoiceEngineClient
+from tts_api.services.tts import TtsService
 
 # Número mínimo de turnos para considerar válida una conversación.
 _MIN_CONVERSATION_TURNS = 2
@@ -27,7 +29,7 @@ class ConversationService:
     def __init__(
         self,
         engine_client: OmniVoiceEngineClient | None = None,
-        tts_service: object | None = None,
+        tts_service: TtsService | None = None,
     ) -> None:
         self._engine_client = engine_client
         self._tts_service = tts_service
@@ -76,7 +78,7 @@ class ConversationService:
         sample_rate = 22050  # default mock rate
 
         for turn in turns:
-            result = await self._tts_service.synthesize_stock(
+            result = await cast(TtsService, self._tts_service).synthesize_stock(
                 text=turn.text,
                 voice_id=turn.voice_id,
                 language=turn.language,

@@ -90,11 +90,11 @@ class TtsEngineBase(ABC):
         """
 
     @abstractmethod
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, object]]:
         """Return available stock voices, optionally filtered by language."""
 
     @abstractmethod
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, object]:
         """Return engine health status dict."""
 
     async def warmup(self) -> None:
@@ -108,7 +108,7 @@ class TtsEngineBase(ABC):
         Returns empty list if not applicable or not implemented."""
         return []
 
-    async def list_available_features(self) -> dict:
+    async def list_available_features(self) -> dict[str, object]:
         """Optional: Return detailed feature information.
         Default implementation returns capabilities as dict."""
         return self.capabilities.__dict__

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import AsyncIterator, Iterator
+from typing import Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
@@ -25,13 +26,19 @@ router = APIRouter(prefix="/tts", tags=["tts"])
 WAV_CHUNK_SIZE = 64 * 1024  # 64 KB chunks for streaming
 
 
-def _stream_wav(wav_bytes: bytes, chunk_size: int = WAV_CHUNK_SIZE):
+class _PoolLike(Protocol):
+    async def acquire(self) -> None: ...
+
+    def release(self) -> None: ...
+
+
+def _stream_wav(wav_bytes: bytes, chunk_size: int = WAV_CHUNK_SIZE) -> Iterator[bytes]:
     """Generator that yields WAV data in chunks."""
     for i in range(0, len(wav_bytes), chunk_size):
         yield wav_bytes[i : i + chunk_size]
 
 
-async def get_tts_service() -> TtsService:
+async def get_tts_service() -> AsyncIterator[TtsService]:
     """Dependency para obtener el servicio TTS.
 
     Reutiliza el cliente de engine compartido por el proceso: cerrarlo aquí
@@ -47,7 +54,7 @@ async def get_tts_service() -> TtsService:
 def _handle_tts_error(e: Exception) -> None:
     """Convierte excepciones del dominio en HTTPException."""
     if isinstance(e, VoiceNotFoundError):
-        detail: dict = {
+        detail: dict[str, Any] = {
             "detail": f"Voz no encontrada: {e.voice_id} ({e.voice_type})",
             "error_type": "voice_not_found",
             "voice_id": e.voice_id,
@@ -148,7 +155,7 @@ async def synthesize_tts(
 ) -> Response:
     """Sintetiza texto a voz con voz stock, clonada o instruct."""
     try:
-        pool = get_engine_pool()
+        pool = cast(_PoolLike, get_engine_pool())
         await pool.acquire()
         try:
             if instruct:
@@ -224,7 +231,7 @@ async def synthesize_instruct(
 ) -> Response:
     """Sintetiza texto con un instruct de voice design personalizado."""
     try:
-        pool = get_engine_pool()
+        pool = cast(_PoolLike, get_engine_pool())
         await pool.acquire()
         try:
             result = await tts_service.synthesize_instruct(
@@ -263,7 +270,7 @@ async def synthesize_instruct(
     summary="Listar tokens válidos para voice design",
     description="Devuelve los tokens de instruct agrupados por categoría (solo OmniVoice engine).",
 )
-async def get_voice_design_tokens() -> dict:
+async def get_voice_design_tokens() -> dict[str, Any]:
     """Devuelve los tokens válidos para instruct de voice design.
 
     Returns empty categories if the active engine does not support voice design.

@@ -145,16 +145,14 @@ class TtsService:
             err.valid_voice_ids = valid_ids
             raise err
 
-        stock_kwargs = {
-            "text": text,
-            "voice_id": voice_id,
-            "speed": speed,
-            "emotion": emotion,
-            "language": language,
-        }
-        if engine_name is not None:
-            stock_kwargs["engine_name"] = engine_name
-        return await engine.synthesize_stock(**stock_kwargs)
+        return await engine.synthesize_stock(
+            text=text,
+            voice_id=voice_id,
+            speed=speed,
+            emotion=emotion,
+            language=language,
+            engine_name=engine_name,
+        )
 
     async def synthesize_instruct(
         self,
@@ -170,16 +168,14 @@ class TtsService:
         self._validate_language(language)
         self._validate_emotion(emotion)
         engine = await self._get_engine_client()
-        instruct_kwargs = {
-            "text": text,
-            "instruct": instruct,
-            "speed": speed,
-            "emotion": emotion,
-            "language": language,
-        }
-        if engine_name is not None:
-            instruct_kwargs["engine_name"] = engine_name
-        return await engine.synthesize_instruct(**instruct_kwargs)
+        return await engine.synthesize_instruct(
+            text=text,
+            instruct=instruct,
+            speed=speed,
+            emotion=emotion,
+            language=language,
+            engine_name=engine_name,
+        )
 
     async def synthesize_clone(
         self,

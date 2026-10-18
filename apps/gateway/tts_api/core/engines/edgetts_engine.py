@@ -6,6 +6,7 @@ import io
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from tts_api.core.engine_base import EngineCapabilities, TtsEngineBase
 from tts_api.core.exceptions import (
@@ -221,7 +222,7 @@ class EdgeTTSEngine(TtsEngineBase):
     ) -> bytes:
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         voices = [
             {"voice_id": vid, "language": v["language"], "gender": v["gender"], "name": v["name"]}
             for vid, v in _STOCK_VOICE_MAP.items()
@@ -230,7 +231,7 @@ class EdgeTTSEngine(TtsEngineBase):
             voices = [v for v in voices if v["language"] == language]
         return voices
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         return {
             "model_loaded": True,
             "gpu_available": False,

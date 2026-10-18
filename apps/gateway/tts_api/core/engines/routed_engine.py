@@ -146,19 +146,20 @@ class RoutedEngine(TtsEngineBase):
             emotion=emotion,
         )
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """List stock voices from all sub-engines (deduplicated by voice_id)."""
         seen: set[str] = set()
-        all_voices: list[dict] = []
+        all_voices: list[dict[str, Any]] = []
         for engine in self._engines.values():
             voices = await engine.list_stock_voices(language)
             for v in voices:
-                if v["voice_id"] not in seen:
-                    seen.add(v["voice_id"])
+                vid = v["voice_id"]
+                if vid not in seen:
+                    seen.add(str(vid))
                     all_voices.append(v)
         return all_voices
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         sub_health: dict[str, Any] = {}
         for name, engine in self._engines.items():
             try:

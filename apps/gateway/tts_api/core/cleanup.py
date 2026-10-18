@@ -38,7 +38,7 @@ async def cleanup_expired_outputs(
             logger.exception("Error en cleanup task")
 
 
-_background_task: asyncio.Task | None = None
+_background_task: asyncio.Task[None] | None = None
 
 
 def start_cleanup_task(outputs_dir: Path, ttl_seconds: int = 3600) -> None:

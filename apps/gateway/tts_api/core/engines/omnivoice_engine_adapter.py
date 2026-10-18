@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from pathlib import Path
+from typing import Any
 
 from tts_api.core import ffmpeg
 from tts_api.core.engine_base import EngineCapabilities, TtsEngineBase
@@ -99,7 +100,9 @@ class OmniVoiceAdapter(TtsEngineBase):
             import soundfile as sf
 
             info = sf.info(audio_path)
-            return info.samplerate != REFERENCE_SAMPLE_RATE or info.channels != 1
+            samplerate: int = info.samplerate
+            channels: int = info.channels
+            return samplerate != REFERENCE_SAMPLE_RATE or channels != 1
         except Exception:
             return False
 
@@ -143,11 +146,11 @@ class OmniVoiceAdapter(TtsEngineBase):
             language=language,
         )
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         assert self._engine is not None
         return await self._engine.list_stock_voices(language=language)
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         assert self._engine is not None
         return await self._engine.health_check()
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import AsyncIterator, Iterator
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
@@ -21,13 +22,13 @@ WAV_CHUNK_SIZE = 64 * 1024  # 64 KB chunks for streaming
 MIN_CONVERSATION_TURNS = 2
 
 
-def _stream_wav(wav_bytes: bytes, chunk_size: int = WAV_CHUNK_SIZE):
+def _stream_wav(wav_bytes: bytes, chunk_size: int = WAV_CHUNK_SIZE) -> Iterator[bytes]:
     """Generator that yields WAV data in chunks."""
     for i in range(0, len(wav_bytes), chunk_size):
         yield wav_bytes[i : i + chunk_size]
 
 
-async def get_conversation_service() -> ConversationService:
+async def get_conversation_service() -> AsyncIterator[ConversationService]:
     """Dependency para obtener el servicio de conversaciones."""
     engine_client = get_shared_engine_client()
     tts_service = TtsService(engine_client=engine_client)
@@ -52,7 +53,7 @@ async def get_conversation_service() -> ConversationService:
 )
 async def generate_conversation(
     turns: Annotated[
-        list[dict],
+        list[dict[str, Any]],
         Body(
             description=(
                 "Lista de turnos. Cada turno tiene 'voice_id', 'text' y "

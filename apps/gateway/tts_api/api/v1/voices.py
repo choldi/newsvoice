@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 from loguru import logger
@@ -22,7 +24,7 @@ from tts_api.services.voice_service import VoiceService
 router = APIRouter(prefix="/voices", tags=["voices"])
 
 
-async def get_engine_client() -> OmniVoiceEngineClient:
+async def get_engine_client() -> AsyncIterator[OmniVoiceEngineClient]:
     """Dependency para obtener el cliente del engine."""
     client = OmniVoiceEngineClient()
     await client.start()
@@ -32,7 +34,7 @@ async def get_engine_client() -> OmniVoiceEngineClient:
         await client.stop()
 
 
-async def get_voice_service() -> VoiceService:
+async def get_voice_service() -> AsyncIterator[VoiceService]:
     """Dependency para obtener el servicio de voces."""
     service = VoiceService()
     await service.initialize()
@@ -163,14 +165,14 @@ async def clone_voice(
         tmp_file_path.unlink(missing_ok=True)
 
 
-@router.get("/cloned", response_model=list[dict])
+@router.get("/cloned", response_model=list[dict[str, Any]])
 async def list_cloned_voices(
     language: str | None = Query(None, description="Filtrar por idioma (ISO 639-1)"),
     engine: str | None = Query(None, description="Filtrar por engine (pocket_tts, omnivoice)"),
     limit: int = Query(100, ge=1, le=1000, description="Límite de resultados"),
     offset: int = Query(0, ge=0, description="Desplazamiento para paginación"),
     voice_service: VoiceService = Depends(get_voice_service),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Lista las voces clonadas disponibles.
 
@@ -191,7 +193,7 @@ async def list_cloned_voices(
 async def get_cloned_voice(
     voice_id: str,
     voice_service: VoiceService = Depends(get_voice_service),
-) -> dict:
+) -> dict[str, Any]:
     """
     Obtiene una voz clonada específica por su ID.
 
@@ -289,7 +291,7 @@ async def create_designed_voice(
 
 @router.get(
     "/designed",
-    response_model=list[dict],
+    response_model=list[dict[str, Any]],
     summary="Listar voces diseñadas",
     description="Lista las voces diseñadas (instruct-based presets) guardadas.",
 )
@@ -298,7 +300,7 @@ async def list_designed_voices(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     voice_service: VoiceService = Depends(get_voice_service),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     return await voice_service.list_designed_voices(
         language=language,
         limit=limit,
@@ -314,7 +316,7 @@ async def list_designed_voices(
 async def get_designed_voice(
     voice_id: str,
     voice_service: VoiceService = Depends(get_voice_service),
-) -> dict:
+) -> dict[str, Any]:
     try:
         return await voice_service.get_designed_voice(voice_id)
     except VoiceNotFoundError as e:

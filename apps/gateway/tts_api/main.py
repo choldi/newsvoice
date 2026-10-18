@@ -34,6 +34,7 @@ def _force_proactor_loop_factory() -> asyncio.AbstractEventLoop:
     return asyncio.new_event_loop()
 
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 
 from tts_api.api.v1 import catalog, conversations, engines, system, tts, voices
 from tts_api.core.cleanup import start_cleanup_task, stop_cleanup_task
+from tts_api.core.engine_base import TtsEngineBase
 from tts_api.core.engine_client import (
     reset_shared_engine_client,
     set_shared_engine_client,
@@ -52,11 +54,11 @@ from tts_api.middleware import APIKeyMiddleware, RequestIDMiddleware
 from tts_api.settings import get_settings
 
 # Global engine reference for lifespan
-_active_engine = None
+_active_engine: TtsEngineBase | None = None
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _active_engine
 
     try:
@@ -156,7 +158,10 @@ from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler,  # type: ignore[arg-type]
+)
 
 # --- Prometheus metrics ---
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -178,7 +183,7 @@ app.include_router(system.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/emotions", tags=["tts"], summary="Listar emociones soportadas")
-async def list_emotions() -> list[dict]:
+async def list_emotions() -> list[dict[str, object]]:
     """Devuelve la lista de emociones soportadas por el engine activo.
 
     Solo OmniVoice soporta emociones explícitas ([happy], [sad], etc.).
@@ -271,8 +276,8 @@ async def readiness() -> JSONResponse:
     )
 
 
-@app.get("/", tags=["Root"])
-async def root():
+@app.get("/", tags=["Root"], response_model=None)
+async def root() -> FileResponse | JSONResponse:
     index = STATIC_DIR / "index.html"
     if index.exists():
         return FileResponse(str(index))

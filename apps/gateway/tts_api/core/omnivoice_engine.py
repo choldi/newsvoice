@@ -9,9 +9,10 @@ import math
 import struct
 import wave
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 from tts_api.core.exceptions import (
     EngineUnavailableError,
@@ -277,15 +278,17 @@ class OmniVoiceEngineInterface(Protocol):
         generation_params: GenerationParams | None = None,
     ) -> bytes: ...
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]: ...
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]: ...
 
-    async def health_check(self) -> dict: ...
+    async def health_check(self) -> dict[str, Any]: ...
 
     async def warmup(self) -> None: ...
 
 
 def _get_dtype() -> torch.dtype:
     """Convierte el string de dtype a torch.dtype."""
+    import torch
+
     settings = get_settings()
     dtype_map = {
         "float16": torch.float16,
@@ -297,6 +300,8 @@ def _get_dtype() -> torch.dtype:
 
 def _validate_cuda_device(device: str) -> None:
     """Valida que el dispositivo CUDA especificado sea coherente con la disponibilidad de GPU."""
+    import torch
+
     if not device.startswith("cuda"):
         return
 
@@ -353,7 +358,7 @@ class OmniVoiceEngine:
         self._settings = get_settings()
         self._device = self._settings.TTS_DEVICE
         self._model = None
-        self._stock_voices: list[dict] = []
+        self._stock_voices: list[dict[str, Any]] = []
         self._use_mock: bool = self._settings.TTS_USE_MOCK
         self._real_engine_error: str | None = None
 
@@ -449,6 +454,7 @@ class OmniVoiceEngine:
             return
         logger.info("Warmup: probando síntesis...")
         try:
+            assert self._model is not None
             audio = self._model.generate(text=".", num_step=32)
             if audio and len(audio) > 0:
                 logger.info("Warmup OK")
@@ -457,7 +463,7 @@ class OmniVoiceEngine:
         except Exception as e:
             logger.warning("Warmup falló: %s", e)
 
-    def _get_mock_stock_voices(self) -> list[dict]:
+    def _get_mock_stock_voices(self) -> list[dict[str, Any]]:
         """Voces stock mock."""
         return [
             {
@@ -573,7 +579,7 @@ class OmniVoiceEngine:
         _validate_instruct(instruct)
         return instruct
 
-    def _numpy_to_wav(self, audio: list) -> bytes:
+    def _numpy_to_wav(self, audio: list[Any]) -> bytes:
         """Convierte lista de numpy arrays a WAV bytes (24 kHz, mono)."""
         import numpy as np
 
@@ -642,6 +648,7 @@ class OmniVoiceEngine:
                 kwargs.get("guidance_scale", _GUIDANCE_SCALE_DEFAULT) == _GUIDANCE_SCALE_DEFAULT
             ):
                 kwargs["guidance_scale"] = 3.0
+            assert self._model is not None
             audio = await asyncio.to_thread(self._model.generate, **kwargs)
             return self._numpy_to_wav(audio)
         except Exception as e:
@@ -694,6 +701,7 @@ class OmniVoiceEngine:
                 kwargs.get("guidance_scale", _GUIDANCE_SCALE_DEFAULT) == _GUIDANCE_SCALE_DEFAULT
             ):
                 kwargs["guidance_scale"] = 3.0
+            assert self._model is not None
             audio = await asyncio.to_thread(self._model.generate, **kwargs)
             return self._numpy_to_wav(audio)
         except Exception as e:
@@ -761,20 +769,21 @@ class OmniVoiceEngine:
             if instruct:
                 _validate_instruct(instruct)
                 kwargs["instruct"] = instruct
+            assert self._model is not None
             audio = await asyncio.to_thread(self._model.generate, **kwargs)
             return self._numpy_to_wav(audio)
         except Exception as e:
             logger.error("Error en synthesize_clone: %s", e)
             raise EngineUnavailableError(f"Error sintetizando con voz clonada: {e}") from e
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """Lista voces stock."""
         voices = self._stock_voices
         if language:
             voices = [v for v in voices if v["language"] == language]
         return voices
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         """Estado del motor."""
         gpu_available = False
         vram_free_mb = 0
@@ -782,6 +791,8 @@ class OmniVoiceEngine:
         settings = self._settings
 
         try:
+            import torch
+
             gpu_available = torch.cuda.is_available()
             if gpu_available:
                 device_str = getattr(settings, "TTS_DEVICE", "cuda:0")

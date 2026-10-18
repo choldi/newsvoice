@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from tts_api.core.engine_base import TtsEngineBase
 from tts_api.settings import get_settings
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +22,7 @@ def _create_single_engine(name: str) -> TtsEngineBase:
     if name == "mock":
         from tts_api.core.engines.mock_engine import MockEngine
 
-        engine_class = MockEngine
+        engine_class: type[TtsEngineBase] = MockEngine
     elif name == "pocket_tts":
         from tts_api.core.engines.pocket_tts_engine import PocketTTSEngine
 

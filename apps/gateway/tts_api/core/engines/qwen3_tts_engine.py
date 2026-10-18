@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 from tts_api.core.engine_base import EngineCapabilities, TtsEngineBase
 from tts_api.core.engines.qwen3_tts_worker import RESPONSE_PREFIX
@@ -57,7 +58,7 @@ class Qwen3TTSEngine(TtsEngineBase):
 
     def __init__(self) -> None:
         self._settings = get_settings()
-        self._proc: subprocess.Popen | None = None
+        self._proc: subprocess.Popen[Any] | None = None
         self._lock = threading.Lock()
         self._request_id = 0
 
@@ -139,7 +140,7 @@ class Qwen3TTSEngine(TtsEngineBase):
             s.QWEN3_TTS_CLONE_MODEL,
         ]
 
-    def _ensure_worker(self) -> subprocess.Popen:
+    def _ensure_worker(self) -> subprocess.Popen[Any]:
         """Return a live worker process, spawning one if needed."""
         if self._proc is not None and self._proc.poll() is None:
             return self._proc
@@ -155,7 +156,7 @@ class Qwen3TTSEngine(TtsEngineBase):
         )
         return self._proc
 
-    def _request_sync(self, job: dict) -> dict:
+    def _request_sync(self, job: dict[str, Any]) -> dict[str, Any]:
         """Send one job and block until its (prefixed) response arrives."""
         with self._lock:
             for attempt in range(2):
@@ -182,7 +183,7 @@ class Qwen3TTSEngine(TtsEngineBase):
 
             raise EngineUnavailableError("qwen3_tts worker no responde")
 
-    def _read_response(self, proc: subprocess.Popen, request_id: int) -> dict:
+    def _read_response(self, proc: subprocess.Popen[Any], request_id: int) -> dict[str, Any]:
         """Read lines until the response for ``request_id`` is found."""
         assert proc.stdout is not None
         while True:
@@ -191,11 +192,11 @@ class Qwen3TTSEngine(TtsEngineBase):
                 raise RuntimeError("worker process closed its stdout")
             if not line.startswith(RESPONSE_PREFIX):
                 continue
-            payload = json.loads(line[len(RESPONSE_PREFIX) :])
+            payload: dict[str, Any] = json.loads(line[len(RESPONSE_PREFIX) :])
             if payload.get("id") == request_id:
                 return payload
 
-    async def _render(self, job: dict) -> bytes:
+    async def _render(self, job: dict[str, Any]) -> bytes:
         """Run a job and return the produced WAV bytes."""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             out_path = Path(tmp.name)
@@ -273,11 +274,11 @@ class Qwen3TTSEngine(TtsEngineBase):
             }
         )
 
-    async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+    async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """Qwen3-TTS has no stock presets."""
         return []
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         runtime = self._python_bin().exists()
         worker_alive = self._proc is not None and self._proc.poll() is None
         return {

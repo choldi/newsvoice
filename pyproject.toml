@@ -11,6 +11,8 @@ readme = "README.md"
 
 [tool.uv.workspace]
 members = ["apps/news", "apps/gateway", "libs/tts_contract"]
+
+[tool.uv]
 resolver = "lowest-direct"
 
 [tool.uv.sources]

@@ -65,6 +65,7 @@ async def test_synthesize_stock() -> None:
         language="es",
         speed=1.0,
         emotion=None,
+        engine_name=None,
     )
 
 
@@ -91,6 +92,7 @@ async def test_synthesize_stock_passes_params() -> None:
         language="es",
         speed=0.9,
         emotion="happy",
+        engine_name=None,
     )
 
 
@@ -116,6 +118,7 @@ async def test_synthesize_instruct() -> None:
         language="en",
         speed=1.0,
         emotion=None,
+        engine_name=None,
     )
 
 
@@ -158,6 +161,7 @@ async def test_synthesize_clone() -> None:
         language="es",
         speed=1.0,
         ref_text=None,
+        engine_name=None,
     )
 
 
@@ -183,6 +187,7 @@ async def test_synthesize_clone_with_ref_text() -> None:
         language="es",
         speed=1.0,
         ref_text="Hola, esta es la transcripción",
+        engine_name=None,
     )
 
 

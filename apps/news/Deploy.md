@@ -9,153 +9,141 @@ digest workflow. Orchestration/scheduling is handled by Temporal, not cron.
 
 ## 1. Prerequisites
 
-- Server with Linux OS (Ubuntu 22.04 LTS or similar recommended)
-- Docker & Docker Compose installed
-- Local LLM inference server (e.g. `llama.cpp` server) accessible via HTTP API
-  (`/v1/chat/completions`)
-- A Telegram bot token and chat ID for delivery
+- Linux server (Ubuntu 22.04 LTS or similar recommended)
+- Docker Engine ≥ 24 + Docker Compose v2 (plugin or standalone)
+- `nvidia-container-toolkit` on any host running the TTS gateway with GPU (Shape A on GPU host; Shape B GPU host)
+- Local LLM inference server (e.g. `llama.cpp` / Ollama) reachable via OpenAI-compatible `/v1/chat/completions`
+- Telegram bot token + chat ID (or WhatsApp via the bundled Baileys gateway)
+- Tailscale (optional, for MagicDNS between hosts in Shape B)
 
 ---
 
-## 2. Configuration Setup
+## 2. Configuration
 
-1. Clone the repository to the production server.
-2. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-3. Update `.env` with production values:
-   - `LLM_API_BASE` — endpoint OpenAI-compatible del LLM. En producción:
-     `http://100.75.148.68:11434/v1` con `LLM_MODEL=openai/qwen3:8b` (Ollama de
-     debwk, el LLM migrado; modelos: `qwen3:8b`, `llama3.1:8b`, `phi3:mini`,
-     `nemotron-cascade-2`). Fallback si debwk cae:
-     `http://192.168.5.4:9000/v1` (Qwen3.5-4B en winsrv, verificado).
-     **No uses `localhost:8080` en esta caja: ahí vive qBittorrent.**
-   - `TTS_API_BASE_URL` — endpoint del gateway OmniVoice (voces, clonado y
-     render de narración/lecciones): `http://debwk.elver-exponential.ts.net:8001/api/v1`.
-     **No uses el `:8000` antiguo** (API vieja, ya parada): con él la GUI de
-     voces sale vacía y los renders no encuentran el gateway.
-   - `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`
-   - `RSS_FEED_URLS` — JSON list of feed URLs (fallback for the implicit default
-     collection when no `collections.toml` is present)
-   - `COLLECTIONS_FILE` — path to the collections config (default `collections.toml`)
-   - `TEMPORAL_HOST` & `TEMPORAL_TASK_QUEUE` (defaults work for the bundled
-     Temporal server; the Compose `api`/`worker` services override it to
-     `temporal:7233` for container-to-container access)
-   - `ADMIN_API_TOKEN` — legacy shared token for the admin web GUI (`/ui`) and
-     the admin REST API (`/api/admin/*`). Generate one with
-     `openssl rand -hex 24`.
-   - **Preferred**: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt). The login
-     form will use username/password instead of the token. Generate the hash
-     with: `python -c "import bcrypt; print(bcrypt.hashpw(b'password', bcrypt.gensalt()).decode())"`
-   - **Fase 6**: mientras `ADMIN_*` esté vacío la GUI solo se cierra cuando el
-     primer usuario se auto-registra (`/ui/register`); a partir de ahí hace
-     falta una sesión (admin con user/pass, o código OTP por email con
-     `SMTP_*` configurado). Ver *Admin GUI → Lockout recovery* abajo.
-   Nota de topología: **debwk (`100.75.148.68`,
-   `debwk.elver-exponential.ts.net`) es la instancia autoritativa** del pack:
-   UI, workers, Temporal y datos viven allí desde la migración (desde cualquier
-   caja de la tailnet: `http://debwk.elver-exponential.ts.net:8000/ui`).
-   La copia de vm-ubuntu quedó **parada** para evitar digestos duplicados
-   (`docker compose stop` + `restart=no`); para revertir la migración y
-   volver a ejecutarla desde vm-ubuntu:
-   `cd ~/aider_projects/news_sumary && docker compose start && for n in $(docker ps -aq --filter name=news_engine_); do docker update --restart=unless-stopped $n; done`
-   (y parar la de debwk con `ssh debwk 'cd ~/news-summary && docker compose stop'`).
-   El `data/` de debwk es root-owned: las copias de estado se hacen con
-   `rsync` a `~/news-transfer/` y un `docker run ... cp -a` (sin sudo).
+The monorepo separates **compose-level** variables (ports, host paths, profile selection) from **per-app** variables (API keys, LLM endpoints, engine selection).
 
-4. Copy `collections.toml.example` to `collections.toml` and define your
-   collections (names, feed URLs, per-collection schedule `time`, TTS flags,
-   prompt templates, optional per-collection `chat_id`)
+| File | Purpose | Source |
+|------|---------|--------|
+| `deploy/.env` | Compose interpolation (`API_PORT`, `GATEWAY_PORT`, `TTS_PATH`, `COMPOSE_PROFILES`) | `deploy/.env.example` |
+| `apps/news/.env` | news-engine runtime (LLM, Temporal, Telegram, collections, admin auth) | `apps/news/.env.example` |
+| `apps/gateway/.env` | TTS gateway runtime (engine, device, API key, storage) | `apps/gateway/.env.example` |
+
+Both apps define `VOICES_DIR` with different meanings — keeping `.env` files separate avoids collisions.
+
+### Quick start
+
+```bash
+# 1. Repo root
+cd /path/to/newsvoice
+
+# 2. Compose-level vars
+cp deploy/.env.example deploy/.env
+# edit deploy/.env if you need non-default ports or a custom TTS_PATH
+
+# 3. Per-app vars
+cp apps/news/.env.example apps/news/.env
+cp apps/gateway/.env.example apps/gateway/.env
+# edit both files with your secrets and endpoints
+
+# 4. Collections (news-engine)
+cp apps/news/collections.toml.example apps/news/collections.toml
+# edit collections.toml: names, feeds, schedules, TTS flags
+```
+
+Key variables to set:
+
+- **apps/news/.env**
+  - `LLM_API_BASE` / `LLM_MODEL` — your LLM endpoint (e.g. `http://ollama:11434/v1`, `qwen3:8b`)
+  - `TTS_API_BASE_URL` — where the gateway lives:
+    - Shape A: `http://gateway:8001/api/v1` (container DNS)
+    - Shape B: `http://<gpu-host>:8001/api/v1` (Tailscale IP or LAN IP)
+  - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+  - `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt) — preferred over legacy `ADMIN_API_TOKEN`
+  - `SMTP_*` — required for email OTP login of self-registered users
+
+- **apps/gateway/.env**
+  - `TTS_ENGINE` — `routed` (multi-engine) or a single engine name
+  - `TTS_ENGINES` — JSON mapping lang→engine (e.g. `{"es":"pocket_tts","_default":"pocket_tts"}`)
+  - `TTS_DEVICE` — `cuda:0` on GPU host, `cpu` otherwise
+  - `API_KEY` — protect the gateway API (required in Shape B when exposed)
 
 ---
 
 ## 3. Starting Services
 
-Using Docker Compose:
+The stack is defined in `deploy/docker-compose.yml` with two overlays:
+
+| Overlay | File | Purpose |
+|---------|------|---------|
+| Base (Shape A) | `deploy/docker-compose.yml` | All 12 services on one host |
+| GPU reserve | `deploy/docker-compose.gpu.yml` | Adds NVIDIA GPU reservation to `gateway` |
+| Split (Shape B) | `deploy/docker-compose.split.yml` | Assigns services to `news` or `gateway` profiles |
+
+### Shape A — Single host (default)
+
+Everything runs on one box. Use the GPU overlay if the host has a GPU:
+
 ```bash
-docker compose up -d --build
+# CPU-only
+docker compose -f deploy/docker-compose.yml up -d --build
+
+# With GPU (requires nvidia-container-toolkit)
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
 ```
 
-This starts:
-- `api` — FastAPI on `:8000` (serves the REST API, `/api/admin/*`, and the
-  admin GUI at `/ui`)
-- `worker` — Temporal worker polling the digest task queue
-- `narration-worker` — Temporal worker polling the narration task queue
-  (multi-speaker audio; Phase 7)
-- `temporal` — Temporal server on `:7233`
-- `temporal-ui` — Temporal web UI on `:8081` (host port; the container listens on 8080)
-- `temporal-postgres` — Postgres backing the Temporal server
+Services started (12):
+- `api` (news-engine REST + GUI) — port `${API_PORT:-8000}`
+- `worker` (Temporal digest worker)
+- `narration-worker` (multi-speaker audio)
+- `doc-tts-worker` (document TTS)
+- `teacher-worker` (language lessons)
+- `voice-catalog-worker` (voice catalog sync)
+- `there` (WhatsApp gateway, internal)
+- `temporal` + `temporal-postgres` + `temporal-ui` (port 8081)
+- `gateway` (TTS API) — published on `${GATEWAY_PORT:-8001}`
 
-Verify service status:
+Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8001/api/v1` in `apps/news/.env`.
+
+### Shape B — Multi-host (app host + GPU host)
+
+Split the stack across two machines. The gateway runs on the GPU host; everything else on the app host.
+
+**GPU host** (runs `gateway` with GPU):
 ```bash
-docker compose ps
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.split.yml \
+  --profile gateway -f deploy/docker-compose.gpu.yml up -d --build
 ```
+Or set `COMPOSE_PROFILES=gateway` in `deploy/.env` on this host.
 
-### Quick reference (`make`)
+**App host** (runs news-engine, Temporal, WhatsApp):
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.split.yml \
+  --profile news up -d --build
+```
+Or `COMPOSE_PROFILES=news` in `deploy/.env`.
 
-Most deploy/recurring actions have a `make` wrapper (run `make help` for the
-full list):
+In `apps/news/.env` on the app host, point to the GPU host:
+```bash
+TTS_API_BASE_URL=http://<gpu-host>:8001/api/v1
+```
+Use Tailscale MagicDNS (`<gpu-host>.ts.net`) or LAN IP.
+
+The `narration-modal-worker` keeps its own `modal` profile (opt-in, paid Modal.com) and is NOT started by the `news` profile.
+
+### Quick reference (`make` from repo root)
 
 | Action | Command |
 |--------|---------|
-| Start/build services | `make up` |
-| Health + status checks | `make health` / `make status` |
-| Tail logs | `make logs` / `make logs-api` / `make logs-worker` |
+| Start full stack (Shape A) | `make up` |
+| Start Shape B app host | `COMPOSE_PROFILES=news make up` |
+| Start Shape B GPU host | `COMPOSE_PROFILES=gateway make up` |
+| Health + status | `make health` / `make status` |
+| Tail logs | `make logs` / `make logs-api` / `make logs-gateway` |
 | Register schedules | `make schedule` |
 | Manual run | `make trigger` |
-| Deploy | `make deploy` (default `production`) |
+| Deploy wrapper | `make deploy [ENV=production]` |
 
-### Admin GUI
-
-**URL desplegada (producción):** `http://debwk.elver-exponential.ts.net:8000/ui`
-(Tailscale MagicDNS, accesible desde el móvil; en LAN `http://debwk:8000/ui` si
-tienes el nombre local resuelto). La GUI solo es remota cuando la caja expone
-`:8000` en la interfaz elegida.
-
-**Login (Fase 6, multi-usuario):**
-
-- **Admin local** — `http://<host>:8000/ui/login` con `ADMIN_USERNAME` +
-  `ADMIN_PASSWORD_HASH` (recomendado) o, en su defecto, `ADMIN_API_TOKEN`.
-  No usa OTP ni aparece en la lista de usuarios.
-- **Usuarios auto-registrados** — se dan de alta en `/ui/register` con su
-  email; la cuenta queda **pendiente** hasta que el admin la aprueba y le
-  asigna rol desde **Usuarios** (`/ui/users`). Cada login pide un **código de
-  6 dígitos** enviado por email (`SMTP_*` debe estar configurado; TTL 10 min,
-  5 intentos, reenvío cada 60 s). No hay contraseña que recordar.
-- **Roles** — `admin`: todo; `user`: lectura + herramientas (URL/doc-TTS/
-  lecciones/podcast), ejecutar/narrar ahora, terminar runs y borrar trabajos
-  de audio; `viewer`: solo lectura (ningún POST salvo cerrar sesión).
-  Las páginas y la API responden 302 (GUI) o 401/403 JSON (`/api/*`) a quien
-  no tiene el rol.
-
-**Lockout recovery** — si hay usuarios registrados y `ADMIN_*` está vacío,
-nadie puede entrar (la auth ya está activada por los registros). Salida
-rápida por SSH en el host del despliegue:
-
-```bash
-# Opción A (recomendada): añadir credencial de admin en .env y recrear la api
-#   ADMIN_USERNAME=admin
-#   ADMIN_PASSWORD_HASH=<bcrypt>
-docker compose up -d api
-
-# Opción B (nuclear): borrar usuarios y sesiones vuelve a dejar la GUI abierta
-docker compose exec api python -c \
-  "import sqlite3; db=sqlite3.connect('data/news.db'); db.execute('DELETE FROM sessions'); db.execute('DELETE FROM users'); db.commit()"
-```
-
-Desde ahí, sin tocar código ni `collections.toml` a mano, el admin puede:
-
-- Create / edit / delete collections (feeds, time, TTS, podcast identity,
-  narration cast editor, verification options)
-- See the weekly schedule calendar and resync Temporal schedules
-- Browse run history (with the verification ledger per run) and launch an
-  immediate run
-- Manage voices (stock voices and cloning new ones from an audio reference)
-- Approve, promote, disable or delete self-registered users (`/ui/users`)
-- **Herramientas** (`/ui/tools`): URL summary, document TTS, language lessons
-  and manual podcast renders, with live job tables
-- **Ajustes** (`/ui/settings`): validated editor for the whole `.env`
+Run `make help` for the full list. The root Makefile targets are thin wrappers around the compose files and `scripts/deploy.sh`.
 
 ---
 
