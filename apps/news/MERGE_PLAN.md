@@ -5,7 +5,7 @@
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
 **P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18), **P7**
 (ops unificados, 2026-10-18) y **P8** (lease de GPU, 2026-10-18) completados. El
-**cutover en debwk se difiere a P10**. Pendiente **P9.5**.
+**cutover en debwk se difiere a P10**. Pendiente **P10**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -459,4 +459,22 @@ participante del lease de prioridad de Fase 8.1.
 
 4. ✅ **Gates locales** — ruff limpio en las 3 piezas, 1570 + 403 tests, mypy 0, `bash -n` en scripts, YAML válido.
 
-**Siguiente: P9.5** — export/import de config, voces, programación y boletines (`scripts/export_config.sh`, `scripts/import_config.sh`).
+## P9.5 — Export/Import de config, voces, programación y boletines (2026-10-18)
+
+1. ✅ **`scripts/export_config.sh`** — crea tarball `backups/newsvoice-config-<ts>.tar.gz` con:
+   - Configuración: `deploy/.env`, `apps/news/.env`, `apps/gateway/.env`, `apps/news/collections.toml` (checksums SHA256 + tamaños en `manifest.json`).
+   - Programación: snapshot JSON de schedules Temporal (`tctl schedule list --output json`).
+   - Voces: catálogo runtime del gateway (`apps/gateway/storage/voice_catalog/` = `custom_profiles.json` + `manifest.json` + `refs/*.wav`) + checksum de `voice_profiles.json` commiteado.
+   - Historial: `data/news.db` (tablas `deliveries`, `digest_runs`, `clusters`, `audio_jobs`, `narration_scripts`, `verifications`, `modal_spend`, `monitor_events`, `tts_leases`, `tts_lease_waiters`, `users`, `login_codes`, `sessions`, `kv_state`); audio (`audio_path`, `narration_path`) solo con `--with-audio`.
+
+2. ✅ **`scripts/import_config.sh`** — restaura desde tarball con flags:
+   - `--dry-run`: inventaria diffs (existente vs archivo) sin tocar nada.
+   - `--with-env`: aplica `.env` y `collections.toml` (backup `.bak-<ts>` previo).
+   - `--wipe`: borra recursos gestionados antes de importar (voice_catalog runtime, schedules `digest-pipeline-*`, tablas de historial en `news.db`).
+   - Re-registra schedules Temporal desde `collections.toml` vía `python -m src.workers.schedule` (requiere worker arriba).
+
+3. ✅ **Round-trip verificado**: export → modificación local → import `--with-env` restaura estado original; checksums validados.
+
+4. ✅ **Gates** — `bash -n` limpio, ruff/format limpios, 1570 + 403 tests, mypy 0.
+
+**Siguiente: P10** — cutover en debwk: desplegar monorepo, retirar checkouts `~/news-summary` y `~/ov_api`, archivar remotos.

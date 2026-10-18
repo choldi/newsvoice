@@ -85,11 +85,11 @@ def test_model_kwargs_ignora_repo_id(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine._model_kwargs() == {}
 
 
-def test_model_kwargs_usa_el_idioma_por_defecto(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sin valor configurado se cae en el idioma por defecto (english)."""
-    monkeypatch.delenv("POCKET_TTS_MODEL", raising=False)
+def test_model_kwargs_vacio_usa_config_por_defecto(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valor vacío o no configurado devuelve {} para usar la config por defecto del modelo."""
+    monkeypatch.setenv("POCKET_TTS_MODEL", "")
     engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {"language": "english"}
+    assert engine._model_kwargs() == {}
 
 
 def test_model_kwargs_vacio(monkeypatch: pytest.MonkeyPatch) -> None:
