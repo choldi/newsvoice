@@ -483,11 +483,12 @@ participante del lease de prioridad de Fase 8.1.
 
 ---
 
-## P10 — Cutover (preparado 2026-10-19; ejecución pendiente)
+## P10 — Cutover (COMPLETADO 2026-10-19)
 
-**Estado:** preparado y ensayado en debwk, **sin tocar producción** (decisión del
-usuario: «prepare only, don't stop production»). Los 11 contenedores
-`news-summary` y el `tts-api.service` de usuario siguen corriendo.
+**Estado:** ✅ cutover ejecutado y verificado en debwk. La pila `newsvoice`
+(12 contenedores) reemplaza al stack legacy (`news-summary` + `tts-api.service`).
+El digest end-to-end funciona: RSS → ollama → clustering → gateway TTS (GPU) →
+Telegram (message_id 407, status ok). `tts-api.service` deshabilitada.
 
 ### Qué se preparó en este cambio
 
@@ -568,35 +569,44 @@ make trigger COLLECTION=tech        # digest de prueba
 make status
 ```
 
-### Pendiente/riesgos del cutover
+### Log del cutover (debwk, 2026-10-19)
 
-- **Colisión de nombres de contenedor (crítico)**: el compose de `newsvoice`
-  declara `container_name: news_engine_*`, los **mismos nombres** que la pila
-  `news-summary` en producción (proyecto `news-summary`, `/home/jordi/news-summary`).
-  Las dos pilas **no pueden coexistir**: el `docker compose down` de la vieja
-  (paso 1) es obligatorio antes del `up` de la nueva, o el `up` falla con
-  `container name is already in use`. Verificado en debwk: las redes difieren
-  (`news-summary_default` vs `newsvoice_default`) y el DNS de servicio
-  (`http://gateway:8000`) resuelve solo en `up` (con `compose run` el alias es el
-  nombre del contenedor, no el del servicio).
-- El volumen de Temporal del proyecto `newsvoice` es **nuevo**: hay que crear
-  namespaces y re-registrar schedules (el historial de workflows en vuelo se
-  pierde; `data/news.db` sí se importa).
-- `TTS_PATH` apunta a `/opt/omnivoice` por defecto (vacío en debwk). Para
-  `routed` → `pocket_tts`/`edgetts` OmniVoice no se carga (el check de
-  `TTS_PATH` solo corre si el engine activo es `omnivoice`), pero conviene fijar
-  `TTS_PATH` al install correcto (p. ej. el venv/install real) antes del corte.
-- **Modelos pocket_tts**: en el primer arranque el gateway descarga de HuggingFace
-  (tokenizer + `model.safetensors` ~438 MB + embeddings de voces). Se persiste en
-  el volumen nombrado `gateway_hf_cache` montado en `/root/.cache/huggingface`
-  (añadido al servicio `gateway`), de modo que los recreates no re-descargan
-  (verificado en debwk: 2º arranque sin descarga). Requiere salida a internet en
-  el primer boot únicamente.
-- `VOICE_STAGING_API_KEY` y el worker de diseño (`apps/news/scripts/design_window.sh`)
-  se reconfiguran tras el corte.
-- Retirar `~/news-summary` y `~/ov_api` y archivar los remotos al final.
-- **Verificado en debwk (staging)**: las 7 imágenes compilan; el gateway arranca
-  en `routed` (pocket_tts + edgetts), `/api/v1/health` = ok, `/api/v1/tts`
-  sintetiza WAV y el contrato news→gateway (`POST /api/v1/tts`,
-  `{text, voice_id, language}` → WAV) coincide.
+1. **Export legacy fresco** → `~/backups/newsvoice-config-legacy-20261019-142703.tar.gz`
+   (5 schedules, 18 tablas, 34 voces).
+2. **Baseline de datos** → `sudo rsync` de `~/news-summary/data/` a
+   `apps/news/data/` (603M) + `chown -R 1001:65533` sobre `data/there`.
+3. **Parar legacy** → `docker compose down` en `~/news-summary`; `tts-api.service`
+   stop+disable; contenedor superviviente `news_engine_narration_modal_worker`
+   eliminado; red `news-summary_default` eliminada.
+4. **Import** → `import_config.sh … --with-env` (merge); adaptación
+   `TTS_API_BASE_URL=http://gateway:8000/api/v1`; el gateway conserva
+   `TTS_ENGINE=routed` + `TTS_ENGINES` + `API_KEY=` (paridad: abierto).
+5. **Deploy** → `GPU=1 MODAL=1 ./scripts/deploy.sh production` → 12 contenedores,
+   api/gateway healthy, 5 schedules registrados.
+6. **Smoke test** → GPU real (`torch.cuda.is_available()==True`), síntesis TTS
+   end-to-end vía DNS `gateway:8000`, `make trigger COLLECTION=tech` →
+   Telegram `message_id 407, status ok`.
+
+### Follow-ups (pendientes tras el cutover)
+
+- **WhatsApp `there`**: sesión inválida tras el corte (Baileys) — requiere
+  re-emparejamiento manual (QR). Canal secundario; el digest por Telegram funciona.
+- **Narración gaming (OmniVoice)**: la colección `gaming` usa
+  `tts_backend='omni_voice'` con voces diseñadas (UUIDs). El engine `routed`
+  (pocket_tts/edgetts) no las conoce → «Voz no encontrada». El workflow garantiza
+  que el digest de texto se entrega igual (narration failure ≠ digest failure).
+  Para restaurar la narración de audio: habilitar OmniVoice para ese job (instalar
+  el engine + `TTS_ENGINES` con `omnivoice`), aceptar la voz stock o activar
+  `TTS_FALLBACK_TO_EDGE=true` (pierde los personajes John/Peter).
+- **Purga legacy (1–2 semanas, con confirmación)**: retirar `~/news-summary`,
+  `~/ov_api`, `~/qwen3-tts` y el volumen `news-summary_temporal_pg_data`. Ya hay
+  tarballs finales en `~/backups/` (`news-summary-final`, `ov_api-final` con los
+  modelos OmniVoice). No hacerlo hasta confirmar la estabilidad.
+- **Rotar `SMTP_PASSWORD`** (el secreto viajó en el tarball de import).
+- **Hardening API key**: el gateway quedó abierto (paridad). Considerar fijar
+  `API_KEY` y rotar cuando se exponga fuera de la LAN/Tailscale.
+- **Modo compose en `design_window.sh`**: el script maneja el gateway vía unit
+  systemd (`TTS_GATEWAY_UNIT`) — necesita soporte compose.
+- `VOICE_STAGING_API_KEY` y el worker de diseño se reconfiguran tras el corte.
+
 
