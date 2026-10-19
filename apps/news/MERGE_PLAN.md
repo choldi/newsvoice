@@ -565,13 +565,32 @@ make status
 
 ### Pendiente/riesgos del cutover
 
+- **Colisión de nombres de contenedor (crítico)**: el compose de `newsvoice`
+  declara `container_name: news_engine_*`, los **mismos nombres** que la pila
+  `news-summary` en producción (proyecto `news-summary`, `/home/jordi/news-summary`).
+  Las dos pilas **no pueden coexistir**: el `docker compose down` de la vieja
+  (paso 1) es obligatorio antes del `up` de la nueva, o el `up` falla con
+  `container name is already in use`. Verificado en debwk: las redes difieren
+  (`news-summary_default` vs `newsvoice_default`) y el DNS de servicio
+  (`http://gateway:8000`) resuelve solo en `up` (con `compose run` el alias es el
+  nombre del contenedor, no el del servicio).
 - El volumen de Temporal del proyecto `newsvoice` es **nuevo**: hay que crear
   namespaces y re-registrar schedules (el historial de workflows en vuelo se
   pierde; `data/news.db` sí se importa).
 - `TTS_PATH` apunta a `/opt/omnivoice` por defecto (vacío en debwk). Para
-  `routed` → `pocket_tts`/`edgetts` OmniVoice no se carga, pero conviene fijar
+  `routed` → `pocket_tts`/`edgetts` OmniVoice no se carga (el check de
+  `TTS_PATH` solo corre si el engine activo es `omnivoice`), pero conviene fijar
   `TTS_PATH` al install correcto (p. ej. el venv/install real) antes del corte.
+- **Modelos pocket_tts**: en el primer arranque el gateway descarga de HuggingFace
+  (tokenizer + `model.safetensors` ~438 MB + embeddings de voces) al HF cache
+  **dentro del contenedor** (no hay volumen montado para `~/.cache/huggingface`),
+  así que un `recreate` del contenedor vuelve a descargar. Requiere salida a
+  internet en el primer boot; considerar un volumen de cache antes del corte.
 - `VOICE_STAGING_API_KEY` y el worker de diseño (`apps/news/scripts/design_window.sh`)
   se reconfiguran tras el corte.
 - Retirar `~/news-summary` y `~/ov_api` y archivar los remotos al final.
+- **Verificado en debwk (staging)**: las 7 imágenes compilan; el gateway arranca
+  en `routed` (pocket_tts + edgetts), `/api/v1/health` = ok, `/api/v1/tts`
+  sintetiza WAV y el contrato news→gateway (`POST /api/v1/tts`,
+  `{text, voice_id, language}` → WAV) coincide.
 
