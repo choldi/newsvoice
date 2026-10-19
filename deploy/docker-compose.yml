@@ -237,10 +237,11 @@ services:
   # ---------------------------------------------------------------------------
   # tts gateway (apps/gateway)
   # ---------------------------------------------------------------------------
-  # Listens on 8000 inside the container and is published as 8001 by default, so
-  # it matches TTS_API_BASE_URL=http://gateway:8001/api/v1 (Shape A), the
-  # GET /disk disk probe and the historical systemd :8001. In Shape B the same
-  # service is published directly on the GPU host's 8001.
+  # Listens on 8000 inside the container and is published as 8001 by default.
+  # Container DNS (Shape A) therefore uses the internal port:
+  # TTS_API_BASE_URL=http://gateway:8000/api/v1. The published :8001 is for
+  # host/external access (Shape B, host.docker.internal) and the historical
+  # systemd service.
   gateway:
     build:
       context: ../apps/gateway

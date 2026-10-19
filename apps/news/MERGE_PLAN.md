@@ -125,7 +125,8 @@ El número de servidores es una **elección de overlay de compose**, nunca un st
 distinto.
 
 **Shape A — un solo host (debwk hoy):** `make up` → los 11 servicios de news + `gateway`
-en un único proyecto. El gateway se resuelve como `http://gateway:8001/api/v1`.
+en un único proyecto. El gateway se resuelve como `http://gateway:8000/api/v1`
+(DNS de servicio → puerto interno 8000; el puerto 8001 solo se publica en el host).
 
 **Shape B — app host + GPU host:** la GPU host solo corre `gateway` (+ la unidad
 systemd de diseño de voces); la app host corre el resto;
@@ -186,7 +187,7 @@ En `news_sumary`: limpio (solo `data/.gitkeep`).
 
 ## 8. Qué cambia exactamente
 
-- `TTS_API_BASE_URL` pasa a DNS de servicio `http://gateway:8001/api/v1` (Shape A) /
+- `TTS_API_BASE_URL` pasa a DNS de servicio `http://gateway:8000/api/v1` (Shape A) /
   nombre Tailscale (Shape B).
 - `collections.toml` se mueve a `apps/news/collections.toml` → `deploy.sh` y el
   bind-mount se re-apuntan (**footgun conocido, commit `80a19a5`**, inodo `461207`).
@@ -523,8 +524,8 @@ systemctl --user disable tts-api.service
 
 # 2. Importar config/voces/historial del export legacy
 ./scripts/import_config.sh backups/newsvoice-config-legacy-<ts>.tar.gz --with-env --wipe
-#    editar apps/news/.env: TTS_API_BASE_URL=http://gateway:8001/api/v1
-#    (Shape A: DNS de compose, no el nombre Tailscale)
+#    editar apps/news/.env: TTS_API_BASE_URL=http://gateway:8000/api/v1
+#    (Shape A: DNS de compose → puerto interno 8000, no el nombre Tailscale)
 
 # 3. Levantar la pila unificada (debwk tiene GPU → overlay gpu)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build

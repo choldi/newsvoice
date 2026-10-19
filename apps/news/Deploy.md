@@ -55,7 +55,8 @@ Key variables to set:
 - **apps/news/.env**
   - `LLM_API_BASE` / `LLM_MODEL` — your LLM endpoint (e.g. `http://ollama:11434/v1`, `qwen3:8b`)
   - `TTS_API_BASE_URL` — where the gateway lives:
-    - Shape A: `http://gateway:8001/api/v1` (container DNS)
+    - Shape A: `http://gateway:8000/api/v1` (container DNS; the container
+      listens on 8000, the host publishes 8001)
     - Shape B: `http://<gpu-host>:8001/api/v1` (Tailscale IP or LAN IP)
   - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
   - `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt) — preferred over legacy `ADMIN_API_TOKEN`
@@ -102,7 +103,8 @@ Services started (12):
 - `temporal` + `temporal-postgres` + `temporal-ui` (port 8081)
 - `gateway` (TTS API) — published on `${GATEWAY_PORT:-8001}`
 
-Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8001/api/v1` in `apps/news/.env`.
+Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8000/api/v1` in `apps/news/.env`
+(the gateway container listens on 8000; the host publishes 8001 for Shape B).
 
 ### Shape B — Multi-host (app host + GPU host)
 
