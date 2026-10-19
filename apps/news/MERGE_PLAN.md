@@ -509,8 +509,30 @@ usuario: «prepare only, don't stop production»). Los 11 contenedores
    `make namespaces|schedule|trigger`.
 5. **`.gitignore`**: `backups/` ignorado; se destrackearon los tarballs de prueba
    que la P9.5 commiteó por error.
+6. **Imágenes arregladas (bloqueante real de P10)** — las imágenes del gateway y
+   de news nunca se habían ejercitado dentro de un contenedor (P8 difirió la
+   containerización). Fallos encontrados y corregidos:
+   - El gateway hacía `uv sync` (venv en `/app/.venv`) pero el `CMD`/healthcheck
+     usaban el Python del sistema → `import fastapi` fallaba. Ahora
+     `ENV VIRTUAL_ENV` + `PATH` activan el venv.
+   - `tts-contract` es miembro del workspace y **no está publicado en PyPI**: el
+     `pip install .` de news fallaba y el lock del gateway no lo incluía. Ambos
+     Dockerfiles ahora compilan desde el **contexto raíz** con
+     `uv sync --package <pkg>` contra el `uv.lock` de la raíz (que sí resuelve
+     `tts-contract`); se añadió `.dockerignore` en la raíz.
+   - `COPY voice_profiles.json` sobraba en news (P6 movió el catálogo al gateway).
+   - Verificado en debwk: las 7 imágenes compilan y `import tts_contract`,
+     `import src.api.main` (news) e `import tts_api.main` (gateway) funcionan.
+7. **URL Shape A corregida** — `TTS_API_BASE_URL=http://gateway:8000/api/v1` (DNS
+   de servicio → puerto **interno** del contenedor; el 8001 solo se publica en el
+   host).
 
 ### Runbook de cutover (cuando toque)
+
+Estado ya preparado en debwk: repo en `~/newsvoice` (rama `main`), config
+importada (`.env` ×3, `collections.toml`), voces/DB del gateway y `news.db`
+restaurados, `TTS_API_BASE_URL=http://gateway:8000/api/v1`, e imágenes ya
+compiladas (`newsvoice-*`). El import solo es necesario si se rehace el staging.
 
 ```bash
 # En debwk, repo ya preparado en ~/newsvoice
@@ -522,15 +544,15 @@ cd ~/newsvoice
 systemctl --user stop tts-api.service
 systemctl --user disable tts-api.service
 
-# 2. Importar config/voces/historial del export legacy
-./scripts/import_config.sh backups/newsvoice-config-legacy-<ts>.tar.gz --with-env --wipe
-#    editar apps/news/.env: TTS_API_BASE_URL=http://gateway:8000/api/v1
-#    (Shape A: DNS de compose → puerto interno 8000, no el nombre Tailscale)
+# 2. (Si hace falta reimportar) config/voces/historial del export legacy
+# ./scripts/import_config.sh backups/newsvoice-config-legacy-<ts>.tar.gz --with-env --wipe
+#    y fijar apps/news/.env: TTS_API_BASE_URL=http://gateway:8000/api/v1
 
-# 3. Levantar la pila unificada (debwk tiene GPU → overlay gpu)
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
+# 3. Levantar la pila unificada (debwk tiene GPU → overlay gpu).
+#    Las imágenes ya están compiladas; --build opcional.
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d
 
-# 4. Namespaces + schedules (el volumen de Temporal es nuevo)
+# 4. Namespaces + schedules (el volumen de Temporal del proyecto es nuevo)
 make namespaces
 make schedule
 
@@ -546,6 +568,9 @@ make status
 - El volumen de Temporal del proyecto `newsvoice` es **nuevo**: hay que crear
   namespaces y re-registrar schedules (el historial de workflows en vuelo se
   pierde; `data/news.db` sí se importa).
+- `TTS_PATH` apunta a `/opt/omnivoice` por defecto (vacío en debwk). Para
+  `routed` → `pocket_tts`/`edgetts` OmniVoice no se carga, pero conviene fijar
+  `TTS_PATH` al install correcto (p. ej. el venv/install real) antes del corte.
 - `VOICE_STAGING_API_KEY` y el worker de diseño (`apps/news/scripts/design_window.sh`)
   se reconfiguran tras el corte.
 - Retirar `~/news-summary` y `~/ov_api` y archivar los remotos al final.
