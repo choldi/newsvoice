@@ -258,6 +258,9 @@ services:
     volumes:
       - ../apps/gateway/storage:/app/storage
       - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+      # Persiste los pesos de pocket_tts (~438 MB) descargados de HuggingFace en
+      # el primer arranque; sin este volumen se re-descargan en cada recreate.
+      - gateway_hf_cache:/root/.cache/huggingface
     healthcheck:
       test:
         - "CMD"
@@ -272,3 +275,4 @@ services:
 
 volumes:
   temporal_pg_data:
+  gateway_hf_cache:

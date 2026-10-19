@@ -582,10 +582,11 @@ make status
   `TTS_PATH` solo corre si el engine activo es `omnivoice`), pero conviene fijar
   `TTS_PATH` al install correcto (p. ej. el venv/install real) antes del corte.
 - **Modelos pocket_tts**: en el primer arranque el gateway descarga de HuggingFace
-  (tokenizer + `model.safetensors` ~438 MB + embeddings de voces) al HF cache
-  **dentro del contenedor** (no hay volumen montado para `~/.cache/huggingface`),
-  así que un `recreate` del contenedor vuelve a descargar. Requiere salida a
-  internet en el primer boot; considerar un volumen de cache antes del corte.
+  (tokenizer + `model.safetensors` ~438 MB + embeddings de voces). Se persiste en
+  el volumen nombrado `gateway_hf_cache` montado en `/root/.cache/huggingface`
+  (añadido al servicio `gateway`), de modo que los recreates no re-descargan
+  (verificado en debwk: 2º arranque sin descarga). Requiere salida a internet en
+  el primer boot únicamente.
 - `VOICE_STAGING_API_KEY` y el worker de diseño (`apps/news/scripts/design_window.sh`)
   se reconfiguran tras el corte.
 - Retirar `~/news-summary` y `~/ov_api` y archivar los remotos al final.
