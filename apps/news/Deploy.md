@@ -67,6 +67,12 @@ Key variables to set:
   - `TTS_ENGINES` — JSON mapping lang→engine (e.g. `{"es":"pocket_tts","_default":"pocket_tts"}`)
   - `TTS_DEVICE` — `cuda:0` on GPU host, `cpu` otherwise
   - `API_KEY` — protect the gateway API (required in Shape B when exposed)
+  - `HF_TOKEN` — HuggingFace token with access to the gated repo
+    `kyutai/pocket-tts`. Required for pocket_tts **voice cloning** (the stock
+    voices do not need it). Without it, `synthesize_clone` fails with
+    *"could not download the weights for the model with voice cloning"*. The
+    gated weights (~438 MB) are downloaded once and persisted in the
+    `gateway_hf_cache` volume.
 
 ---
 
