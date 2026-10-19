@@ -550,11 +550,16 @@ systemctl --user disable tts-api.service
 
 # 3. Levantar la pila unificada (debwk tiene GPU → overlay gpu).
 #    Las imágenes ya están compiladas; --build opcional.
+#    Alternativa de un solo comando (espera health + registra schedules):
+#      GPU=1 MODAL=1 ./scripts/deploy.sh production
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d
 
 # 4. Namespaces + schedules (el volumen de Temporal del proyecto es nuevo)
 make namespaces
 make schedule
+
+# 4b. Worker Modal (parity con el stack legacy, que lo corría)
+docker compose -f deploy/docker-compose.yml --profile modal up -d narration-modal-worker
 
 # 5. Verificar
 curl -sf http://localhost:8000/health

@@ -9,6 +9,12 @@ set -euo pipefail
 #   ./scripts/deploy.sh [environment] [--tts]
 #     environment  label only, defaults to "production"
 #     --tts        enable audio in the scheduled digest
+#
+# Environment switches:
+#   GPU=1   add the deploy/docker-compose.gpu.yml overlay (gateway reserves the
+#           host GPU; requires nvidia-container-toolkit). Shape A on a GPU host.
+#   MODAL=1 run with --profile modal so the Modal narration worker starts too
+#           (parity with the pre-merge production stack).
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -21,6 +27,16 @@ fi
 
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
 DC=(docker compose -f "$COMPOSE_FILE")
+
+if [[ "${GPU:-0}" == "1" ]]; then
+    DC+=(-f deploy/docker-compose.gpu.yml)
+    echo "==> GPU overlay enabled (deploy/docker-compose.gpu.yml)"
+fi
+
+if [[ "${MODAL:-0}" == "1" ]]; then
+    DC+=(--profile modal)
+    echo "==> Modal profile enabled (narration-modal-worker will start)"
+fi
 
 _read_env() {
     local file="$1" key="$2" default="$3" val=""
