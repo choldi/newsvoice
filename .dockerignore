@@ -1,0 +1,53 @@
+# Keep the build context small and keep secrets/runtime data out of images.
+# The build context is the repo root (see deploy/docker-compose.yml).
+.git
+.gitignore
+
+# Python build/test artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+**/.venv/
+
+# Secrets — never bake these into an image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Runtime data (bind-mounted at run time, not baked in)
+data/
+storage/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Models / binaries / backups
+models/
+*.gguf
+*.bin
+backups/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docs/plans (not needed to build)
+*.md
+!apps/news/README.md

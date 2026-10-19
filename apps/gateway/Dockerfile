@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -8,22 +8,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar dependencias primero (mejor cache de Docker)
-# The three runtime engines are baked in so the image can switch between them by
-# config alone (TTS_ENGINE / TTS_ENGINES): pocket_tts and edgetts cover the
-# default routing, omnivoice is installed but stays unloaded unless a job pins
-# it (and the host has a GPU; otherwise it stays disabled and only Modal is
-# used for those backends).
+# Workspace metadata + the shared tts_contract lib, so `uv sync --package
+# tts-api` resolves `tts-contract` from the monorepo root lock. The three
+# runtime engines are baked in so the image can switch between them by config
+# alone (TTS_ENGINE / TTS_ENGINES): pocket_tts and edgetts cover the default
+# routing, omnivoice is installed but stays unloaded unless a job pins it (and
+# the host has a GPU; otherwise it stays disabled and only Modal is used for
+# those backends).
 COPY pyproject.toml uv.lock ./
+COPY libs/tts_contract ./libs/tts_contract
+COPY apps/gateway/pyproject.toml apps/gateway/README.md ./apps/gateway/
 ARG UV_EXTRAS="--extra pocket_tts --extra edgetts --extra omnivoice"
 RUN pip install --no-cache-dir uv && \
-    uv sync --frozen --no-dev --no-install-project ${UV_EXTRAS} && \
+    uv sync --frozen --no-dev --no-install-project --package tts-api ${UV_EXTRAS} && \
     uv cache clean
 
-# Copiar código fuente y el catálogo de voces versionado
-COPY tts_api/ tts_api/
-COPY voice_profiles.json ./
-RUN uv sync --frozen --no-dev ${UV_EXTRAS}
+# Copiar código fuente y el catálogo de voces versionado. voice_profiles.json
+# y storage/ se resuelven relativas al CWD (/app) en runtime.
+COPY apps/gateway/tts_api ./apps/gateway/tts_api
+COPY apps/gateway/voice_profiles.json ./voice_profiles.json
+RUN uv sync --frozen --no-dev --package tts-api ${UV_EXTRAS}
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# The workspace venv carries every dependency (incl. tts_contract) and the
+# editable installs point at /app/..., so the whole /app tree must be carried
+# over for the absolute .pth paths to resolve.
+COPY --from=builder /app /app
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8000
 

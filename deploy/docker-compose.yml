@@ -22,8 +22,8 @@ services:
   # ---------------------------------------------------------------------------
   api:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_api
     depends_on:
       temporal:
@@ -43,8 +43,8 @@ services:
 
   worker:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_worker
     depends_on:
       temporal:
@@ -67,8 +67,8 @@ services:
 
   narration-worker:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_narration_worker
     depends_on:
       temporal:
@@ -90,8 +90,8 @@ services:
   # there) and the shared ./data volume (upload, extracted text, audio).
   doc-tts-worker:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_doc_tts_worker
     depends_on:
       temporal:
@@ -110,8 +110,8 @@ services:
   # narration render must never occupy the digest worker's slots.
   teacher-worker:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_teacher_worker
     depends_on:
       temporal:
@@ -132,8 +132,8 @@ services:
   narration-modal-worker:
     profiles: ["modal"]
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_narration_modal_worker
     depends_on:
       temporal:
@@ -156,8 +156,8 @@ services:
   # box (Deploy.md section 8).
   voice-catalog-worker:
     build:
-      context: ../apps/news
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/news/Dockerfile
     container_name: news_engine_voice_catalog_worker
     depends_on:
       temporal:
@@ -244,8 +244,8 @@ services:
   # systemd service.
   gateway:
     build:
-      context: ../apps/gateway
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/gateway/Dockerfile
     container_name: news_engine_gateway
     ports:
       - "${GATEWAY_PORT:-8001}:8000"
