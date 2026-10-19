@@ -22,9 +22,6 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
 COPY data/ data/
-# The voice catalog is read from the working directory by the admin routes and
-# by design_voice / run_voice_worker --role catalog.
-COPY voice_profiles.json ./
 
 EXPOSE 8000
 
