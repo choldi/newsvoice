@@ -18,7 +18,8 @@
 
 .PHONY: help venv install lint format format-check test test-news test-gateway \
         coverage check commit up down ps health logs logs-api logs-gateway \
-        logs-worker logs-temporal status deploy clean urls
+        logs-worker logs-temporal status deploy clean urls schedule trigger \
+        namespaces
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 
@@ -65,6 +66,9 @@ help: ## Show all make targets
 	@echo "  make logs-temporal    Tail temporal logs"
 	@echo "  make status           Unified health check (scripts/status.sh)"
 	@echo "  make deploy [ENV=..]  Deploy via scripts/deploy.sh (default production)"
+	@echo "  make namespaces       Create the Temporal namespaces (idempotent)"
+	@echo "  make schedule         Register the per-collection digest schedules"
+	@echo "  make trigger [COLLECTION=..]  Run one digest manually"
 	@echo ""
 	@echo "Utilities"
 	@echo "  make urls             Print admin GUI, Temporal UI and gateway URLs"
@@ -146,6 +150,15 @@ status: ## Unified health check (scripts/status.sh)
 
 deploy: ## Deploy via scripts/deploy.sh (ENV defaults to production)
 	./scripts/deploy.sh $(ENV)
+
+namespaces: ## Create the Temporal namespaces (idempotent)
+	./scripts/create_namespaces.sh
+
+schedule: ## Register the per-collection digest schedules
+	$(DC) exec -T worker python -m src.workers.schedule
+
+trigger: ## Run one digest manually (COLLECTION defaults to tech)
+	$(DC) exec -T worker python -m src.workers.trigger --collection $(or $(COLLECTION),tech)
 
 urls: ## Print admin GUI, Temporal UI and gateway URLs
 	@echo "Admin GUI:   http://localhost:$(API_PORT)/ui"

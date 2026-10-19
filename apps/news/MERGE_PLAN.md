@@ -4,8 +4,9 @@
 **Estado:** plan aprobado; **P0** (2026-10-16), **P1** (2026-10-17), **P2**
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
 **P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18), **P7**
-(ops unificados, 2026-10-18) y **P8** (lease de GPU, 2026-10-18) completados. El
-**cutover en debwk se difiere a P10**. Pendiente **P10**.
+(ops unificados, 2026-10-18), **P8** (lease de GPU, 2026-10-18) y **P9/P9.5**
+(docs+CI / export-import, 2026-10-18) completados. **P10 (cutover) preparado en
+debwk el 2026-10-19 (sin tocar producción); ejecución pendiente**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -478,3 +479,73 @@ participante del lease de prioridad de Fase 8.1.
 4. ✅ **Gates** — `bash -n` limpio, ruff/format limpios, 1570 + 403 tests, mypy 0.
 
 **Siguiente: P10** — cutover en debwk: desplegar monorepo, retirar checkouts `~/news-summary` y `~/ov_api`, archivar remotos.
+
+---
+
+## P10 — Cutover (preparado 2026-10-19; ejecución pendiente)
+
+**Estado:** preparado y ensayado en debwk, **sin tocar producción** (decisión del
+usuario: «prepare only, don't stop production»). Los 11 contenedores
+`news-summary` y el `tts-api.service` de usuario siguen corriendo.
+
+### Qué se preparó en este cambio
+
+1. **Export legacy v2** — `scripts/export_config.sh` ahora detecta el layout
+   (`--source monorepo|legacy`) y captura además el **runtime del gateway
+   pre-merge**: `storage/omnivoice.db` (tablas `cloned_voices`,
+   `designed_voices`), `melref.wav` y `storage/voices/<uuid>/reference.wav`.
+   La P9.5 solo cubría el `voice_catalog/` moderno, que la caja legacy no tiene.
+2. **Bug de colisión de `.env` corregido** — los tres `.env` se guardaban como
+   `config/.env` (mismo basename) y solo sobrevivía uno; ahora son
+   `config/deploy.env`, `config/apps-news.env`, `config/apps-gateway.env`.
+   `import_config.sh` los mapea a sus destinos y restaura el gateway legacy.
+3. **Engines en la imagen del gateway** — `apps/gateway/Dockerfile` compila con
+   `--extra pocket_tts --extra edgetts --extra omnivoice` (ARG `UV_EXTRAS`). Los
+   tres conmutables por config; **OmniVoice queda apagado por defecto**
+   (`TTS_ENGINE=routed` → `pocket_tts`/`edgetts`), se activa solo si un job lo
+   pide y hay GPU; sin GPU queda deshabilitado y ese backend va por Modal.
+4. **Ops**: `scripts/create_namespaces.sh` (wrapper raíz) y targets
+   `make namespaces|schedule|trigger`.
+5. **`.gitignore`**: `backups/` ignorado; se destrackearon los tarballs de prueba
+   que la P9.5 commiteó por error.
+
+### Runbook de cutover (cuando toque)
+
+```bash
+# En debwk, repo ya preparado en ~/newsvoice
+cd ~/newsvoice
+
+# 0. Ventana: avisar. La app queda caída unos minutos.
+# 1. Parar la pila vieja + el gateway systemd
+( cd ~/news-summary && docker compose down )
+systemctl --user stop tts-api.service
+systemctl --user disable tts-api.service
+
+# 2. Importar config/voces/historial del export legacy
+./scripts/import_config.sh backups/newsvoice-config-legacy-<ts>.tar.gz --with-env --wipe
+#    editar apps/news/.env: TTS_API_BASE_URL=http://gateway:8001/api/v1
+#    (Shape A: DNS de compose, no el nombre Tailscale)
+
+# 3. Levantar la pila unificada (debwk tiene GPU → overlay gpu)
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
+
+# 4. Namespaces + schedules (el volumen de Temporal es nuevo)
+make namespaces
+make schedule
+
+# 5. Verificar
+curl -sf http://localhost:8000/health
+curl -sf http://localhost:8001/api/v1/health
+make trigger COLLECTION=tech        # digest de prueba
+make status
+```
+
+### Pendiente/riesgos del cutover
+
+- El volumen de Temporal del proyecto `newsvoice` es **nuevo**: hay que crear
+  namespaces y re-registrar schedules (el historial de workflows en vuelo se
+  pierde; `data/news.db` sí se importa).
+- `VOICE_STAGING_API_KEY` y el worker de diseño (`apps/news/scripts/design_window.sh`)
+  se reconfiguran tras el corte.
+- Retirar `~/news-summary` y `~/ov_api` y archivar los remotos al final.
+
