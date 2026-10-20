@@ -122,7 +122,10 @@ Services started (13):
   OmniVoice engine in its own image/venv so its deps (librosa/numba,
   transformers>=5.3) cannot clash with pocket_tts (numpy>=2). The gateway talks
   to it through `OMNIVOICE_REMOTE_URL`; it is unused unless `omnivoice_remote`
-  is added to `TTS_EXTRA_ENGINES`.
+  is added to `TTS_EXTRA_ENGINES`. It reads the model from `${TTS_PATH}/models`
+  when present (e.g. the legacy `~/ov_api`); otherwise it downloads
+  `ModelsLab/omnivoice-singing` (~3.1 GB) once into the `gateway_hf_cache`
+  volume.
 
 Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8000/api/v1` in `apps/news/.env`
 (the gateway container listens on 8000; the host publishes 8001 for Shape B).

@@ -602,6 +602,12 @@ make status
   cloned_voices/designed_voices SET engine='omnivoice_remote'`) las voces que
   deban servirse por el sidecar. Alternativa sin sidecar: aceptar la voz stock o
   `TTS_FALLBACK_TO_EDGE=true` (pierde los personajes John/Peter).
+- **Stock OmniVoice en español**: verificado 2026-10-20 contra el sidecar real:
+  el clonado y el stock inglés funcionan, pero `es-mx-male` (y probablemente el
+  resto de voces ES) mapea a un instruct `"male, spanish accent"` que el modelo
+  no soporta (solo acepta los acentos listados) → `/tts` responde 503. Revisar
+  el perfil de voces stock (`omnivoice_engine._get_mock_stock_voices`) o usar
+  instructs sin acento para ES.
 - **Purga legacy (1–2 semanas, con confirmación)**: retirar `~/news-summary`,
   `~/ov_api`, `~/qwen3-tts` y el volumen `news-summary_temporal_pg_data`. Ya hay
   tarballs finales en `~/backups/` (`news-summary-final`, `ov_api-final` con los
