@@ -740,6 +740,7 @@ class NarrationTTSService:
             language=language,
             speed=speed,
             emotion=emotion or None,
+            engine=get_settings().narration_engine_for(language),
         ).model_dump(exclude_none=True)
         try:
             return await self._post_audio("tts", payload), False

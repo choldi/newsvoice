@@ -442,6 +442,7 @@ async def test_synthesize_turn_sends_the_documented_payload(
         "language": "es",
         "speed": 1.2,
         "emotion": "calm",
+        "engine": "pocket_tts",
     }
     await service.aclose()
 
@@ -459,6 +460,50 @@ async def test_omitted_emotion_is_not_sent(tmp_path: Path, monkeypatch: pytest.M
     await service.synthesize_turn("Hola", "es-mx-male", "es")
 
     assert "emotion" not in seen
+    await service.aclose()
+
+
+async def test_synthesize_turn_pins_engine_per_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narration pins the gateway engine per language, never leaving it to routing."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=_wav())
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(
+        settings, "narration_engine_by_language", '{"es": "pocket_tts", "ca": "edgetts"}'
+    )
+
+    await service.synthesize_turn("Hola", "es-mx-male", "es")
+    assert seen["engine"] == "pocket_tts"
+
+    await service.synthesize_turn("Hola", "ca-female", "ca")
+    assert seen["engine"] == "edgetts"
+    await service.aclose()
+
+
+async def test_synthesize_turn_omits_engine_when_unmapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty mapping leaves the routing decision to the gateway."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=_wav())
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(settings, "narration_engine_by_language", "")
+
+    await service.synthesize_turn("Hola", "es-mx-male", "es")
+
+    assert "engine" not in seen
     await service.aclose()
 
 

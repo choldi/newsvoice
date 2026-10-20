@@ -86,3 +86,23 @@ def test_narration_base_url_allows_shared_port_when_tts_also_there() -> None:
         tts_api_base_url="http://gateway.example:8000/api/v1",
     )
     assert settings.narration_base_url == "http://gateway.example:8000/api/v1"
+
+
+def test_narration_engine_for_uses_the_language_mapping() -> None:
+    """A language maps to its pinned gateway engine."""
+    settings = Settings(narration_engine_by_language='{"es": "pocket_tts", "ca": "edgetts"}')
+    assert settings.narration_engine_for("es") == "pocket_tts"
+    assert settings.narration_engine_for("ca") == "edgetts"
+
+
+def test_narration_engine_for_falls_back_to_default_key() -> None:
+    """An unmapped language uses the `_default` entry when present."""
+    settings = Settings(narration_engine_by_language='{"es": "pocket_tts", "_default": "edgetts"}')
+    assert settings.narration_engine_for("fr") == "edgetts"
+
+
+def test_narration_engine_for_returns_none_when_unmapped() -> None:
+    """Empty or invalid mappings leave the engine choice to the gateway."""
+    assert Settings(narration_engine_by_language="").narration_engine_for("es") is None
+    assert Settings(narration_engine_by_language="not json").narration_engine_for("es") is None
+    assert Settings(narration_engine_by_language='["es"]').narration_engine_for("es") is None

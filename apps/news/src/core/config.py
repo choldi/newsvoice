@@ -1,5 +1,6 @@
 """Configuration settings for news-engine using pydantic-settings."""
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -371,6 +372,16 @@ class Settings(BaseSettings):
     narration_cache_dir: str = "data/narration"
     narration_music_dir: str = "data/narration/music"
     narration_language: str = "es"
+    # Phase 8: engine the narration gateway must use per language. The gateway
+    # routes by language too, but pinning the engine here makes the choice
+    # explicit and independent of the gateway's own routing config, so a
+    # Spanish narration can never silently fall back to an English-only model.
+    # JSON dict {"es": "pocket_tts", "ca": "edgetts", ...}; "_default" is used
+    # for languages not listed.
+    narration_engine_by_language: str = (
+        '{"es": "pocket_tts", "en": "pocket_tts", "fr": "pocket_tts",'
+        ' "ca": "edgetts", "_default": "pocket_tts"}'
+    )
     narration_speed: float = Field(default=1.0, ge=0.5, le=2.0)
     narration_pause_ms: int = Field(default=400, ge=0, le=5000)
     # The gateway does not chunk long text and enforces a concurrency limit, so
@@ -553,6 +564,29 @@ class Settings(BaseSettings):
             `narration_api_base_url` when set, otherwise `tts_api_base_url`.
         """
         return self.narration_api_base_url or self.tts_api_base_url
+
+    def narration_engine_for(self, language: str) -> str | None:
+        """Return the gateway engine the narration must use for a language.
+
+        Args:
+            language: ISO 639-1 language code of the turn.
+
+        Returns:
+            The pinned engine name (e.g. ``pocket_tts``), or ``None`` when the
+            mapping is empty/invalid so the gateway keeps deciding on its own.
+        """
+        raw = (self.narration_engine_by_language or "").strip()
+        if not raw:
+            return None
+        try:
+            mapping = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(mapping, dict):
+            return None
+        code = (language or "").strip().lower()
+        engine = mapping.get(code) or mapping.get("_default")
+        return str(engine) if engine else None
 
     model_config = SettingsConfigDict(
         env_file=".env",
