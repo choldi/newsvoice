@@ -77,6 +77,17 @@ Key variables to set:
     in the `gateway_hf_cache` volume. Set the token on the host
     (`~/.cache/huggingface/token`) or export `HF_TOKEN` in this file;
     `HF_TOKEN_FILE` is also honoured.
+  - `POCKET_TTS_DEFAULT_LANGUAGE` — language whose checkpoint loads eagerly at
+    start (default `es`); other languages load lazily on first use. There is no
+    Catalan checkpoint, so route `ca` to `edgetts`.
+  - `POCKET_TTS_REFERENCES` — JSON mapping of reference keys to **absolute**
+    WAV paths inside the container, e.g.
+    `{"es_male":"/app/storage/pocket_refs/es_male.wav","es_female":"...",
+    "fr_male":"...","fr_female":"..."}`. pocket_tts renders the ES/FR stock
+    voices (`es-mx-male`, `fr-fr-female`, ...) by zero-shot cloning these
+    prompts, because the model ships **no** Spanish/French preset. Without them
+    a stock ES/FR request fails with *"requiere un fichero de referencia"*.
+    See the script in §4 to generate them.
   - `OMNIVOICE_REMOTE_URL` — address of the `gateway-omnivoice` sidecar, e.g.
     `http://gateway-omnivoice:8000`. Add `omnivoice_remote` to
     `TTS_EXTRA_ENGINES` (not `TTS_ENGINES`) so voices tagged with that engine
@@ -246,6 +257,78 @@ TTS cache.
 > route, and every render dies with `NarrationGatewayError: Not Found`.
 > `Settings` refuses to start with that misconfiguration (see
 > `narration_base_url` in `src/core/config.py`).
+
+#### Pinning the TTS engine per language
+
+The gateway can route by language on its own (`TTS_ENGINES`), but the narration
+worker also sends an explicit `engine` per request so a Spanish narration can
+never silently fall back to an English-only model. Set it in `apps/news/.env`:
+
+```bash
+NARRATION_ENGINE_BY_LANGUAGE={"es": "pocket_tts", "en": "pocket_tts", "fr": "pocket_tts", "ca": "edgetts", "_default": "pocket_tts"}
+```
+
+Unmapped languages (and an empty value) leave the choice to the gateway's own
+routing. The `_default` key is the fallback for languages not listed.
+
+#### Generating pocket_tts reference WAVs (ES/FR)
+
+pocket_tts has no ES/FR stock presets: it clones the reference WAVs named in
+`POCKET_TTS_REFERENCES`. Generate them from any royalty-free voice (EdgeTTS
+stock voices are a convenient, no-extra-cost source), convert to mono 24 kHz
+PCM, drop them under the gateway's bind-mounted storage, and point the env var
+at the in-container path.
+
+```bash
+# 1. Generate reference MP3s with EdgeTTS (run where edge-tts is installed)
+python - <<'PY'
+import asyncio, pathlib, edge_tts
+OUT = pathlib.Path("/tmp/pocket_refs"); OUT.mkdir(parents=True, exist_ok=True)
+JOBS = {
+    "es_male":   ("es-ES-AlvaroNeural", "Buenos días. Bienvenidos al resumen de la mañana."),
+    "es_female": ("es-ES-ElviraNeural", "Buenos días. Bienvenidos al resumen de la mañana."),
+    "fr_male":   ("fr-FR-HenriNeural",  "Bonjour. Bienvenue dans le résumé du matin."),
+    "fr_female": ("fr-FR-DeniseNeural", "Bonjour. Bienvenue dans le résumé du matin."),
+}
+async def main():
+    for key, (voice, text) in JOBS.items():
+        await edge_tts.Communicate(text, voice).save(str(OUT / f"{key}.mp3"))
+asyncio.run(main())
+PY
+
+# 2. Convert to mono 24 kHz 16-bit PCM WAV (pocket_tts expects WAV)
+for f in es_male es_female fr_male fr_female; do
+  ffmpeg -y -loglevel error -i "/tmp/pocket_refs/$f.mp3" \
+    -ac 1 -ar 24000 -c:a pcm_s16le "/tmp/pocket_refs/$f.wav"
+done
+
+# 3. Install into the gateway's bind-mounted storage (host path, from repo root)
+mkdir -p apps/gateway/storage/pocket_refs
+cp /tmp/pocket_refs/*.wav apps/gateway/storage/pocket_refs/
+
+# 4. Point POCKET_TTS_REFERENCES at the in-container paths (apps/gateway/.env)
+#    /app/storage/pocket_refs/<key>.wav
+```
+
+Then restart the gateway so it reloads the references:
+
+```bash
+docker compose up -d --force-recreate gateway
+```
+
+Verify with a stock ES request against the published gateway port:
+
+```bash
+curl -s -o /tmp/es.wav -w "%{http_code} %{content_type}\n" \
+  -X POST http://localhost:8001/api/v1/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Buenos días.","voice_id":"es-mx-male","language":"es","engine":"pocket_tts"}'
+```
+
+Expect `200 audio/wav`. A `503` with *"requiere un fichero de referencia"*
+means `POCKET_TTS_REFERENCES` is unset or the WAV path is wrong. Sourcing
+these WAVs is the deployer's responsibility — use voices you are licensed to
+clone.
 
 ### Narration delivery (Phase 7.6)
 
