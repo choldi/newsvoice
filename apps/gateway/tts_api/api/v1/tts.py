@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
@@ -20,6 +21,7 @@ from tts_api.core.exceptions import (
 )
 from tts_api.services.tts import TtsService
 from tts_api.services.voice_service import VoiceService
+from tts_api.settings import get_settings
 
 router = APIRouter(prefix="/tts", tags=["tts"])
 
@@ -199,6 +201,81 @@ async def synthesize_tts(
     return Response(content=result.wav_bytes, media_type="audio/wav")
 
 
+# --- POST /tts/clone — Clone from a stored reference path ---
+@router.post(
+    "/clone",
+    responses={200: {"content": {"audio/wav": {}}}},
+    response_class=Response,
+    summary="Sintetizar clonando una referencia por ruta",
+    description=(
+        "Clona una voz a partir de la ruta de un audio de referencia ya "
+        "almacenado (bajo VOICES_DIR). Lo usa el proxy del sidecar OmniVoice, "
+        "que comparte el volumen de storage; no consulta la base de datos."
+    ),
+)
+async def synthesize_clone_path(
+    text: Annotated[str, Body(min_length=1, description="Texto a sintetizar")],
+    reference_audio_path: Annotated[
+        str, Body(description="Ruta del WAV de referencia (bajo VOICES_DIR)")
+    ],
+    language: Annotated[str, Body(description="Idioma del texto (ISO 639-1)")],
+    speed: Annotated[float, Body(ge=0.5, le=2.0, description="Velocidad de habla")] = 1.0,
+    ref_text: Annotated[
+        str | None, Body(description="Transcripción de la referencia (opcional)")
+    ] = None,
+    engine: Annotated[
+        str | None,
+        Body(description="Engine override para routers."),
+    ] = None,
+    tts_service: TtsService = Depends(get_tts_service),
+) -> Response:
+    """Sintetiza texto clonando una referencia identificada por su ruta."""
+    voices_dir = Path(get_settings().VOICES_DIR).resolve()
+    candidate = Path(reference_audio_path).resolve()
+    if not candidate.is_relative_to(voices_dir):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "detail": "reference_audio_path debe estar bajo VOICES_DIR",
+                "error_type": "invalid_reference_path",
+            },
+        )
+    if not candidate.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "detail": f"No existe el audio de referencia: {reference_audio_path}",
+                "error_type": "reference_not_found",
+            },
+        )
+
+    try:
+        pool = cast(_PoolLike, get_engine_pool())
+        await pool.acquire()
+        try:
+            result = await tts_service.synthesize_clone_path(
+                text=text,
+                reference_audio_path=str(candidate),
+                language=language,
+                speed=speed,
+                ref_text=ref_text,
+                engine_name=engine,
+            )
+        finally:
+            pool.release()
+    except (
+        UnsupportedLanguageError,
+        UnsupportedEmotionError,
+        EngineUnavailableError,
+        FeatureNotSupportedError,
+    ) as e:
+        _handle_tts_error(e)
+    except Exception as e:
+        _handle_tts_error(e)
+
+    return Response(content=result.wav_bytes, media_type="audio/wav")
+
+
 # --- POST /tts/instruct — Custom instruct ---
 @router.post(
     "/instruct",
@@ -275,11 +352,9 @@ async def get_voice_design_tokens() -> dict[str, Any]:
 
     Returns empty categories if the active engine does not support voice design.
     """
-    from tts_api.settings import get_settings
-
     settings = get_settings()
 
-    if settings.TTS_ENGINE != "omnivoice":
+    if settings.TTS_ENGINE not in ("omnivoice", "omnivoice_remote"):
         return {
             "note": f"Voice design no soportado por el engine '{settings.TTS_ENGINE}'. "
             "Cambia TTS_ENGINE=omnivoice para usar voice design.",

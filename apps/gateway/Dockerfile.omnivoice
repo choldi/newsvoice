@@ -1,0 +1,49 @@
+# OmniVoice sidecar image.
+#
+# The real OmniVoice package pins librosa (numba) and transformers>=5.3, which
+# cannot coexist with pocket_tts (numpy>=2) in the same virtualenv. This image
+# therefore installs ONLY the core tts-api dependencies plus `omnivoice`, and is
+# run with TTS_ENGINE=omnivoice. The main gateway reaches it over HTTP through
+# the `omnivoice_remote` engine.
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml uv.lock ./
+COPY libs/tts_contract ./libs/tts_contract
+COPY apps/gateway/pyproject.toml apps/gateway/README.md ./apps/gateway/
+RUN pip install --no-cache-dir uv && \
+    uv sync --frozen --no-dev --no-install-project --package tts-api && \
+    uv cache clean
+
+COPY apps/gateway/tts_api ./apps/gateway/tts_api
+COPY apps/gateway/voice_profiles.json ./voice_profiles.json
+RUN uv sync --frozen --no-dev --package tts-api && \
+    uv pip install --python /app/.venv/bin/python --no-cache-dir "omnivoice==0.2.1"
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /app /app
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:${PATH}"
+ENV TTS_ENGINE=omnivoice
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import httpx; r=httpx.get('http://localhost:8000/api/v1/health/live'); exit(0 if r.status_code==200 else 1)"
+
+CMD ["uvicorn", "tts_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

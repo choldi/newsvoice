@@ -44,3 +44,5 @@ services:
 
   gateway:
     profiles: ["gateway"]
+  gateway-omnivoice:
+    profiles: ["gateway"]

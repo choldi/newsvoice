@@ -212,6 +212,35 @@ class TtsService:
             clone_kwargs["engine_name"] = engine_name
         return await engine.synthesize_clone(**clone_kwargs)
 
+    async def synthesize_clone_path(
+        self,
+        *,
+        text: str,
+        reference_audio_path: str,
+        language: str,
+        speed: float = 1.0,
+        ref_text: str | None = None,
+        engine_name: str | None = None,
+    ) -> AudioResult:
+        """Synthesize cloning a voice from a reference path (no DB lookup).
+
+        Used by the HTTP proxy to forward a clone request to the remote
+        OmniVoice sidecar, which shares the storage volume and can read the
+        reference file directly.
+        """
+        self._validate_language(language)
+        engine = await self._get_engine_client()
+        clone_kwargs = {
+            "text": text,
+            "reference_audio_path": reference_audio_path,
+            "ref_text": ref_text,
+            "speed": speed,
+            "language": language,
+        }
+        if engine_name:
+            clone_kwargs["engine_name"] = engine_name
+        return await engine.synthesize_clone(**clone_kwargs)
+
     async def close(self) -> None:
         """Suelta la referencia al cliente sin descargar el engine.
 

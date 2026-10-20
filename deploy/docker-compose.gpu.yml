@@ -21,3 +21,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+  gateway-omnivoice:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

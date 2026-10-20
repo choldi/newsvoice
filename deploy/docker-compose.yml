@@ -273,6 +273,32 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # omnivoice sidecar (apps/gateway, TTS_ENGINE=omnivoice)
+  # ---------------------------------------------------------------------------
+  # Runs the real OmniVoice engine in its own image/venv so its heavy deps
+  # (librosa/numba, transformers>=5.3) cannot clash with pocket_tts (numpy>=2)
+  # in the main gateway. The main gateway reaches it through the
+  # `omnivoice_remote` engine; the service is not published to the host.
+  gateway-omnivoice:
+    build:
+      context: ..
+      dockerfile: apps/gateway/Dockerfile.omnivoice
+    container_name: news_engine_gateway_omnivoice
+    env_file:
+      - ../apps/gateway/.env
+    environment:
+      - TTS_ENGINE=omnivoice
+      - TTS_ENGINES=
+      - TTS_INSTALL_DIR=/omnivoice-external
+      - TTS_DEVICE=cuda:0
+      - TTS_FALLBACK_TO_MOCK=false
+      - DATABASE_URL=sqlite:///storage/omnivoice.db
+    volumes:
+      - ../apps/gateway/storage:/app/storage
+      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+    restart: unless-stopped
+
 volumes:
   temporal_pg_data:
   gateway_hf_cache:

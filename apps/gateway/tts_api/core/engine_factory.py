@@ -39,6 +39,10 @@ def _create_single_engine(name: str) -> TtsEngineBase:
         from tts_api.core.engines.omnivoice_engine_adapter import OmniVoiceAdapter
 
         engine_class = OmniVoiceAdapter
+    elif name == "omnivoice_remote":
+        from tts_api.core.engines.omnivoice_remote_engine import OmniVoiceRemoteEngine
+
+        engine_class = OmniVoiceRemoteEngine
     elif name == "zono2":
         from tts_api.core.engines.zono2_engine import Zono2Engine
 
@@ -61,11 +65,15 @@ def _create_single_engine(name: str) -> TtsEngineBase:
     return engine_class()
 
 
-def _create_routed_engine(routing_json: str) -> TtsEngineBase:
+def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngineBase:
     """Create a RoutedEngine from a JSON routing configuration.
 
     The routing JSON maps language codes to engine names:
         {"es":"pocket_tts","en":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
+
+    ``extra_engines`` is a comma-separated list of engines to instantiate
+    without routing any language to them, so per-voice ``engine`` pins can
+    target them (e.g. ``omnivoice_remote``).
     """
     from tts_api.core.engines.routed_engine import RoutedEngine
 
@@ -86,6 +94,7 @@ def _create_routed_engine(routing_json: str) -> TtsEngineBase:
     # Collect unique engine names needed
     engine_names: set[str] = set(routing.values())
     engine_names.discard("_default")
+    engine_names.update(name.strip() for name in extra_engines.split(",") if name.strip())
 
     if not engine_names:
         raise ValueError("TTS_ENGINES no contiene ningún engine válido")
@@ -124,6 +133,6 @@ def create_engine(engine_name: str | None = None) -> TtsEngineBase:
 
     if engine_name == "routed":
         settings = get_settings()
-        return _create_routed_engine(settings.TTS_ENGINES)
+        return _create_routed_engine(settings.TTS_ENGINES, settings.TTS_EXTRA_ENGINES)
 
     return _create_single_engine(engine_name)

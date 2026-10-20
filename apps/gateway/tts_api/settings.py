@@ -28,8 +28,10 @@ class Settings(BaseSettings):
     # qwen3_tts: local GPU, voice cloning (Base) + voice design (VoiceDesign)
     # mock: test tones (for development/testing)
     # routed: multi-engine, dispatches by language (requires TTS_ENGINES config)
+    # omnivoice_remote: proxy HTTP al sidecar OmniVoice (ver OMNIVOICE_REMOTE_URL)
     TTS_ENGINE: Literal[
         "omnivoice",
+        "omnivoice_remote",
         "pocket_tts",
         "edgetts",
         "piper",
@@ -44,6 +46,11 @@ class Settings(BaseSettings):
     # Use "_default" for fallback when language has no explicit mapping.
     # Ejemplo de mapeo: es a pocket_tts, en a pocket_tts, ca a edgetts, y _default a pocket_tts.
     TTS_ENGINES: str = ""
+
+    # Extra engines to instantiate under TTS_ENGINE=routed without routing any
+    # language to them (comma-separated). Needed so per-voice `engine` pins can
+    # target an engine that is not in TTS_ENGINES, e.g. `omnivoice_remote`.
+    TTS_EXTRA_ENGINES: str = ""
 
     # --- Qwen3-TTS (when TTS_ENGINE=qwen3_tts, or as a sub-engine of routed) ---
     # The runtime lives in an external venv (torch + qwen-tts) driven as a
@@ -94,6 +101,15 @@ class Settings(BaseSettings):
     TTS_DTYPE: Literal["float16", "float32", "int8"] = "float16"
     TTS_WARMUP_ON_START: bool = False
     TTS_DEVICE: str = "cuda:0"
+
+    # --- OmniVoice remoto (sidecar) ---
+    # Base URL del sidecar que ejecuta el engine omnivoice real en su propio
+    # contenedor/venv. Se usa cuando `TTS_ENGINE=omnivoice_remote` o cuando
+    # `TTS_ENGINES` enruta un idioma a `omnivoice_remote`. Vacío = desactivado.
+    # Ejemplo: http://gateway-omnivoice:8000/api/v1
+    OMNIVOICE_REMOTE_URL: str = ""
+    # Timeout (segundos) de las llamadas al sidecar; la síntesis puede tardar.
+    OMNIVOICE_REMOTE_TIMEOUT: float = 300.0
 
     # --- Mock / Real engine toggle ---
     # Si True, usa generación de tonos mock (útil para tests sin GPU/modelo).
