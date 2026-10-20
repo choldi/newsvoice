@@ -64,10 +64,18 @@ class Settings(BaseSettings):
     QWEN3_TTS_ATTN: Literal["sdpa", "flash_attention_2", "eager"] = "sdpa"
 
     # Pocket TTS config (when TTS_ENGINE=pocket_tts)
-    # Código de idioma para load_model() (p. ej. "english") o ruta/URL de un
-    # fichero de configuración YAML ("hf://<repo>/config.yaml"). Un repo id de
-    # Hugging Face sin .yaml no sirve y se ignora con warning.
-    POCKET_TTS_MODEL: str = "english"
+    # Idioma por defecto (ISO 639-1) cuyo checkpoint se carga al arrancar; el
+    # resto de idiomas se cargan de forma perezosa. Por defecto "es" para no
+    # cargar el modelo inglés si nadie lo pide.
+    POCKET_TTS_DEFAULT_LANGUAGE: str = "es"
+    # Override global del checkpoint: ruta/URL de un fichero de configuración
+    # YAML ("hf://<repo>/config.yaml"). Vacío = checkpoint por idioma. Un repo
+    # id de Hugging Face sin .yaml no sirve y se ignora con warning.
+    POCKET_TTS_MODEL: str = ""
+    # Prompts de referencia (WAV) para voces stock ES/FR clonadas, como JSON
+    # {"es_male": "/ruta/es_male.wav", "fr_female": "..."}. Las voces stock ES
+    # y FR renderizan vía clonación con estos prompts.
+    POCKET_TTS_REFERENCES: str = ""
 
     # EdgeTTS config (when TTS_ENGINE=edgetts)
     EDGETTS_VOICE_PREFIX: str = "es-MX"
@@ -175,6 +183,25 @@ class Settings(BaseSettings):
         from tts_api.core.engine_paths import default_install_dir
 
         return default_install_dir() / "models"
+
+    @property
+    def pocket_tts_references(self) -> dict[str, str]:
+        """Prompts de referencia (WAV) para las voces stock ES/FR de pocket_tts.
+
+        Returns:
+            Diccionario ``{clave: ruta}``; vacío si ``POCKET_TTS_REFERENCES``
+            no es un JSON de objeto o no está fijado.
+        """
+        raw = (self.POCKET_TTS_REFERENCES or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {str(k): str(v) for k, v in parsed.items()}
 
     @property
     def omnilang_list(self) -> list[str]:

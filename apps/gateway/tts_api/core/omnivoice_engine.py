@@ -50,7 +50,6 @@ VALID_INSTRUCT_TOKENS_EN: list[str] = [
     "korean accent",
     "portuguese accent",
     "russian accent",
-    "spanish accent",
 ]
 
 # --- Emotion tags (ModelsLab/omnivoice-singing) ---
@@ -84,11 +83,13 @@ _EMOTION_TAG_MAP: dict[str, str] = {
 }
 
 # Mapeo de voces stock a instructs válidos para model.generate(instruct=...).
+# OmniVoice NO admite "spanish accent": el idioma se selecciona con
+# model.generate(language=...) (ver _map_language), no con un token de acento.
 STOCK_VOICE_INSTRUCTS: dict[str, str] = {
-    "es-mx-male": "male, spanish accent",
-    "es-mx-female": "female, spanish accent",
-    "es-es-male": "male, spanish accent",
-    "es-es-female": "female, spanish accent",
+    "es-mx-male": "male",
+    "es-mx-female": "female",
+    "es-es-male": "male",
+    "es-es-female": "female",
     "en-us-male": "male, american accent",
     "en-us-female": "female, american accent",
     "en-gb-male": "male, british accent",

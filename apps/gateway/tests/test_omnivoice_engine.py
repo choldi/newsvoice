@@ -330,10 +330,14 @@ async def test_engine_synthesize_clone_with_emotion(engine: OmniVoiceEngine) -> 
 # --- Spanish accent validation ---
 
 
-def test_spanish_accent_in_valid_tokens():
-    assert "spanish accent" in VALID_INSTRUCT_TOKENS_EN
+def test_spanish_accent_not_a_valid_token():
+    """OmniVoice no tiene "spanish accent": el idioma va por language=, no por instruct."""
+    assert "spanish accent" not in VALID_INSTRUCT_TOKENS_EN
 
 
-def test_spanish_voice_instructs_use_spanish_accent():
+def test_spanish_voice_instructs_do_not_use_spanish_accent():
+    """Las voces ES deben usar instructs válidos (gender), sin acento inexistente."""
     for voice_id in ["es-mx-male", "es-mx-female", "es-es-male", "es-es-female"]:
-        assert "spanish accent" in STOCK_VOICE_INSTRUCTS[voice_id]
+        instruct = STOCK_VOICE_INSTRUCTS[voice_id]
+        assert "spanish accent" not in instruct
+        _validate_instruct(instruct)  # Should not raise

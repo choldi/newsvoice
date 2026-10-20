@@ -55,36 +55,34 @@ def _stretch_audio(audio: Any, sample_rate: int, speed: float) -> Any:
     return stretched
 
 
-# Pocket TTS preset voice names
-_POCKET_VOICE_PRESETS: dict[str, str] = {
-    "alba": "alba",
-    "anna": "anna",
-    "giovanni": "giovanni",
-    "lola": "lola",
-}
-
-# Mapping from our voice_id scheme to Pocket TTS voice presets
+# Mapping from our voice_id scheme to a pocket_tts voice. Each entry declares
+# the stock voice's real language (which selects the per-language model) and
+# either an upstream ``preset`` (English presets only) or a ``reference`` path
+# to a real-language audio prompt used for zero-shot cloning.
+#
+# ES/FR reuse the SAME voice_id as before, but now render through the matching
+# language model with a real ES/FR reference instead of an English preset.
 _STOCK_VOICE_MAP: dict[str, dict[str, str]] = {
     "es-mx-male": {
-        "preset": "giovanni",
+        "reference": "es_male",
         "language": "es",
         "gender": "male",
         "name": "Spanish MX Male",
     },
     "es-mx-female": {
-        "preset": "lola",
+        "reference": "es_female",
         "language": "es",
         "gender": "female",
         "name": "Spanish MX Female",
     },
     "es-es-male": {
-        "preset": "giovanni",
+        "reference": "es_male",
         "language": "es",
         "gender": "male",
         "name": "Spanish Spain Male",
     },
     "es-es-female": {
-        "preset": "lola",
+        "reference": "es_female",
         "language": "es",
         "gender": "female",
         "name": "Spanish Spain Female",
@@ -113,25 +111,50 @@ _STOCK_VOICE_MAP: dict[str, dict[str, str]] = {
         "gender": "female",
         "name": "English UK Female",
     },
-    "fr-fr-male": {"preset": "giovanni", "language": "fr", "gender": "male", "name": "French Male"},
+    "fr-fr-male": {
+        "reference": "fr_male",
+        "language": "fr",
+        "gender": "male",
+        "name": "French Male",
+    },
     "fr-fr-female": {
-        "preset": "alba",
+        "reference": "fr_female",
         "language": "fr",
         "gender": "female",
         "name": "French Female",
     },
 }
 
-# Languages Pocket TTS supports
+# Languages Pocket TTS ships a dedicated model for.
 _POCKET_LANGUAGES = {"en", "es", "fr", "de", "it", "pt"}
+
+# ISO 639-1 code -> pocket_tts ``load_model(language=...)`` name. Only the
+# languages with a dedicated checkpoint are listed; anything else falls back
+# to the default language.
+_POCKET_LANGUAGE_MODELS: dict[str, str] = {
+    "en": "english",
+    "es": "spanish",
+    "fr": "french",
+    "de": "german",
+    "it": "italian",
+    "pt": "portuguese",
+    "nl": "dutch",
+}
 
 
 class PocketTTSEngine(TtsEngineBase):
-    """Pocket TTS engine — CPU-first, supports voice cloning from audio prompts."""
+    """Pocket TTS engine — CPU-first, supports voice cloning from audio prompts.
+
+    Models are loaded lazily, one per language, from the checkpoints the
+    upstream project ships (``english``, ``spanish``, ``french``, ...). No
+    model is loaded until a voice in that language is used, so the engine
+    never pulls the English checkpoint just because English is the default.
+    """
 
     def __init__(self) -> None:
         self._settings = get_settings()
-        self._model: Any = None
+        # Per-language model cache: ISO 639-1 code -> loaded TTSModel.
+        self._models: dict[str, Any] = {}
         self._voice_states: dict[str, Any] = {}
         self._clone_states: OrderedDict[tuple[str, float, int], Any] = OrderedDict()
         # pocket-tts documenta generate_audio() y get_state_for_audio_prompt()
@@ -155,15 +178,39 @@ class PocketTTSEngine(TtsEngineBase):
             supported_languages=list(_POCKET_LANGUAGES),
         )
 
-    def _model_kwargs(self) -> dict[str, Any]:
+    @property
+    def default_language(self) -> str:
+        """Language used when a request does not name one (falls back to es)."""
+        value = (self._settings.POCKET_TTS_DEFAULT_LANGUAGE or "").strip().lower()
+        return value if value in _POCKET_LANGUAGE_MODELS else "es"
+
+    def _language_kwargs(self, language: str) -> dict[str, Any]:
+        """Traduce un código ISO 639-1 a los kwargs de ``TTSModel.load_model``.
+
+        Usa ``POCKET_TTS_MODEL`` (config YAML/ruta/URL) si está fijado, para
+        permitir checkpoints locales; si no, selecciona el checkpoint del
+        idioma pedido con ``language=``.
+
+        Args:
+            language: Código ISO 639-1 del idioma a cargar.
+
+        Returns:
+            Argumentos de keyword para ``TTSModel.load_model``.
+        """
+        override = self._model_override_kwargs()
+        if override:
+            return override
+        return {"language": _POCKET_LANGUAGE_MODELS.get(language, "english")}
+
+    def _model_override_kwargs(self) -> dict[str, Any]:
         """Traduce ``POCKET_TTS_MODEL`` a argumentos válidos de ``load_model``.
 
-        Acepta un código de idioma (``english``) como ``language=`` o una
-        ruta/URL de config YAML (``hf://repo/config.yaml``) como ``config=``.
+        Acepta una ruta/URL de config YAML (``hf://repo/config.yaml``) como
+        ``config=``; un repo id de Hugging Face sin ``.yaml`` se ignora.
 
         Returns:
             Argumentos de keyword para ``TTSModel.load_model``; vacío si el
-            valor no es utilizable y procede usar la config por defecto.
+            valor no es utilizable o no está fijado.
         """
         value = (self._settings.POCKET_TTS_MODEL or "").strip()
         if not value:
@@ -173,43 +220,137 @@ class PocketTTSEngine(TtsEngineBase):
         if Path(value).exists():
             return {"config": value}
         if "/" not in value and "\\" not in value:
-            return {"language": value}
+            # A bare language name is handled per-request, not as an override.
+            return {}
         logger.warning(
             "POCKET_TTS_MODEL=%r no es ni un codigo de idioma ni un fichero .yaml: "
-            "se ignora y se usa la config por defecto.",
+            "se ignora y se usa el checkpoint por idioma.",
             value,
         )
         return {}
 
-    async def initialize(self) -> None:
-        if self._model is not None:
-            return
+    def _model_kwargs(self) -> dict[str, Any]:
+        """Compatibilidad: kwargs del override global de modelo (vacío si no hay).
+
+        Returns:
+            Argumentos de ``load_model`` derivados de ``POCKET_TTS_MODEL``.
+        """
+        return self._model_override_kwargs()
+
+    async def _get_model(self, language: str) -> Any:
+        """Devuelve el modelo del idioma, cargándolo de forma perezosa.
+
+        Args:
+            language: Código ISO 639-1 del idioma.
+
+        Returns:
+            El ``TTSModel`` cargado para ese idioma.
+
+        Raises:
+            EngineUnavailableError: Si ``pocket-tts`` no está instalado o el
+                modelo no se puede cargar.
+        """
+        cached = self._models.get(language)
+        if cached is not None:
+            return cached
         try:
             from pocket_tts import TTSModel
-
-            kwargs = self._model_kwargs()
-            logger.info(
-                "Initializing Pocket TTS engine (model=%s, load=%s)...",
-                self._settings.POCKET_TTS_MODEL,
-                kwargs or "defaults (english)",
-            )
-            self._model = await asyncio.to_thread(TTSModel.load_model, **kwargs)
-            # Pre-load voice states for stock presets
-            for preset_name in _POCKET_VOICE_PRESETS:
-                try:
-                    state = await asyncio.to_thread(
-                        self._model.get_state_for_audio_prompt, preset_name
-                    )
-                    self._voice_states[preset_name] = state
-                except Exception as e:
-                    logger.warning("Could not load voice preset '%s': %s", preset_name, e)
-            logger.info("Pocket TTS engine initialized")
         except ImportError:
             raise EngineUnavailableError(
                 "pocket-tts no está instalado. Ejecuta: pip install pocket-tts"
             ) from None
+        kwargs = self._language_kwargs(language)
+        try:
+            logger.info(
+                "Loading Pocket TTS model for language=%s (%s)...",
+                language,
+                kwargs or "defaults",
+            )
+            model = await asyncio.to_thread(TTSModel.load_model, **kwargs)
         except Exception as e:
-            raise EngineUnavailableError(f"Error inicializando Pocket TTS: {e}") from e
+            raise EngineUnavailableError(f"Error cargando Pocket TTS para {language}: {e}") from e
+        self._models[language] = model
+        logger.info("Pocket TTS model for language=%s loaded", language)
+        return model
+
+    def _reference_path(self, reference_key: str) -> Path | None:
+        """Resuelve la ruta de un prompt de referencia ES/FR configurado.
+
+        Args:
+            reference_key: Clave lógica (p.ej. ``es_male``) definida en
+                ``POCKET_TTS_REFERENCES``.
+
+        Returns:
+            La ruta al WAV de referencia, o ``None`` si no está configurada o
+            el fichero no existe.
+        """
+        references = self._settings.pocket_tts_references
+        raw = references.get(reference_key)
+        if not raw:
+            return None
+        path = Path(raw)
+        return path if path.exists() else None
+
+    async def initialize(self) -> None:
+        """Precarga el modelo del idioma por defecto y los prompts stock.
+
+        El resto de idiomas se cargan de forma perezosa en el primer uso. No
+        se carga el checkpoint inglés salvo que el idioma por defecto sea
+        ``en``.
+        """
+        language = self.default_language
+        await self._get_model(language)
+        # Pre-load voice states for stock presets of the default language.
+        for voice_id, voice in _STOCK_VOICE_MAP.items():
+            if voice["language"] != language:
+                continue
+            try:
+                state = await self._voice_state(voice_id)
+                if state is not None:
+                    self._voice_states[voice_id] = state
+            except Exception as e:
+                logger.warning("Could not load stock voice '%s': %s", voice_id, e)
+        logger.info("Pocket TTS engine initialized (default language=%s)", language)
+
+    async def _voice_state(self, voice_id: str) -> Any:
+        """Estado de voz stock: preset upstream o prompt de referencia clonado.
+
+        Args:
+            voice_id: Id de voz stock.
+
+        Returns:
+            El estado de audio de pocket_tts, o ``None`` si la voz necesita un
+            fichero de referencia que no está configurado.
+
+        Raises:
+            VoiceNotFoundError: Si el id no está en el catálogo stock.
+        """
+        voice = _STOCK_VOICE_MAP.get(voice_id)
+        if not voice:
+            err = VoiceNotFoundError(voice_id, "stock")
+            err.valid_voice_ids = list(_STOCK_VOICE_MAP.keys())
+            raise err
+        preset = voice.get("preset")
+        if preset:
+            model = await self._get_model(voice["language"])
+            return await asyncio.to_thread(model.get_state_for_audio_prompt, preset)
+        reference_key = voice.get("reference")
+        if reference_key:
+            path = self._reference_path(reference_key)
+            if path is None:
+                return None
+            return await self._get_model_and_state_from_reference(voice["language"], path)
+        return None
+
+    async def _get_model_and_state_from_reference(self, language: str, path: Path) -> Any:
+        """Carga el modelo del idioma y calcula el estado desde un WAV de referencia."""
+        model = await self._get_model(language)
+
+        def _build() -> Any:
+            with self._generate_lock:
+                return model.get_state_for_audio_prompt(str(path))
+
+        return await asyncio.to_thread(_build)
 
     async def synthesize(
         self,
@@ -228,16 +369,28 @@ class PocketTTSEngine(TtsEngineBase):
             err.valid_voice_ids = valid_ids
             raise err
 
+        voice_language = voice["language"]
         if language not in _POCKET_LANGUAGES:
             raise UnsupportedLanguageError(language, list(_POCKET_LANGUAGES))
 
-        preset = voice["preset"]
-        state = self._voice_states.get(preset)
-        if state is None:
-            raise EngineUnavailableError(f"Voice preset '{preset}' no cargado")
+        # The voice's own language wins: a voice only renders correctly with
+        # the model it was recorded/designed for.
+        language = voice_language
 
+        state = self._voice_states.get(voice_id)
+        if state is None:
+            state = await self._voice_state(voice_id)
+            if state is not None:
+                self._voice_states[voice_id] = state
+        if state is None:
+            raise EngineUnavailableError(
+                f"Voz '{voice_id}' requiere un fichero de referencia "
+                f"({voice.get('reference')}) no configurado"
+            )
+
+        model = await self._get_model(language)
         try:
-            return await asyncio.to_thread(self._render_locked, state, text, speed)
+            return await asyncio.to_thread(self._render_locked, model, state, text, speed)
         except Exception as e:
             raise EngineUnavailableError(f"Error sintetizando con Pocket TTS: {e}") from e
 
@@ -254,9 +407,12 @@ class PocketTTSEngine(TtsEngineBase):
         if not Path(reference_audio_path).exists():
             raise EngineUnavailableError(f"Reference audio no encontrado: {reference_audio_path}")
 
+        model = await self._get_model(
+            language if language in _POCKET_LANGUAGES else self.default_language
+        )
         try:
             return await asyncio.to_thread(
-                self._render_clone_locked, reference_audio_path, text, speed
+                self._render_clone_locked, model, reference_audio_path, text, speed
             )
         except Exception as e:
             raise EngineUnavailableError(f"Error clonando voz con Pocket TTS: {e}") from e
@@ -284,29 +440,32 @@ class PocketTTSEngine(TtsEngineBase):
 
     async def health_check(self) -> dict[str, Any]:
         return {
-            "model_loaded": self._model is not None,
+            "model_loaded": bool(self._models),
+            "loaded_languages": sorted(self._models),
             "gpu_available": False,
             "device": "cpu",
             "stock_voices_count": len(_STOCK_VOICE_MAP),
             "vram_free_mb": 0,
-            "mode": "REAL" if self._model else "NOT_LOADED",
+            "mode": "REAL" if self._models else "NOT_LOADED",
             "engine": self.name,
         }
 
-    def _render_locked(self, state: Any, text: str, speed: float) -> bytes:
+    def _render_locked(self, model: Any, state: Any, text: str, speed: float) -> bytes:
         """Genera audio de voz stock serializando el acceso al modelo."""
         with self._generate_lock:
-            audio = self._model.generate_audio(state, text)
-        return self._apply_speed(self._tensor_to_wav(audio), speed)
+            audio = model.generate_audio(state, text)
+        return self._apply_speed(self._tensor_to_wav(model, audio), speed)
 
-    def _render_clone_locked(self, reference_audio_path: str, text: str, speed: float) -> bytes:
+    def _render_clone_locked(
+        self, model: Any, reference_audio_path: str, text: str, speed: float
+    ) -> bytes:
         """Genera audio clonado serializando cálculo de prompt + generación."""
         with self._generate_lock:
-            state = self._clone_state(reference_audio_path)
-            audio = self._model.generate_audio(state, text)
-        return self._apply_speed(self._tensor_to_wav(audio), speed)
+            state = self._clone_state(model, reference_audio_path)
+            audio = model.generate_audio(state, text)
+        return self._apply_speed(self._tensor_to_wav(model, audio), speed)
 
-    def _clone_state(self, reference_audio_path: str) -> Any:
+    def _clone_state(self, model: Any, reference_audio_path: str) -> Any:
         """Estado de clonado cacheado por fichero de referencia (bajo el lock).
 
         Recalcular el estado en cada segmento cuesta ~0.7 s, por lo que un
@@ -320,7 +479,7 @@ class PocketTTSEngine(TtsEngineBase):
         if cached is not None:
             self._clone_states.move_to_end(key)
             return cached
-        state = self._model.get_state_for_audio_prompt(reference_audio_path)
+        state = model.get_state_for_audio_prompt(reference_audio_path)
         self._clone_states[key] = state
         while len(self._clone_states) > _MAX_CACHED_CLONE_STATES:
             self._clone_states.popitem(last=False)
@@ -354,7 +513,7 @@ class PocketTTSEngine(TtsEngineBase):
         sf.write(buffer, stretched, sample_rate, format="WAV", subtype="PCM_16")
         return buffer.getvalue()
 
-    def _tensor_to_wav(self, audio: Any) -> bytes:
+    def _tensor_to_wav(self, model: Any, audio: Any) -> bytes:
         """Convert tensor/numpy output from Pocket TTS to WAV bytes."""
         import numpy as np
 
@@ -365,7 +524,7 @@ class PocketTTSEngine(TtsEngineBase):
         if audio.ndim > 1:
             audio = audio.flatten()
 
-        sample_rate = getattr(self._model, "sample_rate", 24000)
+        sample_rate = getattr(model, "sample_rate", 24000)
         audio_int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)
 
         buffer = io.BytesIO()

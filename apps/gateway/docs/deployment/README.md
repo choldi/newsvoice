@@ -37,7 +37,9 @@ cp .env.example .env
 |----------|-------------|---------|
 | `TTS_ENGINE` | Engine activo: `pocket_tts`, `edgetts`, `omnivoice`, `mock`, `routed` | `omnivoice` |
 | `TTS_ENGINES` | JSON routing por idioma (cuando `routed`) | `""` |
-| `POCKET_TTS_MODEL` | Modelo Pocket TTS | `kyutai/pocket-tts-100m-en` |
+| `POCKET_TTS_DEFAULT_LANGUAGE` | Idioma por defecto (ISO 639-1) que se carga al arrancar | `es` |
+| `POCKET_TTS_MODEL` | Override global del checkpoint (config YAML) | `""` |
+| `POCKET_TTS_REFERENCES` | JSON de WAVs de referencia para voces stock ES/FR | `""` |
 | `EDGETTS_VOICE_PREFIX` | Locale EdgeTTS | `es-MX` |
 | `AUTO_TRANSCRIBE` | Auto-transcribir audio de referencia | `false` |
 

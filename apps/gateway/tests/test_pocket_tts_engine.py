@@ -10,8 +10,11 @@ from pathlib import Path
 import pytest
 
 from tts_api.core import ffmpeg
-from tts_api.core.engines.pocket_tts_engine import PocketTTSEngine
-from tts_api.core.exceptions import EngineUnavailableError
+from tts_api.core.engines.pocket_tts_engine import (
+    _POCKET_LANGUAGE_MODELS,
+    PocketTTSEngine,
+)
+from tts_api.core.exceptions import EngineUnavailableError, VoiceNotFoundError
 
 
 def _make_wav_bytes(sample_rate: int = 24000, duration_sec: float = 1.0) -> bytes:
@@ -51,52 +54,113 @@ class _FakeModel:
 
 
 # ---------------------------------------------------------------------------
-# POCKET_TTS_MODEL -> argumentos de load_model()
+# POCKET_TTS_MODEL -> override global de load_model()
 # ---------------------------------------------------------------------------
 
 
-def test_model_kwargs_acepta_codigo_de_idioma(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Un código de idioma se traduce a language=."""
-    monkeypatch.setenv("POCKET_TTS_MODEL", "english")
+def test_model_override_vacio_usa_checkpoint_por_idioma(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sin override, el idioma se resuelve con el checkpoint por idioma."""
+    monkeypatch.setenv("POCKET_TTS_MODEL", "")
     engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {"language": "english"}
+    assert engine._language_kwargs("es") == {"language": "spanish"}
+    assert engine._language_kwargs("fr") == {"language": "french"}
+    assert engine._language_kwargs("en") == {"language": "english"}
 
 
-def test_model_kwargs_acepta_config_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Una URL de config YAML se traduce a config=."""
+def test_model_override_acepta_config_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Una URL de config YAML se traduce a config= (override global)."""
     monkeypatch.setenv("POCKET_TTS_MODEL", "hf://repo/config.yaml")
     engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {"config": "hf://repo/config.yaml"}
+    assert engine._language_kwargs("es") == {"config": "hf://repo/config.yaml"}
 
 
-def test_model_kwargs_acepta_ruta_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_override_acepta_ruta_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Una ruta local existente a YAML se traduce a config=."""
     config = tmp_path / "voice.yaml"
     config.write_text("language: english\n")
     monkeypatch.setenv("POCKET_TTS_MODEL", str(config))
     engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {"config": str(config)}
+    assert engine._language_kwargs("es") == {"config": str(config)}
 
 
-def test_model_kwargs_ignora_repo_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Un repo id de HF sin .yaml no sirve: se ignora (config por defecto)."""
+def test_model_override_ignora_repo_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un repo id de HF sin .yaml no sirve: se ignora (checkpoint por idioma)."""
     monkeypatch.setenv("POCKET_TTS_MODEL", "kyutai/pocket-tts-100m-en")
     engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {}
+    assert engine._language_kwargs("en") == {"language": "english"}
 
 
-def test_model_kwargs_vacio_usa_config_por_defecto(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Valor vacío o no configurado devuelve {} para usar la config por defecto del modelo."""
-    monkeypatch.setenv("POCKET_TTS_MODEL", "")
-    engine = PocketTTSEngine()
-    assert engine._model_kwargs() == {}
-
-
-def test_model_kwargs_vacio(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_override_en_blanco(monkeypatch: pytest.MonkeyPatch) -> None:
     """Un valor en blanco se trata como no configurado."""
     monkeypatch.setenv("POCKET_TTS_MODEL", "   ")
     engine = PocketTTSEngine()
     assert engine._model_kwargs() == {}
+
+
+# ---------------------------------------------------------------------------
+# Selección de idioma por defecto
+# ---------------------------------------------------------------------------
+
+
+def test_default_language_por_defecto_es(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin configurar, el idioma por defecto es español."""
+    monkeypatch.setenv("POCKET_TTS_DEFAULT_LANGUAGE", "")
+    engine = PocketTTSEngine()
+    assert engine.default_language == "es"
+
+
+def test_default_language_respeta_configurado(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un idioma configurado válido se respeta."""
+    monkeypatch.setenv("POCKET_TTS_DEFAULT_LANGUAGE", "fr")
+    engine = PocketTTSEngine()
+    assert engine.default_language == "fr"
+
+
+def test_default_language_ignora_idioma_invalido(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un idioma sin checkpoint cae a español."""
+    monkeypatch.setenv("POCKET_TTS_DEFAULT_LANGUAGE", "xx")
+    engine = PocketTTSEngine()
+    assert engine.default_language == "es"
+
+
+# ---------------------------------------------------------------------------
+# Mapa de idioma -> checkpoint
+# ---------------------------------------------------------------------------
+
+
+def test_language_model_map_cubre_es_fr_en() -> None:
+    """Los idiomas principales tienen checkpoint dedicado."""
+    assert _POCKET_LANGUAGE_MODELS["es"] == "spanish"
+    assert _POCKET_LANGUAGE_MODELS["fr"] == "french"
+    assert _POCKET_LANGUAGE_MODELS["en"] == "english"
+
+
+# ---------------------------------------------------------------------------
+# Referencias ES/FR
+# ---------------------------------------------------------------------------
+
+
+def test_references_vacio_sin_configurar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sin configurar no hay referencias."""
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", "")
+    engine = PocketTTSEngine()
+    assert engine._settings.pocket_tts_references == {}
+
+
+def test_references_parsea_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Las referencias se parsean desde JSON."""
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", '{"es_male": "/tmp/es.wav"}')
+    engine = PocketTTSEngine()
+    assert engine._settings.pocket_tts_references == {"es_male": "/tmp/es.wav"}
+
+
+def test_references_ignora_json_invalido(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Un JSON inválido se ignora en vez de reventar."""
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", "not json")
+    engine = PocketTTSEngine()
+    assert engine._settings.pocket_tts_references == {}
 
 
 # ---------------------------------------------------------------------------
@@ -154,20 +218,88 @@ def test_apply_speed_falla_sin_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg no disponible")
-async def test_synthesize_aplica_speed() -> None:
-    """synthesize() aplica la velocidad indicada al audio generado."""
+async def test_synthesize_aplica_speed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """synthesize() aplica la velocidad indicada al audio generado.
+
+    Una voz stock EN (preset) carga perezosamente el modelo inglés.
+    """
     engine = PocketTTSEngine()
-    engine._model = _FakeModel()
-    engine._voice_states["giovanni"] = object()
+    fake = _FakeModel()
+    monkeypatch.setattr(engine, "_get_model", _fake_get_model(fake))
 
     wav = await engine.synthesize(
-        text="Hola mundo",
+        text="Hello world",
         voice_id="en-us-male",
         language="en",
         speed=2.0,
     )
 
     assert _wav_duration_sec(wav) == pytest.approx(0.5, rel=0.15)
+
+
+async def test_synthesize_usa_idioma_de_la_voz(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El idioma de la voz manda sobre el idioma pedido en la petición."""
+    reference = tmp_path / "es_male.wav"
+    reference.write_bytes(_make_wav_bytes())
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", f'{{"es_male": "{reference}"}}')
+    engine = PocketTTSEngine()
+    fake = _FakeModel()
+    loaded: list[str] = []
+
+    async def _get_model(language: str) -> _FakeModel:
+        loaded.append(language)
+        return fake
+
+    monkeypatch.setattr(engine, "_get_model", _get_model)
+
+    await engine.synthesize(text="Hola", voice_id="es-mx-male", language="en")
+
+    assert "es" in loaded
+
+
+async def test_synthesize_voz_es_sin_referencia_falla(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Una voz ES sin referencia configurada falla con error explícito."""
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", "")
+    engine = PocketTTSEngine()
+    monkeypatch.setattr(engine, "_get_model", _fake_get_model(_FakeModel()))
+
+    with pytest.raises(EngineUnavailableError, match="referencia"):
+        await engine.synthesize(text="Hola", voice_id="es-mx-male", language="es")
+
+
+async def test_synthesize_voz_es_con_referencia(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Una voz ES con referencia configurada renderiza vía clonación."""
+    reference = tmp_path / "es_male.wav"
+    reference.write_bytes(_make_wav_bytes())
+    monkeypatch.setenv("POCKET_TTS_REFERENCES", f'{{"es_male": "{reference}"}}')
+    engine = PocketTTSEngine()
+    fake = _FakeModel()
+    monkeypatch.setattr(engine, "_get_model", _fake_get_model(fake))
+
+    wav = await engine.synthesize(text="Hola", voice_id="es-mx-male", language="es")
+
+    assert fake.prompt_calls == 1
+    assert _wav_duration_sec(wav) == pytest.approx(1.0, rel=0.15)
+
+
+async def test_synthesize_voz_desconocida() -> None:
+    """Una voz fuera del catálogo stock da VoiceNotFoundError."""
+    engine = PocketTTSEngine()
+    with pytest.raises(VoiceNotFoundError):
+        await engine.synthesize(text="x", voice_id="nope", language="es")
+
+
+def _fake_get_model(fake: _FakeModel):
+    """Devuelve un sustituto async de ``PocketTTSEngine._get_model``."""
+
+    async def _get_model(_language: str) -> _FakeModel:
+        return fake
+
+    return _get_model
 
 
 # ---------------------------------------------------------------------------
@@ -181,13 +313,13 @@ def test_clone_state_se_cachea(tmp_path: Path) -> None:
     reference.write_bytes(_make_wav_bytes())
 
     engine = PocketTTSEngine()
-    engine._model = _FakeModel()
+    fake = _FakeModel()
 
-    first = engine._clone_state(str(reference))
-    second = engine._clone_state(str(reference))
+    first = engine._clone_state(fake, str(reference))
+    second = engine._clone_state(fake, str(reference))
 
     assert first is second
-    assert engine._model.prompt_calls == 1
+    assert fake.prompt_calls == 1
 
 
 def test_clone_state_se_invalida_si_cambia_la_referencia(tmp_path: Path) -> None:
@@ -196,10 +328,10 @@ def test_clone_state_se_invalida_si_cambia_la_referencia(tmp_path: Path) -> None
     reference.write_bytes(_make_wav_bytes())
 
     engine = PocketTTSEngine()
-    engine._model = _FakeModel()
+    fake = _FakeModel()
 
-    engine._clone_state(str(reference))
+    engine._clone_state(fake, str(reference))
     reference.write_bytes(_make_wav_bytes(duration_sec=2.0))
-    engine._clone_state(str(reference))
+    engine._clone_state(fake, str(reference))
 
-    assert engine._model.prompt_calls == 2
+    assert fake.prompt_calls == 2
