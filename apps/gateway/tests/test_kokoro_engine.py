@@ -1,26 +1,66 @@
-"""Tests unitarios del engine Kokoro (sin cargar el modelo real)."""
+"""Tests unitarios del engine Kokoro (sin cargar el modelo real).
+
+El test inyecta un ``KPipeline`` falso en vez de importar ``kokoro`` para no
+descargar pesos ni arrastrar torch en CI.
+"""
 
 from __future__ import annotations
 
 import io
 import wave
+from typing import ClassVar
 
+import numpy as np
 import pytest
 
 from tts_api.core.engines.kokoro_engine import KokoroEngine
-from tts_api.core.exceptions import FeatureNotSupportedError, UnsupportedLanguageError
+from tts_api.core.exceptions import (
+    EngineUnavailableError,
+    FeatureNotSupportedError,
+    UnsupportedLanguageError,
+    VoiceNotFoundError,
+)
+
+
+class _FakePipeline:
+    """Minimal stand-in for kokoro.KPipeline."""
+
+    instances: ClassVar[list[_FakePipeline]] = []
+
+    def __init__(self, *, lang_code: str, repo_id: str) -> None:
+        self.lang_code = lang_code
+        self.repo_id = repo_id
+        self.calls: list[tuple[str, str, float]] = []
+        _FakePipeline.instances.append(self)
+
+    def __call__(self, text, voice=None, speed=1.0, **_kwargs):
+        self.calls.append((text, voice, speed))
+        audio = np.zeros(2400, dtype=np.float32)
+        yield "graphemes", "phonemes", audio
+
+
+@pytest.fixture(autouse=True)
+def fake_kokoro(monkeypatch: pytest.MonkeyPatch):
+    """Install a fake ``kokoro`` module so KPipeline never downloads weights.
+
+    Autouse: every test in this module gets the stub, so a stray real import
+    can never reach the network. Tests that need to inspect the pipelines pass
+    the fixture explicitly.
+    """
+    _FakePipeline.instances = []
+    module = type("kokoro", (), {"KPipeline": _FakePipeline})
+    monkeypatch.setitem(__import__("sys").modules, "kokoro", module)
+    return _FakePipeline
 
 
 def test_kokoro_engine_name():
-    """Test that the engine name is correct."""
-    engine = KokoroEngine()
-    assert engine.name == "kokoro"
+    """El nombre del engine es estable para el router."""
+    assert KokoroEngine().name == "kokoro"
 
 
 def test_kokoro_engine_capabilities():
-    """Test that the engine capabilities are correct."""
-    engine = KokoroEngine()
-    caps = engine.capabilities
+    """Kokoro declara voces stock y ni clonado ni instruct."""
+    caps = KokoroEngine().capabilities
     assert caps.stock_voices
     assert not caps.voice_cloning
     assert not caps.instruct_voice_design
@@ -31,166 +71,119 @@ def test_kokoro_engine_capabilities():
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_initialize():
-    """Test that the engine initializes correctly."""
+async def test_kokoro_initialize_loads_default_language(fake_kokoro):
+    """initialize() carga solo el pipeline del idioma por defecto (es -> e)."""
     engine = KokoroEngine()
-    assert not engine._model_loaded
-
     await engine.initialize()
-    assert engine._model_loaded
 
-    # Calling initialize again should not change anything
-    await engine.initialize()
-    assert engine._model_loaded
+    assert engine._pipelines
+    assert list(engine._pipelines) == ["e"]
+    assert fake_kokoro.instances[0].lang_code == "e"
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_synthesize():
-    """Test that the engine can synthesize text."""
+async def test_kokoro_synthesize_returns_pcm_wav():
+    """synthesize() devuelve un WAV mono 24 kHz de 16 bits."""
     engine = KokoroEngine()
-    await engine.initialize()
-
-    # Test with English text
     result = await engine.synthesize(
-        text="Hello world", voice_id="kokoro-male-1", language="en", speed=1.0
+        text="Hola mundo", voice_id="es-mx-male", language="es", speed=1.0
     )
 
-    # Should return WAV bytes
     assert isinstance(result, bytes)
-    assert len(result) > 0
-
-    # Verify it's a valid WAV file
-    buffer = io.BytesIO(result)
-    with wave.open(buffer, "rb") as wav_file:
-        assert wav_file.getnchannels() == 1  # Mono
-        assert wav_file.getsampwidth() == 2  # 16-bit
+    with wave.open(io.BytesIO(result), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
         assert wav_file.getframerate() == 24000
+        assert wav_file.getnframes() == 2400
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_synthesize_unsupported_language():
-    """Test that the engine rejects unsupported languages."""
+async def test_kokoro_synthesize_passes_native_voice_and_speed():
+    """La voz nativa y la velocidad llegan al pipeline."""
     engine = KokoroEngine()
-    await engine.initialize()
+    await engine.synthesize(text="Hola", voice_id="es-mx-male", language="es", speed=1.25)
 
+    pipeline = engine._pipelines["e"]
+    assert pipeline.calls == [("Hola", "em_alex", 1.25)]
+
+
+@pytest.mark.asyncio
+async def test_kokoro_synthesize_unknown_voice_raises():
+    """Una voz desconocida no se traduce: VoiceNotFoundError."""
+    engine = KokoroEngine()
+    with pytest.raises(VoiceNotFoundError):
+        await engine.synthesize(text="Hola", voice_id="nope", language="es")
+
+
+@pytest.mark.asyncio
+async def test_kokoro_unsupported_language_raises():
+    """Un idioma sin lang_code (p.ej. catalán) se rechaza al cargar."""
+    engine = KokoroEngine()
     with pytest.raises(UnsupportedLanguageError):
-        await engine.synthesize(
-            text="Hello world",
-            voice_id="kokoro-male-1",
-            language="xx",  # Unsupported language
-            speed=1.0,
-        )
+        await engine._ensure_pipeline("ca")
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_synthesize_clone():
-    """Test that the engine raises FeatureNotSupportedError for cloning."""
-    engine = KokoroEngine()
-    await engine.initialize()
+async def test_kokoro_missing_dependency_raises(monkeypatch: pytest.MonkeyPatch):
+    """Sin el paquete kokoro el engine avisa con EngineUnavailableError."""
+    import sys
 
+    monkeypatch.setitem(sys.modules, "kokoro", None)
+    engine = KokoroEngine()
+    with pytest.raises(EngineUnavailableError, match="kokoro"):
+        await engine.initialize()
+
+
+@pytest.mark.asyncio
+async def test_kokoro_clone_and_instruct_are_rejected():
+    """Clonado e instruct no están soportados."""
+    engine = KokoroEngine()
     with pytest.raises(FeatureNotSupportedError):
         await engine.synthesize_clone(
-            text="Hello world",
-            reference_audio_path="/fake/path/reference.wav",
-            language="en",
-            speed=1.0,
+            text="Hola", reference_audio_path="/fake/ref.wav", language="es"
         )
-
-
-@pytest.mark.asyncio
-async def test_kokoro_engine_synthesize_instruct():
-    """Test that the engine raises FeatureNotSupportedError for instruct."""
-    engine = KokoroEngine()
-    await engine.initialize()
-
     with pytest.raises(FeatureNotSupportedError):
-        await engine.synthesize_instruct(
-            text="Hello world", instruct="female, young adult", language="en", speed=1.0
-        )
+        await engine.synthesize_instruct(text="Hola", instruct="female", language="es")
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_list_stock_voices():
-    """Test that the engine can list stock voices."""
+async def test_kokoro_list_stock_voices_filters_language():
+    """El catálogo declara voces con idioma y género y filtra por idioma."""
     engine = KokoroEngine()
     voices = await engine.list_stock_voices()
-
-    assert isinstance(voices, list)
-    assert len(voices) > 0
-
-    # Check structure of first voice
-    voice = voices[0]
-    assert "voice_id" in voice
-    assert "language" in voice
-    assert "gender" in voice
-    assert "name" in voice
-
-    # Test filtering by language
-    en_voices = await engine.list_stock_voices(language="en")
-    assert all(v["language"] == "en" for v in en_voices)
+    assert voices
+    assert {"voice_id", "language", "gender", "name"} <= set(voices[0])
 
     es_voices = await engine.list_stock_voices(language="es")
+    assert es_voices
     assert all(v["language"] == "es" for v in es_voices)
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_health_check():
-    """Test that the engine health check works."""
+async def test_kokoro_settings_override_voice_map(monkeypatch: pytest.MonkeyPatch):
+    """KOKORO_VOICES redefine la voz nativa de un voice_id nuestro."""
+    monkeypatch.setenv("KOKORO_VOICES", '{"es-mx-female": "ef_sofia"}')
     engine = KokoroEngine()
+    table = engine._voice_table()
+    assert table["es-mx-female"]["voice"] == "ef_sofia"
+
+
+@pytest.mark.asyncio
+async def test_kokoro_health_check():
+    """El health reporta los idiomas cargados de forma perezosa."""
+    engine = KokoroEngine()
+    await engine.initialize()
     health = await engine.health_check()
 
-    assert isinstance(health, dict)
-    assert "model_loaded" in health
-    assert "engine" in health
     assert health["engine"] == "kokoro"
-    assert "stock_voices_count" in health
+    assert health["mode"] == "REAL"
+    assert health["loaded_languages"] == ["e"]
+    assert health["stock_voices_count"] > 0
 
 
 @pytest.mark.asyncio
-async def test_kokoro_engine_list_available_models():
-    """Test that the engine can list available models."""
+async def test_kokoro_change_model_only_accepts_configured():
+    """Kokoro tiene un solo modelo: solo el configurado es válido."""
     engine = KokoroEngine()
-    models = await engine.list_available_models()
-
-    assert isinstance(models, list)
-    assert len(models) > 0
-    assert "kokoro-v0-1.0" in models
-    assert "kokoro-v0-1.1" in models
-    assert "kokoro-v1-0" in models
-
-
-@pytest.mark.asyncio
-async def test_kokoro_engine_list_available_features():
-    """Test that the engine can list available features."""
-    engine = KokoroEngine()
-    features = await engine.list_available_features()
-
-    assert isinstance(features, dict)
-    assert "stock_voices" in features
-    assert "voice_cloning" in features
-    assert "instruct_voice_design" in features
-    assert "emotions" in features
-    assert "streaming" in features
-    assert "supported_languages" in features
-    assert "available_models" in features
-    assert "current_model" in features
-
-
-@pytest.mark.asyncio
-async def test_kokoro_engine_change_model():
-    """Test that the engine can change models."""
-    engine = KokoroEngine()
-
-    # Test changing to a valid model
-    result = await engine.change_model("kokoro-v0-1.1")
-    assert result
-    assert engine._current_model == "kokoro-v0-1.1"
-
-    # Test changing to the same model (should return True)
-    result = await engine.change_model("kokoro-v0-1.1")
-    assert result
-
-    # Test changing to an invalid model (should return False)
-    result = await engine.change_model("invalid-model")
-    assert not result
-    assert engine._current_model == "kokoro-v0-1.1"  # Should remain unchanged
+    assert await engine.change_model(engine._current_model)
+    assert not await engine.change_model("kokoro-v0-1.0")

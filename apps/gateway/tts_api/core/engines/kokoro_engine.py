@@ -1,8 +1,23 @@
-"""Kokoro TTS engine implementation."""
+"""Kokoro TTS engine (hexgrad/Kokoro-82M) — CPU-first, stock voices only.
+
+Kokoro is an 82M-parameter open-weight TTS model with a small set of stock
+voices per language (American/British English, Spanish, French, Hindi,
+Italian, Portuguese, ...). It does NOT support voice cloning, instruct/voice
+design nor emotions, and has no Catalan.
+
+The pipeline loads lazily on the first synthesis so a cold API start does not
+download weights nor occupy memory until Kokoro is actually selected by the
+router. The heavy ``kokoro`` import (which pulls torch/transformers/spacy) is
+deferred to that same point.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
+import threading
+import wave
 from typing import Any
 
 from tts_api.core.engine_base import EngineCapabilities, TtsEngineBase
@@ -10,25 +25,62 @@ from tts_api.core.exceptions import (
     EngineUnavailableError,
     FeatureNotSupportedError,
     UnsupportedLanguageError,
+    VoiceNotFoundError,
 )
+from tts_api.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Frecuencia de muestreo de Kokoro-82M.
+_SAMPLE_RATE = 24000
+
+# Idioma del gateway -> ``lang_code`` de una letra que espera KPipeline.
+# Kokoro no soporta catalán.
+_KOKORO_LANGUAGE_CODES: dict[str, str] = {
+    "en": "a",
+    "en-us": "a",
+    "en-gb": "b",
+    "es": "e",
+    "fr": "f",
+    "hi": "h",
+    "it": "i",
+    "pt": "p",
+}
+
+# Idiomas declarados como soportados (los del mapping anterior, agrupados).
+_SUPPORTED_LANGUAGES = ["en", "es", "fr", "hi", "it", "pt"]
+
+# Voces stock de Kokoro por defecto para nuestro esquema de voice_id. El
+# prefijo de la voz nativa codifica idioma + género (p.ej. ``ef_dora``:
+# e=español, f=femenina). Se puede sobrescribir con ``KOKORO_VOICES``.
+_DEFAULT_VOICES: dict[str, dict[str, str]] = {
+    "es-mx-male": {"voice": "em_alex", "language": "es", "gender": "male"},
+    "es-mx-female": {"voice": "ef_dora", "language": "es", "gender": "female"},
+    "es-es-male": {"voice": "em_alex", "language": "es", "gender": "male"},
+    "es-es-female": {"voice": "ef_dora", "language": "es", "gender": "female"},
+    "en-us-male": {"voice": "am_michael", "language": "en", "gender": "male"},
+    "en-us-female": {"voice": "af_heart", "language": "en", "gender": "female"},
+    "en-gb-male": {"voice": "bm_george", "language": "en", "gender": "male"},
+    "en-gb-female": {"voice": "bf_emma", "language": "en", "gender": "female"},
+    "fr-fr-male": {"voice": "fm_gabriel", "language": "fr", "gender": "male"},
+    "fr-fr-female": {"voice": "ff_siwis", "language": "fr", "gender": "female"},
+    "it-it-male": {"voice": "im_nicola", "language": "it", "gender": "male"},
+    "it-it-female": {"voice": "if_sara", "language": "it", "gender": "female"},
+    "pt-br-male": {"voice": "pm_alex", "language": "pt", "gender": "male"},
+    "pt-br-female": {"voice": "pf_dora", "language": "pt", "gender": "female"},
+    "hi-in-male": {"voice": "hm_omega", "language": "hi", "gender": "male"},
+    "hi-in-female": {"voice": "hf_alpha", "language": "hi", "gender": "female"},
+}
+
 
 class KokoroEngine(TtsEngineBase):
-    """Kokoro TTS engine implementation."""
+    """Kokoro-82M stock-voice engine."""
 
     def __init__(self) -> None:
-        self._model_loaded = False
-        self._available_models = ["kokoro-v0-1.0", "kokoro-v0-1.1", "kokoro-v1-0"]
-        self._current_model = "kokoro-v0-1.0"
-        # Kokoro is primarily an English-focused TTS with some multilingual capability
-        # The exact list is model-dependent; these are the typical Kokoro languages.
-        self._supported_languages = ["en", "es", "fr", "de", "it", "pt"]
-        self._supports_cloning = False  # Kokoro typically doesn't support voice cloning
-        self._supports_instruct = False  # Kokoro typically doesn't support instruct/voice design
-        self._supports_emotions = False  # Kokoro typically doesn't support emotions
-        self._supports_streaming = False  # Kokoro typically doesn't support streaming
+        self._pipelines: dict[str, Any] = {}
+        self._load_lock = threading.Lock()
+        self._generate_lock = threading.Lock()
+        self._current_model = get_settings().KOKORO_REPO_ID
 
     @property
     def name(self) -> str:
@@ -40,28 +92,98 @@ class KokoroEngine(TtsEngineBase):
         """Declare what this engine supports."""
         return EngineCapabilities(
             stock_voices=True,
-            voice_cloning=self._supports_cloning,
-            instruct_voice_design=self._supports_instruct,
-            emotions=self._supports_emotions,
-            streaming=self._supports_streaming,
-            supported_languages=self._supported_languages,
+            voice_cloning=False,
+            instruct_voice_design=False,
+            emotions=False,
+            streaming=False,
+            supported_languages=list(_SUPPORTED_LANGUAGES),
         )
 
     async def initialize(self) -> None:
-        """Load model / verify connectivity."""
-        if self._model_loaded:
-            return
+        """Load the default-language pipeline (fail fast if deps are missing)."""
+        settings = get_settings()
+        language = settings.KOKORO_DEFAULT_LANGUAGE or "es"
+        await self._ensure_pipeline(language)
 
-        try:
-            # In a real implementation, this would load the Kokoro model
-            # For now, we'll simulate the initialization
-            logger.info("Initializing Kokoro engine with model %s", self._current_model)
-            # Simulate model loading
-            self._model_loaded = True
-            logger.info("Kokoro engine initialized")
-        except Exception as e:
-            logger.error("Failed to initialize Kokoro engine: %s", e)
-            raise EngineUnavailableError(f"Error initializing Kokoro engine: {e}") from e
+    def _voice_table(self) -> dict[str, dict[str, str]]:
+        """Return the voice_id -> voice mapping (settings override wins)."""
+        table = {k: dict(v) for k, v in _DEFAULT_VOICES.items()}
+        for voice_id, native in get_settings().kokoro_voices.items():
+            base = table.get(voice_id, {})
+            language = base.get("language") or self._language_from_voice(native)
+            table[voice_id] = {
+                "voice": native,
+                "language": language,
+                "gender": base.get("gender", ""),
+            }
+        return table
+
+    @staticmethod
+    def _language_from_voice(voice: str) -> str:
+        """Derive the gateway language from a native Kokoro voice id.
+
+        The first letter of a Kokoro voice selects its language group; there is
+        no reverse mapping for every group, so unknown groups fall back to the
+        default language.
+        """
+        code = (voice or "")[:1].lower()
+        for language, letter in _KOKORO_LANGUAGE_CODES.items():
+            if letter == code:
+                return language.split("-")[0]
+        return get_settings().KOKORO_DEFAULT_LANGUAGE or "es"
+
+    @staticmethod
+    def _lang_code(language: str) -> str:
+        """Map a gateway language to the single-letter KPipeline lang code."""
+        code = _KOKORO_LANGUAGE_CODES.get(language)
+        if code is None:
+            code = _KOKORO_LANGUAGE_CODES.get(language.split("-", maxsplit=1)[0])
+        return code or ""
+
+    def _load_pipeline(self, language: str) -> Any:
+        with self._load_lock:
+            lang_code = self._lang_code(language)
+            if not lang_code:
+                raise UnsupportedLanguageError(language, _SUPPORTED_LANGUAGES)
+            if lang_code in self._pipelines:
+                return self._pipelines[lang_code]
+
+            try:
+                from kokoro import KPipeline
+            except ImportError as exc:
+                raise EngineUnavailableError(
+                    "kokoro no está instalado. Instala el extra: uv sync --extra kokoro"
+                ) from exc
+
+            repo_id = get_settings().KOKORO_REPO_ID
+            try:
+                pipeline = KPipeline(lang_code=lang_code, repo_id=repo_id)
+            except Exception as exc:
+                raise EngineUnavailableError(f"Error cargando Kokoro ({repo_id}): {exc}") from exc
+
+            self._pipelines[lang_code] = pipeline
+            logger.info("kokoro pipeline loaded (lang_code=%s, repo=%s)", lang_code, repo_id)
+            return pipeline
+
+    async def _ensure_pipeline(self, language: str) -> Any:
+        lang_code = self._lang_code(language)
+        if lang_code in self._pipelines:
+            return self._pipelines[lang_code]
+        return await asyncio.to_thread(self._load_pipeline, language)
+
+    def _generate(self, text: str, voice: str, lang_code: str, speed: float) -> Any:
+        import numpy as np
+
+        pipeline = self._pipelines[lang_code]
+        chunks: list[Any] = []
+        with self._generate_lock:
+            for _gs, _ps, audio in pipeline(text, voice=voice, speed=speed):
+                if audio is None:
+                    continue
+                chunks.append(np.asarray(_tensor_to_numpy(audio), dtype=np.float32).squeeze())
+        if not chunks:
+            raise EngineUnavailableError("Kokoro no devolvió audio para el texto dado")
+        return np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
     async def synthesize(
         self,
@@ -74,42 +196,19 @@ class KokoroEngine(TtsEngineBase):
         engine_name: str | None = None,
     ) -> bytes:
         """Synthesize text with a stock voice. Returns WAV bytes."""
-        if not self._model_loaded:
-            await self.initialize()
+        table = self._voice_table()
+        entry = table.get(voice_id)
+        if entry is None:
+            raise VoiceNotFoundError(voice_id, "stock")
 
-        # Validate language
-        if language not in self._supported_languages:
-            raise UnsupportedLanguageError(language, self._supported_languages)
+        entry_language = entry.get("language") or language
+        if entry_language not in _SUPPORTED_LANGUAGES:
+            raise UnsupportedLanguageError(entry_language, _SUPPORTED_LANGUAGES)
 
-        # In a real implementation, this would call the Kokoro synthesis function
-        # For now, we'll return silent audio as a placeholder
-        logger.info(
-            "Synthesizing with Kokoro: text='%s', voice=%s, language=%s, speed=%.2f",
-            text[:50],
-            voice_id,
-            language,
-            speed,
-        )
-
-        # Placeholder implementation - in reality this would generate actual audio
-        # For now, return silent audio (1 second of silence at 24kHz)
-        import io
-        import wave
-
-        sample_rate = 24000
-        duration_seconds = max(1.0, len(text) * 0.08)  # Rough estimate
-        num_samples = int(duration_seconds * sample_rate)
-
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(sample_rate)
-            # Write silent audio (all zeros)
-            silent_frames = b"\x00\x00" * num_samples
-            wav_file.writeframes(silent_frames)
-
-        return buffer.getvalue()
+        await self._ensure_pipeline(entry_language)
+        lang_code = self._lang_code(entry_language)
+        audio = await asyncio.to_thread(self._generate, text, entry["voice"], lang_code, speed)
+        return self._numpy_to_wav(audio)
 
     async def synthesize_clone(
         self,
@@ -121,18 +220,7 @@ class KokoroEngine(TtsEngineBase):
         ref_text: str | None = None,
         engine_name: str | None = None,
     ) -> bytes:
-        """Synthesize text cloning a voice from reference audio. Returns WAV bytes."""
-        if not self._supports_cloning:
-            raise FeatureNotSupportedError("voice cloning", self.name)
-
-        if not self._model_loaded:
-            await self.initialize()
-
-        # Validate language
-        if language not in self._supported_languages:
-            raise UnsupportedLanguageError(language, self._supported_languages)
-
-        # Kokoro typically doesn't support voice cloning
+        """Kokoro does not support voice cloning."""
         raise FeatureNotSupportedError("voice cloning", self.name)
 
     async def synthesize_instruct(
@@ -145,51 +233,20 @@ class KokoroEngine(TtsEngineBase):
         emotion: str | None = None,
         engine_name: str | None = None,
     ) -> bytes:
-        """Synthesize text with a voice-design instruct. Returns WAV bytes."""
-        if not self._supports_instruct:
-            raise FeatureNotSupportedError("instruct/voice design", self.name)
-
-        if not self._model_loaded:
-            await self.initialize()
-
-        # Validate language
-        if language not in self._supported_languages:
-            raise UnsupportedLanguageError(language, self._supported_languages)
-
-        # Kokoro typically doesn't support instruct/voice design
+        """Kokoro does not support instruct/voice design."""
         raise FeatureNotSupportedError("instruct/voice design", self.name)
 
     async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
         """Return available stock voices, optionally filtered by language."""
-        # In a real implementation, this would return actual Kokoro voices
-        # For now, return a placeholder list based on typical Kokoro voices
         voices = [
             {
-                "voice_id": "kokoro-male-1",
-                "language": "en",
-                "gender": "male",
-                "name": "Kokoro Male Voice 1",
-            },
-            {
-                "voice_id": "kokoro-female-1",
-                "language": "en",
-                "gender": "female",
-                "name": "Kokoro Female Voice 1",
-            },
-            {
-                "voice_id": "kokoro-male-es-1",
-                "language": "es",
-                "gender": "male",
-                "name": "Kokoro Spanish Male Voice 1",
-            },
-            {
-                "voice_id": "kokoro-female-es-1",
-                "language": "es",
-                "gender": "female",
-                "name": "Kokoro Spanish Female Voice 1",
-            },
+                "voice_id": voice_id,
+                "language": entry["language"],
+                "gender": entry.get("gender", ""),
+                "name": voice_id,
+            }
+            for voice_id, entry in self._voice_table().items()
         ]
-
         if language:
             voices = [v for v in voices if v["language"] == language]
         return voices
@@ -197,58 +254,59 @@ class KokoroEngine(TtsEngineBase):
     async def health_check(self) -> dict[str, Any]:
         """Return engine health status dict."""
         return {
-            "model_loaded": self._model_loaded,
-            "gpu_available": False,  # Kokoro is typically CPU-based
+            "model_loaded": bool(self._pipelines),
+            "gpu_available": False,
             "device": "cpu",
             "stock_voices_count": len(await self.list_stock_voices()),
             "vram_free_mb": 0,
-            "mode": "REAL" if self._model_loaded else "NOT_LOADED",
+            "mode": "REAL" if self._pipelines else "NOT_LOADED",
             "engine": self.name,
             "current_model": self._current_model,
+            "loaded_languages": sorted(self._pipelines),
         }
 
     async def list_available_models(self) -> list[str]:
         """List available models for this engine."""
-        return self._available_models.copy()
+        return [self._current_model]
 
     async def list_available_features(self) -> dict[str, Any]:
         """Return detailed feature information."""
-        base_features = self.capabilities.__dict__
-        base_features.update(
+        features = self.capabilities.__dict__.copy()
+        features.update(
             {
-                "available_models": self._available_models,
+                "available_models": [self._current_model],
                 "current_model": self._current_model,
-                "supports_cloning": self._supports_cloning,
-                "supports_instruct": self._supports_instruct,
-                "supports_emotions": self._supports_emotions,
-                "supports_streaming": self._supports_streaming,
+                "supports_cloning": False,
+                "supports_instruct": False,
+                "supports_emotions": False,
+                "supports_streaming": False,
             }
         )
-        return base_features
+        return features
 
     async def change_model(self, model_name: str) -> bool:
-        """Attempt to change model at runtime."""
-        if model_name not in self._available_models:
-            logger.warning(
-                "Model %s not available. Available models: %s",
-                model_name,
-                self._available_models,
-            )
+        """Kokoro ships a single model; only the configured repo is valid."""
+        if model_name != self._current_model:
+            logger.warning("Kokoro only supports model %s", self._current_model)
             return False
+        return True
 
-        if model_name == self._current_model:
-            logger.info("Model %s is already active", model_name)
-            return True
+    def _numpy_to_wav(self, audio: Any) -> bytes:
+        """Convert a float32 mono signal to 16-bit PCM WAV bytes."""
+        import numpy as np
 
-        try:
-            logger.info("Changing Kokoro model from %s to %s", self._current_model, model_name)
-            # In a real implementation, this would unload the current model and load the new one
-            self._current_model = model_name
-            # If model was loaded, we'd need to reload it
-            if self._model_loaded:
-                # Simulate reloading
-                logger.info("Reloaded model %s", model_name)
-            return True
-        except Exception as e:
-            logger.error("Failed to change model to %s: %s", model_name, e)
-            return False
+        pcm = (np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(_SAMPLE_RATE)
+            out.writeframes(pcm.tobytes())
+        return buffer.getvalue()
+
+
+def _tensor_to_numpy(audio: Any) -> Any:
+    """Detach a torch tensor (or pass a numpy array through)."""
+    if hasattr(audio, "detach"):
+        audio = audio.detach().cpu().numpy()
+    return audio

@@ -72,11 +72,9 @@ zono2 = [
     # For now, placeholder
     "numpy>=1.24.0",
 ]
-# Engine: Kokoro (TTS model)
+# Engine: Kokoro (TTS model, CPU-first, 82M params, stock voices es/en/fr/...)
 kokoro = [
-    # Add actual Kokoro dependencies here when known
-    # For now, placeholder
-    "numpy>=1.24.0",
+    "kokoro>=0.9.4",
 ]
 # Auto-transcription of reference audio (optional)
 transcribe = [

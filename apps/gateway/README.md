@@ -75,6 +75,9 @@ cp .env.example .env
 | `POCKET_TTS_MODEL` | Override global del checkpoint (config YAML/ruta/URL) | `""` |
 | `POCKET_TTS_REFERENCES` | JSON de WAVs de referencia para voces stock ES/FR clonadas | `""` |
 | `EDGETTS_VOICE_PREFIX` | Locale por defecto EdgeTTS | `es-MX` |
+| `KOKORO_REPO_ID` | Repo Hugging Face del modelo Kokoro | `hexgrad/Kokoro-82M` |
+| `KOKORO_DEFAULT_LANGUAGE` | Idioma por defecto de Kokoro (sin catalán) | `es` |
+| `KOKORO_VOICES` | JSON voz_id del gateway -> voz nativa de Kokoro | `""` |
 | `AUTO_TRANSCRIBE` | Auto-transcribir audio de referencia | `false` |
 | `DATABASE_URL` | URL de SQLite | `sqlite:///storage/omnivoice.db` |
 | `API_KEY` | API Key opcional | `""` |

@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     # EdgeTTS config (when TTS_ENGINE=edgetts)
     EDGETTS_VOICE_PREFIX: str = "es-MX"
 
+    # --- Kokoro engine (when TTS_ENGINE=kokoro) ---
+    # Repo Hugging Face del model card oficial (82M). El pipeline descarga
+    # pesos y voces desde aquí en el primer arranque.
+    KOKORO_REPO_ID: str = "hexgrad/Kokoro-82M"
+    # Idioma por defecto: se mapea al lang_code de una letra del KPipeline
+    # (a=en-US, b=en-GB, e=es, f=fr, h=hi, i=it, p=pt, ...). Kokoro no soporta
+    # catalán.
+    KOKORO_DEFAULT_LANGUAGE: str = "es"
+    # Mapeo voz_id (nuestro esquema) -> voz nativa de Kokoro (p.ej. "ef_dora").
+    # JSON {"es-mx-male": "em_alex", ...}; el idioma se deriva de la voz.
+    KOKORO_VOICES: str = ""
+
     # --- Piper engine (when TTS_ENGINE=piper) ---
     # Directorio con los modelos ONNX (<voice>.onnx + <voice>.onnx.json).
     PIPER_VOICES_DIR: Path = Path("storage/piper_voices")
@@ -193,6 +205,25 @@ class Settings(BaseSettings):
             no es un JSON de objeto o no está fijado.
         """
         raw = (self.POCKET_TTS_REFERENCES or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {str(k): str(v) for k, v in parsed.items()}
+
+    @property
+    def kokoro_voices(self) -> dict[str, str]:
+        """Mapeo voz_id del gateway -> voz nativa de Kokoro.
+
+        Returns:
+            Diccionario ``{voice_id: kokoro_voice}``; vacío si
+            ``KOKORO_VOICES`` no es un JSON de objeto o no está fijado.
+        """
+        raw = (self.KOKORO_VOICES or "").strip()
         if not raw:
             return {}
         try:

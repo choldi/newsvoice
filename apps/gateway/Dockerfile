@@ -2,10 +2,12 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Instalar dependencias del sistema para soundfile, pydub
+# Instalar dependencias del sistema para soundfile, pydub y espeak-ng (Kokoro
+# usa espeak-ng via misaki/espeakng-loader para el frontend G2P multiidioma).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Workspace metadata + the shared tts_contract lib, so `uv sync --package
@@ -18,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml uv.lock ./
 COPY libs/tts_contract ./libs/tts_contract
 COPY apps/gateway/pyproject.toml apps/gateway/README.md ./apps/gateway/
-ARG UV_EXTRAS="--extra pocket_tts --extra edgetts --extra omnivoice"
+ARG UV_EXTRAS="--extra pocket_tts --extra edgetts --extra omnivoice --extra kokoro"
 RUN pip install --no-cache-dir uv && \
     uv sync --frozen --no-dev --no-install-project --package tts-api ${UV_EXTRAS} && \
     uv cache clean
@@ -34,6 +36,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
