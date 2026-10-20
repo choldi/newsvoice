@@ -595,8 +595,12 @@ make status
   `tts_backend='omni_voice'` con voces diseñadas (UUIDs). El engine `routed`
   (pocket_tts/edgetts) no las conoce → «Voz no encontrada». El workflow garantiza
   que el digest de texto se entrega igual (narration failure ≠ digest failure).
-  Para restaurar la narración de audio: habilitar OmniVoice para ese job (instalar
-  el engine + `TTS_ENGINES` con `omnivoice`), aceptar la voz stock o activar
+  **Sidecar implementado** (`gateway-omnivoice`, imagen
+  `apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote` en el gateway):
+  para activarlo, poner `OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000`,
+  añadir `omnivoice_remote` a `TTS_EXTRA_ENGINES` y retaggear (`UPDATE
+  cloned_voices/designed_voices SET engine='omnivoice_remote'`) las voces que
+  deban servirse por el sidecar. Alternativa sin sidecar: aceptar la voz stock o
   `TTS_FALLBACK_TO_EDGE=true` (pierde los personajes John/Peter).
 - **Purga legacy (1–2 semanas, con confirmación)**: retirar `~/news-summary`,
   `~/ov_api`, `~/qwen3-tts` y el volumen `news-summary_temporal_pg_data`. Ya hay

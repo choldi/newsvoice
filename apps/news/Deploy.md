@@ -65,14 +65,24 @@ Key variables to set:
 - **apps/gateway/.env**
   - `TTS_ENGINE` — `routed` (multi-engine) or a single engine name
   - `TTS_ENGINES` — JSON mapping lang→engine (e.g. `{"es":"pocket_tts","_default":"pocket_tts"}`)
+  - `TTS_EXTRA_ENGINES` — comma-separated engines to load without routing any
+    language to them (e.g. `omnivoice_remote`), for per-voice engine pins
   - `TTS_DEVICE` — `cuda:0` on GPU host, `cpu` otherwise
   - `API_KEY` — protect the gateway API (required in Shape B when exposed)
   - `HF_TOKEN` — HuggingFace token with access to the gated repo
-    `kyutai/pocket-tts`. Required for pocket_tts **voice cloning** (the stock
-    voices do not need it). Without it, `synthesize_clone` fails with
-    *"could not download the weights for the model with voice cloning"*. The
-    gated weights (~438 MB) are downloaded once and persisted in the
-    `gateway_hf_cache` volume.
+    `kyutai/pocket-tts`. pocket_tts loads that repo (438 MB) when it starts, so
+    the token must be present before the gateway boots; without it
+    `synthesize_clone` fails with *"could not download the weights for the
+    model with voice cloning"*. The weights are downloaded once and persisted
+    in the `gateway_hf_cache` volume. Set the token on the host
+    (`~/.cache/huggingface/token`) or export `HF_TOKEN` in this file;
+    `HF_TOKEN_FILE` is also honoured.
+  - `OMNIVOICE_REMOTE_URL` — address of the `gateway-omnivoice` sidecar, e.g.
+    `http://gateway-omnivoice:8000`. Add `omnivoice_remote` to
+    `TTS_EXTRA_ENGINES` (not `TTS_ENGINES`) so voices tagged with that engine
+    resolve without routing any language to it; leave the URL empty to keep the
+    proxy disabled.
+  - `OMNIVOICE_REMOTE_TIMEOUT` — proxy timeout in seconds (default `300`).
 
 ---
 
@@ -98,7 +108,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
 ```
 
-Services started (12):
+Services started (13):
 - `api` (news-engine REST + GUI) — port `${API_PORT:-8000}`
 - `worker` (Temporal digest worker)
 - `narration-worker` (multi-speaker audio)
@@ -108,6 +118,11 @@ Services started (12):
 - `there` (WhatsApp gateway, internal)
 - `temporal` + `temporal-postgres` + `temporal-ui` (port 8081)
 - `gateway` (TTS API) — published on `${GATEWAY_PORT:-8001}`
+  - `gateway-omnivoice` (OmniVoice sidecar, internal, optional) — the real
+  OmniVoice engine in its own image/venv so its deps (librosa/numba,
+  transformers>=5.3) cannot clash with pocket_tts (numpy>=2). The gateway talks
+  to it through `OMNIVOICE_REMOTE_URL`; it is unused unless `omnivoice_remote`
+  is added to `TTS_EXTRA_ENGINES`.
 
 Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8000/api/v1` in `apps/news/.env`
 (the gateway container listens on 8000; the host publishes 8001 for Shape B).
