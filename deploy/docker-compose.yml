@@ -297,6 +297,7 @@ services:
     volumes:
       - ../apps/gateway/storage:/app/storage
       - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+      - gateway_hf_cache:/root/.cache/huggingface
     restart: unless-stopped
 
 volumes:
