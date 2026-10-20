@@ -263,3 +263,111 @@ async def test_tts_cloned_voice_via_stock_endpoint(async_client: AsyncClient) ->
         assert call_kwargs["language"] == "es"
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# POST /tts/clone (path-based, used by the OmniVoice sidecar proxy)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tts_clone_path_success(
+    async_client: AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    voices_dir = tmp_path / "voices"
+    reference = voices_dir / "abc" / "reference.wav"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(_make_wav())
+    monkeypatch.setenv("VOICES_DIR", str(voices_dir))
+
+    mock_service = AsyncMock()
+    mock_service.synthesize_clone_path.return_value = AudioResult(
+        wav_bytes=_make_wav(), duration_sec=0.5, sample_rate=24000
+    )
+
+    app.dependency_overrides[get_tts_service] = lambda: mock_service
+    try:
+        resp = await async_client.post(
+            "/api/v1/tts/clone",
+            json={
+                "text": "Hola",
+                "reference_audio_path": str(reference),
+                "language": "es",
+                "speed": 1.1,
+                "ref_text": "Hola",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "audio/wav"
+        kwargs = mock_service.synthesize_clone_path.call_args.kwargs
+        assert kwargs["reference_audio_path"] == str(reference.resolve())
+        assert kwargs["language"] == "es"
+        assert kwargs["speed"] == 1.1
+        assert kwargs["ref_text"] == "Hola"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_tts_clone_path_rejects_outside_voices_dir(
+    async_client: AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(_make_wav())
+    monkeypatch.setenv("VOICES_DIR", str(voices_dir))
+
+    resp = await async_client.post(
+        "/api/v1/tts/clone",
+        json={"text": "Hola", "reference_audio_path": str(outside), "language": "es"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error_type"] == "invalid_reference_path"
+
+
+@pytest.mark.asyncio
+async def test_tts_clone_path_missing_reference(
+    async_client: AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    monkeypatch.setenv("VOICES_DIR", str(voices_dir))
+
+    resp = await async_client.post(
+        "/api/v1/tts/clone",
+        json={
+            "text": "Hola",
+            "reference_audio_path": str(voices_dir / "nope.wav"),
+            "language": "es",
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error_type"] == "reference_not_found"
+
+
+@pytest.mark.asyncio
+async def test_tts_clone_path_engine_unavailable(
+    async_client: AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tts_api.core.exceptions import EngineUnavailableError
+
+    voices_dir = tmp_path / "voices"
+    reference = voices_dir / "abc" / "reference.wav"
+    reference.parent.mkdir(parents=True)
+    reference.write_bytes(_make_wav())
+    monkeypatch.setenv("VOICES_DIR", str(voices_dir))
+
+    mock_service = AsyncMock()
+    mock_service.synthesize_clone_path.side_effect = EngineUnavailableError("sidecar down")
+
+    app.dependency_overrides[get_tts_service] = lambda: mock_service
+    try:
+        resp = await async_client.post(
+            "/api/v1/tts/clone",
+            json={"text": "Hola", "reference_audio_path": str(reference), "language": "es"},
+        )
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["error_type"] == "engine_unavailable"
+    finally:
+        app.dependency_overrides.clear()

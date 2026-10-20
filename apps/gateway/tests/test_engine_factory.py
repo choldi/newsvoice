@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from tts_api.core.engine_base import TtsEngineBase
-from tts_api.core.engine_factory import _create_single_engine, create_engine
+from tts_api.core.engine_factory import (
+    _create_routed_engine,
+    _create_single_engine,
+    create_engine,
+)
 
 
 def test_create_single_engine_mock():
@@ -34,6 +38,13 @@ def test_create_single_engine_omnivoice():
     engine = _create_single_engine("omnivoice")
     assert isinstance(engine, TtsEngineBase)
     assert engine.name == "omnivoice"
+
+
+def test_create_single_engine_omnivoice_remote():
+    """Test creating the HTTP proxy engine for the OmniVoice sidecar."""
+    engine = _create_single_engine("omnivoice_remote")
+    assert isinstance(engine, TtsEngineBase)
+    assert engine.name == "omnivoice_remote"
 
 
 def test_create_single_engine_zono2():
@@ -103,3 +114,21 @@ def test_create_engine_with_chatterbox_param():
     engine = create_engine("chatterbox")
     assert isinstance(engine, TtsEngineBase)
     assert engine.name == "chatterbox"
+
+
+def test_create_routed_engine_with_extra_engines():
+    """Extra engines are instantiated without routing any language to them."""
+    engine = _create_routed_engine(
+        '{"es":"mock","_default":"mock"}', extra_engines="omnivoice_remote"
+    )
+    assert engine.name.startswith("routed(")
+    assert set(engine._engines) == {"mock", "omnivoice_remote"}
+
+
+def test_create_engine_reads_extra_engines(monkeypatch):
+    """create_engine wires TTS_EXTRA_ENGINES into the routed engine."""
+    monkeypatch.setenv("TTS_ENGINE", "routed")
+    monkeypatch.setenv("TTS_ENGINES", '{"es":"mock","_default":"mock"}')
+    monkeypatch.setenv("TTS_EXTRA_ENGINES", "omnivoice_remote")
+    engine = create_engine()
+    assert "omnivoice_remote" in engine._engines
