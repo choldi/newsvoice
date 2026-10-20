@@ -5,6 +5,8 @@
 # This overlay assigns every service to one of two profiles:
 #   news    - the app host (news-engine, Temporal, WhatsApp)
 #   gateway - the GPU host (the TTS gateway)
+# The OmniVoice sidecar keeps its own opt-in "omnivoice" profile (defined in the
+# base file) and is intentionally not listed here.
 #
 # Usage:
 #   app host:    docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.split.yml \
@@ -43,6 +45,4 @@ services:
     profiles: ["news"]
 
   gateway:
-    profiles: ["gateway"]
-  gateway-omnivoice:
     profiles: ["gateway"]

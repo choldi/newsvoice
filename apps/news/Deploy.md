@@ -108,7 +108,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
 ```
 
-Services started (13):
+Services started (12):
 - `api` (news-engine REST + GUI) — port `${API_PORT:-8000}`
 - `worker` (Temporal digest worker)
 - `narration-worker` (multi-speaker audio)
@@ -118,7 +118,10 @@ Services started (13):
 - `there` (WhatsApp gateway, internal)
 - `temporal` + `temporal-postgres` + `temporal-ui` (port 8081)
 - `gateway` (TTS API) — published on `${GATEWAY_PORT:-8001}`
-  - `gateway-omnivoice` (OmniVoice sidecar, internal, optional) — the real
+
+Optional, opt-in with `--profile omnivoice` (never started by the `news` or
+`gateway` profiles):
+- `gateway-omnivoice` (OmniVoice sidecar, internal) — the real
   OmniVoice engine in its own image/venv so its deps (librosa/numba,
   transformers>=5.3) cannot clash with pocket_tts (numpy>=2). The gateway talks
   to it through `OMNIVOICE_REMOTE_URL`; it is unused unless `omnivoice_remote`

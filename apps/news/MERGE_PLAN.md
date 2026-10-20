@@ -595,10 +595,12 @@ make status
   `tts_backend='omni_voice'` con voces diseñadas (UUIDs). El engine `routed`
   (pocket_tts/edgetts) no las conoce → «Voz no encontrada». El workflow garantiza
   que el digest de texto se entrega igual (narration failure ≠ digest failure).
-  **Sidecar implementado** (`gateway-omnivoice`, imagen
-  `apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote` en el gateway):
-  para activarlo, poner `OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000`,
-  añadir `omnivoice_remote` a `TTS_EXTRA_ENGINES` y retaggear (`UPDATE
+  **Sidecar implementado y verificado** (`gateway-omnivoice`, imagen
+  `apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote` en el gateway;
+  arranca con `--profile omnivoice`): para activarlo, poner
+  `TTS_PATH=/home/jordi/ov_api` (modelo local, sin descarga),
+  `OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000`, añadir
+  `omnivoice_remote` a `TTS_EXTRA_ENGINES` y retaggear (`UPDATE
   cloned_voices/designed_voices SET engine='omnivoice_remote'`) las voces que
   deban servirse por el sidecar. Alternativa sin sidecar: aceptar la voz stock o
   `TTS_FALLBACK_TO_EDGE=true` (pierde los personajes John/Peter).

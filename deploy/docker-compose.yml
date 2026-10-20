@@ -281,6 +281,7 @@ services:
   # in the main gateway. The main gateway reaches it through the
   # `omnivoice_remote` engine; the service is not published to the host.
   gateway-omnivoice:
+    profiles: ["omnivoice"]
     build:
       context: ..
       dockerfile: apps/gateway/Dockerfile.omnivoice
