@@ -13,7 +13,7 @@ narration_strategy = 'turns'
 [[collections]]
 name = 'tech'
 time = '08:00'
-feed_urls = ['https://techcrunch.com/feed/', 'https://www.theverge.com/rss/index.xml']
+feed_urls = ['https://techcrunch.com/feed/', 'https://www.theverge.com/rss/index.xml', 'https://arstechnica.com/feed/', 'https://www.engadget.com/rss.xml', 'https://www.theregister.com/headlines.atom']
 tts_enabled = false
 deliver_audio = false
 podcast_name = 'Tech Brief'
@@ -40,7 +40,7 @@ enabled = true
 [[collections]]
 name = 'health'
 time = '09:30'
-feed_urls = ['https://www.healthline.com/rss']
+feed_urls = ['https://www.sciencedaily.com/rss/health_medicine.xml', 'https://www.statnews.com/feed/', 'https://www.medicalxpress.com/rss-feed/', 'https://www.who.int/rss-feeds/news-english.xml', 'https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml']
 tts_enabled = false
 deliver_audio = false
 podcast_name = ''
