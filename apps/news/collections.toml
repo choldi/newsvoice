@@ -23,7 +23,7 @@ voice = 'es-mx-male'
 prompt_template = 'default'
 custom_prompt = ''
 email_recipients = []
-whatsapp_recipients = ['+34635173028']
+whatsapp_recipients = ['+34609116369']
 delivery_channels = ['telegram']
 narration_enabled = true
 narration_spec = { title = 'Tech Brief', language = 'es', roles = [{ name = 'anchor', voice_id = 'es-mx-male', language = 'es' }, { name = 'expert', voice_id = 'es-mx-female', language = 'es' }], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'omni_voice', voice_source = 'qwen_design', ai_disclosure = false }
