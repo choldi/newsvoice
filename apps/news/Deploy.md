@@ -487,6 +487,127 @@ Session state persists in `data/there`, so the pairing survives container
 restarts. Re-pair at any time by repeating the tunnel+scan steps.
 
 ---
+
+## 4.2 Telegram Delivery
+
+Telegram delivery talks directly to the Telegram Bot API
+(`https://api.telegram.org/bot<token>/<method>`) from the worker. It is the
+**default channel**: every collection falls back to `["telegram"]` when
+`delivery_channels` is empty or invalid. No extra container is needed.
+
+Enable it in `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=<token from @BotFather>
+TELEGRAM_CHAT_ID=<target chat id>            # e.g. -1001234567890 for a group
+```
+
+`delivery_channels` controls which channels are used; `chat_id` overrides the
+global `TELEGRAM_CHAT_ID` per collection:
+
+```toml
+chat_id = ""                              # empty -> global TELEGRAM_CHAT_ID
+delivery_channels = ["telegram"]          # add "email"/"whatsapp" to fan out
+```
+
+**Getting the credentials:**
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy
+   the token.
+2. Add the bot to the target group (or start a DM with it).
+3. Resolve the chat id — read the `chat.id` from an incoming update:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates" \
+     | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"][-1]["message"]["chat"]["id"])'
+   ```
+
+   Group ids are negative and usually start with `-100…`.
+
+**What is delivered:**
+
+- Digest text (`sendMessage`) — split into ≤4000-char chunks; Markdown is tried
+  first and automatically falls back to plain text when Telegram rejects the
+  entities.
+- Digest audio (`sendAudio`) when `tts_enabled` **and** `deliver_audio` are true.
+- Narration audio (`sendAudio`) when the narration flow runs and
+  `narration_deliver_audio` is true.
+- Lessons (`sendDocument` + `sendAudio`) via the lesson workflow.
+- Monitor alerts (`sendMessage`) when `monitor_notify_channels` includes
+  `telegram` (targets `MONITOR_TELEGRAM_CHAT_ID` or the global chat id).
+
+### Validating Telegram delivery
+
+Run these from the repo root on the host (the `docker exec` uses the worker's
+`settings`, so it exercises the exact credentials the pipeline uses).
+
+**1. Bot and chat reachable:**
+
+```bash
+docker exec news_engine_worker python3 -c '
+import json, urllib.request
+from src.core.config import get_settings
+s = get_settings()
+def get(m):
+    with urllib.request.urlopen(f"https://api.telegram.org/bot{s.telegram_bot_token}/{m}", timeout=15) as r:
+        return json.loads(r.read())
+print("me:  ", get("getMe")["result"]["username"])
+print("chat:", get(f"getChat?chat_id={s.telegram_chat_id}")["result"].get("title"))
+print("member:", get(f"getChatMember?chat_id={s.telegram_chat_id}&user_id=" + str(get("getMe")["result"]["id"]))["result"]["status"])
+'
+```
+
+Expected: the bot username, the chat title and a membership `status` of
+`member` or `administrator` (a plain `member` is enough when the group permits
+sending messages).
+
+**2. Direct text + audio send:**
+
+```bash
+# text (Markdown + plain fallback)
+docker exec news_engine_worker python3 -c '
+import json, urllib.request
+from src.core.config import get_settings
+s = get_settings(); cid = s.telegram_chat_id
+body = json.dumps({"chat_id": cid, "text": "*news-engine*\nvalidacion Telegram ✅", "parse_mode": "Markdown"}).encode()
+req = urllib.request.Request(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendMessage", data=body, headers={"Content-Type": "application/json"}, method="POST")
+print(json.loads(urllib.request.urlopen(req, timeout=20).read())["result"]["message_id"])
+'
+
+# audio (sendAudio multipart) with a rendered narration file
+docker exec news_engine_worker python3 -c '
+import json, urllib.request, uuid
+from src.core.config import get_settings
+s = get_settings(); cid = s.telegram_chat_id
+data = open("/app/data/narration/<file>.m4a", "rb").read()
+b = "----b" + uuid.uuid4().hex
+def part(n, v): return ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (b, n, v)).encode()
+body = part("chat_id", cid) + part("caption", "audio test") + ("--%s\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"n.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n" % b).encode() + data + ("\r\n--%s--\r\n" % b).encode()
+req = urllib.request.Request(f"https://api.telegram.org/bot{s.telegram_bot_token}/sendAudio", data=body, headers={"Content-Type": "multipart/form-data; boundary=" + b}, method="POST")
+print(json.loads(urllib.request.urlopen(req, timeout=60).read())["result"]["message_id"])
+'
+```
+
+**3. End-to-end via the pipeline:**
+
+```bash
+docker exec news_engine_worker python -m src.workers.trigger --collection tech
+```
+
+Inspect the returned `delivery_status`: it must contain a `status: ok` text
+entry (`message_id`), a `channel: narration` audio entry and a
+`channel: telegram_audio` entry. Matching worker log lines:
+
+```
+Sending Telegram message        (... deliver_telegram_message_activity)
+Sending Telegram audio: data/narration/...  (... deliver_telegram_audio_activity)
+```
+
+`telegram_markdown_rejected_sending_plain_text` is a **warning, not a
+failure**: it means the Markdown attempt was rejected and the plain-text
+fallback was used.
+
+---
 ## 5. Health Checks
 
 Check API health:
