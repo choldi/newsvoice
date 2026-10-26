@@ -52,6 +52,45 @@ async def test_generate_completion_does_not_disable_thinking_when_configured() -
 
 
 @pytest.mark.asyncio
+async def test_generate_completion_can_opt_into_disabling_thinking_in_json_mode() -> None:
+    """A JSON caller talking to llama.cpp may ask for thinking off explicitly."""
+    mock_choice = AsyncMock()
+    mock_choice.message.content = "{}"
+    mock_response = AsyncMock()
+    mock_response.choices = [mock_choice]
+
+    with patch("litellm.acompletion", return_value=mock_response) as mock_acompletion:
+        await generate_completion(
+            messages=[{"role": "user", "content": "Hello"}],
+            response_format="json_object",
+            disable_thinking=True,
+        )
+
+    kwargs = mock_acompletion.call_args.kwargs
+    assert kwargs["response_format"] == {"type": "json_object"}
+    assert kwargs["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "reasoning_effort": "none",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_completion_keeps_json_mode_free_of_llama_kwargs_by_default() -> None:
+    """Without an explicit override, JSON mode is left alone (hosted providers)."""
+    mock_choice = AsyncMock()
+    mock_choice.message.content = "{}"
+    mock_response = AsyncMock()
+    mock_response.choices = [mock_choice]
+
+    with patch("litellm.acompletion", return_value=mock_response) as mock_acompletion:
+        await generate_completion(
+            messages=[{"role": "user", "content": "Hello"}], response_format="json_object"
+        )
+
+    assert "extra_body" not in mock_acompletion.call_args.kwargs
+
+
+@pytest.mark.asyncio
 async def test_generate_completion_failure() -> None:
     """Tests exception handling when LiteLLM completion fails."""
     with patch("litellm.acompletion", side_effect=Exception("Connection refused")):

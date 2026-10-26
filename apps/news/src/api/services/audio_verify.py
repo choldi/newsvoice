@@ -58,6 +58,9 @@ class AudioVerification:
     expected_chars: int = 0
     transcript_chars: int = 0
     verdict: str = "valid"
+    requested_language: str = ""
+    wer_secondary: float | None = None
+    secondary_similarity: float | None = None
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable dict (details column of verifications).
@@ -78,6 +81,9 @@ class AudioVerification:
             "language": self.language,
             "expected_chars": self.expected_chars,
             "transcript_chars": self.transcript_chars,
+            "requested_language": self.requested_language,
+            "wer_secondary": self.wer_secondary,
+            "secondary_similarity": self.secondary_similarity,
         }
 
 
@@ -97,6 +103,49 @@ def normalize_for_wer(text: str) -> str:
     cleaned = strip_emotion_tags(text or "")
     cleaned = _NON_WORD_RE.sub(" ", cleaned.lower())
     return _WHITESPACE_RE.sub(" ", cleaned).strip()
+
+
+def respelling_delta(original_text: str, respelled_text: str) -> float:
+    """Measure how much a phonetic respelling changed the canonical text.
+
+    The delta is the word-level WER between both texts after normalization,
+    clamped to ``[0, 1]``. It is used to relax the ASR threshold: the audio
+    speaks ``respelled_text`` while the gate compares it against
+    ``original_text``, so the respelling introduces up to this much extra WER.
+
+    Args:
+        original_text: Canonical, human-readable script.
+        respelled_text: Pronunciation-adjusted text that was synthesized.
+
+    Returns:
+        The normalized WER between both texts, or 0.0 when either is empty or
+        they normalize to the same string.
+    """
+    original = normalize_for_wer(original_text)
+    respelled = normalize_for_wer(respelled_text)
+    if not original or not respelled or original == respelled:
+        return 0.0
+    return _wer_score(original, respelled)
+
+
+def _wer_score(reference: str, hypothesis: str) -> float:
+    """Compute a clamped word error rate between normalized texts.
+
+    Args:
+        reference: Normalized reference text.
+        hypothesis: Normalized transcript or candidate text.
+
+    Returns:
+        WER in ``[0, 1]``. An empty hypothesis scores 1.0; an empty reference
+        scores 0.0 (nothing to compare).
+    """
+    if not reference:
+        return 0.0
+    if not hypothesis:
+        return 1.0
+    import jiwer
+
+    return max(0.0, min(float(jiwer.wer(reference, hypothesis)), 1.0))
 
 
 def decode_to_samples(audio_path: str) -> np.ndarray:
@@ -240,6 +289,8 @@ async def verify_audio(
     expected_text: str,
     *,
     threshold: float | None = None,
+    language: str | None = None,
+    secondary_expected_text: str | None = None,
     on_progress: object | None = None,
 ) -> AudioVerification:
     """Transcribe audio and score it against the text that produced it.
@@ -250,9 +301,14 @@ async def verify_audio(
 
     Args:
         audio_path: File to verify (WAV, M4A, MP3...).
-        expected_text: What the audio is supposed to say.
+        expected_text: What the audio is supposed to say. This is the primary
+            reference that decides ``passed``.
         threshold: Maximum accepted WER; defaults to
             ``audio_verify_wer_threshold``.
+        language: ISO 639-1 hint for the whole audio. ``None`` or empty uses
+            ``audio_verify_language``.
+        secondary_expected_text: Optional second reference scored against the
+            same transcript (diagnostics only; it never affects ``passed``).
         on_progress: Callable ``(done, total)`` invoked after each block.
 
     Returns:
@@ -266,7 +322,9 @@ async def verify_audio(
     expected = normalize_for_wer(expected_text)
     if not expected:
         raise AudioVerifyError("expected text is empty: nothing to verify against")
+    secondary = normalize_for_wer(secondary_expected_text) if secondary_expected_text else ""
     limit = settings.audio_verify_wer_threshold if threshold is None else float(threshold)
+    requested_language = language or settings.audio_verify_language
 
     samples = await asyncio.to_thread(decode_to_samples, audio_path)
     blocks = split_blocks(samples, settings.audio_verify_block_seconds)
@@ -277,35 +335,32 @@ async def verify_audio(
     detected = ""
     total = len(blocks)
     for index, block in enumerate(blocks, start=1):
-        text, language = await asyncio.to_thread(
-            _transcribe_block, model, block, settings.audio_verify_language
+        text, used_language = await asyncio.to_thread(
+            _transcribe_block, model, block, requested_language
         )
         transcripts.append(text)
         if not detected:
-            detected = language
+            detected = used_language
         if on_progress is not None:
             on_progress(index, total)  # type: ignore[operator]
 
     transcript = " ".join(part for part in transcripts if part).strip()
     hypothesis = normalize_for_wer(transcript)
-    if not hypothesis:
-        # Silent audio cannot possibly match its script: fail it explicitly
-        # instead of letting jiwer reject an empty hypothesis.
-        wer = 1.0
-    else:
-        import jiwer
-
-        wer = float(jiwer.wer(expected, hypothesis))
-    wer = max(0.0, min(wer, 1.0))
+    # Silent audio cannot possibly match its script: fail it explicitly
+    # instead of letting jiwer reject an empty hypothesis.
+    wer = _wer_score(expected, hypothesis)
+    wer_secondary = _wer_score(secondary, hypothesis) if secondary else None
     passed = wer <= limit
     logger.info(
         "audio_verified",
         audio_path=audio_path,
         wer=round(wer, 4),
+        wer_secondary=round(wer_secondary, 4) if wer_secondary is not None else None,
         threshold=limit,
         passed=passed,
         blocks=total,
         duration_seconds=duration,
+        requested_language=requested_language,
     )
     return AudioVerification(
         wer=wer,
@@ -321,4 +376,7 @@ async def verify_audio(
         expected_chars=len(expected),
         transcript_chars=len(hypothesis),
         verdict="valid" if passed else "invalid",
+        requested_language=requested_language,
+        wer_secondary=wer_secondary,
+        secondary_similarity=(round(1.0 - wer_secondary, 4) if wer_secondary is not None else None),
     )

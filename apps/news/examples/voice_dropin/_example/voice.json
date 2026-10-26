@@ -1,0 +1,11 @@
+{
+  "name": "tech_anchor_m",
+  "label": "Tech — presentador masculino",
+  "role": "anchor",
+  "sex": "male",
+  "language": "es",
+  "audio": "sample.wav",
+  "transcript": "sample.txt",
+  "instruct": "Hombre, finales de los 40, barítono cálido, claridad de radio, tono neutro, ritmo medido",
+  "enabled": true
+}

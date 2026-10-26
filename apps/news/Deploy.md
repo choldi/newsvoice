@@ -330,6 +330,91 @@ means `POCKET_TTS_REFERENCES` is unset or the WAV path is wrong. Sourcing
 these WAVs is the deployer's responsibility — use voices you are licensed to
 clone.
 
+#### On-prem qwen3_tts with cloned voices
+
+`qwen3_tts` can render on the local GPU gateway instead of Modal. The
+collection opts in explicitly:
+
+```toml
+narration_spec = { title = "Tech Brief", language = "es", roles = [
+    {name="anchor", voice_id="es_fe_maria", language="es"},
+    {name="expert", voice_id="es_ma_juan", language="es"}
+], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0,
+tts_backend = "qwen3_tts", voice_source = "recording", run_in_modal = false,
+ai_disclosure = false }
+```
+
+`voice_id` can be a catalog profile name; `resolve_gateway_qwen_voice` maps it
+to the `<name>__qwen3_tts` clone UUID at render time, so a reclone does not
+require editing `collections.toml`. Import the WAV + transcript first with
+`apps/news/scripts/import_voice_dropin.py` (see
+`examples/voice_dropin/README.md`).
+
+**Host runtime for qwen3_tts.** The gateway image does not install torch or
+`qwen-tts`: it runs the model out-of-process in an external venv so the
+`transformers==4.57.3` pin cannot clash with `pocket_tts`. On the Docker host,
+create the venv with the interpreter the GPU image expects (Python 3.13 in the
+default overlay) and install a CUDA build of torch plus `qwen-tts`:
+
+```bash
+python3.13 -m venv /opt/qwen3-tts/venv
+/opt/qwen3-tts/venv/bin/pip install --upgrade pip
+/opt/qwen3-tts/venv/bin/pip install torch qwen-tts soundfile
+```
+
+Point the GPU overlay at that runtime in `deploy/.env` (paths are on the host;
+the container sees `/qwen3-tts/venv/bin/python`):
+
+```bash
+QWEN3_TTS_DIR=/opt/qwen3-tts
+QWEN3_TTS_HOST_PYTHON=/usr/bin/python3.13
+QWEN3_TTS_HOST_STDLIB=/usr/lib/python3.13
+QWEN3_TTS_HOST_INCLUDE=/usr/include/python3.13
+QWEN3_TTS_HOST_ARCH_INCLUDE=/usr/include/x86_64-linux-gnu/python3.13
+QWEN3_TTS_HOST_LIBPYTHON=/usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+QWEN3_TTS_HF_CACHE=/home/jordi/.cache/huggingface
+```
+
+The gateway image now ships `gcc`/`g++` because Triton compiles CUDA kernels on
+first synthesis. In `apps/gateway/.env`, set
+`QWEN3_TTS_PYTHON=/qwen3-tts/venv/bin/python` and either route a language to
+`qwen3_tts` in `TTS_ENGINES` or load it as an extra engine
+(`TTS_EXTRA_ENGINES=qwen3_tts`). The first render downloads the three 1.7B
+checkpoints into `QWEN3_TTS_HF_CACHE` (~3.5 GB each); the engine keeps one model
+resident at a time.
+
+Local qwen3 renders in the `news-engine-podcast-modal` namespace (see §9), so
+the `narration-modal-worker` must be running even though the synthesis goes to
+the local gateway. `MODAL_ENABLED=false` is valid for this path: the spend
+guard is enforced only for `zonos2`, `voxcpm2` and `qwen3_tts` with
+`run_in_modal = true`.
+
+Respelling runs inside `resolve_narration_script_activity` and persists
+`tts_text` on the stored script. Configure it in `apps/news/.env`:
+
+```bash
+RESPELLING_ENABLED=true
+RESPELLING_TEMPERATURE=0.2
+```
+
+It uses `LLM_API_BASE` / `LLM_MODEL`. With an Ollama-hosted thinking model
+(e.g. `openai/qwen3:8b`), the wrapper sends `reasoning_effort="none"`; Ollama
+ignores `chat_template_kwargs`, while the effort flag cuts a ~69 s call to a
+few seconds. Verify a stored script after a manual render:
+
+```bash
+docker compose exec -T narration-modal-worker python - <<'PY'
+import asyncio, json
+from src.api.db.database import NarrationRepository
+script = asyncio.run(NarrationRepository().get_script(1))
+print(json.dumps(script.model_dump(), ensure_ascii=False, indent=2))
+PY
+```
+
+The segments keep the original `text` and add the spoken `tts_text`; the cache
+key includes both, so a respelling change regenerates instead of reusing the
+previous audio.
+
 ### Narration delivery (Phase 7.6)
 
 When a collection has `narration_enabled = true` and `narration_deliver_audio = true`
@@ -957,7 +1042,7 @@ namespace that owns the backend.
 ```bash
 ./scripts/create_namespaces.sh   # once, and after any Temporal restore
 docker compose up -d worker narration-worker voice-catalog-worker
-docker compose --profile modal up -d narration-modal-worker   # needs Modal creds
+docker compose --profile modal up -d narration-modal-worker   # Modal creds for Modal backends; also serves local qwen3
 ```
 
 `src/workers/podcast_target.py` maps a spec's `tts_backend` to its namespace
@@ -1581,7 +1666,7 @@ en vuelo quedan `GENERATING`; borra sus filas en `audio_jobs` si no te importan)
 
 ---
 
-## 15. Audio verification with Whisper (Phase 7.14)
+## 15. Audio verification with Whisper (Phase 7.14 / 7.15 respelling)
 
 Antes de entregar un audio, se transcribe con `faster-whisper` (CPU) y se
 compara con el texto que lo generó mediante **WER** (`jiwer`, word error rate:
@@ -1591,8 +1676,12 @@ veredicto queda en el ledger `verifications`.
 
 - **TTS del digest**: el texto esperado es exactamente lo que recibió el motor
   (`speech_text_for_digest`: truncado + Markdown → habla).
-- **Narración**: el texto esperado es el script en orden (+ divulgación de IA
-  audible si la spec la pide).
+- **Narración**: el texto esperado es el `text` canónico en orden (+
+  divulgación de IA audible si la spec la pide). El `tts_text` respelling no
+  sustituye al original: se usa para calcular `delta = WER(text, tts_text)` y
+  relajar el umbral con `efectivo = base * (1 + delta * factor)`, donde
+  `factor = AUDIO_VERIFY_RESPELLING_FACTOR` (1.0 = 100% del delta). Whisper
+  recibe el idioma del boletín (`spec.language`) para toda la narración.
 - Opt-in por colección (`audio_verify = true`); solo se verifica si la
   colección entregaría audio (`deliver_audio` / `narration_deliver_audio`).
 
@@ -1614,7 +1703,7 @@ vez y sobrevive a los rebuilds). Sin salida a internet, la verificación respond
 [[collections]]
 name = "tech"
 audio_verify = true            # opt-in de la colección
-audio_verify_threshold = 0.30  # opcional; vacío = AUDIO_VERIFY_WER_THRESHOLD
+audio_verify_threshold = 0.20  # calibrado para tech (ver §15.6); vacío = global
 ```
 
 Kill switch global: `AUDIO_VERIFY_ENABLED=false` (apaga todas las colecciones).
@@ -1626,7 +1715,10 @@ El audio se decodifica a 16 kHz mono con ffmpeg, se trocea en bloques de
 `condition_on_previous_text=False` para que un bucle de repetición no contamine
 al resto) y se comparan los textos **normalizados** (minúsculas, sin puntuación
 ni tags de emoción: `3,5%` y `3.5%` tokenizan igual). El resultado incluye
-`wer`, `similarity = 1 - WER`, el transcript y los transcripts por bloque.
+`wer`, `similarity = 1 - WER`, `wer_secondary` (diagnóstico contra el texto
+respelling), `respelling_delta`, `base_threshold`, el umbral efectivo, el
+transcript y los transcripts por bloque. El `score` que decide `passed` sigue
+siendo el WER contra el `text` original.
 
 ### 15.4 Cuando falla (gate solo de audio)
 
@@ -1656,20 +1748,32 @@ AUDIO_VERIFY_MODEL_DIR=data/whisper
 AUDIO_VERIFY_WER_THRESHOLD=0.30 # techo de WER (0 = estricto, 1 = inútil)
 AUDIO_VERIFY_BLOCK_SECONDS=60
 AUDIO_VERIFY_LANGUAGE=          # p.ej. 'es'; vacío = auto-detección
+AUDIO_VERIFY_RESPELLING_FACTOR=1.0 # 0 = no ajustar; 1 = aplicar todo el delta
 ```
+
+En narración, `spec.language` tiene prioridad sobre `AUDIO_VERIFY_LANGUAGE` para
+fijar el idioma de Whisper. El TTS del digest sigue usando la variable global.
 
 ### 15.6 Calibration
 
-1. Con `audio_verify = true` en una colección de prueba, deja pasar 10-15
-   digests/narraciones conocidos.
-2. Lee los valores: `SELECT score FROM verifications WHERE method='asr_wer' AND passed=1`
-   y coloca el umbral **por encima del peor aceptado** con margen (~0.05).
-3. Ten en cuenta dos sesgos del ASR observados en el smoke test: números mal
-   leídos (`2027` → `2017`, +0.08 de WER en una frase de 12 palabras) y la
-   música de fondo de la narración, que infla el WER: para narración con music
-   bed sube el modelo (`small`) o el umbral, no bajes la barra del TTS.
-4. El umbral solo afecta a colecciones con `audio_verify = true`, así que
+1. Renderiza 10-15 narraciones/digests reales con `audio_verify` activo.
+2. Lee `score` (WER contra el original), `respelling_delta` y `threshold`
+   (efectivo). Para fijar la base, calcula
+   `base_necesario = score / (1 + delta * factor)` y elige la base por encima
+   del peor aceptado con margen (~0.05).
+3. Conserva `factor = 1.0` salvo que la distribución pida otra cosa; el
+   umbral efectivo queda registrado en cada fila.
+4. Ten en cuenta dos sesgos del ASR: números mal leídos (`2027` → `2017`) y la
+   música de fondo, que infla el WER. Para música sube el modelo (`small`) o el
+   umbral, no bajes la barra del TTS.
+5. El umbral solo afecta a colecciones con `audio_verify = true`, así que
    calibrar es reversible y no toca al resto.
+
+Calibración de referencia (`tech`, 2026-10-26, modelo `base`): 15/15
+narraciones aceptadas, `score` entre 0,0590 y 0,1301, `base_necesario` máximo
+0,1193 (p90 0,1148). Se eligió `audio_verify_threshold = 0.20` con margen. El
+dry-run posterior de 60 artículos dio `score=0,0793`, `wer_secondary=0,1156`
+y umbral efectivo `0,2159`, con entrega de narración y sin canales externos.
 
 ### 15.7 Rollback
 

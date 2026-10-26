@@ -33,10 +33,15 @@ RUN uv sync --frozen --no-dev --package tts-api ${UV_EXTRAS}
 
 FROM python:3.12-slim
 
+# gcc/g++ are needed at runtime by the qwen3_tts worker: torch Inductor/
+# Triton compiles CUDA kernels on first use and aborts with "Failed to find C
+# compiler" without a toolchain. They are also harmless for the other engines.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
     espeak-ng \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

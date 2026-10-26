@@ -314,12 +314,21 @@ class NarrationSegment(BaseModel):
     Attributes:
         role: Name of the role that speaks this segment.
         text: What is said. Kept free of markdown; the renderer normalizes it.
+        tts_text: Optional pronunciation-adjusted text. When set, the renderer
+            synthesizes this instead of ``text``: it carries the phonetic
+            respelling of foreign terms and is what makes a re-render free.
+            ``text`` stays the canonical, human-readable script.
         emotion: Optional per-segment emotion override.
         pause_after_ms: Optional pause after this segment, overriding the spec.
     """
 
     role: str = Field(..., min_length=1, max_length=64, description="Role name from the spec")
     text: str = Field(..., min_length=1, max_length=4000, description="Spoken text")
+    tts_text: str | None = Field(
+        default=None,
+        max_length=8000,
+        description="Pronunciation-adjusted text synthesized instead of 'text'",
+    )
     emotion: str | None = Field(default=None, description="Emotion tag for this segment")
     pause_after_ms: int | None = Field(
         default=None, ge=0, le=5000, description="Pause after this segment, in ms"

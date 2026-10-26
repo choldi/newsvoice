@@ -842,6 +842,33 @@ class NarrationRepository:
                 row = await cursor.fetchone()
                 return int(row["id"]) if row else 0
 
+    async def update_script_json(self, script_id: int, script: NarrationScript) -> bool:
+        """Rewrite the stored JSON of an existing narration script.
+
+        Used by the resolver after respelling a script: ``text`` stays the
+        human-readable version and ``tts_text`` is persisted next to it, so the
+        same run renders with the same pronunciation without another LLM call.
+
+        Args:
+            script_id: Id of the narration_scripts row.
+            script: Enriched script to store.
+
+        Returns:
+            True when a row was updated, False when the id does not exist.
+        """
+        query = """
+            UPDATE narration_scripts
+            SET script_json = ?, language = ?, title = ?
+            WHERE id = ?
+        """
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(
+                query,
+                (script.model_dump_json(), script.language, script.title, script_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def get_script(self, script_id: int) -> NarrationScript | None:
         """Return a narration script by its database id.
 

@@ -15,10 +15,13 @@ from src.api.models.narration import (
     NarrationSpec,
     SpeakerRole,
 )
-from src.api.services.audio_verify import AudioVerification
+from src.api.services.audio_verify import AudioVerification, respelling_delta
+from src.core.config import settings
 from src.workers.narration_activities import (
     NARRATION_JOB_KIND,
+    _effective_verify_threshold,
     _expected_narration_text,
+    _spoken_narration_text,
     render_narration_activity,
 )
 
@@ -47,6 +50,23 @@ def _script() -> NarrationScript:
     )
 
 
+def _respelled_script() -> NarrationScript:
+    """A script carrying a phonetic respelling cache."""
+    return NarrationScript(
+        title="Clase",
+        language="es",
+        source="llm",
+        segments=[
+            {
+                "role": "profe",
+                "text": "Bienvenidos a startup de machine learning.",
+                "tts_text": "Bienvenidos a estartap de mashin lerning.",
+            },
+            {"role": "profe", "text": "Hoy practicamos el subjuntivo."},
+        ],
+    )
+
+
 def _render_result(tmp_path: Path) -> NarrationOut:
     """A plausible render outcome pointing at a file on disk."""
     audio_path = tmp_path / "narration.m4a"
@@ -60,13 +80,15 @@ def _render_result(tmp_path: Path) -> NarrationOut:
     )
 
 
-def _verification(passed: bool = True, wer: float = 0.1) -> AudioVerification:
+def _verification(
+    passed: bool = True, wer: float = 0.1, threshold: float = 0.3
+) -> AudioVerification:
     """A canned ASR score."""
     return AudioVerification(
         wer=wer,
         similarity=round(1 - wer, 4),
         passed=passed,
-        threshold=0.3,
+        threshold=threshold,
         transcript="Bienvenidos a clase de espanol. Hoy practicamos el subjuntivo.",
         blocks=["Bienvenidos..."],
         block_count=1,
@@ -152,6 +174,72 @@ async def test_render_verifies_and_records_a_passing_score(
     assert row["passed"] is True
     assert row["score"] == 0.05
     assert row["threshold"] == 0.3
+
+
+async def test_render_scores_the_original_and_relaxes_by_respelling(
+    environment: ActivityEnvironment,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate keeps the canonical text but allows the respelling delta."""
+    monkeypatch.setattr(settings, "audio_verify_respelling_factor", 1.0)
+    result_mock = AsyncMock(return_value=_render_result(tmp_path))
+
+    async def _fake_verify(_audio_path: str, _expected: str, **kwargs: object) -> AudioVerification:
+        return _verification(passed=True, wer=0.05, threshold=float(kwargs["threshold"]))
+
+    verify_mock = AsyncMock(side_effect=_fake_verify)
+    spec = _spec()
+    script = _respelled_script()
+
+    with (
+        patch("src.workers.narration_activities.NarrationTTSService") as service_cls,
+        patch("src.workers.narration_activities.verify_audio", verify_mock),
+    ):
+        service_cls.return_value.render = result_mock
+        payload = await environment.run(
+            render_narration_activity,
+            _payload(spec, script, audio_verify={"enabled": True, "threshold": 0.3}),
+        )
+
+    awaited = verify_mock.await_args
+    expected = awaited.args[1]
+    spoken = awaited.kwargs["secondary_expected_text"]
+    delta = respelling_delta(expected, spoken)
+    assert "startup" in expected
+    assert "estartap" not in expected
+    assert "estartap" in spoken
+    assert delta > 0
+    assert awaited.kwargs["language"] == "es"
+    assert awaited.kwargs["threshold"] == pytest.approx(0.3 * (1.0 + delta))
+
+    verification = payload["verification"]
+    assert verification["base_threshold"] == 0.3
+    assert verification["respelling_delta"] == pytest.approx(delta)
+    assert verification["threshold"] == pytest.approx(0.3 * (1.0 + delta))
+
+    row = (await VerificationsRepository().get_for_run(RUN_ID))[0]
+    assert row["threshold"] == pytest.approx(0.3 * (1.0 + delta))
+    assert row["details"]["base_threshold"] == 0.3
+    assert row["details"]["respelling_delta"] == pytest.approx(delta)
+    assert row["details"]["expected_source"] == "original"
+    assert row["details"]["requested_language"] == "es"
+
+
+def test_narration_texts_keep_original_and_spoken_apart() -> None:
+    """Expected text is canonical; the spoken copy carries tts_text."""
+    expected = _expected_narration_text(_spec(), _respelled_script())
+    spoken = _spoken_narration_text(_spec(), _respelled_script())
+    assert "startup" in expected
+    assert "estartap" not in expected
+    assert "estartap" in spoken
+
+
+def test_effective_threshold_is_clamped() -> None:
+    """The relaxed ceiling never leaves the valid WER range."""
+    assert _effective_verify_threshold(0.3, 0.2, 1.0) == pytest.approx(0.36)
+    assert _effective_verify_threshold(1.0, 1.0, 2.0) == 1.0
+    assert _effective_verify_threshold(0.0, 1.0, 1.0) == 0.0
 
 
 async def test_render_withholds_a_failing_score(
