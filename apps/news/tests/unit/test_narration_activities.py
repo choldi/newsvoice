@@ -1,5 +1,6 @@
 """Unit tests for the Phase 7 narration Temporal activities."""
 
+import json
 from typing import Any
 
 import pytest
@@ -228,6 +229,7 @@ def _modal_spec(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         **SPEC,
         "tts_backend": "qwen3_tts",
+        "run_in_modal": True,
         "roles": [
             {"name": "anchor", "voice_id": "anchor_neutral_m"},
             {"name": "guest", "voice_id": "anchor_neutral_f"},
@@ -267,6 +269,25 @@ async def test_render_activity_raises_when_modal_disabled(
         await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
 
     assert excinfo.value.non_retryable is True
+
+
+async def test_render_activity_allows_local_qwen3_without_modal(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    monkeypatch.setattr(narration_activities.settings, "modal_enabled", False)
+    service = _FakeService(RENDER_RESULT)
+    _patch_service(monkeypatch, service)
+    payload = {
+        "run_id": "r",
+        "collection": "tech",
+        "spec": _modal_spec(run_in_modal=False),
+        "script": SCRIPT,
+    }
+
+    await ActivityEnvironment().run(narration_activities.render_narration_activity, payload)
+
+    assert len(service.calls) == 1
 
 
 async def test_render_activity_raises_when_budget_exceeded(
@@ -445,13 +466,48 @@ async def test_resolve_activity_needs_a_script_or_a_script_id_or_existing_run(
         )
 
 
-async def test_resolve_activity_generates_script_from_digest_when_no_script_provided(
+async def test_generate_script_activity_uses_a_short_non_thinking_llm_call(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Placeholder for a test that mocks the LLM generation.
-    Currently the generation path calls the real LLM, so this test is not run.
+    """Script generation must ask the LLM to skip thinking.
+
+    Ollama ignores the llama.cpp chat-template flag and returns empty content
+    while the model reasons, which used to burn three long attempts per
+    narration.
     """
-    pass
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    await RunsRepository().record_run(
+        workflow_id="digest-llm",
+        collection="tech",
+        status="ok",
+        article_count=1,
+        cluster_count=1,
+        digest_preview="Una noticia de tecnologia.",
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_generate_completion(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return json.dumps(
+            {
+                "title": "Edicion",
+                "segments": [
+                    {"role": "anchor", "text": "Bienvenidos."},
+                    {"role": "guest", "text": "Gracias."},
+                ],
+            }
+        )
+
+    monkeypatch.setattr("src.core.llm.generate_completion", fake_generate_completion)
+
+    generated = await ActivityEnvironment().run(
+        narration_activities.generate_narration_script_activity,
+        {"spec": SPEC, "collection": "tech", "run_id": "digest-llm"},
+    )
+
+    assert captured["disable_thinking"] is True
+    assert generated["source"] == "llm"
+    assert generated["segments"] == 2
 
 
 async def test_resolve_activity_rejects_an_invalid_spec(

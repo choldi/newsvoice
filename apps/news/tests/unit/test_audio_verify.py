@@ -14,6 +14,7 @@ from src.api.services.audio_verify import (
     AudioVerifyError,
     decode_to_samples,
     normalize_for_wer,
+    respelling_delta,
     split_blocks,
     verify_audio,
 )
@@ -42,9 +43,11 @@ class _FakeModel:
         self.transcript = transcript
         self.language = language
         self.calls: list[object] = []
+        self.kwargs: list[dict] = []
 
-    def transcribe(self, block, **kwargs):  # noqa: ANN001, ARG002
+    def transcribe(self, block, **kwargs):  # noqa: ANN001
         self.calls.append(block)
+        self.kwargs.append(kwargs)
         return iter([_FakeSegment(self.transcript)]), _FakeInfo(self.language)
 
 
@@ -83,6 +86,29 @@ def test_normalize_handles_empty_input() -> None:
     """Empty input normalizes to empty instead of raising."""
     assert normalize_for_wer("") == ""
     assert normalize_for_wer(None) == ""  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# respelling_delta
+# ---------------------------------------------------------------------------
+
+
+def test_respelling_delta_is_zero_for_identical_text() -> None:
+    """No respelling means no threshold adjustment."""
+    assert respelling_delta("Hola, mundo!", "hola mundo") == 0.0
+
+
+def test_respelling_delta_measures_changed_words() -> None:
+    """A respelled token counts as one word error."""
+    assert respelling_delta("startup", "estartap") == 1.0
+    delta = respelling_delta("El startup de machine learning", "El estartap de mashin lerning")
+    assert 0.0 < delta <= 1.0
+
+
+def test_respelling_delta_handles_empty_input() -> None:
+    """Missing text cannot introduce a delta."""
+    assert respelling_delta("", "estartap") == 0.0
+    assert respelling_delta("startup", "") == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +189,42 @@ async def test_verify_audio_passes_on_a_faithful_transcript(
     assert result.similarity == 1.0
     assert result.language == "es"
     assert progress == [(1, 1)]
+
+
+async def test_verify_audio_uses_the_requested_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's bulletin language reaches every Whisper block."""
+    _patch_decode(monkeypatch)
+    model = _FakeModel(EXPECTED, language="es")
+    _patch_model(monkeypatch, model)
+
+    result = await verify_audio("fake.mp3", EXPECTED, language="es")
+
+    assert model.kwargs[0]["language"] == "es"
+    assert result.requested_language == "es"
+    assert result.language == "es"
+
+
+async def test_verify_audio_scores_a_secondary_reference_without_gating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The respelled text is diagnostic only; the original still decides."""
+    _patch_decode(monkeypatch)
+    secondary = "Noticias deportivas de última hora"
+    _patch_model(monkeypatch, _FakeModel(secondary))
+
+    result = await verify_audio(
+        "fake.mp3",
+        EXPECTED,
+        secondary_expected_text=secondary,
+        threshold=0.3,
+    )
+
+    assert result.wer_secondary == 0.0
+    assert result.secondary_similarity == 1.0
+    assert result.passed is False
+    assert result.wer > 0.3
 
 
 async def test_verify_audio_fails_a_divergent_transcript(

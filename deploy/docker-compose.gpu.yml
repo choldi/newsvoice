@@ -21,6 +21,21 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    volumes:
+      # qwen3_tts runs out-of-process in an external venv (torch + qwen-tts,
+      # transformers==4.57.3) that cannot live in the gateway image without
+      # clashing with pocket_tts pins. The venv was created on the host against
+      # /usr/bin/python3.13, so the interpreter, its stdlib and libpython must
+      # be mounted at the exact paths the venv symlinks point to. The
+      # HuggingFace cache holds the three Qwen3-TTS checkpoints (~3.5 GB each);
+      # it is mounted read-write so the worker can download on first use.
+      - ${QWEN3_TTS_DIR:-/opt/qwen3-tts}:/qwen3-tts:ro
+      - ${QWEN3_TTS_HOST_PYTHON:-/usr/bin/python3.13}:/usr/bin/python3.13:ro
+      - ${QWEN3_TTS_HOST_STDLIB:-/usr/lib/python3.13}:/usr/lib/python3.13:ro
+      - ${QWEN3_TTS_HOST_INCLUDE:-/usr/include/python3.13}:/usr/include/python3.13:ro
+      - ${QWEN3_TTS_HOST_ARCH_INCLUDE:-/usr/include/x86_64-linux-gnu/python3.13}:/usr/include/x86_64-linux-gnu/python3.13:ro
+      - ${QWEN3_TTS_HOST_LIBPYTHON:-/usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0}:/usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0:ro
+      - ${QWEN3_TTS_HF_CACHE:-/home/jordi/.cache/huggingface}:/root/.cache/huggingface
   gateway-omnivoice:
     deploy:
       resources:

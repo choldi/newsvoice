@@ -187,6 +187,14 @@ def test_segment_emotion_and_pause_are_optional_and_validated() -> None:
         NarrationSegment(role="expert", text="")
 
 
+def test_segment_keeps_an_optional_tts_text_next_to_the_canonical_text() -> None:
+    segment = NarrationSegment(role="anchor", text="El startup", tts_text="El estartap")
+
+    assert segment.text == "El startup"
+    assert segment.tts_text == "El estartap"
+    assert NarrationSegment(role="anchor", text="El startup").tts_text is None
+
+
 def test_script_round_trips_through_json() -> None:
     script = NarrationScript.model_validate(
         {

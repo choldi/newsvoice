@@ -19,8 +19,10 @@ from temporalio.exceptions import ApplicationError
 
 # Resolving a script only reads the database and validates the models.
 # Generation of a long extended script (5+10 items) on a local LLM can take
-# >60s, so raise the ceiling to 300s.
-NARRATION_SCRIPT_TIMEOUT = timedelta(seconds=300)
+# >60s, and the resolver also waits for one respelling call per segment (Phase
+# 7.15), so keep a generous ceiling: a 30-segment script at 10s/call is 300s
+# before generation is even counted.
+NARRATION_SCRIPT_TIMEOUT = timedelta(seconds=900)
 # The render is the expensive step: the gateway is called once per turn (each
 # bounded by narration_request_timeout, default 300s) and the result is mixed
 # and encoded locally. A 20k-character program is ~14 requests, so keep the

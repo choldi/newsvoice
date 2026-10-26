@@ -59,6 +59,7 @@ from src.api.models.narration import (
     MusicBed,
     NarrationOut,
     NarrationScript,
+    NarrationSegment,
     NarrationSpec,
     TTSBackend,
 )
@@ -186,6 +187,18 @@ def concat_wavs(parts: Sequence[tuple[bytes, int]]) -> bytes:
         return _concat_wavs(parts)
     except AudioError as exc:
         raise NarrationRenderError(str(exc)) from exc
+
+
+def segment_speech_text(segment: NarrationSegment) -> str:
+    """Return the text the renderer must synthesize for a segment.
+
+    Args:
+        segment: Segment, optionally carrying a pronunciation-adjusted text.
+
+    Returns:
+        ``tts_text`` when present, else ``text`` with emotion tags stripped.
+    """
+    return segment.tts_text or strip_emotion_tags(segment.text)
 
 
 def chunk_text(text: str, max_chars: int) -> list[str]:
@@ -1083,7 +1096,7 @@ class NarrationTTSService:
                     f"strategy for segment {segment.role!r}"
                 )
             speeds.add(role.speed if role.speed != 1.0 else spec.speed)
-            for chunk in chunk_text(strip_emotion_tags(segment.text), self._max_chars):
+            for chunk in chunk_text(segment_speech_text(segment), self._max_chars):
                 turns.append(
                     {
                         "voice_id": role.voice_id,
@@ -1212,7 +1225,7 @@ class NarrationTTSService:
             language = role.language or spec.language
             speed = role.speed if role.speed != 1.0 else spec.speed
             emotion = segment.emotion or role.emotion or spec.emotion
-            text = strip_emotion_tags(segment.text)
+            text = segment_speech_text(segment)
             for chunk in chunk_text(text, self._max_chars):
                 audio, used_edge = await self.synthesize_turn(
                     chunk,
@@ -1251,7 +1264,12 @@ class NarrationTTSService:
             A new script whose first segment opens with the disclosure.
         """
         first = script.segments[0]
-        segments = [first.model_copy(update={"text": f"{disclosure} {first.text}"})]
+        updates: dict[str, str] = {"text": f"{disclosure} {first.text}"}
+        if first.tts_text:
+            # The renderer reads tts_text when present, so the disclosure must
+            # go into both fields or it would be silently skipped.
+            updates["tts_text"] = f"{disclosure} {first.tts_text}"
+        segments = [first.model_copy(update=updates)]
         segments.extend(script.segments[1:])
         return script.model_copy(update={"segments": segments})
 

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=1800, ge=1)
     llm_max_tokens: int = Field(default=4096, gt=0)
     llm_disable_thinking: bool = True
+    # --- Phase 7.15: pronunciation respelling ------------------------------
+    # Rewrite foreign/tech terms into the target language's orthography before
+    # synthesis (QWEN3_TTS only). The map is cached per segment so a re-render
+    # never pays for the same LLM call twice.
+    respelling_enabled: bool = True
+    respelling_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     # --- Phase 7.13: LLM output verification -------------------------------
     # Global kill switch. The per-collection opt-in is `llm_verify` in
     # collections.toml; this flag can only turn every collection off.
@@ -132,6 +138,9 @@ class Settings(BaseSettings):
     audio_verify_block_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
     # ISO 639-1 hint so the model does not guess per block; empty = auto.
     audio_verify_language: str = ""
+    # How much of the phonetic-respelling delta relaxes the WER ceiling:
+    # effective = base * (1 + delta * factor). 1.0 applies the full percentage.
+    audio_verify_respelling_factor: float = Field(default=1.0, ge=0.0, le=2.0)
     # --- Phase 7.10: single-URL summary -------------------------------------
     # Kill switch for POST /api/summarize/url (the endpoint stays behind the
     # admin auth either way; this closes it without a code change).

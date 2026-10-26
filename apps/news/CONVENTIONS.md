@@ -141,6 +141,19 @@
   configured pauses; `RenderStrategy.CONVERSATIONS` uses a single
   `/conversations` request and therefore rejects scripts with per-role speeds or
   emotions instead of silently ignoring them
+- `NarrationSegment.text` is canonical and human-readable;
+  `NarrationSegment.tts_text` is optional, persists the phonetic respelling the
+  `qwen3_tts` renderer actually speaks, and is written by
+  `resolve_narration_script_activity` (which also updates the stored script).
+  The cache key covers the full script model, so changing `tts_text`
+  regenerates. Respelling never mutates `text`, never runs for other backends,
+  and falls back to an empty `tts_text` on LLM failure
+- The ASR gate compares Whisper against canonical `text`; `tts_text` only feeds
+  `respelling_delta` and the diagnostic `wer_secondary`. `audio_verify` is
+  resolved **outside** the workflow (`pipeline_config_for`) and only runs when
+  the collection would deliver audio; a failed verification withholds the audio
+  only, records a `verifications` row (`method='asr_wer'`) and leaves the text
+  delivery untouched
 - Narration output is always canonical WAV (mono, 24 kHz, PCM s16le) before it
   is mixed, compressed or cached. ffmpeg must write to a **temporary file**, not
   a pipe: on a non-seekable output ffmpeg cannot patch the RIFF sizes and leaves

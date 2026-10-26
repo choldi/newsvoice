@@ -31,6 +31,25 @@ async def test_get_script_returns_none_for_unknown_id() -> None:
     assert await NarrationRepository().get_script(9999) is None
 
 
+async def test_update_script_json_round_trips_the_tts_text() -> None:
+    repo = NarrationRepository()
+    script = _script()
+    script_id = await repo.save_script("run-tts", script, collection="tech")
+    enriched = script.model_copy(
+        update={
+            "segments": [script.segments[0].model_copy(update={"tts_text": "estartap"})],
+        }
+    )
+
+    assert await repo.update_script_json(script_id, enriched) is True
+
+    stored = await repo.get_script(script_id)
+    assert stored is not None
+    assert stored.segments[0].tts_text == "estartap"
+    assert stored.segments[0].text == script.segments[0].text
+    assert await repo.update_script_json(9999, enriched) is False
+
+
 async def test_latest_script_for_run_returns_most_recent() -> None:
     repo = NarrationRepository()
     first = await repo.save_script("run-2", _script("primera version"), collection="tech")

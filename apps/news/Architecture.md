@@ -86,7 +86,14 @@ The local engine has **no stock voices**, so a catalog profile name (committed
 or operator-designed) is registered once as a gateway clone pinned to
 `qwen3_tts` (`src/api/services/gateway_voices.py`), reusing the reference WAV
 and its `ref_text`; the assigned clone UUID then drives synthesis. Gateway-owned
-ids (stock ids and clone UUIDs) pass through untouched.
+ids (stock ids and clone UUIDs) pass through untouched. Operator voices enter
+through the idempotent drop-in importer (`scripts/import_voice_dropin.py`):
+`voice.json` + a 5-30 s reference + its exact 100-600 character transcript are
+validated locally, then the profile and reference are written through the
+gateway and the `<name>__qwen3_tts` clone is registered (`--apply`; dry-run by
+default, `--reclone` after transcript fixes). The gateway launches `qwen-tts` as
+an external venv subprocess because `transformers==4.57.3` conflicts with the
+`pocket_tts` pins; one 1.7B model stays resident at a time.
 
 `src/api/services/tts_backends.py` owns the dispatch, the per-engine voice
 resolution and the output extension. The engine is part of the cache hash
@@ -232,6 +239,38 @@ Both audio paths coexist on the same run: `audio_jobs` is keyed by
 `narration_path` for the narration, and narration files live in
 `data/narration/` so their `.meta.json` sidecars cannot collide with
 `data/tts_cache/`. See Phases.md → Phase 7 and CONVENTIONS.md → Narration.
+
+### On-prem qwen3_tts and respelling
+
+The narration branch supports an on-prem `qwen3_tts` render: the spec sets
+`tts_backend = 'qwen3_tts'` and `run_in_modal = false`, and the render activity
+synthesizes through the local gateway (`engine=qwen3_tts`) instead of Modal. The
+Modal spend guard applies only to `zonos2`, `voxcpm2` and `qwen3_tts` **with**
+`run_in_modal = true`; a local qwen3 render works with `MODAL_ENABLED=false`.
+Because the backend is still routed to the podcast *modal* namespace by
+`podcast_target`, the `narration-modal-worker` must be running (it is the
+worker for every non-`omni_voice`/`edge` backend, whether or not the render
+spends GPU in Modal).
+
+Before synthesis, `resolve_narration_script_activity` optionally respells the
+script for the requested language: `src/core/respelling.py` prefilters tokens
+that look foreign (tech terms, CamelCase, English suffixes/digraphs, etc.),
+asks the LLM for a `{term: respelling}` map, and substitutes whole words in one
+pass. The rewritten line is stored as `NarrationSegment.tts_text`; the original
+`text` is never modified. `NarrationTTSService` speaks `tts_text` when present
+and `text` otherwise, and the disclosure prefix is applied to both. The cache
+key includes the full script model, so a changed respelling regenerates the
+audio. Respelling is gated by `RESPELLING_ENABLED` and `RESPELLING_TEMPERATURE`
+(0.2) and only runs for `qwen3_tts`; an LLM failure logs a warning and leaves
+`tts_text` empty so the render still proceeds.
+
+The narration ASR gate scores Whisper against the canonical `text`, not against
+`tts_text`, so the WER is comparable across renders. The respelling is not
+ignored: `delta = WER(text, tts_text)` measures how much it changed the spoken
+words and relaxes the ceiling with `effective = base * (1 + delta *
+AUDIO_VERIFY_RESPELLING_FACTOR)`. The transcript is also scored against
+`tts_text` as a diagnostic (`wer_secondary`), and Whisper receives the
+bulletin's language (`spec.language`) for the whole narration.
 
 ### Narration delivery (Phase 7.6)
 

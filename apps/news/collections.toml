@@ -26,7 +26,7 @@ email_recipients = []
 whatsapp_recipients = ['+34609116369']
 delivery_channels = ['telegram']
 narration_enabled = true
-narration_spec = { title = 'Tech Brief', language = 'es', roles = [{ name = 'anchor', voice_id = 'es-mx-male', language = 'es' }, { name = 'expert', voice_id = 'es-mx-female', language = 'es' }], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'omni_voice', voice_source = 'qwen_design', ai_disclosure = false }
+narration_spec = { title = 'Tech Brief', language = 'es', roles = [{ name = 'anchor', voice_id = 'es_fe_maria', language = 'es' }, { name = 'expert', voice_id = 'es_ma_juan', language = 'es' }], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'qwen3_tts', voice_source = 'recording', run_in_modal = false, ai_disclosure = false }
 narration_strategy = 'turns'
 narration_deliver_audio = true
 main_story_count = 5
@@ -34,7 +34,8 @@ headline_count = 5
 source_reliability = {  }
 source_hosts = {  }
 llm_verify = false
-audio_verify = false
+audio_verify = true
+audio_verify_threshold = 0.20
 enabled = true
 
 [[collections]]

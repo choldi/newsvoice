@@ -26,7 +26,7 @@ from src.api.db.database import (
     VerificationsRepository,
 )
 from src.api.models.narration import NarrationScript, NarrationSpec, TTSBackend
-from src.api.services.audio_verify import AudioVerifyError, verify_audio
+from src.api.services.audio_verify import AudioVerifyError, respelling_delta, verify_audio
 from src.api.services.narration_tts import (
     NarrationError,
     NarrationTTSService,
@@ -41,6 +41,7 @@ from src.core.modal_cost import (
     record_billing_delta,
     set_cost_context,
 )
+from src.core.respelling import respell_script
 
 #: ``audio_jobs.kind`` discriminator owned by this module. The digest TTS job
 #: keeps ``'tts'`` so the two audio paths never overwrite each other.
@@ -189,24 +190,37 @@ async def resolve_narration_script_activity(payload: dict[str, Any]) -> dict[str
         raise ApplicationError(f"Invalid narration spec: {exc}", non_retryable=True) from exc
 
     inline = payload.get("script")
+    script_id = payload.get("script_id")
     stored: NarrationScript | None = None
-    if not isinstance(inline, dict):
-        script_id = payload.get("script_id")
-        if isinstance(script_id, int):
-            stored = await NarrationRepository().get_script(script_id)
-            if stored is None:
-                raise ApplicationError(
-                    f"Narration script {script_id} not found", non_retryable=True
-                )
-        else:
-            # No inline script and no script_id: generate from the digest
-            generated = await generate_narration_script_activity(payload)
-            return generated
+    if isinstance(script_id, int):
+        # Load it even when an inline copy is present: the admin trigger sends
+        # both so the row can be enriched in place.
+        stored = await NarrationRepository().get_script(script_id)
+        if stored is None and not isinstance(inline, dict):
+            raise ApplicationError(f"Narration script {script_id} not found", non_retryable=True)
+    if not isinstance(inline, dict) and stored is None:
+        # No inline script and no script_id: generate from the digest, then
+        # respell it exactly like a stored script so both paths sound alike.
+        generated = await generate_narration_script_activity(payload)
+        try:
+            script = NarrationScript.model_validate(generated.get("script"), context={"spec": spec})
+        except ValidationError as exc:
+            raise ApplicationError(f"Invalid narration script: {exc}", non_retryable=True) from exc
+        script = await respell_script(spec, script)
+        generated["script"] = script.model_dump()
+        generated["char_count"] = script.total_chars()
+        return generated
 
     try:
         script = NarrationScript.model_validate(inline or stored, context={"spec": spec})
     except ValidationError as exc:
         raise ApplicationError(f"Invalid narration script: {exc}", non_retryable=True) from exc
+    # Respelling is I/O (the LLM), so it lives in the activity, not the
+    # workflow. A failure leaves tts_text unset and the renderer reads `text`.
+    script = await respell_script(spec, script)
+    if stored is not None and isinstance(script_id, int) and script != stored:
+        # Persist the map so a re-render of the stored script is free.
+        await NarrationRepository().update_script_json(script_id, script)
     return {
         "script": script.model_dump(),
         "source": script.source,
@@ -216,12 +230,29 @@ async def resolve_narration_script_activity(payload: dict[str, Any]) -> dict[str
     }
 
 
-def _expected_narration_text(spec: NarrationSpec, script: NarrationScript) -> str:
-    """Return everything the render is supposed to say (Phase 7.14).
+def _narration_text(spec: NarrationSpec, script: NarrationScript, *, respelled: bool) -> str:
+    """Return the canonical or respelled narration text.
 
-    Mirrors what ``NarrationTTSService`` synthesizes: the optional audible AI
-    disclosure is prepended when the spec and the settings ask for it, then
-    every segment in order.
+    Args:
+        spec: The cast/delivery spec used for the render.
+        script: The script that was rendered.
+        respelled: When True, use ``tts_text`` where present.
+
+    Returns:
+        Plain text of the narration in segment order.
+    """
+    parts: list[str] = []
+    if spec.ai_disclosure and settings.narration_ai_disclosure_text:
+        parts.append(settings.narration_ai_disclosure_text)
+    parts.extend(
+        (segment.tts_text or segment.text) if respelled else segment.text
+        for segment in script.segments
+    )
+    return " ".join(parts)
+
+
+def _expected_narration_text(spec: NarrationSpec, script: NarrationScript) -> str:
+    """Return the canonical text the ASR score is measured against.
 
     Args:
         spec: The cast/delivery spec used for the render.
@@ -230,11 +261,34 @@ def _expected_narration_text(spec: NarrationSpec, script: NarrationScript) -> st
     Returns:
         Plain text of the expected narration.
     """
-    parts: list[str] = []
-    if spec.ai_disclosure and settings.narration_ai_disclosure_text:
-        parts.append(settings.narration_ai_disclosure_text)
-    parts.extend(segment.text for segment in script.segments)
-    return " ".join(parts)
+    return _narration_text(spec, script, respelled=False)
+
+
+def _spoken_narration_text(spec: NarrationSpec, script: NarrationScript) -> str:
+    """Return the text that was actually synthesized, including respelling.
+
+    Args:
+        spec: The cast/delivery spec used for the render.
+        script: The script that was rendered.
+
+    Returns:
+        Plain text of the spoken narration.
+    """
+    return _narration_text(spec, script, respelled=True)
+
+
+def _effective_verify_threshold(base: float, delta: float, factor: float) -> float:
+    """Relax a WER ceiling by the phonetic-respelling delta.
+
+    Args:
+        base: Collection or global WER ceiling.
+        delta: WER between the canonical text and the respelled text.
+        factor: Share of the delta applied (1.0 = full percentage).
+
+    Returns:
+        Effective ceiling clamped to ``[0, 1]``.
+    """
+    return max(0.0, min(1.0, base * (1.0 + delta * factor)))
 
 
 @activity.defn
@@ -277,7 +331,13 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     await jobs.set_generating(run_id, kind=NARRATION_JOB_KIND)
     started = time.monotonic()
     service = NarrationTTSService()
-    uses_modal = spec.tts_backend is not TTSBackend.OMNIVOICE
+    # Only the backends that actually call Modal need the spend gate: ZONOS2 and
+    # VOXCPM2 always do, QWEN3_TTS only when it runs in Modal. On-prem QWEN3_TTS
+    # (run_in_modal=False) synthesizes through the local gateway and must render
+    # with MODAL_ENABLED=false.
+    uses_modal = spec.tts_backend in (TTSBackend.ZONOS2, TTSBackend.VOXCPM2) or (
+        spec.tts_backend is TTSBackend.QWEN3_TTS and spec.run_in_modal
+    )
     if uses_modal:
         await _enforce_modal_budget(
             service, spec, script, collection=collection, run_id=run_id, strategy=strategy
@@ -338,7 +398,17 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     audio_verify = payload.get("audio_verify")
     if isinstance(audio_verify, dict) and audio_verify.get("enabled"):
         verify_threshold = audio_verify.get("threshold")
+        base_threshold = (
+            settings.audio_verify_wer_threshold
+            if verify_threshold is None
+            else float(verify_threshold)
+        )
+        factor = settings.audio_verify_respelling_factor
         expected = _expected_narration_text(spec, script)
+        spoken = _spoken_narration_text(spec, script)
+        delta = respelling_delta(expected, spoken)
+        effective_threshold = _effective_verify_threshold(base_threshold, delta, factor)
+        language = spec.language
         verify_started = time.monotonic()
 
         def _progress(done: int, total: int) -> None:
@@ -348,7 +418,9 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
             score = await verify_audio(
                 result.audio_path,
                 expected,
-                threshold=float(verify_threshold) if verify_threshold is not None else None,
+                threshold=effective_threshold,
+                language=language,
+                secondary_expected_text=spoken,
                 on_progress=_progress,
             )
             verification = {
@@ -356,29 +428,49 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
                 "verdict": score.verdict,
                 "score": score.wer,
                 "threshold": score.threshold,
+                "base_threshold": base_threshold,
+                "respelling_delta": delta,
+                "threshold_factor": factor,
                 "similarity": score.similarity,
+                "wer_secondary": score.wer_secondary,
                 "model": score.model,
                 "language": score.language,
+                "requested_language": language,
                 "block_count": score.block_count,
                 "audio_path": result.audio_path,
                 "reason": None,
             }
-            details: dict[str, Any] = {**score.to_dict(), "audio_path": result.audio_path}
+            details: dict[str, Any] = {
+                **score.to_dict(),
+                "audio_path": result.audio_path,
+                "base_threshold": base_threshold,
+                "respelling_delta": delta,
+                "threshold_factor": factor,
+                "expected_source": "original",
+                "requested_language": language,
+            }
         except AudioVerifyError as exc:
-            fallback = (
-                settings.audio_verify_wer_threshold
-                if verify_threshold is None
-                else float(verify_threshold)
-            )
             verification = {
                 "passed": False,
                 "verdict": "error",
                 "score": None,
-                "threshold": fallback,
+                "threshold": effective_threshold,
+                "base_threshold": base_threshold,
+                "respelling_delta": delta,
+                "threshold_factor": factor,
                 "audio_path": result.audio_path,
                 "reason": str(exc),
             }
-            details = {"reason": str(exc), "expected_chars": len(expected)}
+            details = {
+                "reason": str(exc),
+                "expected_chars": len(expected),
+                "spoken_chars": len(spoken),
+                "base_threshold": base_threshold,
+                "respelling_delta": delta,
+                "threshold_factor": factor,
+                "expected_source": "original",
+                "requested_language": language,
+            }
         await VerificationsRepository().record(
             run_id=run_id,
             collection=collection,
@@ -394,7 +486,8 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
         )
         activity.logger.info(
             f"Narration audio verified: passed={verification['passed']} "
-            f"WER={verification['score']} threshold={verification['threshold']}"
+            f"WER={verification['score']} threshold={verification['threshold']} "
+            f"base={base_threshold} delta={delta} language={language}"
         )
 
     payload = result.model_dump()
@@ -492,6 +585,7 @@ async def generate_narration_script_activity(payload: dict[str, Any]) -> dict[st
                 ],
                 temperature=0.4 if attempt == 1 else 0.5,
                 max_tokens=_SCRIPT_MAX_TOKENS,
+                disable_thinking=True,
             )
         except Exception as exc:
             last_error = f"LLM call failed: {exc}"

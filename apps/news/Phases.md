@@ -689,6 +689,40 @@ cubierto por el propio gate.
 
 **Effort:** 5-6 hours.
 
+- [x] **7.15 qwen3_tts on-prem, respelling y verificación calibrada** — la
+      narración puede renderizar `qwen3_tts` en el gateway local
+      (`run_in_modal=false`) con voces clonadas de operador. El gateway ejecuta
+      `qwen-tts` en un venv externo (torch + `transformers==4.57.3`, aislado de
+      `pocket_tts`), montado por `deploy/docker-compose.gpu.yml` junto al
+      intérprete/stdlib/include/libpython de Python 3.13 y la caché de
+      HuggingFace; la imagen del gateway añade `gcc`/`g++` porque Triton compila
+      kernels en la primera síntesis. Las voces entran con el importador
+      idempotente `scripts/import_voice_dropin.py` (`voice.json` + WAV 5-30 s +
+      transcripción exacta 100-600 caracteres): crea el perfil y la referencia
+      en el gateway y registra `<name>__qwen3_tts`; los ids del catálogo se
+      resuelven al clon en cada render. **Respelling**: antes de sintetizar,
+      `resolve_narration_script_activity` pide al LLM un mapa
+      `{término: pronunciación}`, guarda `tts_text` por segmento (sin tocar
+      `text`) y actualiza el script almacenado; el render habla `tts_text` y la
+      caché incluye el script completo. Solo aplica a `qwen3_tts`, con
+      `RESPELLING_ENABLED`/`RESPELLING_TEMPERATURE=0.2`, y un fallo del LLM deja
+      el render intacto. **Verificación ASR**: Whisper recibe `spec.language`,
+      puntúa contra `text` y usa `delta = WER(text, tts_text)` para relajar el
+      umbral (`base * (1 + delta * factor)`); `wer_secondary` queda como
+      diagnóstico. Calibración `tech` 2026-10-26: 15/15 aceptadas, peor
+      `base_necesario=0,1193`, umbral elegido `0,20`; dry-run real de 60
+      artículos con `score=0,0793` y umbral efectivo `0,2159`, narración
+      entregada y cero canales externos.
+
+**Success criteria:** `1604 passed` con `ruff check` y `ruff format --check`
+limpios; `test_respelling.py`, `test_narration_audio_verify.py` y
+`test_narration_activities.py` cubren el mapa, la persistencia de `tts_text`,
+el idioma de Whisper, el delta y el script sin `thinking`; la calibración y el
+dry-run dejan filas `valid` en `verifications` con el umbral efectivo
+registrado.
+
+**Effort:** 8-10 hours.
+
 - [x] **GUI de operación (extensión de 7.10-7.14)** — toda la funcionalidad
       reciente queda operable desde `/ui` sin tocar la API REST. **Herramientas**
       (`/ui/tools`,4 pestañas con polling htmx): resumen de URL, TTS de
