@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Fonética{% endblock %}
+{% block app %}
+<h1>{{ 'Editar' if heuristics else 'Nueva' }} pareja fonética</h1>
+<div class="card">
+  <form method="post"
+        action="{{ '/ui/phonetics/' ~ heuristics.id ~ '/update' if heuristics else '/ui/phonetics' }}">
+    <div class="row">
+      <div class="col">
+        <label>Idioma de origen (de los términos, ISO 639-1)</label>
+        <input type="text" name="language_origin" value="{{ language_origin }}"
+               required maxlength="2" pattern="[a-zA-Z]{2}" placeholder="en">
+      </div>
+      <div class="col">
+        <label>Idioma objetivo (que los lee, ISO 639-1)</label>
+        <input type="text" name="language_target" value="{{ language_target }}"
+               required maxlength="2" pattern="[a-zA-Z]{2}" placeholder="es">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Nombre del origen (para el prompt del LLM)</label>
+        <input type="text" name="language_origin_name" value="{{ language_origin_name }}"
+               maxlength="64" placeholder="English">
+      </div>
+      <div class="col">
+        <label>Nombre del objetivo</label>
+        <input type="text" name="language_target_name" value="{{ language_target_name }}"
+               maxlength="64" placeholder="Spanish">
+      </div>
+    </div>
+
+    <label>Sufijos (uno por línea) — terminaciones que delatan un término de origen</label>
+    <textarea name="suffixes" rows="4" style="font-family:monospace;font-size:12px">{{ suffixes }}</textarea>
+
+    <label>Dígrafos (uno por línea) — aparecen dentro de la palabra</label>
+    <textarea name="digraphs" rows="3" style="font-family:monospace;font-size:12px">{{ digraphs }}</textarea>
+
+    <label>Tecnicismos y marcas (uno por línea, se ofrecen tal cual)</label>
+    <textarea name="tech_terms" rows="4" style="font-family:monospace;font-size:12px">{{ tech_terms }}</textarea>
+
+    <label>Palabras nativas a excluir (una por línea; nunca se ofrecen al LLM)</label>
+    <textarea name="native_words" rows="6" style="font-family:monospace;font-size:12px">{{ native_words }}</textarea>
+
+    <label>Ejemplos para el LLM (<code>término = respelling</code>, uno por línea)</label>
+    <textarea name="examples" rows="4" style="font-family:monospace;font-size:12px"
+              placeholder="bonjour = bonjur">{{ examples }}</textarea>
+
+    <div class="row">
+      <div class="col">
+        <div class="check">
+          <input type="checkbox" name="ascii_only" id="h-ascii" {{ 'checked' if ascii_only else '' }}>
+          <label for="h-ascii">Solo tokens ASCII (el idioma origen no usa acentos)</label>
+        </div>
+      </div>
+      <div class="col">
+        <div class="check">
+          <input type="checkbox" name="flag_all_foreign" id="h-foreign"
+                 {{ 'checked' if flag_all_foreign else '' }}>
+          <label for="h-foreign">Candidato: toda palabra no nativa (el LLM descarta las nativas)</label>
+        </div>
+      </div>
+      <div class="col">
+        <div class="check">
+          <input type="checkbox" name="enabled" id="h-enabled" {{ 'checked' if enabled else '' }}>
+          <label for="h-enabled">Activo</label>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn primary">Guardar</button>
+    <a class="btn" href="/ui/phonetics">Cancelar</a>
+    <p class="muted" style="font-size:12px">
+      El <strong>origen</strong> es el idioma de los términos extranjeros; el
+      <strong>objetivo</strong>, el que los lee. En las clases: origen = idioma
+      que se enseña, objetivo = lengua nativa del alumno (p. ej. francés →
+      español). Apagar la pareja deja de adaptarla sin borrarla.
+    </p>
+  </form>
+</div>
+{% endblock %}

@@ -18,8 +18,9 @@ from starlette.datastructures import UploadFile
 
 from src.api.db.database import AudioJobsRepository
 from src.api.models.lesson import LessonContent, LessonMode
-from src.api.models.narration import NarrationScript, NarrationSpec, SpeakerRole
+from src.api.models.narration import NarrationScript, NarrationSpec, SpeakerRole, TTSBackend
 from src.api.services.audio_files import atomic_write
+from src.api.services.phonetic_heuristics import HeuristicsError, require_enabled_pair
 from src.api.services.signed_links import LESSON_AUDIO_LINK_PREFIX, build_signed_path
 from src.api.services.submit import SubmitError, check_content_length, read_upload
 from src.api.services.voice_engine import VoiceEngineError, infer_backend
@@ -567,6 +568,69 @@ def resolve_cast(
         ) from exc
 
 
+async def validate_phonetic_adaptation(
+    phonetic_adaptation: bool,
+    cast: NarrationSpec,
+    target_language: str,
+    native_language: str,
+    mode: str = LessonMode.MIXED,
+) -> None:
+    """Check a request to phonetically adapt the class (Phase 7.16).
+
+    The adaptation quotes the language being taught inside text spoken in the
+    student's native language, so it needs the ``qwen3_tts`` renderer (the one
+    engine the ``tts_text`` map feeds), a ``dual`` cast that actually declares
+    which role teaches in the native language, and an enabled heuristics row
+    for the ``target -> native`` pair. Every problem is permanent: fail here,
+    before a ten-minute job queues, instead of inside the workflow.
+
+    Args:
+        phonetic_adaptation: Whether the form asked for the adaptation.
+        cast: Resolved cast (its engine decides feasibility).
+        target_language: ISO 639-1 language being taught.
+        native_language: ISO 639-1 language the class is spoken in.
+        mode: Lesson mode: mixed, dual or native.
+
+    Raises:
+        SubmitError: 403 when the feature is disabled, 422 when the languages,
+            the engine, the cast or the heuristics pair cannot support it.
+    """
+    if not phonetic_adaptation:
+        return
+    settings = get_settings()
+    if not settings.teacher_respelling_enabled:
+        raise SubmitError(
+            "Phonetic adaptation is disabled (TEACHER_RESPELLING_ENABLED=false)",
+            status_code=403,
+        )
+    if target_language == native_language:
+        raise SubmitError(
+            "phonetic adaptation needs different target and native languages "
+            f"(both are {target_language!r})",
+            status_code=422,
+        )
+    if cast.tts_backend is not TTSBackend.QWEN3_TTS:
+        raise SubmitError(
+            f"phonetic adaptation requires the qwen3_tts backend (the cast uses "
+            f"{cast.tts_backend}): pick Qwen3-TTS voices or drop the option",
+            status_code=422,
+        )
+    if LessonMode(mode) is LessonMode.DUAL:
+        from src.core.respelling import dual_lacks_native_role
+
+        if dual_lacks_native_role(cast, native_language):
+            raise SubmitError(
+                "mode 'dual' adapts the role that speaks the native language, but "
+                f"the spec declares no {native_language!r} role: set language="
+                f"'{native_language}' on the teaching role or drop the adaptation",
+                status_code=422,
+            )
+    try:
+        await require_enabled_pair(target_language, native_language)
+    except HeuristicsError as exc:
+        raise SubmitError(str(exc), status_code=422) from exc
+
+
 def collection_delivery(collection_name: str) -> tuple[list[str], str | None, list[str]]:
     """Resolve where a lesson is delivered for a collection (Phase 7.12).
 
@@ -604,6 +668,7 @@ async def submit_lesson(
     spec: str | None = None,
     voice: str | None = None,
     voice2: str | None = None,
+    phonetic_adaptation: bool = False,
     run_in_modal: bool = False,
 ) -> dict[str, str]:
     """Validate, store and start a lesson job (Phase 7.12).
@@ -622,6 +687,8 @@ async def submit_lesson(
         spec: Optional NarrationSpec JSON.
         voice: Voice of the native-language role (the single role otherwise).
         voice2: Voice of the target-language role; required in 'dual' mode.
+        phonetic_adaptation: Adapt the target-language terms the class quotes
+            to how a native of ``native_language`` would read them (7.16).
         run_in_modal: For the QWEN3_TTS backend, run synthesis in Modal instead
             of the gateway local (default).
 
@@ -683,6 +750,9 @@ async def submit_lesson(
         validate_mode(lesson_mode, cast)
     except LessonError as exc:
         raise SubmitError(str(exc), status_code=422) from exc
+    # Phase 7.16: reject an adaptation the render cannot honor before anything
+    # is written or queued (kill switch, languages, engine, cast, heuristics row).
+    await validate_phonetic_adaptation(phonetic_adaptation, cast, target, native, mode=lesson_mode)
 
     from src.api.services.temporal_admin import new_lesson_run_id
 
@@ -702,6 +772,7 @@ async def submit_lesson(
             "native_language": native,
             "collection": collection_name,
             "notes_chars": notes.char_count,
+            "phonetic_adaptation": phonetic_adaptation,
         },
     )
 
@@ -721,6 +792,7 @@ async def submit_lesson(
                 native_language=native,
                 title=(title or "").strip(),
                 collection=collection_name,
+                phonetic_adaptation=phonetic_adaptation,
                 delivery_task_queue=settings.temporal_task_queue,
                 delivery_channels=channels,
                 chat_id=chat_id,

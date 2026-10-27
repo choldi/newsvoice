@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}News Engine · Fonética{% endblock %}
+{% block app %}
+<h1>Adaptación fonética</h1>
+<div class="card">
+  <p class="muted">
+    Heurísticas por par de idiomas para el respelling: qué formas del
+    <em>idioma de origen</em> delatan un término extranjero dentro de texto
+    leído en el <em>idioma objetivo</em> (sufijos, dígrafos, tecnicismos,
+    palabras nativas a excluir y ejemplos <code>término = respelling</code>).
+    Las usa la narración (Fase 7.15) y la adaptación de las clases (Fase
+    7.16): la clase cita el idioma que se enseña y la voz de la lengua
+    nativa lo pronuncia como suena en el original.
+  </p>
+  <p style="margin-bottom:0"><a class="btn primary" href="/ui/phonetics/new">Nueva pareja</a></p>
+</div>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Par (origen → objetivo)</th>
+        <th>Sufijos</th>
+        <th>Dígrafos</th>
+        <th>Tecnicismos</th>
+        <th>Nativas</th>
+        <th>Ejemplos</th>
+        <th>Modo</th>
+        <th>Estado</th>
+        <th>Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in heuristics %}
+      <tr>
+        <td>
+          <strong>{{ h.language_origin }}</strong> {{ h.prompt_origin_name() }}
+          → <strong>{{ h.language_target }}</strong> {{ h.prompt_target_name() }}
+        </td>
+        <td>{{ h.suffixes | length }}</td>
+        <td>{{ h.digraphs | length }}</td>
+        <td>{{ h.tech_terms | length }}</td>
+        <td>{{ h.native_words | length }}</td>
+        <td>{{ h.examples | length }}</td>
+        <td class="muted">
+          {%- if h.flag_all_foreign %}toda palabra no nativa{% else %}por forma{% endif -%}
+          {%- if h.ascii_only %} · ascii{% endif %}
+        </td>
+        <td>
+          {% if h.enabled %}<span class="badge ok">activo</span>
+          {% else %}<span class="badge failed">apagado</span>{% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          <a class="btn" href="/ui/phonetics/{{ h.id }}/edit">Editar</a>
+          <form method="post" action="/ui/phonetics/{{ h.id }}/delete" style="display:inline"
+                onsubmit="return confirm('¿Eliminar el par {{ h.language_origin }} → {{ h.language_target }}?')">
+            <button type="submit" class="btn danger" style="margin:0">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="empty">Sin parejas configuradas todavía</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

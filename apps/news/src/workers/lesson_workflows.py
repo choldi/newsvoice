@@ -53,6 +53,8 @@ class LessonConfig:
     native_language: str = "es"
     title: str = ""
     collection: str = "default"
+    phonetic_adaptation: bool = False
+    """Adapt the target-language terms the class quotes (Phase 7.16)."""
     # --- resolved outside the workflow ---
     delivery_task_queue: str = ""
     """Digest queue, where the delivery activities are registered."""
@@ -97,6 +99,7 @@ class LessonWorkflow:
                     "native_language": config.native_language,
                     "title": config.title,
                     "collection": config.collection,
+                    "phonetic_adaptation": config.phonetic_adaptation,
                 },
                 start_to_close_timeout=LESSON_GENERATE_TIMEOUT,
                 retry_policy=LESSON_RETRY_POLICY,

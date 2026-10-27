@@ -382,6 +382,69 @@ def test_lesson_voice_fragment_follows_the_mode() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 7.16: phonetic adaptation switch
+# ---------------------------------------------------------------------------
+
+
+def test_lesson_form_exposes_the_phonetic_adaptation_switch() -> None:
+    """The lesson form offers the adaptation, off by default."""
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    lesson_form = response.text.split('action="/ui/tools/lessons"', 1)[1].split("</form>", 1)[0]
+    assert 'name="phonetic_adaptation"' in lesson_form
+    tag = lesson_form.split('name="phonetic_adaptation"', 1)[1][:120]
+    assert "checked" not in tag, "off by default: not every cast is qwen3_tts"
+
+
+def test_lesson_form_hides_the_switch_when_the_feature_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TEACHER_RESPELLING_ENABLED=false removes the option entirely."""
+    monkeypatch.setattr(settings, "teacher_respelling_enabled", False)
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    assert 'name="phonetic_adaptation"' not in response.text
+
+
+def test_lesson_submit_forwards_the_phonetic_switch() -> None:
+    """A ticked checkbox reaches the shared service as True; absent as False."""
+    client = _client()
+    result = {
+        "workflow_id": "lesson-phon",
+        "collection": "default",
+        "title": "Fonetica",
+        "mode": "mixed",
+        "status_url": "/api/admin/lessons/lesson-phon",
+    }
+    with patch(
+        "src.api.routes_ui.submit_lesson", new_callable=AsyncMock, return_value=result
+    ) as submit:
+        client.post(
+            "/ui/tools/lessons",
+            files={"file": ("apuntes.md", b"# Clase\n\nHola.", "text/markdown")},
+            data={
+                "target_language": "en",
+                "native_language": "es",
+                "phonetic_adaptation": "on",
+            },
+            follow_redirects=False,
+        )
+        assert submit.call_args.kwargs["phonetic_adaptation"] is True
+
+        client.post(
+            "/ui/tools/lessons",
+            files={"file": ("apuntes.md", b"# Clase\n\nHola.", "text/markdown")},
+            data={"target_language": "en", "native_language": "es"},
+            follow_redirects=False,
+        )
+        assert submit.call_args.kwargs["phonetic_adaptation"] is False
+
+
+# ---------------------------------------------------------------------------
 # Podcast
 # ---------------------------------------------------------------------------
 

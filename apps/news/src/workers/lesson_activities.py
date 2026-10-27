@@ -21,7 +21,7 @@ from temporalio.exceptions import ApplicationError
 
 from src.api.db.database import AudioJobsRepository
 from src.api.models.lesson import LessonContent
-from src.api.models.narration import NarrationScript, NarrationSpec
+from src.api.models.narration import NarrationScript, NarrationSpec, TTSBackend
 from src.api.services.lesson import (
     LessonError,
     attachment_text,
@@ -38,6 +38,8 @@ from src.api.services.lesson import (
     validate_notes,
 )
 from src.api.services.narration_tts import NarrationTTSService, RenderStrategy
+from src.core.config import get_settings
+from src.core.respelling import respell_lesson_script
 
 logger = structlog.get_logger(__name__)
 
@@ -115,17 +117,17 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payload: Dict with 'run_id', 'notes_path', 'mode', 'spec',
-            'target_language', 'native_language', optional 'title' and
-            'collection'.
+            'target_language', 'native_language', optional 'title',
+            'collection' and 'phonetic_adaptation' (Phase 7.16).
 
     Returns:
         Dict with 'text_path', 'title', 'segments' and 'char_count'.
 
     Raises:
-        ApplicationError: Non-retryable for unusable notes, an invalid mode or
-            an unparsable LLM reply after the format retries (the job row
-            records the reason first); retryable when the LLM call itself
-            fails on every attempt.
+        ApplicationError: Non-retryable for unusable notes, an invalid mode, a
+            failed phonetic adaptation or an unparsable LLM reply after the
+            format retries (the job row records the reason first); retryable
+            when the LLM call itself fails on every attempt.
     """
     run_id = str(payload.get("run_id") or "")
     if not run_id:
@@ -209,6 +211,55 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         script = build_script(content, spec)
+    except LessonError as exc:
+        await repo.finish_job(
+            run_id,
+            status="FINISHED_ERROR",
+            error=str(exc),
+            elapsed_seconds=round(time.monotonic() - started, 2),
+            kind=LESSON_JOB_KIND,
+        )
+        raise ApplicationError(f"Lesson generation rejected: {exc}", non_retryable=True) from exc
+
+    # Phase 7.16: the teacher asks the LLM for the phonetic map of the
+    # target-language terms the class quotes, per role, before the script is
+    # stored: the render must speak `tts_text` and the metadata must carry the
+    # full {term: respelling} map. Unlike narration this is strict — any
+    # problem (feature off, wrong engine, unconfigured pair, LLM failure)
+    # finishes the job as FINISHED_ERROR instead of shipping a half-adapted
+    # class that would teach the wrong pronunciation.
+    respelling_metadata: dict[str, Any] | None = None
+    if payload.get("phonetic_adaptation"):
+        try:
+            settings = get_settings()
+            if not settings.teacher_respelling_enabled:
+                raise ValueError("TEACHER_RESPELLING_ENABLED=false")
+            if spec.tts_backend is not TTSBackend.QWEN3_TTS:
+                raise ValueError(
+                    f"phonetic adaptation requires the qwen3_tts backend "
+                    f"(the cast uses {spec.tts_backend})"
+                )
+            script, respelling_metadata = await respell_lesson_script(
+                script,
+                spec,
+                mode=mode,
+                target_language=str(payload.get("target_language") or ""),
+                native_language=str(payload.get("native_language") or ""),
+            )
+        except Exception as exc:
+            detail = f"phonetic adaptation failed: {exc}"
+            await repo.finish_job(
+                run_id,
+                status="FINISHED_ERROR",
+                error=detail,
+                elapsed_seconds=round(time.monotonic() - started, 2),
+                kind=LESSON_JOB_KIND,
+            )
+            raise ApplicationError(
+                f"Lesson generation rejected: {detail}", non_retryable=True
+            ) from exc
+
+    try:
         text_path = save_lesson(run_id, content, script)
         script_path = str(lesson_script_path(run_id))
         markdown = attachment_text(content)
@@ -222,19 +273,21 @@ async def generate_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
         )
         raise ApplicationError(f"Lesson generation rejected: {exc}", non_retryable=True) from exc
 
-    update_lesson_meta(
-        run_id,
-        {
-            "title": content.title,
-            "mode": mode,
-            "target_language": str(payload.get("target_language") or ""),
-            "native_language": str(payload.get("native_language") or ""),
-            "char_count": len(content.markdown),
-            "segments": len(content.segments),
-            "notes_chars": notes.char_count,
-            "text_path": text_path,
-        },
-    )
+    meta_update: dict[str, Any] = {
+        "title": content.title,
+        "mode": mode,
+        "target_language": str(payload.get("target_language") or ""),
+        "native_language": str(payload.get("native_language") or ""),
+        "char_count": len(content.markdown),
+        "segments": len(content.segments),
+        "notes_chars": notes.char_count,
+        "text_path": text_path,
+    }
+    if respelling_metadata is not None:
+        # The full term map, per segment and union, for auditing what the
+        # voice actually said (Phase 7.16 requirement: store, don't preview).
+        meta_update["respelling"] = respelling_metadata
+    update_lesson_meta(run_id, meta_update)
     activity.logger.info(
         f"Lesson generated: title={content.title!r} chars={len(content.markdown)} "
         f"segments={len(content.segments)}"
