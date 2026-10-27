@@ -58,6 +58,14 @@ async def submit_lesson_endpoint(
         default=None,
         description="Second voice id (target language); required for mode='dual'",
     ),
+    phonetic_adaptation: bool = Form(
+        default=False,
+        description=(
+            "Adapt the cited target-language terms to how a speaker of "
+            "native_language would read them (Phase 7.16; needs the qwen3_tts "
+            "backend and an enabled phonetic_heuristics row for the pair)"
+        ),
+    ),
 ) -> LessonSubmitOut:
     """POST /admin/lessons endpoint handler.
 
@@ -72,6 +80,8 @@ async def submit_lesson_endpoint(
         spec: Optional NarrationSpec JSON.
         voice: Voice of the native-language role (the single role otherwise).
         voice2: Voice of the target-language role; required for mode='dual'.
+        phonetic_adaptation: Whether the script must be phonetically adapted
+            for the native-language voice (Phase 7.16).
 
     Returns:
         LessonSubmitOut with the workflow id and the status URL.
@@ -92,6 +102,7 @@ async def submit_lesson_endpoint(
             spec=spec,
             voice=voice,
             voice2=voice2,
+            phonetic_adaptation=phonetic_adaptation,
         )
     except SubmitError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
@@ -149,6 +160,7 @@ async def get_lesson(workflow_id: str) -> LessonJobOut:
         duration_estimate=float(duration) if isinstance(duration, (int, float)) else None,
         audio_url=audio_url,
         text_path=str(meta.get("text_path") or ""),
+        respelling=meta.get("respelling") if isinstance(meta.get("respelling"), dict) else None,
         error=job.get("error"),
         elapsed_seconds=job.get("elapsed_seconds"),
     )

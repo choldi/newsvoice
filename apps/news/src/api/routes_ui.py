@@ -34,8 +34,15 @@ from src.api.db.database import (
 )
 from src.api.models.lesson import LessonMode
 from src.api.models.narration import NarrationSpec, TTSBackend
+from src.api.models.phonetic import PhoneticHeuristicsIn, PhoneticHeuristicsOut
 from src.api.models.voices import CustomVoiceIn
-from src.api.services import env_editor, voice_catalog_admin, voice_preview, voice_search
+from src.api.services import (
+    env_editor,
+    phonetic_heuristics,
+    voice_catalog_admin,
+    voice_preview,
+    voice_search,
+)
 from src.api.services.audio_cleanup import delete_job_artifacts
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
@@ -46,6 +53,7 @@ from src.api.services.lesson import (
     read_lesson_meta,
     submit_lesson,
 )
+from src.api.services.phonetic_heuristics import HeuristicsError
 from src.api.services.signed_links import (
     NARRATION_AUDIO_LINK_PREFIX,
     SignedLinkError,
@@ -2276,6 +2284,217 @@ async def ui_user_delete(user_id: int) -> RedirectResponse:
     return _flash("/ui/users", "Usuario eliminado")
 
 
+# ---------------------------------------------------------------------------
+# Phase 7.16: phonetic-adaptation heuristics (one row per language pair)
+# ---------------------------------------------------------------------------
+
+
+def _heuristics_payload(fields: dict[str, str]) -> PhoneticHeuristicsIn:
+    """Build the heuristics payload of the admin form.
+
+    Textareas arrive as plain text: the model's validators accept newline- or
+    comma-separated word lists and ``term = respelling`` lines (or raw JSON),
+    so the form never has to emit JSON.
+
+    Args:
+        fields: Parsed form fields.
+
+    Returns:
+        The validated payload.
+
+    Raises:
+        ValidationError: On a bad code, an unparsable list or a same-language
+            pair (the caller maps it onto a flash).
+    """
+    return PhoneticHeuristicsIn(
+        language_origin=fields.get("language_origin", ""),
+        language_target=fields.get("language_target", ""),
+        language_origin_name=fields.get("language_origin_name", ""),
+        language_target_name=fields.get("language_target_name", ""),
+        suffixes=fields.get("suffixes", ""),
+        digraphs=fields.get("digraphs", ""),
+        tech_terms=fields.get("tech_terms", ""),
+        native_words=fields.get("native_words", ""),
+        examples=fields.get("examples", ""),
+        ascii_only=fields.get("ascii_only") == "on",
+        flag_all_foreign=fields.get("flag_all_foreign") == "on",
+        enabled=fields.get("enabled") == "on",
+    )
+
+
+def _heuristics_form_context(row: PhoneticHeuristicsOut | None) -> dict:
+    """Render-ready context of the create/edit heuristics form.
+
+    Lists become newline-separated textarea text and the example map becomes
+    ``term = respelling`` lines, so what the admin sees round-trips through
+    the same parser.
+
+    Args:
+        row: Row being edited, or None for the empty create form.
+
+    Returns:
+        Context for ``phonetic_form.html``.
+    """
+    if row is None:
+        return {
+            "heuristics": None,
+            "language_origin": "",
+            "language_target": "",
+            "language_origin_name": "",
+            "language_target_name": "",
+            "suffixes": "",
+            "digraphs": "",
+            "tech_terms": "",
+            "native_words": "",
+            "examples": "",
+            "ascii_only": True,
+            "flag_all_foreign": False,
+            "enabled": True,
+        }
+    return {
+        "heuristics": row,
+        "language_origin": row.language_origin,
+        "language_target": row.language_target,
+        "language_origin_name": row.language_origin_name,
+        "language_target_name": row.language_target_name,
+        "suffixes": "\n".join(row.suffixes),
+        "digraphs": "\n".join(row.digraphs),
+        "tech_terms": "\n".join(row.tech_terms),
+        "native_words": "\n".join(row.native_words),
+        "examples": "\n".join(f"{term} = {value}" for term, value in row.examples.items()),
+        "ascii_only": row.ascii_only,
+        "flag_all_foreign": row.flag_all_foreign,
+        "enabled": row.enabled,
+    }
+
+
+@router.get("/ui/phonetics", response_class=HTMLResponse, include_in_schema=False)
+async def ui_phonetics(request: Request) -> HTMLResponse:
+    """Render the phonetic heuristics table (admin, Phase 7.16).
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse listing every configured language pair.
+    """
+    try:
+        rows = await phonetic_heuristics.list_all()
+        error = ""
+    except HeuristicsError as exc:
+        rows, error = [], str(exc)
+    return _render(request, "phonetics.html", {"heuristics": rows, "error": error})
+
+
+@router.get("/ui/phonetics/new", response_class=HTMLResponse, include_in_schema=False)
+async def ui_phonetics_new(request: Request) -> HTMLResponse:
+    """Render the empty create form for one language pair.
+
+    Args:
+        request: Incoming request.
+
+    Returns:
+        HTMLResponse with the heuristics form.
+    """
+    return _render(request, "phonetic_form.html", _heuristics_form_context(None))
+
+
+@router.post("/ui/phonetics", include_in_schema=False)
+async def ui_phonetics_create(request: Request) -> RedirectResponse:
+    """Create one heuristics row from the admin form.
+
+    Args:
+        request: Incoming request with the form body.
+
+    Returns:
+        Redirect to the heuristics list with a flash.
+    """
+    fields = await _form(request)
+    try:
+        payload = _heuristics_payload(fields)
+        saved = await phonetic_heuristics.save(payload)
+    except ValidationError as exc:
+        return _flash("/ui/phonetics/new", f"Error al guardar: {_validation_message(exc)}", "error")
+    except HeuristicsError as exc:
+        return _flash("/ui/phonetics/new", str(exc), "error")
+    logger.info(
+        "ui_phonetics_created",
+        origin=saved.language_origin,
+        target=saved.language_target,
+    )
+    return _flash(
+        "/ui/phonetics",
+        f"Par {saved.language_origin} → {saved.language_target} guardado",
+    )
+
+
+@router.get("/ui/phonetics/{row_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def ui_phonetics_edit(request: Request, row_id: int) -> Response:
+    """Render the edit form of one heuristics row.
+
+    Args:
+        request: Incoming request.
+        row_id: Primary key of the row.
+
+    Returns:
+        HTMLResponse with the prefilled form, or a redirect when missing.
+    """
+    row = await phonetic_heuristics.get(row_id)
+    if row is None:
+        return _flash("/ui/phonetics", f"Regla {row_id} no encontrada", "error")
+    return _render(request, "phonetic_form.html", _heuristics_form_context(row))
+
+
+@router.post("/ui/phonetics/{row_id}/update", include_in_schema=False)
+async def ui_phonetics_update(row_id: int, request: Request) -> RedirectResponse:
+    """Replace one heuristics row from the admin form.
+
+    Args:
+        row_id: Primary key of the row.
+        request: Incoming request with the form body.
+
+    Returns:
+        Redirect to the heuristics list with a flash.
+    """
+    fields = await _form(request)
+    back = f"/ui/phonetics/{row_id}/edit"
+    try:
+        payload = _heuristics_payload(fields)
+        saved = await phonetic_heuristics.save(payload, row_id=row_id)
+    except ValidationError as exc:
+        return _flash(back, f"Error al guardar: {_validation_message(exc)}", "error")
+    except HeuristicsError as exc:
+        return _flash(back, str(exc), "error")
+    logger.info(
+        "ui_phonetics_updated",
+        row_id=row_id,
+        origin=saved.language_origin,
+        target=saved.language_target,
+    )
+    return _flash(
+        "/ui/phonetics",
+        f"Par {saved.language_origin} → {saved.language_target} actualizado",
+    )
+
+
+@router.post("/ui/phonetics/{row_id}/delete", include_in_schema=False)
+async def ui_phonetics_delete(row_id: int) -> RedirectResponse:
+    """Delete one heuristics row (the respeller falls back or stops).
+
+    Args:
+        row_id: Primary key of the row.
+
+    Returns:
+        Redirect to the heuristics list with a flash.
+    """
+    try:
+        await phonetic_heuristics.delete(row_id)
+    except HeuristicsError as exc:
+        return _flash("/ui/phonetics", str(exc), "error")
+    logger.info("ui_phonetics_deleted", row_id=row_id)
+    return _flash("/ui/phonetics", f"Regla {row_id} eliminada")
+
+
 @router.post("/ui/login", include_in_schema=False)
 async def ui_login(request: Request) -> RedirectResponse:
     """Validate admin credentials and start a server-side session.
@@ -2453,6 +2672,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
     omni = await _omni_options()
     edge = await _edge_voice_options()
     all_voices = [voice.model_dump() for voice in await list_all_voices()]
+    from src.core.config import get_settings
+
     doc_picker = _picker_context(
         edge["voices"],
         picker_id="doc",
@@ -2471,6 +2692,9 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "doc_picker": doc_picker,
             "doc_language_options": voice_search.language_options(edge["voices"]),
             "lesson_language_options": voice_search.language_options(all_voices),
+            # Phase 7.16: the lesson form only offers the adaptation when the
+            # teacher feature can actually run it.
+            "teacher_respelling_enabled": get_settings().teacher_respelling_enabled,
             **_lesson_voice_context(
                 all_voices,
                 native_language="es",
@@ -2573,6 +2797,7 @@ async def ui_tools_lessons(request: Request) -> RedirectResponse:
             spec=fields.get("spec") or None,
             voice=fields.get("voice") or None,
             voice2=fields.get("voice2") or None,
+            phonetic_adaptation=fields.get("phonetic_adaptation") == "on",
             run_in_modal=fields.get("narr_run_in_modal") == "on",
         )
     except SubmitError as exc:

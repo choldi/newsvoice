@@ -148,6 +148,26 @@
   The cache key covers the full script model, so changing `tts_text`
   regenerates. Respelling never mutates `text`, never runs for other backends,
   and falls back to an empty `tts_text` on LLM failure
+- Respell rules are **data**: the `phonetic_heuristics` table (migration 015,
+  admin GUI `/ui/phonetics`) stores one row per `language_origin →
+  language_target` pair — suffixes, digraphs, tech terms, the native-word stop
+  list, few-shot examples and the `ascii_only` / `flag_all_foreign` /
+  `enabled` flags. `src/core/respelling.py` keeps the Phase 7.15 English
+  constants only as the built-in fallback for a pair nobody stored, so
+  narration still runs on a row-less database; a stored **disabled** row wins
+  over the fallback and switches that pair off. Narration resolves its pair
+  per segment language with `load_heuristics()`
+- The teacher's phonetic adaptation (Phase 7.16, `respell_lesson_script`) is
+  strict where narration is best effort: the `target_language →
+  native_language` pair must exist **and** be enabled (`require_heuristics()`,
+  no fallback), the cast must be `qwen3_tts`, and any failure — including the
+  LLM call — finishes the lesson as `FINISHED_ERROR`, never a half-adapted
+  class. It adapts only the segments spoken in the native language (all of
+  them in `mixed`/`native`, only the native role in `dual`) and stores the
+  full per-segment `{term: respelling}` map plus the union in the lesson meta
+  (`respelling` key, echoed by `GET /api/admin/lessons/{id}`): stored, never
+  previewed. Its switches (`TEACHER_RESPELLING_ENABLED`,
+  `TEACHER_RESPELLING_TEMPERATURE`) are independent from the narration's
 - The ASR gate compares Whisper against canonical `text`; `tts_text` only feeds
   `respelling_delta` and the diagnostic `wer_secondary`. `audio_verify` is
   resolved **outside** the workflow (`pipeline_config_for`) and only runs when

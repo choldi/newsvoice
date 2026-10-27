@@ -761,6 +761,49 @@ falla y nunca filtra un secreto (`test_env_editor.py`22 +
 
 **Effort:** 6-8 hours.
 
+- [x] **7.16 Adaptación fonética en las clases (por par de idiomas)** — el
+      formulario de clase gana la casilla **Adaptación fonética**
+      (por defecto apagada; oculta con `TEACHER_RESPELLING_ENABLED=false`):
+      los términos que la clase cita del idioma que se enseña se reescriben en
+      `tts_text` para que la voz de la lengua nativa los pronuncie como suenan
+      en el original ("en francés, decimos **bonjur**"). **Las heurísticas
+      pasan a ser datos**: tabla `phonetic_heuristics` (migración
+      `015_phonetic_heuristics.sql`, semillas `en→es`, `en→fr` —los pares que
+      la 7.15 tenía en código— y `fr→es` con `flag_all_foreign`), una fila por
+      par `origen → objetivo` con sufijos, dígrafos, tecnicismos, palabras
+      nativas, ejemplos `{término: respelling}` y banderas `ascii_only` /
+      `flag_all_foreign` / `enabled`, editables en `/ui/phonetics` (solo
+      admin, CRUD con validación ISO 639-1, par repetido y par `mismo →
+      mismo`). `src/core/respelling.py` carga las filas (`load_heuristics`,
+      con los constantes de la 7.15 como *fallback* para la narración; una
+      fila apagada manda) y añade `respell_lesson_script`, **estricta**:
+      par no configurado/apagado, cast ≠ `qwen3_tts` o fallo del LLM acaban
+      en `FINISHED_ERROR` con el motivo. Aplicación **por rol**: en `dual`
+      solo el profe de la lengua nativa (el de objetivo habla su idioma);
+      en `mixed`/`native`, todos los segmentos. Los metadatos guardan el mapa
+      completo **por segmento** y la unión de términos (meta `respelling`,
+      expuesta en `GET /api/admin/lessons/{id}`): se almacena, no se
+      previsualiza. Nuevos settings `TEACHER_RESPELLING_ENABLED` y
+      `TEACHER_RESPELLING_TEMPERATURE` (independientes de los de narración),
+      validación en el submit (403 apagado / 422 idiomas iguales, motor ≠
+      qwen3_tts, cast `dual` sin rol con `language=<nativa>` —no se adaptaría
+      nada—, par sin configurar) y se corrigió `.gitignore`: la regla
+      `models/` sin anclar también ocultaba `src/api/models/*.py` de git
+      (un fichero nuevo ahí no se habría commiteado).
+
+**Success criteria:** `1671 passed` con `ruff check .` y `ruff format --check .`
+limpios; suites nuevas `test_phonetic_heuristics.py` (19: seeds + drift guard
+contra las constantes 7.15, parsing de textareas, CRUD y los tres estados de
+`require_enabled_pair`), ampliaciones en `test_respelling.py` (+14: par en BD,
+fila apagada, candidatos por par, prompt con los dos idiomas, adaptación
+por rol/estricta y el cast `dual` sin rol nativo), `test_lesson_activities.py`
+(+5: mapa en el script y en la meta, y los tres fallos a `FINISHED_ERROR`),
+`test_lesson_service.py` (+8), `test_admin_lessons_endpoint.py` (+6 con el mapa
+en el estado) y la GUI (`test_ui_phonetics.py`, 7 + `test_ui_tools.py`, 3 +
+`test_authz.py`, reglas admin de `/ui/phonetics`).
+
+**Effort:** 6-8 hours.
+
 ---
 
 ## PHASE 8 — TTS engine routing, engine leasing and synthesis-time estimation

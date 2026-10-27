@@ -68,3 +68,11 @@ class LessonJobOut(BaseModel):
     text_path: str = Field(default="", description="Path of the lesson .md attachment")
     error: str | None = Field(default=None, description="Failure detail when any")
     elapsed_seconds: float | None = Field(default=None, description="Render wall time")
+    respelling: dict | None = Field(
+        default=None,
+        description=(
+            "Phase 7.16 adaptation metadata when the class requested it: the "
+            "language pair, the union {term: respelling} map and one entry per "
+            "adapted segment with its full map"
+        ),
+    )

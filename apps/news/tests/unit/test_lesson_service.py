@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from src.api.models.lesson import LessonContent, LessonMode
-from src.api.models.narration import NarrationSpec, SpeakerRole
+from src.api.models.narration import NarrationSpec, SpeakerRole, TTSBackend
 from src.api.services.lesson import (
     LessonError,
     attachment_text,
@@ -29,6 +29,7 @@ from src.api.services.lesson import (
     validate_lesson_id,
     validate_mode,
     validate_notes,
+    validate_phonetic_adaptation,
 )
 from src.api.services.submit import SubmitError
 
@@ -372,3 +373,84 @@ def test_save_lesson_writes_markdown_and_script() -> None:
     stored = json.loads(lesson_script_path("lesson-abc").read_text(encoding="utf-8"))
     assert stored["source"] == "llm"
     assert stored["segments"][0]["role"] == "profe_0"
+
+
+# ---------------------------------------------------------------------------
+# validate_phonetic_adaptation (Phase 7.16)
+# ---------------------------------------------------------------------------
+
+
+def _qwen_cast(*voices: str) -> NarrationSpec:
+    """Build a qwen3_tts cast (the only engine the adaptation feeds)."""
+    return NarrationSpec(
+        language="en",
+        tts_backend=TTSBackend.QWEN3_TTS,
+        roles=[
+            SpeakerRole(name=f"profe_{index}", voice_id=voice)
+            for index, voice in enumerate(voices or ("voice-es",))
+        ],
+    )
+
+
+async def test_adaptation_is_a_noop_when_not_requested() -> None:
+    """Nothing is checked when the checkbox is off (legacy submits keep working)."""
+    await validate_phonetic_adaptation(False, _spec(), "en", "en")
+
+
+async def test_adaptation_rejects_the_wrong_backend() -> None:
+    """The default gateway cast cannot consume tts_text, so 422 up front."""
+    with pytest.raises(SubmitError) as excinfo:
+        await validate_phonetic_adaptation(True, _spec(), "en", "es")
+
+    assert excinfo.value.status_code == 422
+    assert "qwen3_tts" in excinfo.value.message
+
+
+async def test_adaptation_rejects_equal_languages() -> None:
+    """A language does not need adapting to itself."""
+    with pytest.raises(SubmitError, match="different target and native"):
+        await validate_phonetic_adaptation(True, _qwen_cast(), "es", "es")
+
+
+async def test_adaptation_rejects_an_unconfigured_pair() -> None:
+    """Without a heuristics row the class would guess: refuse before queueing."""
+    with pytest.raises(SubmitError, match="no phonetic heuristics for de -> es"):
+        await validate_phonetic_adaptation(True, _qwen_cast(), "de", "es")
+
+
+async def test_adaptation_accepts_the_seeded_pair() -> None:
+    """The seeded en -> es row with a qwen3 cast passes untouched."""
+    await validate_phonetic_adaptation(True, _qwen_cast(), "en", "es")
+
+
+async def test_adaptation_respects_its_kill_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TEACHER_RESPELLING_ENABLED=false answers 403, like every kill switch."""
+    monkeypatch.setattr("src.core.config.settings.teacher_respelling_enabled", False)
+
+    with pytest.raises(SubmitError) as excinfo:
+        await validate_phonetic_adaptation(True, _qwen_cast(), "en", "es")
+
+    assert excinfo.value.status_code == 403
+    assert "TEACHER_RESPELLING_ENABLED" in excinfo.value.message
+
+
+async def test_adaptation_rejects_a_dual_cast_without_a_native_role() -> None:
+    """A dual cast with no `language` roles would adapt nothing: 422 first."""
+    cast = NarrationSpec(
+        language="en",
+        tts_backend=TTSBackend.QWEN3_TTS,
+        roles=[
+            SpeakerRole(name="teacher_a", voice_id="voice-es"),
+            SpeakerRole(name="teacher_b", voice_id="voice-en"),
+        ],
+    )
+
+    with pytest.raises(SubmitError, match="declares no 'es' role"):
+        await validate_phonetic_adaptation(True, cast, "en", "es", mode=LessonMode.DUAL)
+
+
+async def test_adaptation_ignores_role_languages_outside_dual() -> None:
+    """mixed/native speak the native language by definition: no role needed."""
+    await validate_phonetic_adaptation(True, _qwen_cast(), "en", "es", mode=LessonMode.MIXED)

@@ -67,6 +67,11 @@ class TestRequiredRole:
         [
             ("GET", "/ui/settings"),
             ("POST", "/ui/settings"),
+            ("GET", "/ui/phonetics"),
+            ("POST", "/ui/phonetics"),
+            ("GET", "/ui/phonetics/3/edit"),
+            ("POST", "/ui/phonetics/3/update"),
+            ("POST", "/ui/phonetics/3/delete"),
             ("GET", "/ui/users"),
             ("POST", "/ui/users/3/approve"),
             ("POST", "/ui/users/3/delete"),

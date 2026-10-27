@@ -69,6 +69,7 @@ _ROLE_RULES: tuple[tuple[str, re.Pattern[str], Role], ...] = (
     ("POST", re.compile(r"^/api/mvp_digest$"), Role.USER),
     # --- admin: everything else ------------------------------------------
     ("*", re.compile(r"^/ui/settings"), Role.ADMIN),
+    ("*", re.compile(r"^/ui/phonetics"), Role.ADMIN),
     ("*", re.compile(r"^/ui/users"), Role.ADMIN),
     ("*", re.compile(r"^/docs$|^/redoc$|^/openapi\.json$"), Role.ADMIN),
     ("*", re.compile(r"^/api/cluster$|^/api/filter_new$"), Role.ADMIN),

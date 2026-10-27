@@ -143,6 +143,24 @@
         <div class="check" style="margin-top:26px"><input type="checkbox" name="narr_run_in_modal"><label>Ejecutar en Modal</label></div>
         <p class="muted" style="font-size:12px;margin:4px 0 0">Solo voces Qwen3-TTS/ZONOS2; sin marcar, síntesis en el gateway local.</p>
       </div>
+      {% if teacher_respelling_enabled %}
+      {# Phase 7.16: adapta los términos que la clase cita de un idioma a
+         otro a cómo los leería un hablante de la lengua nativa (p. ej.
+         "en francés, decimos bonjur"). Solo con voces Qwen3-TTS y con la
+         pareja de idiomas configurada en /ui/phonetics. #}
+      <div class="col">
+        <div class="check" style="margin-top:26px">
+          <input type="checkbox" name="phonetic_adaptation" id="phonetic-adaptation">
+          <label for="phonetic-adaptation">Adaptación fonética</label>
+        </div>
+        <p class="muted" style="font-size:12px;margin:4px 0 0">
+          Respell de los términos citados del idioma objetivo para la voz de la
+          lengua nativa (p. ej. "bonjour" → "bonjur"). Requiere voces
+          Qwen3-TTS{% if is_admin %} y la pareja en
+          <a href="/ui/phonetics">Fonética</a>{% endif %}.
+        </p>
+      </div>
+      {% endif %}
       {# One voice for mixed/native, two for dual (native + target); the mode
          select re-fetches this block so the cast always matches the mode. #}
       <div class="col" id="lesson-voices" style="display:contents">

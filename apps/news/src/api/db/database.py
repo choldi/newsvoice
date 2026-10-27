@@ -1737,3 +1737,199 @@ class SessionsRepository:
             cursor = await db.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso,))
             await db.commit()
             return cursor.rowcount
+
+
+class PhoneticHeuristicsRepository:
+    """Repository for the phonetic-adaptation heuristics (migration 015).
+
+    One row per ``(language_origin, language_target)`` pair: how the respeller
+    recognises foreign terms of the origin language inside text read in the
+    target language. The seeds come from the migration; the admin GUI at
+    ``/ui/phonetics`` edits them.
+    """
+
+    #: Columns stored as JSON arrays of strings.
+    _LIST_COLUMNS = ("suffixes", "digraphs", "tech_terms", "native_words")
+
+    def __init__(self, db_path: str | None = None) -> None:
+        """Initialize with an optional database path.
+
+        Args:
+            db_path: Path to the SQLite database. Defaults to settings.database_path.
+        """
+        self.db_path = db_path
+
+    def _decode(self, row: Any) -> dict[str, Any]:
+        """Turn one row into a dict with JSON columns parsed and flags as bools.
+
+        Args:
+            row: An aiosqlite.Row (or mapping) of ``phonetic_heuristics``.
+
+        Returns:
+            The decoded row dict.
+        """
+        data = dict(row)
+        for column in self._LIST_COLUMNS:
+            raw = data.get(column) or "[]"
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = []
+            data[column] = [str(item) for item in parsed] if isinstance(parsed, list) else []
+        raw_examples = data.get("examples") or "{}"
+        try:
+            examples = json.loads(raw_examples)
+        except (TypeError, ValueError):
+            examples = {}
+        data["examples"] = examples if isinstance(examples, dict) else {}
+        for flag in ("ascii_only", "flag_all_foreign", "enabled"):
+            data[flag] = bool(int(data.get(flag) or 0))
+        for stamp in ("created_at", "updated_at"):
+            data[stamp] = str(data.get(stamp) or "")
+        return data
+
+    @staticmethod
+    def _encode(data: dict[str, Any]) -> dict[str, Any]:
+        """Serialize the JSON/bool columns of a payload for SQLite.
+
+        Args:
+            data: Payload with Python lists, dicts and bools.
+
+        Returns:
+            The payload with JSON strings and 0/1 integers.
+        """
+        encoded = dict(data)
+        for column in PhoneticHeuristicsRepository._LIST_COLUMNS:
+            encoded[column] = json.dumps(list(encoded.get(column) or []), ensure_ascii=False)
+        encoded["examples"] = json.dumps(dict(encoded.get("examples") or {}), ensure_ascii=False)
+        for flag in ("ascii_only", "flag_all_foreign", "enabled"):
+            encoded[flag] = 1 if encoded.get(flag, True) else 0
+        return encoded
+
+    async def list_all(self) -> list[dict[str, Any]]:
+        """Return every row ordered by the language pair.
+
+        Returns:
+            Decoded row dicts, sorted by origin then target.
+        """
+        query = "SELECT * FROM phonetic_heuristics ORDER BY language_origin, language_target"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+        return [self._decode(row) for row in rows]
+
+    async def get(self, row_id: int) -> dict[str, Any] | None:
+        """Return one row by id.
+
+        Args:
+            row_id: Primary key.
+
+        Returns:
+            The decoded row, or None when missing.
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(
+                "SELECT * FROM phonetic_heuristics WHERE id = ?", (row_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return self._decode(row) if row else None
+
+    async def get_pair(self, language_origin: str, language_target: str) -> dict[str, Any] | None:
+        """Return the row of one language pair, or None.
+
+        Args:
+            language_origin: ISO 639-1 language of the terms.
+            language_target: ISO 639-1 language reading them.
+
+        Returns:
+            The decoded row, or None when the pair is unconfigured.
+        """
+        query = """
+            SELECT * FROM phonetic_heuristics
+            WHERE language_origin = ? AND language_target = ?
+        """
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (language_origin, language_target)) as cursor:
+                row = await cursor.fetchone()
+        return self._decode(row) if row else None
+
+    async def create(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Insert one row and return it.
+
+        Args:
+            data: Validated payload (lists/dicts/bools).
+
+        Returns:
+            The inserted row, decoded.
+
+        Raises:
+            ValueError: When the pair already exists (UNIQUE violation).
+        """
+        encoded = self._encode(data)
+        columns = ", ".join(encoded)
+        placeholders = ", ".join("?" for _ in encoded)
+        query = f"INSERT INTO phonetic_heuristics ({columns}) VALUES ({placeholders})"
+        async with get_db(self.db_path) as db:
+            try:
+                await db.execute(query, tuple(encoded.values()))
+                await db.commit()
+            except aiosqlite.IntegrityError as exc:
+                raise ValueError(
+                    f"a heuristics row for {data['language_origin']} -> "
+                    f"{data['language_target']} already exists"
+                ) from exc
+            async with db.execute(
+                "SELECT * FROM phonetic_heuristics WHERE rowid = last_insert_rowid()"
+            ) as cursor:
+                row = await cursor.fetchone()
+        return self._decode(row) if row else {}
+
+    async def update(self, row_id: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Replace the editable columns of one row.
+
+        Args:
+            row_id: Primary key of the row.
+            data: Validated payload (lists/dicts/bools).
+
+        Returns:
+            The updated row, or None when it does not exist.
+
+        Raises:
+            ValueError: When another row already owns the pair (UNIQUE violation).
+        """
+        encoded = self._encode(data)
+        assignments = ", ".join(f"{column} = ?" for column in encoded)
+        query = (
+            f"UPDATE phonetic_heuristics SET {assignments}, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?"
+        )
+        async with get_db(self.db_path) as db:
+            try:
+                cursor = await db.execute(query, (*encoded.values(), row_id))
+                await db.commit()
+            except aiosqlite.IntegrityError as exc:
+                raise ValueError(
+                    f"a heuristics row for {data['language_origin']} -> "
+                    f"{data['language_target']} already exists"
+                ) from exc
+            if cursor.rowcount == 0:
+                return None
+            async with db.execute(
+                "SELECT * FROM phonetic_heuristics WHERE id = ?", (row_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return self._decode(row) if row else None
+
+    async def delete(self, row_id: int) -> bool:
+        """Delete one row.
+
+        Args:
+            row_id: Primary key of the row.
+
+        Returns:
+            True when a row was removed, False when it did not exist.
+        """
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM phonetic_heuristics WHERE id = ?", (row_id,))
+            await db.commit()
+            return bool(cursor.rowcount)

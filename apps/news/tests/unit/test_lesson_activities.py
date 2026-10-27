@@ -137,3 +137,165 @@ async def test_generate_writes_script_and_meta(
     assert Path(lesson_text_path(RUN_ID)).is_file()
     assert Path(lesson_script_path(RUN_ID)).is_file()
     assert result["segments"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.16: phonetic adaptation
+# ---------------------------------------------------------------------------
+
+#: Dual cast on the only engine the adaptation feeds (qwen3_tts tts_text).
+DUAL_SPEC: dict = {
+    "language": "en",
+    "tts_backend": "qwen3_tts",
+    "roles": [
+        {"name": "profe_native", "voice_id": "voice-es", "language": "es"},
+        {"name": "profe_target", "voice_id": "voice-en", "language": "en"},
+    ],
+}
+DUAL_LESSON: dict = {
+    "title": "Saludos",
+    "markdown": "# Saludos\n\nSe dice startup.",
+    "segments": [
+        {"role": "profe_native", "text": "En inglés decimos startup para una empresa nueva."},
+        {"role": "profe_target", "text": "A startup is a young company."},
+    ],
+}
+
+
+def _dual_payload(notes_path: Path, **overrides: object) -> dict:
+    """Build a dual-mode generate payload with the adaptation requested.
+
+    Args:
+        notes_path: Path of the uploaded notes.
+        **overrides: Payload fields replacing the defaults.
+
+    Returns:
+        The activity payload.
+    """
+    payload: dict = {
+        "run_id": RUN_ID,
+        "notes_path": str(notes_path),
+        "mode": "dual",
+        "spec": DUAL_SPEC,
+        "target_language": "en",
+        "native_language": "es",
+        "collection": "tech",
+        "phonetic_adaptation": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_generate_adapts_the_script_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stored script carries tts_text and the meta the full term map."""
+    from src.api.models.narration import NarrationScript
+
+    notes = await _prepare_notes(tmp_path)
+    generate = AsyncMock(return_value=json.dumps(DUAL_LESSON))
+    respell = AsyncMock(return_value='{"startup": "estartap"}')
+    monkeypatch.setattr("src.core.llm.generate_completion", generate)
+    monkeypatch.setattr("src.core.respelling.generate_completion", respell)
+
+    result = await ActivityEnvironment().run(generate_lesson_activity, _dual_payload(notes))
+
+    respell.assert_awaited_once()
+    spec = NarrationSpec.model_validate(DUAL_SPEC)
+    script = NarrationScript.model_validate_json(
+        Path(lesson_script_path(RUN_ID)).read_text(encoding="utf-8"), context={"spec": spec}
+    )
+    assert script.segments[0].tts_text == ("En inglés decimos estartap para una empresa nueva.")
+    assert script.segments[0].text.startswith("En inglés decimos startup")
+    assert script.segments[1].tts_text is None, "the target-language role speaks natively"
+    assert result["segments"] == 2
+
+    from src.api.services.lesson import read_lesson_meta
+
+    meta = read_lesson_meta(RUN_ID)
+    assert meta["respelling"]["terms"] == {"startup": "estartap"}
+    assert meta["respelling"]["language_origin"] == "en"
+    assert meta["respelling"]["language_target"] == "es"
+    entry = meta["respelling"]["segments"][0]
+    assert entry["role"] == "profe_native"
+    assert entry["term_map"] == {"startup": "estartap"}
+    job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
+    assert job is not None and job["status"] == "GENERATING"
+
+
+async def test_generate_skips_the_adaptation_when_not_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the flag the respelling LLM is never asked."""
+    notes = await _prepare_notes(tmp_path)
+    generate = AsyncMock(return_value=json.dumps(DUAL_LESSON))
+    respell = AsyncMock()
+    monkeypatch.setattr("src.core.llm.generate_completion", generate)
+    monkeypatch.setattr("src.core.respelling.generate_completion", respell)
+    payload = {**_dual_payload(notes), "phonetic_adaptation": False}
+
+    await ActivityEnvironment().run(generate_lesson_activity, payload)
+
+    respell.assert_not_awaited()
+    from src.api.services.lesson import read_lesson_meta
+
+    assert "respelling" not in read_lesson_meta(RUN_ID)
+
+
+async def test_generate_reports_an_unconfigured_pair_as_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No heuristics for the pair: the job fails loudly instead of guessing."""
+    notes = await _prepare_notes(tmp_path)
+    generate = AsyncMock(return_value=json.dumps(DUAL_LESSON))
+    respell = AsyncMock()
+    monkeypatch.setattr("src.core.llm.generate_completion", generate)
+    monkeypatch.setattr("src.core.respelling.generate_completion", respell)
+    payload = _dual_payload(notes, target_language="de")
+
+    with pytest.raises(ApplicationError, match="phonetic adaptation failed") as excinfo:
+        await ActivityEnvironment().run(generate_lesson_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+    respell.assert_not_awaited()
+    job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
+    assert job is not None and job["status"] == "FINISHED_ERROR"
+    assert "no phonetic heuristics for de -> es" in str(job["error"])
+
+
+async def test_generate_fails_when_the_adaptation_llm_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing adaptation is an error: no half-adapted class is stored."""
+    notes = await _prepare_notes(tmp_path)
+    generate = AsyncMock(return_value=json.dumps(DUAL_LESSON))
+    respell = AsyncMock(side_effect=RuntimeError("llm down"))
+    monkeypatch.setattr("src.core.llm.generate_completion", generate)
+    monkeypatch.setattr("src.core.respelling.generate_completion", respell)
+
+    with pytest.raises(ApplicationError, match="phonetic adaptation failed") as excinfo:
+        await ActivityEnvironment().run(generate_lesson_activity, _dual_payload(notes))
+
+    assert excinfo.value.non_retryable is True
+    job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
+    assert job is not None and job["status"] == "FINISHED_ERROR"
+    assert "llm down" in str(job["error"])
+
+
+async def test_generate_rejects_adaptation_on_the_wrong_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only qwen3_tts reads tts_text, so any other cast is refused up front."""
+    notes = await _prepare_notes(tmp_path)
+    generate = AsyncMock(return_value=json.dumps(DUAL_LESSON))
+    respell = AsyncMock()
+    monkeypatch.setattr("src.core.llm.generate_completion", generate)
+    monkeypatch.setattr("src.core.respelling.generate_completion", respell)
+    payload = _dual_payload(notes, spec={**DUAL_SPEC, "tts_backend": "omni_voice"})
+
+    with pytest.raises(ApplicationError, match="qwen3_tts backend"):
+        await ActivityEnvironment().run(generate_lesson_activity, payload)
+
+    respell.assert_not_awaited()
+    job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
+    assert job is not None and job["status"] == "FINISHED_ERROR"

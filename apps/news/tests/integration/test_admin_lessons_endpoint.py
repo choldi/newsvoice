@@ -271,6 +271,7 @@ def test_status_reports_generation_progress(_lesson_env: Path) -> None:
     assert body["title"] == "Clase"
     assert body["mode"] == "mixed"
     assert body["audio_url"] is None
+    assert body["respelling"] is None, "no adaptation metadata unless the class asked for it"
 
 
 def test_status_returns_a_signed_link_when_finished(_lesson_env: Path) -> None:
@@ -409,3 +410,140 @@ def test_lesson_audio_link_rejects_a_foreign_path(_lesson_env: Path) -> None:
     )
 
     assert anon_client.get(path).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phonetic adaptation (Phase 7.16)
+# ---------------------------------------------------------------------------
+
+QWEN_SPEC = json.dumps(
+    {
+        "language": "en",
+        "tts_backend": "qwen3_tts",
+        "roles": [
+            {"name": "profe_es", "voice_id": "clone-es", "language": "es"},
+            {"name": "profe_en", "voice_id": "clone-en", "language": "en"},
+        ],
+    }
+)
+
+
+def test_submit_adapts_when_requested(_lesson_env: Path) -> None:
+    """The flag travels to the workflow config and into the lesson metadata."""
+    from src.api.services.lesson import read_lesson_meta
+
+    with patch(
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
+        new_callable=AsyncMock,
+    ) as start:
+        response = _submit(
+            target_language="en",
+            native_language="es",
+            mode="dual",
+            spec=QWEN_SPEC,
+            phonetic_adaptation="on",
+        )
+
+    assert response.status_code == 202
+    config = start.call_args[0][0]
+    assert config.phonetic_adaptation is True
+    meta = read_lesson_meta(response.json()["workflow_id"])
+    assert meta["phonetic_adaptation"] is True
+
+
+def test_submit_without_adaptation_defaults_to_off(_lesson_env: Path) -> None:
+    """A plain submit keeps the flag false so the workflow skips the step."""
+    with patch(
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
+        new_callable=AsyncMock,
+    ) as start:
+        response = _submit(target_language="en", native_language="es")
+
+    assert response.status_code == 202
+    assert start.call_args[0][0].phonetic_adaptation is False
+
+
+def test_submit_adaptation_requires_the_qwen3_backend(_lesson_env: Path) -> None:
+    """A gateway cast cannot consume tts_text: 422 before anything queues."""
+    plain_spec = json.dumps(
+        {
+            "language": "en",
+            "roles": [
+                {"name": "profe_es", "voice_id": "clone-es", "language": "es"},
+                {"name": "profe_en", "voice_id": "clone-en", "language": "en"},
+            ],
+        }
+    )
+
+    response = _submit(
+        target_language="en",
+        native_language="es",
+        mode="dual",
+        spec=plain_spec,
+        phonetic_adaptation="on",
+    )
+
+    assert response.status_code == 422
+    assert "qwen3_tts" in response.json()["detail"]
+
+
+def test_submit_adaptation_rejects_equal_languages(_lesson_env: Path) -> None:
+    """Adapting a language to itself is refused before the cast is resolved."""
+    response = _submit(
+        target_language="es", native_language="es", mode="mixed", phonetic_adaptation="on"
+    )
+
+    assert response.status_code == 422
+    assert "different target and native" in response.json()["detail"]
+
+
+def test_submit_adaptation_reports_an_unconfigured_pair(_lesson_env: Path) -> None:
+    """No heuristics row for the pair: the error names the GUI to create it."""
+    response = _submit(
+        target_language="de",
+        native_language="es",
+        mode="dual",
+        spec=QWEN_SPEC,
+        phonetic_adaptation="on",
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "no phonetic heuristics for de -> es" in detail
+    assert "/ui/phonetics" in detail
+
+
+def test_status_reports_the_respelling_metadata(_lesson_env: Path) -> None:
+    """The stored {term: respelling} map is readable from the status endpoint."""
+    from src.api.services.lesson import update_lesson_meta
+
+    asyncio.run(AudioJobsRepository().start_job("lesson-adapt", collection="tech", kind=JOB_KIND))
+    asyncio.run(AudioJobsRepository().set_generating("lesson-adapt", kind=JOB_KIND))
+    update_lesson_meta(
+        "lesson-adapt",
+        {
+            "title": "Saludos",
+            "mode": "dual",
+            "respelling": {
+                "language_origin": "en",
+                "language_target": "es",
+                "terms": {"startup": "estartap"},
+                "segments": [
+                    {
+                        "role": "profe_native",
+                        "segment_index": 0,
+                        "original_text": "decimos startup aqui",
+                        "respelled_text": "decimos estartap aqui",
+                        "term_map": {"startup": "estartap"},
+                    }
+                ],
+            },
+        },
+    )
+
+    body = client.get("/api/admin/lessons/lesson-adapt").json()
+
+    assert body["respelling"]["terms"] == {"startup": "estartap"}
+    assert body["respelling"]["language_origin"] == "en"
+    assert body["respelling"]["segments"][0]["role"] == "profe_native"
+    assert body["respelling"]["segments"][0]["term_map"] == {"startup": "estartap"}

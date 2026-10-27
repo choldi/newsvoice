@@ -1640,6 +1640,8 @@ TEACHER_MAX_NOTES_CHARS=60000
 TEACHER_MAX_AUDIO_SECONDS=300         # umbral audio adjunto vs URL
 TEACHER_DIR=data/lessons
 TEACHER_LINK_TTL_SECONDS=604800
+TEACHER_RESPELLING_ENABLED=true       # casilla Adaptación fonética (§14.7)
+TEACHER_RESPELLING_TEMPERATURE=0.2    # mapa {término: respelling} de las clases
 ```
 
 ### 14.5 Notes
@@ -1663,6 +1665,49 @@ TEACHER_ENABLED=false
 y reinicia la API (`docker compose up -d --force-recreate api`): 403 sin tocar
 código. Para retirar la cola: `docker compose stop teacher-worker` (los jobs
 en vuelo quedan `GENERATING`; borra sus filas en `audio_jobs` si no te importan).
+
+### 14.7 Adaptación fonética de los términos citados (Fase 7.16)
+
+La clase puede adaptar los términos que cita del idioma que enseña para que la
+voz de la lengua nativa los lea como suenan en el original ("en francés,
+decimos **bonjur**"). Se activa con la casilla **Adaptación fonética** del
+formulario de clase (`/ui/tools`) o con `-F phonetic_adaptation=true` en el
+endpoint REST; solo tiene sentido con cast `qwen3_tts` (el motor que lee
+`tts_text`), y con el cast de dos voces (`dual`) la adaptación cae solo sobre
+el rol que habla la lengua nativa — en `mixed`/`native`, sobre todos.
+
+**Heurísticas por par de idiomas** (GUI en `/ui/phonetics`, solo admin): la
+tabla `phonetic_heuristics` (migración `015_phonetic_heuristics.sql`) guarda,
+por par `origen → objetivo`, sufijos, dígrafos, tecnicismos, palabras nativas
+a excluir, ejemplos `término = respelling` y las banderas `ascii_only`
+(solo tokens ASCII), `flag_all_foreign` (toda palabra no nativa se ofrece al
+LLM, que descarta las nativas) y `enabled`. El seed trae los pares que la
+narración tenía en código (`en → es`, `en → fr`, Fase 7.15) y `fr → es` para
+el caso de las clases. Para enseñar otro idioma (catalán, alemán...) **crea su
+par antes** de marcar la casilla: sin fila, el submit responde 422 nombrando
+el par que falta.
+
+```bash
+# Kill switch de la función (la narración sigue con RESPELLING_ENABLED):
+TEACHER_RESPELLING_ENABLED=true
+# Temperatura del mapa de las clases, independiente de RESPELLING_TEMPERATURE
+# (que solo sirve a la narración de Fase 7.15):
+TEACHER_RESPELLING_TEMPERATURE=0.2
+```
+
+- **Qué queda guardado**: cada segmento adaptado lleva `tts_text` (lo que se
+  sintetiza; `text` sigue siendo el guion legible) y los metadatos de la
+  clase (`data/lessons/meta/<id>.json`, clave `respelling`, también expuesta
+  en `GET /api/admin/lessons/{workflow_id}`) guardan el mapa completo
+  **por segmento** más la unión `{término: respelling}`: se almacena qué se
+  cambió y cómo, sin previsualización en el formulario.
+- **Estricta, a diferencia de la narración**: par sin configurar o apagado,
+  cast ≠ `qwen3_tts` o fallo del LLM terminan la clase en `FINISHED_ERROR`
+  con el motivo; nunca se entrega una clase a medias.
+- **Rollback**: `TEACHER_RESPELLING_ENABLED=false` oculta la casilla y hace
+  403 (recreate de la API); o marca la casilla solo cuando la quieras. Borrar
+  la fila del par en `/ui/phonetics` deja de adaptarlo: la narración vuelve a
+  sus constantes por pareja y las clases de ese par pasan a 422.
 
 ---
 
@@ -1812,6 +1857,10 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
   o falta el spec, la GUI lo explica sin lanzar nada.
 - Enlaces firmados: `/api/audio/doc/...`, `/api/audio/lesson/...` y
   `/api/audio/narration/...` (nuevo) — mismos secretos y TTL, sin token.
+- Fase 7.16: la pestaña de clase gana la casilla **Adaptación fonética**
+  (oculta si `TEACHER_RESPELLING_ENABLED=false`), que llega al servicio como
+  `phonetic_adaptation`; sus heurísticas se editan en el menú **Fonética**
+  (§16.7).
 
 ### 16.2 Cast de narración (`/ui/collections`)
 
@@ -1905,3 +1954,18 @@ búsqueda** (Fase 9.7): campo de glob + filtro de idioma + resultados en
 radios, hasta 20 con contador; la selección sobrevive a las búsquedas y una
 consulta sin coincidencias añade la opción "Usar «q» tal cual". Las lecciones
 recalculan el guard anti-mezcla tras cada selección.
+
+### 16.7 Menú Fonética (`/ui/phonetics`, Fase 7.16)
+
+- Tabla de **pares de idiomas** (`origen → objetivo` con recuento de
+  sufijos/dígrafos/tecnicismos/nativas/ejemplos, banderas y estado) con
+  "Nueva pareja", Editar y Borrar; las tres rutas de escritura piden rol
+  `admin` (`src/api/authz.py`), la página también.
+- El formulario acepta listas en textarea (una palabra por línea, o JSON) y
+  los ejemplos como `término = respelling` línea a línea; validación de códigos
+  ISO 639-1, de par repetido y de par `mismo → mismo` (422 con flash, jamás
+  un 500). "Apagar" una pareja la deja inutilizable para el respelling sin
+  borrarla.
+- Alimenta tanto la narración (§15/7.15) como las clases (§14.7/7.16): la
+  narración usa la fila si existe y si no sus constantes históricas; la clase
+  **exige** la fila habilitada.

@@ -120,6 +120,15 @@ class Settings(BaseSettings):
     # Signed lesson-audio links share doc_tts_link_secret: one secret for every
     # shareable audio URL the project hands out.
     teacher_link_ttl_seconds: int = Field(default=604_800, ge=60)
+    # --- Phase 7.16: lesson phonetic adaptation -----------------------------
+    # Kill switch for the per-lesson adaptation checkbox: when off, the GUI
+    # hides it and the submit endpoint rejects it. Kept apart from
+    # respelling_enabled (Phase 7.15, narration only) so one feature can be
+    # turned off without the other.
+    teacher_respelling_enabled: bool = True
+    # Temperature of the lesson adaptation map. Independent from
+    # respelling_temperature so a class can be pinned separately.
+    teacher_respelling_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     # --- Phase 7.14: audio verification (ASR) -------------------------------
     # Global kill switch; collections still opt in with `audio_verify = true`.
     audio_verify_enabled: bool = True
