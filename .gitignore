@@ -31,8 +31,9 @@ storage/
 *.db-shm
 *.db-wal
 
-# Models / binaries
-models/
+# Models / binaries (root only: `models/` unanchored would also hide
+# Python packages such as apps/news/src/api/models/)
+/models/
 *.gguf
 *.bin
 
