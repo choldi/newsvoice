@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from src.api.deps import require_admin
 from src.api.services.audiobook import submit_audiobook
 from src.api.services.doc_tts import (
     SubmitError,
@@ -15,9 +14,7 @@ from src.api.services.doc_tts import (
     read_job_meta,
 )
 
-router = APIRouter(
-    prefix="/api/admin/audiobooks", tags=["admin-audiobooks"], dependencies=[Depends(require_admin)]
-)
+router = APIRouter(prefix="/api/admin/audiobooks", tags=["admin-audiobooks"])
 
 
 @router.post("/submit")
