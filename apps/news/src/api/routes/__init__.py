@@ -1,5 +1,6 @@
 """API routes package."""
 
+from src.api.routes.admin_audiobooks import router as admin_audiobooks_router
 from src.api.routes.admin_collections import router as admin_collections_router
 from src.api.routes.admin_documents import router as admin_documents_router
 from src.api.routes.admin_lessons import router as admin_lessons_router
@@ -17,6 +18,7 @@ from src.api.routes.tts import router as tts_router
 from src.api.routes.voice_staging import router as voice_staging_router
 
 __all__ = [
+    "admin_audiobooks_router",
     "admin_collections_router",
     "admin_lessons_router",
     "admin_documents_router",
