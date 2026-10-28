@@ -52,6 +52,7 @@ _CLONE_UUID = re.compile(
 #: setups, then the Modal backends in catalog order.
 _BACKEND_PREFERENCE: tuple[TTSBackend, ...] = (
     TTSBackend.OMNIVOICE,
+    TTSBackend.KOKORO,
     TTSBackend.EDGE,
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
@@ -114,6 +115,9 @@ def engines_for_voice(voice: str) -> set[str]:
         engines.add(str(TTSBackend.OMNIVOICE))
     if name in _modal_names():
         engines.update((str(TTSBackend.QWEN3_TTS), str(TTSBackend.ZONOS2), str(TTSBackend.VOXCPM2)))
+    # Kokoro is available via gateway; allow common stock ids to be used with kokoro too
+    if name and _GATEWAY_STOCK.match(name) or _EDGE_SHORTNAME.match(name):
+        engines.add(str(TTSBackend.KOKORO))
     return engines
 
 

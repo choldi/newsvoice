@@ -20,10 +20,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from src.api.models.voices import VoiceSource
 from src.core.prompts import EMOTION_TAGS
 
-# Audio jobs of a run are discriminated by this column ('tts' | 'narration').
+# Audio jobs of a run are discriminated by this column ('tts' | 'narration' | 'audiobook').
 NARRATION_KIND = "narration"
 TTS_KIND = "tts"
-AUDIO_JOB_KINDS = (TTS_KIND, NARRATION_KIND)
+AUDIOBOOK_KIND = "audiobook"
+AUDIO_JOB_KINDS = (TTS_KIND, NARRATION_KIND, AUDIOBOOK_KIND)
 
 # Where a script came from: the LLM, the admin editor/GUI, or an external API.
 SCRIPT_SOURCES = ("llm", "manual", "api")
@@ -46,6 +47,8 @@ class TTSBackend(StrEnum):
             voice in audio-continuation mode and keeps the best of several
             takes by a no-reference MOS; no native speed or emotion control
             (speed is post-processed with atempo).
+        KOKORO: Kokoro-82M via the tts-api gateway (stock voices only, CPU-first,
+            24 kHz). No cloning/emotion/instruct; good for es/en/fr/it/pt/hi.
     """
 
     EDGE = "edge"
@@ -53,6 +56,7 @@ class TTSBackend(StrEnum):
     QWEN3_TTS = "qwen3_tts"
     ZONOS2 = "zonos2"
     VOXCPM2 = "voxcpm2"
+    KOKORO = "kokoro"
 
 
 class SpeakerRole(BaseModel):
@@ -64,6 +68,10 @@ class SpeakerRole(BaseModel):
         language: Optional ISO 639-1 override for this role.
         speed: Speaking rate in [0.5, 2.0].
         emotion: Optional emotion tag, honored only by OmniVoice backends.
+        pitch_semitones: Pitch shift in semitones (-6..6), applied by rubberband
+            post-processing (all backends). 0.0 = no change.
+        formant_preserve: Preserve formants when shifting pitch (rubberband).
+        variant: Optional variant label for this voice (for UI/cataloging).
     """
 
     name: str = Field(..., min_length=1, max_length=64, description="Role name used by segments")
@@ -78,6 +86,13 @@ class SpeakerRole(BaseModel):
     emotion: str | None = Field(
         default=None, description="Emotion tag (happy, calm, excited, ...); OmniVoice only"
     )
+    pitch_semitones: float = Field(
+        default=0.0, ge=-6.0, le=6.0, description="Pitch shift in semitones (-6..6)"
+    )
+    formant_preserve: bool = Field(
+        default=True, description="Preserve formants when applying pitch shift"
+    )
+    variant: str | None = Field(default=None, max_length=64, description="Voice variant label")
 
     @field_validator("language")
     @classmethod

@@ -740,6 +740,37 @@ class NarrationTTSService:
                     raise NarrationGatewayError(
                         f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
                     ) from edge_exc
+        if backend is TTSBackend.KOKORO:
+            payload: dict[str, Any] = TTSRequest(
+                text=text,
+                voice_id=voice_id,
+                language=language,
+                speed=speed,
+                engine="kokoro",
+            ).model_dump(exclude_none=True)
+            try:
+                return await self._post_audio("tts", payload), False
+            except NarrationGatewayError as exc:
+                fallback_allowed = (
+                    self._fallback_to_edge if allow_edge_fallback is None else allow_edge_fallback
+                )
+                if not fallback_allowed:
+                    raise
+                edge_voice = edge_voice_for(voice_id, language)
+                logger.warning(
+                    "narration_gateway_fallback_to_edge",
+                    voice_id=voice_id,
+                    edge_voice=edge_voice,
+                    status_code=exc.status_code,
+                    error_type=exc.error_type,
+                    error=str(exc),
+                )
+                try:
+                    return await self._edge_synthesize(text, edge_voice, speed=speed), True
+                except Exception as edge_exc:
+                    raise NarrationGatewayError(
+                        f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
+                    ) from edge_exc
         if backend is not TTSBackend.OMNIVOICE:
             return (
                 await self._post_modal_tts(
@@ -1199,6 +1230,38 @@ class NarrationTTSService:
                 raise NarrationRenderError(f"atempo error: {result.stderr.strip()}")
             return target.read_bytes()
 
+    async def _apply_pitch(
+        self, audio: bytes, semitones: float, formant_preserve: bool = True
+    ) -> bytes:
+        if not semitones or abs(semitones) < 1e-6:
+            return audio
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "in.wav"
+            target = Path(tmp) / "out.wav"
+            source.write_bytes(audio)
+            formant = "preserved" if formant_preserve else "shifted"
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-filter:a",
+                f"rubberband=pitch={semitones}:formant={formant}",
+                str(target),
+            ]
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run, command, capture_output=True, text=True, timeout=300
+                )
+            except FileNotFoundError as exc:
+                raise NarrationRenderError("ffmpeg not found for rubberband") from exc
+            if result.returncode != 0:
+                raise NarrationRenderError(f"rubberband error: {result.stderr.strip()}")
+            return target.read_bytes()
+
     async def _render_turns_locally(
         self,
         spec: NarrationSpec,
@@ -1241,6 +1304,11 @@ class NarrationTTSService:
                 audio = await self._to_canonical(audio)
                 if spec.tts_backend in (TTSBackend.QWEN3_TTS, TTSBackend.VOXCPM2) and speed != 1.0:
                     audio = await self._apply_atempo(audio, speed)
+                pitch = getattr(role, "pitch_semitones", 0.0) or 0.0
+                if pitch:
+                    audio = await self._apply_pitch(
+                        audio, pitch, getattr(role, "formant_preserve", True)
+                    )
                 parts.append((audio, 0))
             pause_ms = (
                 segment.pause_after_ms if segment.pause_after_ms is not None else spec.pause_ms
@@ -1376,7 +1444,7 @@ class NarrationTTSService:
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS
-        if used_conversations and spec.tts_backend is not TTSBackend.OMNIVOICE:
+        if used_conversations and spec.tts_backend not in (TTSBackend.OMNIVOICE,):
             raise NarrationRenderError(
                 "conversations strategy is only supported by the omni_voice backend"
             )

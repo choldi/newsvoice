@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # never pays for the same LLM call twice.
     respelling_enabled: bool = True
     respelling_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    phonetic_origins: str = ""
     # --- Phase 7.13: LLM output verification -------------------------------
     # Global kill switch. The per-collection opt-in is `llm_verify` in
     # collections.toml; this flag can only turn every collection off.
@@ -82,6 +83,8 @@ class Settings(BaseSettings):
     # Dedicated task queue: a 300-page render must not occupy the digest
     # worker's activity slots.
     doc_tts_task_queue: str = "news-engine-doc-tts-queue"
+    audiobook_task_queue: str = "news-engine-audiobook-queue"
+    audiobook_dir: str = "data/audiobooks"
     # Upload cap in bytes; the body is rejected before extraction.
     doc_tts_max_file_bytes: int = Field(default=20_000_000, ge=1024)
     # Extracted-text cap in characters (~300 pages). Over it the job fails with

@@ -37,7 +37,7 @@ from typing import Any
 
 import structlog
 
-from src.api.models.narration import NarrationScript, NarrationSegment, NarrationSpec, TTSBackend
+from src.api.models.narration import NarrationScript, NarrationSegment, NarrationSpec
 from src.api.models.phonetic import PhoneticHeuristicsOut
 from src.api.services import phonetic_heuristics as heuristics_service
 from src.api.services.phonetic_heuristics import HeuristicsError
@@ -54,6 +54,9 @@ MAX_CANDIDATES = 60
 #: Assumed source of the foreign terms when a caller (narration) does not say:
 #: Phase 7.15 only ever hunted English terms.
 DEFAULT_LANGUAGE_ORIGIN = "en"
+
+#: Respelling is restricted to these origins/contexts as per plan (Fase B3).
+RESPELLING_LANGUAGES = {"en", "es", "fr", "ca", "de"}
 
 _LANGUAGE_NAMES = {
     "es": "Spanish",
@@ -404,18 +407,27 @@ def builtin_heuristics(language_origin: str, language_target: str) -> PhoneticHe
     Returns:
         The built-in heuristics, or None when this module has no defaults.
     """
-    if language_origin != DEFAULT_LANGUAGE_ORIGIN or language_target not in _LANGUAGE_NAMES:
+    origin = (language_origin or "").lower()
+    target = (language_target or "").lower()
+    if origin not in RESPELLING_LANGUAGES or target not in RESPELLING_LANGUAGES:
         return None
+    if origin != DEFAULT_LANGUAGE_ORIGIN or target not in _LANGUAGE_NAMES:
+        # Fall back to English-origin defaults when origin is in allowed set
+        # but not built-in; caller should prefer DB rows for cross-origin pairs.
+        if origin == DEFAULT_LANGUAGE_ORIGIN and target in _LANGUAGE_NAMES:
+            pass
+        else:
+            return None
     return PhoneticHeuristics(
-        language_origin=language_origin,
-        language_target=language_target,
-        language_origin_name=_LANGUAGE_NAMES[language_origin],
-        language_target_name=_LANGUAGE_NAMES[language_target],
+        language_origin=origin,
+        language_target=target,
+        language_origin_name=_LANGUAGE_NAMES.get(origin, origin),
+        language_target_name=_LANGUAGE_NAMES.get(target, target),
         suffixes=_ENGLISH_SUFFIXES,
         digraphs=_ENGLISH_DIGRAPHS,
         tech_terms=frozenset(_TECH_TERMS),
-        native_words=_NATIVE_WORDS.get(language_target, frozenset()),
-        examples=tuple(_EXAMPLES.get(language_target, ())),
+        native_words=_NATIVE_WORDS.get(target, frozenset()),
+        examples=tuple(_EXAMPLES.get(target, ())),
         ascii_only=True,
         flag_all_foreign=False,
         source="builtin",
@@ -858,40 +870,49 @@ async def respell_text(
 
 
 async def respell_script(spec: NarrationSpec, script: NarrationScript) -> NarrationScript:
-    """Fill ``tts_text`` on every segment of a QWEN3_TTS script.
-
-    Segments that already carry ``tts_text`` are left untouched: that field is
-    the cache, so a re-render never pays for the same LLM call twice. A failed
-    call leaves ``tts_text`` unset and the renderer falls back to ``text`` —
-    narration is best effort by design; the lesson path is not.
-
-    Args:
-        spec: Narration spec (language, cast and backend).
-        script: Script to enrich.
-
-    Returns:
-        The same script when respelling is disabled/not applicable or every
-        segment was already cached, else a copy with ``tts_text`` filled.
-    """
+    """Fill ``tts_text`` on every segment of a script when respelling enabled."""
     settings = get_settings()
-    if not settings.respelling_enabled or spec.tts_backend is not TTSBackend.QWEN3_TTS:
+    if not settings.respelling_enabled:
         return script
     segments: list[NarrationSegment] = []
     changed = False
-    rules_by_language: dict[str, PhoneticHeuristics | None] = {}
+    rules_by_pair: dict[tuple[str, str], PhoneticHeuristics | None] = {}
+    phonetic_origins_raw = (getattr(settings, "phonetic_origins", "") or "").strip()
+    allowed_origins: set[str] | None = None
+    if phonetic_origins_raw:
+        allowed_origins = {
+            o.strip().lower()
+            for o in phonetic_origins_raw.replace(";", ",").split(",")
+            if o.strip()
+        }
+        allowed_origins = {o for o in allowed_origins if o in RESPELLING_LANGUAGES}
     for segment in script.segments:
         if segment.tts_text is not None:
             segments.append(segment)
             continue
         role = spec.role(segment.role)
-        language = role.language or spec.language
+        language = (role.language or spec.language or "").lower()
         text = strip_emotion_tags(segment.text)
-        if not text:
+        if not text or language not in RESPELLING_LANGUAGES:
             segments.append(segment)
             continue
-        if language not in rules_by_language:
-            rules_by_language[language] = await load_heuristics(DEFAULT_LANGUAGE_ORIGIN, language)
-        rules = rules_by_language[language]
+        origins = [o for o in RESPELLING_LANGUAGES if o != language] or [DEFAULT_LANGUAGE_ORIGIN]
+        pair_order = [DEFAULT_LANGUAGE_ORIGIN] + [
+            o for o in origins if o != DEFAULT_LANGUAGE_ORIGIN
+        ]
+        if allowed_origins is not None:
+            pair_order = [o for o in pair_order if o in allowed_origins] or []
+        rules = None
+        for origin in pair_order:
+            if origin not in RESPELLING_LANGUAGES:
+                continue
+            key = (origin, language)
+            if key not in rules_by_pair:
+                rules_by_pair[key] = await load_heuristics(origin, language)
+            r = rules_by_pair[key]
+            if r is not None:
+                rules = r
+                break
         if rules is None:
             segments.append(segment)
             continue

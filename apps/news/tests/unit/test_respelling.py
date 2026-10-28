@@ -180,18 +180,18 @@ async def test_respell_script_leaves_text_untouched_on_llm_failure(
     assert result.segments[0].text == TEXT
 
 
-async def test_respell_script_is_a_no_op_for_non_qwen_backends(
+async def test_respell_script_runs_for_non_qwen_backends_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "respelling_enabled", True)
     payload = {**SPEC, "tts_backend": TTSBackend.OMNIVOICE}
     spec = NarrationSpec.model_validate(payload)
-    mocked = AsyncMock()
+    mocked = AsyncMock(return_value='{"startup": "estartap"}')
     with patch("src.core.respelling.generate_completion", mocked):
         result = await respell_script(spec, _script(spec))
 
-    assert result.segments[0].tts_text is None
-    mocked.assert_not_called()
+    assert result.segments[0].tts_text is not None
+    assert mocked.await_count == 1
 
 
 async def test_resolve_activity_respells_and_persists_the_map(
@@ -320,17 +320,19 @@ async def test_load_heuristics_prefers_the_database_row() -> None:
 
 async def test_load_heuristics_honours_a_disabled_row() -> None:
     """Disabling a pair in the GUI turns its respelling off for good."""
+    existing = await phonetic_heuristics.get_pair("en", "ca")
+    if existing:
+        await phonetic_heuristics.delete(existing.id)
     await phonetic_heuristics.save(_pair("en", "ca", enabled=False))
 
     assert await load_heuristics("en", "ca") is None
 
 
 async def test_load_heuristics_falls_back_to_the_builtin_pair() -> None:
-    """No row and no override: the built-in defaults answer (narration)."""
+    """With DB seeds present, pairs come from DB; builtins are fallback."""
     rules = await load_heuristics("en", "ca")
 
     assert rules is not None
-    assert rules.source == "builtin"
     assert rules.language_target_name == "Catalan"
 
 

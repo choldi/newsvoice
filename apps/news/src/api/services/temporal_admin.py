@@ -27,30 +27,22 @@ SCHEDULE_PREFIX = "daily-digest-"
 WORKFLOW_PREFIX = "digest-pipeline-"
 DOC_TTS_WORKFLOW_PREFIX = "doc-tts-"
 LESSON_WORKFLOW_PREFIX = "lesson-"
+AUDIOBOOK_WORKFLOW_PREFIX = "audiobook-"
 
 
 def new_document_run_id() -> str:
-    """Return a fresh workflow id for a document TTS run (Phase 7.11).
-
-    The submitting API needs the id *before* starting the workflow because the
-    upload file, the metadata file and the audio_jobs row are all keyed by it.
-
-    Returns:
-        Id like ``doc-tts-1a2b3c4d5e6f``.
-    """
+    """Return a fresh workflow id for a document TTS run (Phase 7.11)."""
     return f"{DOC_TTS_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
 
 
 def new_lesson_run_id() -> str:
-    """Return a fresh workflow id for a teacher lesson run (Phase 7.12).
-
-    Same reasoning as the document ids: the upload, the metadata and the
-    audio_jobs row are keyed by it before the workflow exists.
-
-    Returns:
-        Id like ``lesson-1a2b3c4d5e6f``.
-    """
+    """Return a fresh workflow id for a teacher lesson run (Phase 7.12)."""
     return f"{LESSON_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
+
+
+def new_audiobook_run_id() -> str:
+    """Return a fresh workflow id for an audiobook run."""
+    return f"{AUDIOBOOK_WORKFLOW_PREFIX}{uuid4().hex[:12]}"
 
 
 class TemporalAdminService:
@@ -256,17 +248,7 @@ class TemporalAdminService:
         return workflow_id
 
     async def start_lesson(self, config: object, workflow_id: str) -> str:
-        """Start a LessonWorkflow on the teacher queue (Phase 7.12).
-
-        Args:
-            config: LessonConfig with the notes path, the cast and the
-                delivery options resolved by the caller.
-            workflow_id: Id assigned by the caller: the upload, the metadata
-                and the audio_jobs row are already keyed by it.
-
-        Returns:
-            The workflow id of the started run.
-        """
+        """Start a LessonWorkflow on the teacher queue (Phase 7.12)."""
         from src.core.config import settings as app_settings
         from src.workers.lesson_workflows import LessonWorkflow
 
@@ -278,6 +260,22 @@ class TemporalAdminService:
             task_queue=app_settings.teacher_task_queue,
         )
         logger.info("lesson_workflow_started", workflow_id=workflow_id)
+        return workflow_id
+
+    async def start_audiobook(self, config: object, workflow_id: str) -> str:
+        """Start an AudiobookWorkflow."""
+        from src.core.config import settings as app_settings
+        from src.workers.audiobook_workflows import AudiobookWorkflow
+
+        client = await self.client()
+        queue = getattr(app_settings, "audiobook_task_queue", "news-engine-audiobook-queue")
+        await client.start_workflow(
+            AudiobookWorkflow.run,
+            config,
+            id=workflow_id,
+            task_queue=queue,
+        )
+        logger.info("audiobook_workflow_started", workflow_id=workflow_id)
         return workflow_id
 
     async def start_narration_render(

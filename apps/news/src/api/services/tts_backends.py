@@ -67,6 +67,7 @@ BACKEND_ALIASES: dict[str, str] = {
     "zonos2": TTSBackend.ZONOS2,
     "voxcpm2": TTSBackend.VOXCPM2,
     "voxcpm": TTSBackend.VOXCPM2,
+    "kokoro": TTSBackend.KOKORO,
 }
 
 #: Every value a collection may declare for ``tts_backend``.
@@ -76,6 +77,7 @@ ALLOWED_BACKENDS: tuple[str, ...] = (
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
     TTSBackend.VOXCPM2,
+    TTSBackend.KOKORO,
 )
 
 #: Edge ShortName -> gateway stock id. Inverse of ``tts.LEGACY_VOICE_ALIASES``,
@@ -437,7 +439,7 @@ async def synthesize(
 
         return await synthesize_mp3(text, voice, timeout=None if timeout is None else int(timeout))
 
-    if backend is TTSBackend.OMNIVOICE:
+    if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
         return await gateway_tts(
             text, voice, language, timeout=timeout if timeout is not None else None
         )

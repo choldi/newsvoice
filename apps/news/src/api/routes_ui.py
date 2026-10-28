@@ -565,6 +565,7 @@ def _lesson_voice_context(
 TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("edge", "edge (local)"),
     ("omni_voice", "tts-api gateway"),
+    ("kokoro", "Kokoro (gateway)"),
     ("qwen3_tts", "Qwen3-TTS (Modal)"),
     ("zonos2", "ZONOS2 (Modal)"),
     ("voxcpm2", "VoxCPM2 (Modal)"),
@@ -1211,6 +1212,7 @@ ENGINE_FILTERS: tuple[tuple[str, str], ...] = (
     ("", "Todos"),
     ("edge", "edge"),
     ("omni_voice", "tts-api gateway"),
+    ("kokoro", "kokoro"),
     ("qwen3_tts", "qwen3_tts"),
     ("zonos2", "zonos2"),
     ("voxcpm2", "voxcpm2"),
@@ -1596,15 +1598,29 @@ def _narration_spec_from_form(
             raise ValueError(f"Rol {index + 1}: el nombre y la voz van juntos")
         language = (fields.get(f"role{index}_lang") or "").strip() or None
         raw_speed = (fields.get(f"role{index}_speed") or "").strip()
-        roles.append(
-            {
-                "name": name,
-                "voice_id": voice,
-                "language": language,
-                "speed": float(raw_speed) if raw_speed else 1.0,
-                "emotion": (fields.get(f"role{index}_emotion") or "").strip() or None,
-            }
-        )
+        raw_pitch = (fields.get(f"role{index}_pitch") or "").strip()
+        role_dict: dict = {
+            "name": name,
+            "voice_id": voice,
+            "language": language,
+            "speed": float(raw_speed) if raw_speed else 1.0,
+            "emotion": (fields.get(f"role{index}_emotion") or "").strip() or None,
+        }
+        if raw_pitch:
+            try:
+                p = float(raw_pitch)
+                if p < -6.0:
+                    p = -6.0
+                if p > 6.0:
+                    p = 6.0
+                role_dict["pitch_semitones"] = p
+            except ValueError:
+                pass
+        if fields.get(f"role{index}_formant") == "off":
+            role_dict["formant_preserve"] = False
+        else:
+            role_dict["formant_preserve"] = True
+        roles.append(role_dict)
 
     if not roles:
         # Legacy path: the JSON textarea is the source of truth.
@@ -2306,11 +2322,16 @@ def _heuristics_payload(fields: dict[str, str]) -> PhoneticHeuristicsIn:
         ValidationError: On a bad code, an unparsable list or a same-language
             pair (the caller maps it onto a flash).
     """
+    origin = (fields.get("language_origin", "") or "").strip().lower()
+    target = (fields.get("language_target", "") or "").strip().lower()
+    allowed = {"en", "es", "fr", "ca", "de"}
+    if origin not in allowed or target not in allowed:
+        raise ValueError("language_origin/target must be in {en,es,fr,ca,de}")
     return PhoneticHeuristicsIn(
-        language_origin=fields.get("language_origin", ""),
-        language_target=fields.get("language_target", ""),
-        language_origin_name=fields.get("language_origin_name", ""),
-        language_target_name=fields.get("language_target_name", ""),
+        language_origin=origin,
+        language_target=target,
+        language_origin_name=fields.get("language_origin_name", "") or origin,
+        language_target_name=fields.get("language_target_name", "") or target,
         suffixes=fields.get("suffixes", ""),
         digraphs=fields.get("digraphs", ""),
         tech_terms=fields.get("tech_terms", ""),
@@ -2338,10 +2359,10 @@ def _heuristics_form_context(row: PhoneticHeuristicsOut | None) -> dict:
     if row is None:
         return {
             "heuristics": None,
-            "language_origin": "",
-            "language_target": "",
-            "language_origin_name": "",
-            "language_target_name": "",
+            "language_origin": "en",
+            "language_target": "es",
+            "language_origin_name": "English",
+            "language_target_name": "Spanish",
             "suffixes": "",
             "digraphs": "",
             "tech_terms": "",
@@ -2610,15 +2631,7 @@ async def ui_logout(request: Request) -> RedirectResponse:
 
 
 async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
-    """Decorate audio_jobs rows with metadata and a signed audio link.
-
-    Args:
-        jobs: Rows from ``AudioJobsRepository.list_jobs`` (newest first).
-        kind: Job kind: 'doc_tts', 'lesson' or 'narration'.
-
-    Returns:
-        Rows with 'title', 'char_count', 'duration', 'mode' and 'audio_url'.
-    """
+    """Decorate audio_jobs rows with metadata and a signed audio link."""
     annotated: list[dict] = []
     for job in jobs:
         row = dict(job)
@@ -2628,13 +2641,14 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
                 meta = read_job_meta(str(job.get("run_id") or ""))
             elif kind == "lesson":
                 meta = read_lesson_meta(str(job.get("run_id") or ""))
-        except Exception:  # noqa: BLE001 - a foreign id must not break the table
+            elif kind == "audiobook":
+                meta = read_job_meta(str(job.get("run_id") or ""))
+        except Exception:  # noqa: BLE001
             meta = {}
         row["title"] = str(meta.get("title") or "")
         row["mode"] = str(meta.get("mode") or "")
         row["char_count"] = meta.get("char_count")
         row["duration"] = meta.get("duration_seconds")
-        # Phase 8.5: forecast + live remaining time for the running renders.
         estimate = meta.get("estimate") if isinstance(meta.get("estimate"), dict) else {}
         progress = meta.get("progress") if isinstance(meta.get("progress"), dict) else {}
         row["estimate"] = (estimate or {}).get("wall_seconds")
@@ -2649,6 +2663,8 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
                     row["audio_url"] = lesson_audio_link(run_id)
                 elif kind == "narration":
                     row["audio_url"] = build_signed_path(run_id, prefix=NARRATION_AUDIO_LINK_PREFIX)
+                elif kind == "audiobook":
+                    row["audio_url"] = f"/api/admin/audiobooks/{run_id}/download"
                 else:
                     row["audio_url"] = build_signed_path(run_id)
             except SignedLinkError:
@@ -2810,6 +2826,47 @@ async def ui_tools_lessons(request: Request) -> RedirectResponse:
         f"Lección en cola: {result['workflow_id']} ({result['title']})",
         "ok",
     )
+
+
+@router.post("/ui/tools/audiobooks", include_in_schema=False)
+async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
+    """Queue a document for audiobook M4B."""
+    target = "/ui/tools#tool-audiobook"
+    fields, upload = await _file_form(request)
+    if upload is None:
+        return _flash(target, "Falta el fichero", "error")
+    try:
+        from src.api.services.audiobook import submit_audiobook
+
+        result = await submit_audiobook(
+            upload=upload,
+            content_length=request.headers.get("content-length", ""),
+            voice=fields.get("voice") or None,
+            language=fields.get("language") or None,
+            title=fields.get("title") or None,
+        )
+        # try to save cover if provided
+        try:
+            from pathlib import Path
+
+            from src.api.services.audio_files import atomic_write
+
+            form = await request.form()
+            cover = form.get("cover")
+            if cover and getattr(cover, "filename", None):
+                data = await cover.read()
+                ext = Path(getattr(cover, "filename", "")).suffix.lower()
+                out = Path("data/audiobooks/tmp") / f"{result['workflow_id']}_cover{ext}"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(out, data)
+        except Exception:
+            pass
+    except SubmitError as exc:
+        return _flash(target, exc.message, "error")
+    except Exception as exc:
+        logger.error("ui_audiobook_failed", error=str(exc), exc_info=True)
+        return _flash(target, f"No se pudo lanzar: {exc}", "error")
+    return _flash(target, f"Audiolibro en cola: {result['workflow_id']} ({result['title']})", "ok")
 
 
 @router.post("/ui/tools/podcast", include_in_schema=False)
@@ -2997,7 +3054,10 @@ async def ui_fragment_tool_jobs(request: Request, kind: str = "doc_tts") -> HTML
             r for r in runs if str(r.get("workflow_id", "")).startswith("url-summary-")
         ][:20]
     elif kind in ("doc_tts", "lesson", "narration"):
-        jobs = await AudioJobsRepository().list_jobs(kind=kind)
+        if kind == "audiobook":
+            jobs = await AudioJobsRepository().list_jobs(kind="audiobook")
+        else:
+            jobs = await AudioJobsRepository().list_jobs(kind=kind)
         context["jobs"] = await _annotated_jobs(jobs[:20], kind)
     else:
         context["error"] = f"tipo desconocido: {kind}"

@@ -15,6 +15,7 @@ import pytest
 from src.api.models.narration import (
     NarrationScript,
     NarrationSpec,
+    SpeakerRole,
     TTSBackend,
 )
 from src.api.services import narration_tts as narration_module
@@ -2079,3 +2080,14 @@ async def test_narration_spec_accepts_the_edge_backend() -> None:
     )
 
     assert spec.tts_backend is TTSBackend.EDGE
+
+
+def test_narration_spec_accepts_the_kokoro_backend() -> None:
+    spec = NarrationSpec(
+        language="es",
+        roles=[
+            SpeakerRole(name="narrator", voice_id="es-mx-male"),
+        ],
+        tts_backend=TTSBackend.KOKORO,
+    )
+    assert spec.tts_backend == TTSBackend.KOKORO

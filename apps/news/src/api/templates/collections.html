@@ -182,7 +182,7 @@
           <label>Cast — roles que dan la clase</label>
           <table>
             <thead>
-              <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+              <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Pitch (st)</th><th>Formantes</th><th>Emoción</th></tr>
             </thead>
             <tbody>
             {% set roles = c.narration_spec.roles if c.narration_spec else [] %}
@@ -196,6 +196,13 @@
                 <td><div id="cast-voice-{{ c.name }}-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
                 <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
                 <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+                <td><input type="number" name="role{{ i }}_pitch" min="-6" max="6" step="0.5" value="{{ r.pitch_semitones if r and r.pitch_semitones is not none else 0.0 }}"></td>
+                <td>
+                  <select name="role{{ i }}_formant">
+                    <option value="on" {{ 'selected' if not r or r.formant_preserve is not false else '' }}>preservar</option>
+                    <option value="off" {{ 'selected' if r and r.formant_preserve is false else '' }}>desplazar</option>
+                  </select>
+                </td>
                 <td>
                   <select name="role{{ i }}_emotion">
                     <option value="">(ninguna)</option>
@@ -242,6 +249,7 @@
                       hx-target="#cast-voices-{{ c.name }}"
                       hx-swap="innerHTML">
                 <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+                <option value="kokoro" {{ 'selected' if backend == 'kokoro' else '' }}>Kokoro (gateway)</option>
                 <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
                 <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
               </select>
@@ -459,7 +467,7 @@
         <label>Cast — roles que dan la clase</label>
         <table>
           <thead>
-            <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Emoción</th></tr>
+            <tr><th>Nombre</th><th>Voz (voice_id)</th><th>Idioma</th><th>Velocidad</th><th>Pitch (st)</th><th>Formantes</th><th>Emoción</th></tr>
           </thead>
           <tbody>
           {% set roles = [] %}
@@ -472,6 +480,13 @@
               <td><div id="cast-voice-nueva-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
               <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
               <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
+              <td><input type="number" name="role{{ i }}_pitch" min="-6" max="6" step="0.5" value="0.0"></td>
+              <td>
+                <select name="role{{ i }}_formant">
+                  <option value="on" selected>preservar</option>
+                  <option value="off">desplazar</option>
+                </select>
+              </td>
               <td>
                 <select name="role{{ i }}_emotion">
                 <option value="">(ninguna)</option>
@@ -518,6 +533,7 @@
                     hx-target="#cast-voices-nueva"
                     hx-swap="innerHTML">
               <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
+              <option value="kokoro" {{ 'selected' if backend == 'kokoro' else '' }}>Kokoro (gateway)</option>
               <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
               <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
             </select>

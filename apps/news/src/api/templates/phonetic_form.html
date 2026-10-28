@@ -8,13 +8,19 @@
     <div class="row">
       <div class="col">
         <label>Idioma de origen (de los términos, ISO 639-1)</label>
-        <input type="text" name="language_origin" value="{{ language_origin }}"
-               required maxlength="2" pattern="[a-zA-Z]{2}" placeholder="en">
+        <select name="language_origin" required>
+          {% for code in ['en','es','fr','ca','de'] %}
+          <option value="{{ code }}" {{ 'selected' if language_origin == code else '' }}>{{ code }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col">
         <label>Idioma objetivo (que los lee, ISO 639-1)</label>
-        <input type="text" name="language_target" value="{{ language_target }}"
-               required maxlength="2" pattern="[a-zA-Z]{2}" placeholder="es">
+        <select name="language_target" required>
+          {% for code in ['en','es','fr','ca','de'] %}
+          <option value="{{ code }}" {{ 'selected' if language_target == code else '' }}>{{ code }}</option>
+          {% endfor %}
+        </select>
       </div>
     </div>
     <div class="row">

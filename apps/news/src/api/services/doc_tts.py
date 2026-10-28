@@ -638,3 +638,19 @@ async def submit_document(
         "kind": kind,
         "status_url": f"/api/admin/documents/tts/{workflow_id}",
     }
+
+
+async def get_job_audio_path(workflow_id: str) -> str | None:
+    from src.api.db.database import AudioJobsRepository
+
+    repo = AudioJobsRepository()
+    for kind in ("audiobook", "doc_tts", "lesson", "tts", "narration"):
+        try:
+            row = await repo.get_job(workflow_id, kind=kind)
+        except Exception:
+            row = None
+        if row:
+            if isinstance(row, dict):
+                return row.get("audio_path")
+            return getattr(row, "audio_path", None)
+    return None
