@@ -2711,6 +2711,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
             # Phase 7.16: the lesson form only offers the adaptation when the
             # teacher feature can actually run it.
             "teacher_respelling_enabled": get_settings().teacher_respelling_enabled,
+            "can_operate": True,
             **_lesson_voice_context(
                 all_voices,
                 native_language="es",
