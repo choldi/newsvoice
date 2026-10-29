@@ -142,18 +142,14 @@ def split_chapters(text: str, max_chars: int = 8000) -> list[AudiobookChapter]:
     for b in blocks:
         if total + len(b) > max_chars and buf:
             chapters.append(
-                AudiobookChapter(
-                    title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf)
-                )
+                AudiobookChapter(title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf))
             )
             buf, total = [], 0
         buf.append(b)
         total += len(b)
     if buf:
         chapters.append(
-            AudiobookChapter(
-                title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf)
-            )
+            AudiobookChapter(title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf))
         )
     return chapters
 
@@ -511,6 +507,20 @@ async def submit_audiobook(
     from src.workers.audiobook_workflows import AudiobookConfig
 
     settings = get_settings()
+
+    # The render runs through DocTTSService (edge); reject another engine's
+    # vocabulary before storing any data (same rule as document TTS).
+    requested_voice = (voice or "").strip()
+    if requested_voice:
+        from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
+
+        try:
+            assert_voice_engine(requested_voice, TTSBackend.EDGE, field="voice")
+        except VoiceEngineError as exc:
+            raise SubmitError(
+                f"audiobook only accepts edge voices: {exc}", status_code=422
+            ) from exc
+
     filename = Path(upload.filename or "").name.strip()
     if not filename:
         raise SubmitError("file part has no filename", status_code=422)

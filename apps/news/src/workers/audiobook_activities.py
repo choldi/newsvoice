@@ -31,9 +31,7 @@ async def extract_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
         doc = extract_document(data, filename)
         return {"text": doc.text, "title": doc.title, "filename": filename, "kind": doc.kind}
     except Exception as exc:
-        await repo.finish_job(
-            run_id, status="FINISHED_ERROR", error=str(exc), kind=AUDIOBOOK_KIND
-        )
+        await repo.finish_job(run_id, status="FINISHED_ERROR", error=str(exc), kind=AUDIOBOOK_KIND)
         raise ApplicationError(f"audiobook extract failed: {exc}", non_retryable=True) from exc
 
 
@@ -50,16 +48,12 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
         activity.heartbeat()
 
     async def _on_state(paused: bool) -> None:
-        await repo.set_status(
-            run_id, "PAUSED" if paused else "GENERATING", kind=AUDIOBOOK_KIND
-        )
+        await repo.set_status(run_id, "PAUSED" if paused else "GENERATING", kind=AUDIOBOOK_KIND)
 
     lease = TTSLeaseService()
     try:
         async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
-            gate = RenderGate(
-                lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_state=_on_state
-            )
+            gate = RenderGate(lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_state=_on_state)
             service = AudiobookService()
             res = await service.render_m4b(
                 text=text,

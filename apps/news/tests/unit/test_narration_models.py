@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from src.api.models.narration import (
     AUDIO_JOB_KINDS,
+    AUDIOBOOK_KIND,
     NARRATION_KIND,
     TTS_KIND,
     MusicBed,
@@ -27,8 +28,8 @@ def _spec(**overrides: object) -> NarrationSpec:
     return NarrationSpec.model_validate(payload)
 
 
-def test_audio_job_kinds_cover_tts_and_narration() -> None:
-    assert AUDIO_JOB_KINDS == (TTS_KIND, NARRATION_KIND)
+def test_audio_job_kinds_cover_tts_narration_and_audiobook() -> None:
+    assert AUDIO_JOB_KINDS == (TTS_KIND, NARRATION_KIND, AUDIOBOOK_KIND)
 
 
 def test_spec_defaults_match_the_gateway_contract() -> None:

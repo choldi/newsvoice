@@ -38,7 +38,8 @@ def test_edge_shortname_voices_both_network_engines() -> None:
 
 
 def test_gateway_stock_ids_are_reachable_from_both_network_engines() -> None:
-    assert engines_for_voice("es-mx-male") == {"edge", "omni_voice"}
+    # Gateway stock ids also map through Kokoro's stock voice table.
+    assert engines_for_voice("es-mx-male") == {"edge", "omni_voice", "kokoro"}
 
 
 def test_clone_uuid_is_gateway_only() -> None:

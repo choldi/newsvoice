@@ -1,7 +1,5 @@
 """Audiobook service tests (Fase B2)."""
 
-import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -45,12 +43,8 @@ async def test_audiobook_uses_lease_gate(tmp_path, monkeypatch) -> None:
 
     def fake_run(cmd, check=True, timeout=3600, **kw):
         if cmd[0] == "ffmpeg":
-            # concat
             if "-f" in cmd and "concat" in cmd:
-                out = Path(cmd[cmd.index("-i") + 1])
-                # find output
-                out2 = Path(cmd[-1])
-                out2.write_bytes(b"fake")
+                Path(cmd[-1]).write_bytes(b"fake")
                 return subprocess.CompletedProcess(cmd, 0)
             if "-af" in cmd and "loudnorm" in cmd:
                 Path(cmd[-1]).write_bytes(b"fake")
@@ -63,7 +57,14 @@ async def test_audiobook_uses_lease_gate(tmp_path, monkeypatch) -> None:
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    res = await service.render_m4b(text="Hola\n\nMundo", title="T", voice="x", language="es", gate=DummyGate(), resume=False)
+    res = await service.render_m4b(
+        text="Hola\n\nMundo",
+        title="T",
+        voice="x",
+        language="es",
+        gate=DummyGate(),
+        resume=False,
+    )
     assert calls
     assert res.chapters == 2
     assert res.duration_seconds >= 1.0

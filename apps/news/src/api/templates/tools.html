@@ -235,11 +235,21 @@
     <div class="row">
       <div class="col">
         <label>Idioma</label>
-        <input type="text" name="language" value="es" list="lang-list">
+        <select name="language" id="audiobook-language"
+                required
+                hx-get="/ui/fragments/voice_picker"
+                hx-trigger="change"
+                hx-target="#voice-results-audiobook"
+                hx-include="#picker-audiobook, #audiobook-language"
+                hx-swap="innerHTML">
+          {% for option in audiobook_language_options %}
+          <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col">
-        <label>Voz (opcional)</label>
-        <input type="text" name="voice" placeholder="es-mx-male / voz Edge">
+        <label>Voz (solo Edge)</label>
+        {% with picker = audiobook_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
       <div class="col">
         <label>Portada (opcional, JPG/PNG)</label>

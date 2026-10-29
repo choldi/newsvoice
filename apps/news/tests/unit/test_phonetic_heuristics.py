@@ -150,7 +150,11 @@ async def test_save_creates_then_updates_the_same_pair() -> None:
 
     assert updated.id == created.id
     assert updated.native_words == ["haus"]
-    rows = [row for row in await phonetic_heuristics.list_all() if row.language_origin == "de"]
+    rows = [
+        row
+        for row in await phonetic_heuristics.list_all()
+        if row.language_origin == "de" and row.language_target == created.language_target
+    ]
     assert len(rows) == 1
 
 

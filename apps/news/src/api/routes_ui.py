@@ -2697,7 +2697,16 @@ async def ui_tools(request: Request) -> HTMLResponse:
         engines="edge",
         empty_label="(por defecto)",
         langs=False,
-        lang_input="[name='language']",
+        lang_input="#doc-language",
+    )
+    audiobook_picker = _picker_context(
+        edge["voices"],
+        picker_id="audiobook",
+        field="voice",
+        engines="edge",
+        empty_label="(por defecto)",
+        langs=False,
+        lang_input="#audiobook-language",
     )
     return _render(
         request,
@@ -2707,6 +2716,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "omni_languages": omni["languages"],
             "doc_picker": doc_picker,
             "doc_language_options": voice_search.language_options(edge["voices"]),
+            "audiobook_picker": audiobook_picker,
+            "audiobook_language_options": voice_search.language_options(edge["voices"]),
             "lesson_language_options": voice_search.language_options(all_voices),
             # Phase 7.16: the lesson form only offers the adaptation when the
             # teacher feature can actually run it.
