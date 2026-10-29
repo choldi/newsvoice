@@ -23,6 +23,7 @@ class AudiobookConfig:
     title: str = ""
     voice: str = ""
     language: str = "es"
+    engine: str = "edge"
 
 
 @workflow.defn
@@ -49,6 +50,7 @@ class AudiobookWorkflow:
                 "title": extracted.get("title") or config.title,
                 "voice": config.voice,
                 "language": config.language,
+                "engine": config.engine,
             },
             start_to_close_timeout=timedelta(hours=6),
             heartbeat_timeout=timedelta(seconds=600),

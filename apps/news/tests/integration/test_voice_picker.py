@@ -311,3 +311,59 @@ def test_fragment_hints_before_every_role_has_a_voice() -> None:
     assert fragment.status_code == 200
     assert "Selecciona una voz para previsualizar el JSON" in fragment.text
     assert "Previsualización lista" not in fragment.text
+
+
+# ---------------------------------------------------------------------------
+# Engine + language filter (audiolibros) and the browser query param fix
+# ---------------------------------------------------------------------------
+
+
+def test_picker_search_reads_the_browser_query_field() -> None:
+    """The search box sends voice_q; the fragment must filter on it."""
+    client = _client()
+
+    hit = client.get("/ui/fragments/voice_picker", params={"voice_q": "Dario"})
+    assert 'value="es-ES-DarioNeural"' in hit.text
+    assert "1 coincidencia" in hit.text
+
+    miss = client.get("/ui/fragments/voice_picker", params={"voice_q": "zzz"})
+    assert 'value="es-ES-DarioNeural"' not in miss.text
+    assert 'value="zzz" checked' in miss.text, "the unmatched query drops the list"
+
+
+def test_picker_engine_select_filters_with_the_submit_predicate() -> None:
+    """engine=kokoro lists the voices that would pass the submit guard."""
+    client = _client()
+
+    kokoro = client.get("/ui/fragments/voice_picker", params={"engine": "kokoro"})
+    assert f'value="{GATEWAY_STOCK}"' in kokoro.text, "gateway stock ids map to Kokoro"
+    assert 'value="es-ES-DarioNeural"' not in kokoro.text, "Edge shortnames do not"
+    assert f'value="{CLONE_UUID}"' not in kokoro.text, "clones are gateway-only"
+
+    qwen = client.get("/ui/fragments/voice_picker", params={"engine": "qwen3_tts"})
+    assert f'value="{MODAL_CUSTOM}"' in qwen.text, "the catalog profile is Modal"
+    assert f'value="{GATEWAY_STOCK}"' not in qwen.text
+
+    edge = client.get("/ui/fragments/voice_picker", params={"engine": "edge"})
+    assert 'value="es-ES-DarioNeural"' in edge.text
+    assert f'value="{MODAL_CUSTOM}"' not in edge.text
+
+
+def test_audiobook_form_wires_the_engine_select_before_the_voice_picker() -> None:
+    """The audiobook form picks the motor TTS before the voice, over idioma+motor."""
+    client = _client()
+    page = client.get("/ui/tools")
+
+    assert page.status_code == 200
+    ab_form = page.text.split('action="/ui/tools/audiobooks"', 1)[1].split("</form>", 1)[0]
+    assert 'name="engine"' in ab_form
+    assert 'id="audiobook-engine"' in ab_form
+    assert 'id="picker-audiobook"' in ab_form
+    assert 'id="audiobook-language"' in ab_form
+    assert (
+        ab_form.index('id="audiobook-language"')
+        < ab_form.index('id="audiobook-engine"')
+        < (ab_form.index('id="picker-audiobook"'))
+    ), "idioma → motor → voz"
+    assert 'hx-target="#voice-results-audiobook"' in ab_form
+    assert ab_form.count("hx-include=") >= 2, "language and engine selects refetch too"

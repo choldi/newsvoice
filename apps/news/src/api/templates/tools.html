@@ -240,7 +240,7 @@
                 hx-get="/ui/fragments/voice_picker"
                 hx-trigger="change"
                 hx-target="#voice-results-audiobook"
-                hx-include="#picker-audiobook, #audiobook-language"
+                hx-include="#picker-audiobook, #audiobook-language, #audiobook-engine"
                 hx-swap="innerHTML">
           {% for option in audiobook_language_options %}
           <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
@@ -248,7 +248,20 @@
         </select>
       </div>
       <div class="col">
-        <label>Voz (solo Edge)</label>
+        <label>Motor TTS</label>
+        <select name="engine" id="audiobook-engine"
+                hx-get="/ui/fragments/voice_picker"
+                hx-trigger="change"
+                hx-target="#voice-results-audiobook"
+                hx-include="#picker-audiobook, #audiobook-language, #audiobook-engine"
+                hx-swap="innerHTML">
+          {% for value, label in tts_backends %}
+          <option value="{{ value }}" {{ 'selected' if value == 'edge' else '' }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col">
+        <label>Voz</label>
         {% with picker = audiobook_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
       <div class="col">

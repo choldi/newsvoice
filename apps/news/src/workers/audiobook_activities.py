@@ -44,6 +44,14 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
     await repo.set_generating(run_id, kind=AUDIOBOOK_KIND)
     started = time.monotonic()
 
+    from src.api.services.tts_backends import TTSBackendError, resolve_backend
+
+    try:
+        backend = resolve_backend(str(payload.get("engine") or "edge"))
+    except TTSBackendError as exc:
+        await repo.finish_job(run_id, status="FINISHED_ERROR", error=str(exc), kind=AUDIOBOOK_KIND)
+        raise ApplicationError(f"audiobook engine: {exc}", non_retryable=True) from exc
+
     async def _tick() -> None:
         activity.heartbeat()
 
@@ -60,6 +68,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
                 title=title,
                 voice=str(payload.get("voice") or ""),
                 language=str(payload.get("language") or "es"),
+                backend=backend,
                 gate=gate,
                 run_id=run_id,
             )

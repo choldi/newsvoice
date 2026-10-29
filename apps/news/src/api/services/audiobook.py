@@ -16,6 +16,7 @@ import structlog
 
 from src.api.models.narration import TTSBackend
 from src.api.services.audio_files import atomic_write
+from src.api.services.tts_backends import ext_for
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -194,9 +195,16 @@ class AudiobookService:
                 m4b_path=str(m4b_path), chapters=len(chapters), duration_seconds=0.0, cached=True
             )
 
-        # Cover extraction if not provided
+        # Cover: explicit path, then the uploaded cover (workflow-id keyed),
+        # then extracted from the source EPUB.
         if not cover_path and run_id:
-            # try common upload paths
+            covers_dir = self._base / "covers"
+            if covers_dir.is_dir():
+                for cover_file in sorted(covers_dir.glob(f"{run_id}.*")):
+                    if cover_file.is_file():
+                        cover_path = str(cover_file)
+                        break
+        if not cover_path and run_id:
             for cand in [
                 Path("data/doc_tts/uploads") / f"{run_id}.epub",
                 Path("data/doc_tts/uploads") / f"{run_id}.EPUB",
@@ -224,17 +232,15 @@ class AudiobookService:
         service = DocTTSService(base_dir=str(self._tmp_dir / "doc_tts"))
         chapter_files: list[Path] = []
         chapter_durations: list[float] = []
+        chapter_ext = ext_for(backend)
 
         manifest_chapters = manifest.get("chapters") or []
         for idx, ch in enumerate(chapters):
-            if gate is not None:
-                try:
-                    await gate.before_turn()
-                except Exception:
-                    pass
+            if gate is not None and await gate.should_pause():
+                await gate.yield_and_wait()
             done_info = manifest_chapters[idx] if idx < len(manifest_chapters) else {}
             cf_path = Path(
-                done_info.get("path") or self._tmp_dir / f"{digest[:12]}_ch{idx:04d}.mp3"
+                done_info.get("path") or self._tmp_dir / f"{digest[:12]}_ch{idx:04d}{chapter_ext}"
             )
             if resume and cf_path.exists() and done_info.get("done"):
                 chapter_files.append(cf_path)
@@ -242,22 +248,31 @@ class AudiobookService:
                     float(done_info.get("duration") or _probe_duration(cf_path))
                 )
                 continue
-            res = await service.synthesize_document(
-                text=ch.text,
-                voice=voice,
-                language=language,
-                title=f"{title} - {ch.title}",
-            )
-            cf = Path(res.audio_path)
-            # copy to stable tmp name
-            stable = self._tmp_dir / f"{digest[:12]}_ch{idx:04d}.mp3"
-            try:
-                if cf != stable:
-                    import shutil
+            stable = self._tmp_dir / f"{digest[:12]}_ch{idx:04d}{chapter_ext}"
+            if backend is TTSBackend.EDGE:
+                res = await service.synthesize_document(
+                    text=ch.text,
+                    voice=voice,
+                    language=language,
+                    title=f"{title} - {ch.title}",
+                )
+                cf = Path(res.audio_path)
+                try:
+                    if cf != stable:
+                        import shutil
 
-                    shutil.copy2(cf, stable)
-            except Exception:
-                stable = cf
+                        shutil.copy2(cf, stable)
+                except Exception:
+                    stable = cf
+            else:
+                await self._synthesize_chapter(
+                    text=ch.text,
+                    out_path=stable,
+                    voice=voice,
+                    language=language,
+                    backend=backend,
+                    gate=gate,
+                )
             chapter_files.append(stable)
             d = _probe_duration(stable)
             chapter_durations.append(d)
@@ -482,6 +497,124 @@ class AudiobookService:
             cached=False,
         )
 
+    async def _synthesize_chapter(
+        self,
+        *,
+        text: str,
+        out_path: Path,
+        voice: str,
+        language: str,
+        backend: TTSBackend,
+        gate: Any = None,
+    ) -> Path:
+        """Synthesize one chapter with a non-edge engine and join the chunks.
+
+        Chunks are cached per (backend, resolved voice, language, text) so a
+        resumed run never re-pays a gateway/Modal call, and the engine lease
+        gate is honoured before every real synthesis (the same yield protocol
+        the document render uses).
+
+        Args:
+            text: Chapter speech text.
+            out_path: Chapter audio file to write (extension from the backend).
+            voice: Requested voice id (resolved through ``voice_for``).
+            language: ISO 639-1 language code.
+            backend: Engine that synthesizes (gateway or Modal).
+            gate: Optional RenderGate for the digest hand-over.
+
+        Returns:
+            ``out_path`` once the chapter file exists.
+
+        Raises:
+            RuntimeError: When a synthesis yields no audio.
+            TTSBackendError: When the engine has no usable voice here.
+        """
+        from src.api.services.doc_tts import chunk_speech_text
+        from src.api.services.tts_backends import synthesize, voice_for
+
+        resolved = await voice_for(backend, voice, language)
+        chunks = chunk_speech_text(text.strip(), 1500)
+        if not chunks:
+            raise RuntimeError("No text to synthesize")
+        chunk_dir = self._tmp_dir / "chunks"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        ext = ext_for(backend)
+        chunk_files: list[Path] = []
+        for chunk in chunks:
+            key = _hash(str(backend), resolved, language, chunk)[:16]
+            cf = chunk_dir / f"{key}{ext}"
+            if not cf.exists():
+                if gate is not None and await gate.should_pause():
+                    await gate.yield_and_wait()
+                data = await synthesize(backend, chunk, resolved, language)
+                if not data:
+                    raise RuntimeError(
+                        f"{backend.value} synthesis produced no audio for {resolved!r}"
+                    )
+                atomic_write(cf, data)
+            chunk_files.append(cf)
+
+        if len(chunk_files) == 1:
+            if chunk_files[0] != out_path:
+                atomic_write(out_path, chunk_files[0].read_bytes())
+            return out_path
+
+        # One engine produced every chunk, so a concat demuxer joins them;
+        # the re-encode fallback covers the rare parameter mismatch.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, dir=str(self._tmp_dir)
+        ) as f:
+            for cf in chunk_files:
+                f.write(f"file '{cf}'\n")
+            list_path = f.name
+        try:
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                list_path,
+                "-c",
+                "copy",
+                str(out_path),
+            ]
+            try:
+                subprocess.run(cmd, check=True, timeout=3600)
+            except Exception:
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    list_path,
+                    "-ar",
+                    "44100",
+                    "-ac",
+                    "2",
+                    "-c:a",
+                    "pcm_s16le",
+                    str(out_path),
+                ]
+                subprocess.run(cmd, check=True, timeout=3600)
+        finally:
+            try:
+                os.unlink(list_path)
+            except OSError:
+                pass
+        return out_path
+
 
 async def submit_audiobook(
     upload,
@@ -489,6 +622,8 @@ async def submit_audiobook(
     voice: str | None = None,
     language: str | None = None,
     title: str | None = None,
+    engine: str | None = None,
+    cover=None,
 ):
     from pathlib import Path
 
@@ -503,22 +638,29 @@ async def submit_audiobook(
         sniff_kind,
         write_job_meta,
     )
+    from src.api.services.tts_backends import TTSBackendError, resolve_backend
+    from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
     from src.core.config import get_settings
     from src.workers.audiobook_workflows import AudiobookConfig
 
     settings = get_settings()
 
-    # The render runs through DocTTSService (edge); reject another engine's
-    # vocabulary before storing any data (same rule as document TTS).
+    # The engine drives both the voice vocabulary and the synthesis path;
+    # reject an unknown backend before storing any data.
+    try:
+        backend = resolve_backend(engine or "edge")
+    except TTSBackendError as exc:
+        raise SubmitError(str(exc), status_code=422) from exc
+
+    # Reject a voice outside the chosen engine's vocabulary before storing
+    # data (same rule as document TTS, but against the selected engine).
     requested_voice = (voice or "").strip()
     if requested_voice:
-        from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
-
         try:
-            assert_voice_engine(requested_voice, TTSBackend.EDGE, field="voice")
+            assert_voice_engine(requested_voice, backend, field="voice")
         except VoiceEngineError as exc:
             raise SubmitError(
-                f"audiobook only accepts edge voices: {exc}", status_code=422
+                f"voice does not belong to engine {backend.value}: {exc}", status_code=422
             ) from exc
 
     filename = Path(upload.filename or "").name.strip()
@@ -535,6 +677,19 @@ async def submit_audiobook(
     workflow_id = new_audiobook_run_id()
     upload_path = _uploads_dir() / f"{workflow_id}{Path(filename).suffix.lower()}"
     atomic_write(upload_path, data)
+
+    # Persist an explicit cover next to the run; render_m4b picks it up from
+    # the covers directory (workflow-id keyed) or extracts it from the EPUB.
+    if cover is not None and getattr(cover, "filename", None):
+        try:
+            cover_bytes = await cover.read()
+            cover_ext = Path(str(cover.filename)).suffix.lower() or ".jpg"
+            covers_dir = Path(getattr(settings, "audiobook_dir", "data/audiobooks")) / "covers"
+            covers_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write(covers_dir / f"{workflow_id}{cover_ext}", cover_bytes)
+        except Exception as exc:
+            logger.warning("audiobook_cover_save_failed", error=str(exc))
+
     clean_title = (title or "").strip() or Path(filename).stem
     write_job_meta(
         workflow_id,
@@ -544,6 +699,8 @@ async def submit_audiobook(
             "kind": kind,
             "voice": (voice or "").strip(),
             "language": (language or "").strip(),
+            "engine": str(backend),
+            "mode": str(backend),
         },
     )
 
@@ -559,6 +716,7 @@ async def submit_audiobook(
                 title=clean_title,
                 voice=(voice or "").strip(),
                 language=(language or "").strip(),
+                engine=str(backend),
             ),
             workflow_id,
         )

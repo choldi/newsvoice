@@ -243,6 +243,7 @@ async def gateway_tts(
     api_key: str | None = None,
     timeout: float | None = None,
     client: httpx.AsyncClient | None = None,
+    engine: str | None = None,
 ) -> bytes:
     """Synthesize one text through the tts-api gateway.
 
@@ -254,6 +255,8 @@ async def gateway_tts(
         api_key: Gateway key; defaults to ``settings.tts_api_key``.
         timeout: Per-request timeout; defaults to ``settings.tts_request_timeout``.
         client: Injected client (tests pass a mock transport).
+        engine: Optional sub-engine pin ('kokoro', ...); without it the
+            gateway's own language routing picks the engine.
 
     Returns:
         The WAV payload returned by the gateway.
@@ -265,7 +268,12 @@ async def gateway_tts(
     base = (api_base_url or settings.tts_api_base_url).rstrip("/")
     key = settings.tts_api_key if api_key is None else api_key
     limit = timeout if timeout is not None else float(settings.tts_request_timeout)
-    request = TTSRequest(text=text, voice_id=voice_id, language=language)
+    request = TTSRequest(
+        text=text,
+        voice_id=voice_id,
+        language=language,
+        engine=engine or None,
+    )
     payload = request.model_dump(exclude_none=True)
 
     if client is not None:
@@ -326,7 +334,9 @@ async def voice_for(backend: TTSBackend, voice: str, language: str) -> str:
 
         return await resolve_edge_voice(requested, language)
 
-    if backend is TTSBackend.OMNIVOICE:
+    if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
+        # Both speak the gateway stock-id scheme (the Kokoro table maps them);
+        # an Edge ShortName is translated through the legacy aliases.
         if not requested:
             return gateway_voice_for_language(language)
         mapped = GATEWAY_VOICE_ALIASES.get(requested.lower())
@@ -440,8 +450,15 @@ async def synthesize(
         return await synthesize_mp3(text, voice, timeout=None if timeout is None else int(timeout))
 
     if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
+        # Kokoro must be pinned explicitly: without ``engine`` the gateway's
+        # language routing would hand the request to whatever engine serves
+        # that language (pocket_tts, ...) instead of Kokoro.
         return await gateway_tts(
-            text, voice, language, timeout=timeout if timeout is not None else None
+            text,
+            voice,
+            language,
+            timeout=timeout if timeout is not None else None,
+            engine="kokoro" if backend is TTSBackend.KOKORO else None,
         )
 
     return await _modal_synthesize(backend, text, voice, language)

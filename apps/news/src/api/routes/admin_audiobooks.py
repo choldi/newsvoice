@@ -23,6 +23,7 @@ async def submit_audiobook_tts(
     title: str | None = Form(None),
     voice: str | None = Form(None),
     language: str | None = Form(None),
+    engine: str | None = Form(None),
     cover: UploadFile | None = File(None),
     content_length: str | None = Header(None),
 ):
@@ -33,21 +34,9 @@ async def submit_audiobook_tts(
             voice=voice,
             language=language,
             title=title,
+            engine=engine,
+            cover=cover,
         )
-        # Save cover if provided
-        if cover and cover.filename:
-            try:
-                from pathlib import Path
-
-                from src.api.services.audio_files import atomic_write
-
-                data = await cover.read()
-                ext = Path(getattr(cover, "filename", "")).suffix.lower()
-                out = Path("data/audiobooks/tmp") / f"{result['workflow_id']}_cover{ext}"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write(out, data)
-            except Exception:
-                pass
     except SubmitError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     return result

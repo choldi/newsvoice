@@ -764,3 +764,37 @@ def test_delete_job_refuses_a_foreign_id(_ui_env: Path) -> None:
 
     assert response.status_code == 404, "the router does not match traversal ids"
     assert not client.get("/ui/fragments/tool_jobs?kind=doc_tts").status_code == 500
+
+
+def test_audiobook_submit_forwards_engine_and_voice() -> None:
+    """The audiobook form delegates to submit_audiobook with the chosen motor."""
+    client = _client()
+    result = {
+        "workflow_id": "audiobook-abc",
+        "title": "Mi libro",
+        "filename": "libro.epub",
+        "kind": "epub",
+        "status_url": "/api/admin/audiobooks/audiobook-abc",
+    }
+    with patch(
+        "src.api.services.audiobook.submit_audiobook",
+        new_callable=AsyncMock,
+        return_value=result,
+    ) as submit:
+        response = client.post(
+            "/ui/tools/audiobooks",
+            files={"file": ("libro.epub", b"PK-fake", "application/epub+zip")},
+            data={
+                "title": "Mi libro",
+                "voice": "es-mx-male",
+                "language": "es",
+                "engine": "kokoro",
+            },
+            follow_redirects=False,
+        )
+
+    assert "audiobook-abc" in _flash_of(response.headers["location"])
+    kwargs = submit.call_args.kwargs
+    assert kwargs["engine"] == "kokoro"
+    assert kwargs["voice"] == "es-mx-male"
+    assert kwargs["language"] == "es"

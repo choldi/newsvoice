@@ -2697,6 +2697,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
         engines="edge",
         empty_label="(por defecto)",
         langs=False,
+        lang="es",
         lang_input="#doc-language",
     )
     audiobook_picker = _picker_context(
@@ -2706,7 +2707,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
         engines="edge",
         empty_label="(por defecto)",
         langs=False,
-        lang_input="#audiobook-language",
+        lang="es",
+        lang_input="#audiobook-language, #audiobook-engine",
     )
     return _render(
         request,
@@ -2718,6 +2720,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "doc_language_options": voice_search.language_options(edge["voices"]),
             "audiobook_picker": audiobook_picker,
             "audiobook_language_options": voice_search.language_options(edge["voices"]),
+            "tts_backends": TTS_BACKEND_CHOICES,
             "lesson_language_options": voice_search.language_options(all_voices),
             # Phase 7.16: the lesson form only offers the adaptation when the
             # teacher feature can actually run it.
@@ -2850,29 +2853,17 @@ async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
     try:
         from src.api.services.audiobook import submit_audiobook
 
+        form = await request.form()
+        cover = form.get("cover")
         result = await submit_audiobook(
             upload=upload,
             content_length=request.headers.get("content-length", ""),
             voice=fields.get("voice") or None,
             language=fields.get("language") or None,
             title=fields.get("title") or None,
+            engine=fields.get("engine") or None,
+            cover=cover if hasattr(cover, "filename") else None,
         )
-        # try to save cover if provided
-        try:
-            from pathlib import Path
-
-            from src.api.services.audio_files import atomic_write
-
-            form = await request.form()
-            cover = form.get("cover")
-            if cover and getattr(cover, "filename", None):
-                data = await cover.read()
-                ext = Path(getattr(cover, "filename", "")).suffix.lower()
-                out = Path("data/audiobooks/tmp") / f"{result['workflow_id']}_cover{ext}"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write(out, data)
-        except Exception:
-            pass
     except SubmitError as exc:
         return _flash(target, exc.message, "error")
     except Exception as exc:
@@ -2974,8 +2965,11 @@ async def ui_fragment_voice_picker(
     voice: str = "",
     voice2: str = "",
     q: str = "",
+    voice_q: str = "",
+    voice2_q: str = "",
     lang: str = "",
     engines: str = "all",
+    engine: str = "",
     empty_label: str = "",
     language: str = "",
     mode: str = "",
@@ -3005,10 +2999,17 @@ async def ui_fragment_voice_picker(
             back to 'voice'.
         voice: Currently checked voice (native/single/doc picker).
         voice2: Currently checked voice (target picker, dual mode only).
-        q: Glob-style query over id, label, language, category and engines.
+        q: Legacy glob query param (fragment tests); the forms send
+            ``voice_q``/``voice2_q`` (the picker input's real field name).
+        voice_q: Glob query typed in the single/doc search box.
+        voice2_q: Glob query typed in the target search box (dual mode).
         lang: Legacy language prefix param, kept for tests ('' normally).
         engines: 'all' or the canonical engine of the vocabulary (the doc
             picker sends 'edge').
+        engine: Engine select of the form ('', 'all' or a canonical backend);
+            wins over the picker's hidden ``engines`` hint and filters the
+            results through :func:`engines_for_voice` so the list only shows
+            voices that engine would accept at submit.
         empty_label: Label of the value='' option ('' omits it).
         language: Document form language field ('es' matches es and es-ES).
         mode: Lesson mode driving the per-role language mapping.
@@ -3020,7 +3021,9 @@ async def ui_fragment_voice_picker(
     """
     wanted_field = field if field in {"voice", "voice2"} else "voice"
     current = voice2 if wanted_field == "voice2" else voice
-    engine = engines.strip() if engines not in {"", "all"} else None
+    query = (voice2_q if wanted_field == "voice2" else voice_q) or q
+    engine_param = (engine or "").strip()
+    legacy_engine = engines.strip() if engines.strip() not in {"", "all"} else ""
     resolved = _picker_lang_param(
         field=wanted_field,
         lang=lang,
@@ -3029,9 +3032,21 @@ async def ui_fragment_voice_picker(
         native_language=native_language,
         target_language=target_language,
     )
-    voices = [entry.model_dump() for entry in await list_all_voices(engine=engine)]
+    if engine_param and engine_param != "all":
+        # The form's engine select: filter with the same predicate the submit
+        # guard uses (an unknown id stays a wildcard, like validation does).
+        voices = [entry.model_dump() for entry in await list_all_voices()]
+        allowed = []
+        for entry in voices:
+            speaks = engines_for_voice(str(entry.get("id") or ""))
+            if not speaks or engine_param in speaks:
+                allowed.append(entry)
+    else:
+        allowed = [
+            entry.model_dump() for entry in await list_all_voices(engine=legacy_engine or None)
+        ]
     context = _picker_results_context(
-        voices, field=wanted_field, current=current, q=q, lang=resolved
+        allowed, field=wanted_field, current=current, q=query, lang=resolved
     )
     context["empty_label"] = empty_label
     return _render(request, "partials/_voice_picker_results.html", {"picker": context})
