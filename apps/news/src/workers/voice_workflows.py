@@ -21,9 +21,12 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-#: VoiceDesign loads a 1.7B model and synthesises one short sample; 10 min is
-#: generous for a cold start plus generation.
-DESIGN_VOICE_TIMEOUT = timedelta(minutes=10)
+#: VoiceDesign loads a 1.7B model and synthesises one short sample. The local
+#: worker finishes in well under a minute, but the Modal branch (Phase 10.4)
+#: also pays the cold start — image pull to a fresh L4 container plus model
+#: load: a healthy remote run measured ~4.5 min and the first worker-side run
+#: blew past 10 min, so the budget matches the function's own 1800 s timeout.
+DESIGN_VOICE_TIMEOUT = timedelta(minutes=30)
 #: Storing a reference is a local file write plus a manifest update.
 STORE_VOICE_TIMEOUT = timedelta(minutes=2)
 #: Uploading a reference WAV to the Volume is a single file write.
