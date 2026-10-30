@@ -59,6 +59,59 @@ async def modal_tts(
 
 
 @trace_function(component="modal.client")
+async def design_voice(
+    *,
+    segments: list[str],
+    instruct: str,
+    language: str,
+    seed: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+) -> tuple[bytes, int]:
+    """Call the Modal VoiceDesign function and return WAV bytes plus sample rate.
+
+    Phase 10.4: the per-operation switch behind the "Ejecutar en Modal"
+    checkbox. The local GPU worker stays the default; this path only runs
+    when the caller explicitly asked for Modal and the guard below passes.
+
+    Args:
+        segments: Reference text segments, spoken in order.
+        instruct: Natural-language persona description.
+        language: ISO 639-1 language code.
+        seed: RNG seed for a reproducible voice.
+        temperature: Sampling temperature (mirrors ``QWEN_TTS_DESIGN_TEMPERATURE``).
+        top_p: Nucleus sampling (mirrors ``QWEN_TTS_DESIGN_TOP_P``).
+
+    Returns:
+        Tuple of ``(wav_bytes, sample_rate)``.
+
+    Raises:
+        RuntimeError: When Modal is disabled or credentials are missing.
+        Exception: Whatever the Modal call raises, for the caller to wrap.
+    """
+    if not settings.modal_enabled:
+        raise RuntimeError("modal is disabled")
+    if not settings.modal_token_id or not settings.modal_token_secret:
+        raise RuntimeError("modal credentials are not configured")
+
+    import modal
+
+    function = modal.Function.from_name(settings.modal_app_name, "design_voice")
+    audio, _cost = await measure(
+        function.remote.aio(
+            segments=segments,
+            instruct=instruct,
+            language=language,
+            seed=seed,
+            temperature=temperature,
+            top_p=top_p,
+        ),
+        backend="qwen3_tts",
+    )
+    return audio
+
+
+@trace_function(component="modal.client")
 async def modal_zonos2_tts(
     *,
     text: str,

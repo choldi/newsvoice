@@ -76,6 +76,9 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
             ``language``. Optional ``ref_segments`` replaces ``ref_text`` as
             the list of segments to speak (they are joined into one utterance
             so a single voice is sampled for the whole reference).
+            ``run_in_modal`` (Phase 10.4) renders the design on Modal instead
+            of the local GPU worker; it needs ``MODAL_ENABLED`` plus
+            credentials and is refused non-retryably otherwise.
 
     Returns:
         Dict with ``name``, ``sha256``, ``sample_rate``, ``duration_seconds``,
@@ -85,7 +88,9 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
     Raises:
         ApplicationError: When the payload is invalid, the model fails or the
             audio cannot be staged. Staging failures that a retry could fix
-            (network, 5xx) stay retryable; a missing key does not.
+            (network, 5xx) stay retryable; a missing key does not. A
+            ``run_in_modal`` run without Modal enabled or configured is
+            refused non-retryably.
     """
     name = str(payload.get("name") or "")
     instruct = str(payload.get("instruct") or "")
@@ -100,17 +105,48 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
             non_retryable=True,
         )
 
-    from src.core.local_tts import design_voice
+    run_in_modal = bool(payload.get("run_in_modal"))
 
     activity.logger.info(
-        f"Designing voice name={name} language={language} segments={len(segments)}"
+        f"Designing voice name={name} language={language} segments={len(segments)} "
+        f"run_in_modal={run_in_modal}"
     )
     started = time.monotonic()
     seed = zlib.crc32(f"qwen-voice-design:{name}".encode())
     try:
-        # The synthesis is a blocking GPU call; keep the event loop free so the
-        # worker can still heartbeat while the model generates.
-        wav, sample_rate = await asyncio.to_thread(design_voice, segments, instruct, language, seed)
+        if run_in_modal:
+            # The switch is per-run, so misconfiguration must fail the run
+            # loudly instead of silently designing on the local worker.
+            if not settings.modal_enabled:
+                raise ApplicationError(
+                    "voice design requires modal, but modal is disabled",
+                    non_retryable=True,
+                )
+            if not settings.modal_token_id or not settings.modal_token_secret:
+                raise ApplicationError(
+                    "modal credentials are not configured",
+                    non_retryable=True,
+                )
+            from src.core.modal_client import design_voice as design_voice_modal
+
+            wav, sample_rate = await design_voice_modal(
+                segments=segments,
+                instruct=instruct,
+                language=language,
+                seed=seed,
+                temperature=settings.qwen_tts_design_temperature,
+                top_p=settings.qwen_tts_design_top_p,
+            )
+        else:
+            from src.core.local_tts import design_voice
+
+            # The synthesis is a blocking GPU call; keep the event loop free so
+            # the worker can still heartbeat while the model generates.
+            wav, sample_rate = await asyncio.to_thread(
+                design_voice, segments, instruct, language, seed
+            )
+    except ApplicationError:
+        raise
     except Exception as exc:
         raise ApplicationError(f"voice design failed for {name}: {exc}") from exc
     elapsed = time.monotonic() - started

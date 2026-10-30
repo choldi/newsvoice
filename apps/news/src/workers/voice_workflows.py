@@ -58,6 +58,8 @@ class VoiceCatalogConfig:
         names: Optional subset of profile names to (re)generate. Empty means
             every enabled profile that is missing or stale.
         upload: Also upload each generated reference to the Modal Volume.
+        run_in_modal: Render every design on Modal instead of the local GPU
+            worker (Phase 10.4 switch; refused when Modal is disabled).
         task_queue: Narration queue the status, store and upload activities
             run on. A workflow cannot read settings, so the caller supplies it.
         design_task_queue: Voice-design queue polled by the GPU box. Falls
@@ -67,6 +69,7 @@ class VoiceCatalogConfig:
 
     names: list[str] = field(default_factory=list)
     upload: bool = False
+    run_in_modal: bool = False
     task_queue: str = ""
     design_task_queue: str = ""
 
@@ -103,7 +106,7 @@ class VoiceCatalogWorkflow:
             try:
                 designed = await workflow.execute_activity(
                     DESIGN_VOICE_ACTIVITY,
-                    self._design_payload(profile),
+                    self._design_payload(profile, config.run_in_modal),
                     task_queue=design_queue,
                     start_to_close_timeout=DESIGN_VOICE_TIMEOUT,
                     retry_policy=DESIGN_VOICE_RETRY_POLICY,
@@ -131,11 +134,12 @@ class VoiceCatalogWorkflow:
         return {"pending": pending, "results": results}
 
     @staticmethod
-    def _design_payload(profile: dict[str, Any]) -> dict[str, Any]:
+    def _design_payload(profile: dict[str, Any], run_in_modal: bool = False) -> dict[str, Any]:
         """Build the design activity input from a catalog profile.
 
         Args:
             profile: Profile dict as returned by the status activity.
+            run_in_modal: Whether the design must render on Modal (Phase 10.4).
 
         Returns:
             Payload for ``design_voice_activity``.
@@ -145,6 +149,7 @@ class VoiceCatalogWorkflow:
             "instruct": profile["instruct"],
             "ref_text": profile["ref_text"],
             "language": profile["language"],
+            "run_in_modal": run_in_modal,
         }
         segments = profile.get("ref_segments")
         if segments:

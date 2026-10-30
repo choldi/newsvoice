@@ -159,7 +159,44 @@ def test_ui_create_custom_voice_flashes_success(monkeypatch: pytest.MonkeyPatch)
     assert "Voz 'mi_voz_es' creada; diseño en cola" in location
     assert "level=ok" in location
     assert [profile.name for profile in load_custom_profiles()] == ["mi_voz_es"]
-    start.assert_awaited_once_with(names=["mi_voz_es"], upload=False)
+    start.assert_awaited_once_with(names=["mi_voz_es"], upload=False, run_in_modal=False)
+
+
+def test_ui_custom_voice_form_exposes_the_modal_switch() -> None:
+    """The "Ejecutar en Modal" checkbox is offered and off by default."""
+    import re
+
+    response = _client().get("/ui/voices")
+
+    assert response.status_code == 200
+    match = re.search(r"<input[^>]*id=\"custom-run-in-modal\"[^>]*>", response.text)
+    assert match, "the custom voice card must offer the Modal switch"
+    assert 'name="run_in_modal"' in match.group(0)
+    assert "checked" not in match.group(0), "Modal is opt-in, the local worker is the default"
+
+
+def test_ui_create_custom_voice_forwards_the_modal_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checking the box hands run_in_modal=True to the design run."""
+    start = AsyncMock(return_value="voice-catalog-ui-modal")
+    monkeypatch.setattr("src.api.services.voice_catalog_admin.start_generate", start)
+
+    response = _client().post(
+        "/ui/voices/custom",
+        data={
+            "name": "mi_voz_es",
+            "language": "es",
+            "instruct": INSTRUCT,
+            "ref_text": REF_TEXT,
+            "generate": "on",
+            "run_in_modal": "on",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert start.await_args.kwargs["run_in_modal"] is True
 
 
 def test_ui_create_custom_voice_without_generate_skips_the_run(

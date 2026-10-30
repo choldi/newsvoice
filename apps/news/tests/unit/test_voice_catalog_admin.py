@@ -67,7 +67,20 @@ async def test_create_custom_voice_saves_and_starts(
     assert result["workflow_id"] == "voice-catalog-mi-voz-es"
     assert result["start_error"] == ""
     assert [profile.name for profile in load_custom_profiles()] == ["mi_voz_es"]
-    start.assert_awaited_once_with(names=["mi_voz_es"], upload=False)
+    start.assert_awaited_once_with(names=["mi_voz_es"], upload=False, run_in_modal=False)
+
+
+async def test_create_custom_voice_forwards_the_modal_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Phase 10.4 switch rides from the payload into the workflow config."""
+    start = AsyncMock(return_value="voice-catalog-modal")
+    monkeypatch.setattr(voice_catalog_admin, "start_generate", start)
+
+    result = await voice_catalog_admin.create_custom_voice(_payload(run_in_modal=True))
+
+    assert result["workflow_id"] == "voice-catalog-modal"
+    assert start.await_args.kwargs["run_in_modal"] is True
 
 
 async def test_create_custom_voice_without_generate_skips_the_run(
@@ -87,7 +100,9 @@ async def test_create_custom_voice_without_generate_skips_the_run(
 async def test_create_custom_voice_keeps_the_profile_when_enqueue_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def boom(names: list[str] | None = None, upload: bool = False) -> str:
+    async def boom(
+        names: list[str] | None = None, upload: bool = False, run_in_modal: bool = False
+    ) -> str:
         raise voice_catalog_admin.VoiceCatalogAdminError("temporal down")
 
     monkeypatch.setattr(voice_catalog_admin, "start_generate", boom)
@@ -159,7 +174,24 @@ async def test_start_generate_is_fire_and_forget(
     assert client.start_workflow.await_args.kwargs["task_queue"] == (
         settings.voice_catalog_task_queue
     )
+    assert client.start_workflow.await_args.args[1].run_in_modal is False
     client.execute_workflow.assert_not_awaited()
+
+
+async def test_start_generate_carries_the_modal_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_in_modal travels into the VoiceCatalogConfig handed to Temporal."""
+    client = AsyncMock()
+
+    async def fake_build_client(namespace: str | None = None) -> object:
+        return client
+
+    monkeypatch.setattr(voice_catalog_admin, "build_client", fake_build_client)
+
+    await voice_catalog_admin.start_generate(names=["mi_voz_es"], run_in_modal=True)
+
+    assert client.start_workflow.await_args.args[1].run_in_modal is True
 
 
 # --- catalog_status / generated_voices -----------------------------------------

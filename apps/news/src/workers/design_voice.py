@@ -50,6 +50,11 @@ async def main() -> None:
         "--only-missing", action="store_true", help="Skip profiles that are merely stale"
     )
     parser.add_argument("--upload", action="store_true", help="Also upload to the Modal Volume")
+    parser.add_argument(
+        "--modal",
+        action="store_true",
+        help="Design on Modal instead of the local GPU worker (Phase 10.4; needs MODAL_ENABLED)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="List pending profiles and exit")
     args = parser.parse_args()
 
@@ -68,6 +73,7 @@ async def main() -> None:
     config = VoiceCatalogConfig(
         names=names,
         upload=args.upload,
+        run_in_modal=args.modal,
         task_queue=settings.voice_catalog_task_queue,
         design_task_queue=settings.voice_design_task_queue,
     )

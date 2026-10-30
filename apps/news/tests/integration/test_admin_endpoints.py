@@ -459,7 +459,38 @@ def test_voice_catalog_generate_starts_workflow(
     assert "voice-catalog" in body["workflow_id"]
     assert started["kwargs"]["task_queue"] == settings.voice_catalog_task_queue
     assert started["args"][1].design_task_queue == settings.voice_design_task_queue
+    assert started["args"][1].run_in_modal is False
     connect.assert_awaited_once_with(settings.temporal_voices_namespace)
+
+
+def test_voice_catalog_generate_forwards_the_modal_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /admin/voices/catalog/generate carries run_in_modal into the config."""
+    started: dict[str, object] = {}
+
+    class _FakeClient:
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def start_workflow(self, *args: object, **kwargs: object) -> None:
+            started["args"] = args
+            started["kwargs"] = kwargs
+
+        async def execute_workflow(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("catalog generation must not block on completion")
+
+    connect = AsyncMock(return_value=_FakeClient())
+    monkeypatch.setattr("src.api.services.voice_catalog_admin.build_client", connect)
+    response = client.post(
+        "/api/admin/voices/catalog/generate", json={"names": ["mi_voz_es"], "run_in_modal": True}
+    )
+
+    assert response.status_code == 200
+    assert started["args"][1].run_in_modal is True
 
 
 def test_voice_catalog_generate_wraps_failures(

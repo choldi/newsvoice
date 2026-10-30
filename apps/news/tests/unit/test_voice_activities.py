@@ -179,6 +179,88 @@ async def test_design_voice_activity_wraps_model_failure(
         await ActivityEnvironment().run(voice_activities.design_voice_activity, _profile())
 
 
+# --- design on Modal (Phase 10.4 switch) -------------------------------------
+
+
+async def test_design_voice_activity_runs_on_modal_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """run_in_modal=True renders through the Modal client with the local seed."""
+    seen: dict[str, object] = {}
+
+    async def fake_modal_design(
+        *, segments, instruct, language, seed=None, temperature=0.7, top_p=0.9
+    ) -> tuple[bytes, int]:
+        seen.update(
+            segments=segments,
+            instruct=instruct,
+            language=language,
+            seed=seed,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return WAV, 24000
+
+    async def fake_stage(name: str, wav: bytes) -> int:
+        seen["staged"] = (name, wav)
+        return len(wav)
+
+    def local_must_not_run(*args, **kwargs):
+        raise AssertionError("the local worker must not run when Modal was requested")
+
+    monkeypatch.setattr("src.core.modal_client.design_voice", fake_modal_design)
+    monkeypatch.setattr("src.core.local_tts.design_voice", local_must_not_run)
+    monkeypatch.setattr("src.api.services.voice_staging.stage_from_design", fake_stage)
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    monkeypatch.setattr(settings, "modal_token_id", "modal-id")
+    monkeypatch.setattr(settings, "modal_token_secret", "modal-secret")
+
+    payload = {**_profile(), "run_in_modal": True}
+    result = await ActivityEnvironment().run(voice_activities.design_voice_activity, payload)
+
+    assert seen["segments"] == [_profile()["ref_text"]]
+    assert seen["language"] == "en"
+    assert seen["seed"] == zlib.crc32(b"qwen-voice-design:anchor_neutral_m")
+    assert seen["temperature"] == settings.qwen_tts_design_temperature
+    assert seen["top_p"] == settings.qwen_tts_design_top_p
+    assert seen["staged"] == ("anchor_neutral_m", WAV)
+    assert result["sample_rate"] == 24000
+
+
+async def test_design_voice_activity_refuses_modal_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switch is honoured loudly: no silent fallback to the local worker."""
+
+    def local_must_not_run(*args, **kwargs):
+        raise AssertionError("a disabled Modal run must fail, not fall back locally")
+
+    monkeypatch.setattr("src.core.local_tts.design_voice", local_must_not_run)
+    monkeypatch.setattr(settings, "modal_enabled", False)
+
+    payload = {**_profile(), "run_in_modal": True}
+    with pytest.raises(ApplicationError, match="requires modal") as excinfo:
+        await ActivityEnvironment().run(voice_activities.design_voice_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
+async def test_design_voice_activity_refuses_modal_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enabled without tokens is also a non-retryable configuration error."""
+    monkeypatch.setattr(settings, "modal_enabled", True)
+    monkeypatch.setattr(settings, "modal_token_id", "")
+    monkeypatch.setattr(settings, "modal_token_secret", "")
+
+    payload = {**_profile(), "run_in_modal": True}
+    with pytest.raises(ApplicationError, match="credentials") as excinfo:
+        await ActivityEnvironment().run(voice_activities.design_voice_activity, payload)
+
+    assert excinfo.value.non_retryable is True
+
+
 # --- store (runs on the server) ---------------------------------------------
 
 

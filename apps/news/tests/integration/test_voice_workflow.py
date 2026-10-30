@@ -155,6 +155,22 @@ async def test_voice_catalog_workflow_uploads_when_requested() -> None:
     assert SEEN["upload"][0]["ref_text"] == _profile("a")["ref_text"]
 
 
+async def test_voice_catalog_workflow_forwards_the_modal_switch() -> None:
+    """The Phase 10.4 flag reaches every design activity payload."""
+    _reset([_profile("a")])
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with _worker(env.client):
+            await env.client.execute_workflow(
+                VoiceCatalogWorkflow.run,
+                VoiceCatalogConfig(run_in_modal=True, task_queue=QUEUE),
+                id="voice-catalog-modal",
+                task_queue=QUEUE,
+            )
+
+    assert SEEN["design"][0]["run_in_modal"] is True
+    assert SEEN["store"], "the Modal switch must not disturb the store step"
+
+
 async def test_voice_catalog_workflow_honours_the_name_subset() -> None:
     _reset([_profile("a"), _profile("b")])
     async with await WorkflowEnvironment.start_time_skipping() as env:

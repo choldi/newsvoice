@@ -211,6 +211,81 @@ class QwenTTS:
         return buffer.getvalue()
 
 
+@app.cls(
+    image=_QWEN_IMAGE,
+    gpu="L4",
+    timeout=1800,
+)
+class VoiceDesignModel:
+    """Qwen3-TTS VoiceDesign, loaded once per container (Phase 10.4).
+
+    Mirrors the local ``QwenVoiceDesign.generate`` (Phase 10.9): the segments
+    are joined into one utterance so a single timbre is sampled for the whole
+    reference, sampling is calmer than the model defaults (0.9/1.0) and the
+    deterministic seed keeps a profile reproducible across runs.
+    """
+
+    @modal.enter()
+    def load(self) -> None:
+        """Load the VoiceDesign model once per container."""
+        import torch
+        from qwen_tts import Qwen3TTSModel
+
+        self._model = Qwen3TTSModel.from_pretrained(
+            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            device_map="cuda:0",
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+        )
+
+    @modal.method()
+    def design_voice(
+        self,
+        *,
+        segments: list[str],
+        instruct: str,
+        language: str,
+        seed: int | None = None,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> tuple[bytes, int]:
+        """Generate a reference WAV from a persona description.
+
+        Args:
+            segments: Reference text segments, spoken in order.
+            instruct: Natural-language persona description.
+            language: ISO 639-1 language code.
+            seed: RNG seed for a reproducible voice.
+            temperature: Sampling temperature (local default 0.7).
+            top_p: Nucleus sampling (local default 0.9).
+
+        Returns:
+            Tuple of ``(wav_bytes, sample_rate)``.
+
+        Raises:
+            ValueError: When no segments were given.
+        """
+        import io
+
+        import soundfile as sf
+        import torch
+
+        if not segments:
+            raise ValueError("at least one reference segment is required")
+        if seed is not None:
+            torch.manual_seed(int(seed))
+        wavs, sample_rate = self._model.generate_voice_design(
+            text=" ".join(segments),
+            instruct=instruct,
+            language=_qwen_language(language),
+            temperature=temperature,
+            top_p=top_p,
+        )
+        buffer = io.BytesIO()
+        sf.write(buffer, wavs[0], sample_rate, format="WAV")
+        return buffer.getvalue(), int(sample_rate)
+
+
 #: ZONOS2 is not on PyPI: it ships as a git project whose CUDA kernels come
 #: from ``flashinfer`` (installed straight from its release wheel because the
 #: ``flashinfer-jit-cache`` sdist is not published). It also JIT-compiles its
