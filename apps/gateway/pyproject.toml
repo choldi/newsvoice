@@ -75,6 +75,11 @@ zono2 = [
 # Engine: Kokoro (TTS model, CPU-first, 82M params, stock voices es/en/fr/...)
 kokoro = [
     "kokoro>=0.9.4",
+    # kokoro 0.9.x carga sus pesos a través de transformers, y transformers 5.x
+    # deshabilita PyTorch salvo que torch>=2.6 — la imagen fija torch==2.5.1
+    # (extra omnivoice), lo que reventaba el arranque de TTS_ENGINE=routed con
+    # "CustomAlbert requires the PyTorch library". 4.x sí soporta torch 2.5.
+    "transformers>=4.45,<5",
 ]
 # Auto-transcription of reference audio (optional)
 transcribe = [

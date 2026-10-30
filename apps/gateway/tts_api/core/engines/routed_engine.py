@@ -147,11 +147,20 @@ class RoutedEngine(TtsEngineBase):
         )
 
     async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
-        """List stock voices from all sub-engines (deduplicated by voice_id)."""
+        """List stock voices from all sub-engines (deduplicated by voice_id).
+
+        A sub-engine that is unavailable (e.g. ``omnivoice_remote`` without its
+        sidecar) is skipped with a warning instead of failing the whole union:
+        one optional engine being down must not hide the voices of the others.
+        """
         seen: set[str] = set()
         all_voices: list[dict[str, Any]] = []
-        for engine in self._engines.values():
-            voices = await engine.list_stock_voices(language)
+        for name, engine in self._engines.items():
+            try:
+                voices = await engine.list_stock_voices(language)
+            except Exception as e:
+                logger.warning("RoutedEngine: sub-engine '%s' stock listing failed: %s", name, e)
+                continue
             for v in voices:
                 vid = v["voice_id"]
                 if vid not in seen:

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # piper: CPU-first local neural TTS, incl. Catalan (ca-ES)
     # chatterbox: GPU multilingual TTS, zero-shot cloning (no Catalan)
     # qwen3_tts: local GPU, voice cloning (Base) + voice design (VoiceDesign)
+    # kokoro: CPU, stock voices 82M (es/en/fr/it/pt/hi, sin Catalan)
     # mock: test tones (for development/testing)
     # routed: multi-engine, dispatches by language (requires TTS_ENGINES config)
     # omnivoice_remote: proxy HTTP al sidecar OmniVoice (ver OMNIVOICE_REMOTE_URL)
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
         "piper",
         "chatterbox",
         "qwen3_tts",
+        "kokoro",
         "mock",
         "routed",
     ] = "omnivoice"

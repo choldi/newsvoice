@@ -63,6 +63,11 @@ def _isolate_external_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TTS_VENV_DIR", str(fake_venv))
     monkeypatch.setenv("TTS_USE_MOCK", "true")
     monkeypatch.setenv("TTS_FALLBACK_TO_MOCK", "false")
+    # Hermetic: el lifespan arranca `settings.TTS_ENGINE`, y el .env del
+    # operador (hoy `routed`) instanciaría engines con dependencias que el
+    # venv de test no lleva. Los tests de routing van por create_engine("routed")
+    # con su propio env, no por el .env local.
+    monkeypatch.setenv("TTS_ENGINE", "omnivoice")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
 
     # El cliente de engine es un singleton de proceso: se limpia en cada test

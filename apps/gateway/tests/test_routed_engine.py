@@ -58,3 +58,27 @@ def test_factory_creates_qwen3() -> None:
 def test_factory_creates_routed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TTS_ENGINES", '{"es":"mock","ca":"edgetts","_default":"mock"}')
     assert create_engine("routed").name.startswith("routed(")
+
+
+async def test_list_stock_voices_skips_a_failing_sub_engine() -> None:
+    """One unavailable sub-engine must not hide the voices of the others.
+
+    ``omnivoice_remote`` answers 503-style errors when its sidecar is down;
+    the union endpoint has to keep serving pocket/edge/kokoro voices.
+    """
+
+    class _Broken:
+        name = "broken"
+
+        async def list_stock_voices(self, language: str | None = None) -> list[dict]:
+            from tts_api.core.exceptions import EngineUnavailableError
+
+            raise EngineUnavailableError("sidecar caído")
+
+    engines = {"mock": MockEngine(), "broken": _Broken()}
+    routed = RoutedEngine(engines=engines, routing={"_default": "mock"})  # type: ignore[arg-type]
+
+    voices = await routed.list_stock_voices()
+
+    assert voices, "the healthy sub-engine still contributes its voices"
+    assert all(v["voice_id"] for v in voices)

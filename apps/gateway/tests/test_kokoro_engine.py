@@ -159,6 +159,19 @@ async def test_kokoro_list_stock_voices_filters_language():
     assert all(v["language"] == "es" for v in es_voices)
 
 
+def test_kokoro_default_table_only_maps_real_french_voices():
+    """Upstream solo publica una voz francesa (ff_siwis).
+
+    ``fm_gabriel`` nunca existió en ``hexgrad/Kokoro-82M``: pedirla hacía que
+    el gateway descargara en la síntesis y contestara 500 (HF 404) en vez de
+    un ``voice_not_found`` tipado. ``fr-fr-male`` queda fuera de la tabla.
+    """
+    table = KokoroEngine()._voice_table()
+
+    assert table["fr-fr-female"]["voice"] == "ff_siwis"
+    assert "fr-fr-male" not in table
+
+
 @pytest.mark.asyncio
 async def test_kokoro_settings_override_voice_map(monkeypatch: pytest.MonkeyPatch):
     """KOKORO_VOICES redefine la voz nativa de un voice_id nuestro."""

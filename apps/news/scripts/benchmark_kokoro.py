@@ -14,6 +14,11 @@ import httpx
 
 
 async def bench(gateway: str, text: str, voices: list[str], lang: str = "es"):
+    # The API mounts every router under /api/v1; accept both spellings so
+    # `--gateway http://localhost:8001` (the documented usage) works.
+    base = gateway.rstrip("/")
+    if not base.endswith("/api/v1"):
+        base += "/api/v1"
     async with httpx.AsyncClient(timeout=60.0) as client:
         for v in voices:
             for engine in [None, "kokoro", "pocket_tts"]:
@@ -22,7 +27,7 @@ async def bench(gateway: str, text: str, voices: list[str], lang: str = "es"):
                     payload["engine"] = engine
                 t0 = time.perf_counter()
                 try:
-                    r = await client.post(f"{gateway}/tts", json=payload)
+                    r = await client.post(f"{base}/tts", json=payload)
                     dt = time.perf_counter() - t0
                     print(
                         json.dumps(

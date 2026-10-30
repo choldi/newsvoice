@@ -52,7 +52,11 @@ _SUPPORTED_LANGUAGES = ["en", "es", "fr", "hi", "it", "pt"]
 
 # Voces stock de Kokoro por defecto para nuestro esquema de voice_id. El
 # prefijo de la voz nativa codifica idioma + género (p.ej. ``ef_dora``:
-# e=español, f=femenina). Se puede sobrescribir con ``KOKORO_VOICES``.
+# e=español, f=femenino). Se puede sobrescribir con ``KOKORO_VOICES``.
+# Nota: ``hexgrad/Kokoro-82M`` solo publica UNA voz francesa (``ff_siwis``);
+# no existe ``fm_gabriel`` (HF responde 404 en la síntesis), así que
+# ``fr-fr-male`` queda fuera de la tabla y el gateway contesta un
+# VoiceNotFound tipado en vez de un 500.
 _DEFAULT_VOICES: dict[str, dict[str, str]] = {
     "es-mx-male": {"voice": "em_alex", "language": "es", "gender": "male"},
     "es-mx-female": {"voice": "ef_dora", "language": "es", "gender": "female"},
@@ -62,7 +66,6 @@ _DEFAULT_VOICES: dict[str, dict[str, str]] = {
     "en-us-female": {"voice": "af_heart", "language": "en", "gender": "female"},
     "en-gb-male": {"voice": "bm_george", "language": "en", "gender": "male"},
     "en-gb-female": {"voice": "bf_emma", "language": "en", "gender": "female"},
-    "fr-fr-male": {"voice": "fm_gabriel", "language": "fr", "gender": "male"},
     "fr-fr-female": {"voice": "ff_siwis", "language": "fr", "gender": "female"},
     "it-it-male": {"voice": "im_nicola", "language": "it", "gender": "male"},
     "it-it-female": {"voice": "if_sara", "language": "it", "gender": "female"},
