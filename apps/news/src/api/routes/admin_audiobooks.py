@@ -14,7 +14,7 @@ from src.api.services.doc_tts import (
     read_job_meta,
 )
 
-router = APIRouter(prefix="/api/admin/audiobooks", tags=["admin-audiobooks"])
+router = APIRouter(prefix="/admin/audiobooks", tags=["admin-audiobooks"])
 
 
 @router.post("/submit")
@@ -45,9 +45,9 @@ async def submit_audiobook_tts(
 @router.get("/{workflow_id}")
 async def audiobook_status(workflow_id: str):
     meta = read_job_meta(workflow_id)
-    if meta is None:
+    if not meta:
         raise HTTPException(status_code=404, detail="unknown audiobook run")
-    audio_path = get_job_audio_path(workflow_id)
+    audio_path = await get_job_audio_path(workflow_id)
     return {
         "workflow_id": workflow_id,
         "title": meta.get("title"),
@@ -60,7 +60,7 @@ async def audiobook_status(workflow_id: str):
 
 @router.get("/{workflow_id}/download")
 async def audiobook_download(workflow_id: str):
-    audio_path = get_job_audio_path(workflow_id)
+    audio_path = await get_job_audio_path(workflow_id)
     if not audio_path:
         raise HTTPException(status_code=404, detail="audiobook not ready")
     path = Path(audio_path)

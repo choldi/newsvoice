@@ -89,6 +89,26 @@ services:
     command: ["python", "-m", "src.workers.run_doc_tts_worker"]
     restart: unless-stopped
 
+  # Audiobook worker (Fase B2). Own queue: an M4B render holds the TTS lease
+  # for hours and must never occupy the digest/doc-tts activity slots.
+  audiobook-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: news_engine_audiobook_worker
+    depends_on:
+      temporal:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+    volumes:
+      - ./data:/app/data
+      - ./collections.toml:/app/collections.toml:ro
+    command: ["python", "-m", "src.workers.run_audiobook_worker"]
+    restart: unless-stopped
+
   # Language-teacher worker (Phase 7.12). Own queue: the LLM call plus a full
   # narration render must never occupy the digest worker's slots. Deliveries
   # are addressed by name on the digest queue from the lesson workflow.

@@ -255,7 +255,7 @@
                 hx-target="#voice-results-audiobook"
                 hx-include="#picker-audiobook, #audiobook-language, #audiobook-engine"
                 hx-swap="innerHTML">
-          {% for value, label in tts_backends %}
+          {% for value, label in audiobook_engine_choices %}
           <option value="{{ value }}" {{ 'selected' if value == 'edge' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>

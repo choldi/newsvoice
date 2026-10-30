@@ -24,6 +24,7 @@ def _ui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(settings, "doc_tts_dir", str(tmp_path / "doc_tts"))
     monkeypatch.setattr(settings, "teacher_dir", str(tmp_path / "lessons"))
     monkeypatch.setattr(settings, "narration_cache_dir", str(tmp_path / "narration"))
+    monkeypatch.setattr(settings, "audiobook_dir", str(tmp_path / "audiobooks"))
     monkeypatch.setattr(settings, "doc_tts_link_secret", "unit-test-secret")
     monkeypatch.setattr(settings, "teacher_enabled", True)
     monkeypatch.setattr(settings, "doc_tts_enabled", True)
@@ -798,3 +799,90 @@ def test_audiobook_submit_forwards_engine_and_voice() -> None:
     assert kwargs["engine"] == "kokoro"
     assert kwargs["voice"] == "es-mx-male"
     assert kwargs["language"] == "es"
+
+
+def test_audiobook_form_offers_only_local_engines() -> None:
+    """The audiobook engine select bans Modal and labels qwen3 as local."""
+    client = _client()
+    response = client.get("/ui/tools")
+
+    assert response.status_code == 200
+    select = response.text.split('id="audiobook-engine"', 1)[1].split("</select>", 1)[0]
+    assert 'value="edge"' in select
+    assert 'value="omni_voice"' in select
+    assert 'value="kokoro"' in select
+    assert 'value="qwen3_tts"' in select
+    assert "Qwen3-TTS (local gateway)" in select
+    assert 'value="zonos2"' not in select, "Modal-only engines never render a book"
+    assert 'value="voxcpm2"' not in select
+
+
+def test_job_fragment_lists_finished_audiobooks(_ui_env: Path) -> None:
+    """Audiobook rows are listed with their title and download link."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+    from src.api.services.doc_tts import write_job_meta
+
+    run_id = "audiobook-fragment1"
+    audio = Path(settings.audiobook_dir) / "audio" / f"{run_id}.m4b"
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b"fake-m4b")
+
+    async def _seed() -> None:
+        await AudioJobsRepository().start_job(run_id, collection="audiobooks", kind="audiobook")
+        await AudioJobsRepository().finish_job(
+            run_id,
+            status="FINISHED_OK",
+            audio_path=str(audio),
+            kind="audiobook",
+        )
+
+    write_job_meta(run_id, {"title": "Mi audiolibro", "mode": "edge"})
+    asyncio.run(_seed())
+
+    response = _client().get("/ui/fragments/tool_jobs?kind=audiobook")
+
+    assert response.status_code == 200
+    assert "Mi audiolibro" in response.text
+    assert f"/api/admin/audiobooks/{run_id}/download" in response.text
+
+
+def test_delete_audiobook_removes_audio_cover_upload_and_meta(_ui_env: Path) -> None:
+    """Deleting an audiobook purges every artifact and its job row."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+
+    run_id = "audiobook-delete1"
+    root = Path(settings.audiobook_dir)
+    audio = root / "audio" / f"{run_id}.m4b"
+    cover = root / "covers" / f"{run_id}.jpg"
+    upload = Path(settings.doc_tts_dir) / "uploads" / f"{run_id}.epub"
+    meta = Path(settings.doc_tts_dir) / "meta" / f"{run_id}.json"
+    for path in (audio, cover, upload, meta):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"artifact")
+
+    async def _seed() -> None:
+        await AudioJobsRepository().start_job(run_id, collection="audiobooks", kind="audiobook")
+        await AudioJobsRepository().finish_job(
+            run_id,
+            status="FINISHED_OK",
+            audio_path=str(audio),
+            kind="audiobook",
+        )
+
+    asyncio.run(_seed())
+
+    response = _client().post(f"/ui/tools/jobs/audiobook/{run_id}/delete", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "Borrado" in _flash_of(response.headers["location"])
+    for path in (audio, cover, upload, meta):
+        assert not path.exists(), f"{path} must be deleted"
+
+    async def _check() -> None:
+        assert await AudioJobsRepository().get_job(run_id, kind="audiobook") is None
+
+    asyncio.run(_check())

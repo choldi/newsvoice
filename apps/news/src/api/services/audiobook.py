@@ -186,17 +186,10 @@ class AudiobookService:
             raise RuntimeError("No chapters to render")
         settings = get_settings()
         language = language or settings.tts_language
-        digest = _hash(title, language, str(backend), text, voice)
-        m4b_path = self._audio_dir / f"{_slugify(title)}_{digest[:12]}.m4b"
-        manifest_path = self._tmp_dir / f"audiobook_{digest[:12]}.manifest.json"
 
-        if m4b_path.exists():
-            return AudiobookResult(
-                m4b_path=str(m4b_path), chapters=len(chapters), duration_seconds=0.0, cached=True
-            )
-
-        # Cover: explicit path, then the uploaded cover (workflow-id keyed),
-        # then extracted from the source EPUB.
+        # The uploaded cover is resolved before the cache key: choosing a new
+        # cover (or author/loudnorm) must produce a new M4B instead of serving
+        # the previous one.
         if not cover_path and run_id:
             covers_dir = self._base / "covers"
             if covers_dir.is_dir():
@@ -204,6 +197,31 @@ class AudiobookService:
                     if cover_file.is_file():
                         cover_path = str(cover_file)
                         break
+
+        digest = _hash(
+            title,
+            author,
+            language,
+            str(backend),
+            text,
+            voice,
+            cover_path or "",
+            "1" if loudnorm else "0",
+        )
+        m4b_path = self._audio_dir / f"{_slugify(title)}_{digest[:12]}.m4b"
+        manifest_path = self._tmp_dir / f"audiobook_{digest[:12]}.manifest.json"
+
+        if m4b_path.exists():
+            duration = _probe_duration(m4b_path)
+            if duration > 0:
+                return AudiobookResult(
+                    m4b_path=str(m4b_path),
+                    chapters=len(chapters),
+                    duration_seconds=round(duration, 2),
+                    cached=True,
+                )
+
+        # Fallback cover: extract it from the source EPUB only on a cache miss.
         if not cover_path and run_id:
             for cand in [
                 Path("data/doc_tts/uploads") / f"{run_id}.epub",
@@ -400,6 +418,11 @@ class AudiobookService:
                 mf.write(f"title={ch.title}\n")
                 pos += dur
 
+        # Mux to a sibling temp file and publish with os.replace: a failed
+        # ffmpeg run must never leave a partial .m4b that the next request
+        # would mistake for a finished (cached) render.
+        tmp_m4b = m4b_path.with_name(f".{m4b_path.stem}.{os.getpid()}.part.m4b")
+        tmp_m4b.unlink(missing_ok=True)
         try:
             cmd = [
                 "ffmpeg",
@@ -417,7 +440,7 @@ class AudiobookService:
                 "copy",
                 "-f",
                 "mp4",
-                str(m4b_path),
+                str(tmp_m4b),
             ]
             if cover_path and Path(cover_path).exists():
                 cmd = [
@@ -446,7 +469,7 @@ class AudiobookService:
                     "attached_pic",
                     "-f",
                     "mp4",
-                    str(m4b_path),
+                    str(tmp_m4b),
                 ]
             try:
                 subprocess.run(cmd, check=True, timeout=7200)
@@ -481,11 +504,13 @@ class AudiobookService:
                         "copy" if cover_path and Path(cover_path).exists() else "none",
                         "-f",
                         "mp4",
-                        str(m4b_path),
+                        str(tmp_m4b),
                     ]
                 )
                 subprocess.run(cmd, check=True, timeout=7200)
+            os.replace(tmp_m4b, m4b_path)
         except Exception as exc:
+            tmp_m4b.unlink(missing_ok=True)
             logger.error("audiobook_mux_failed", error=str(exc))
             raise
 
@@ -510,16 +535,19 @@ class AudiobookService:
         """Synthesize one chapter with a non-edge engine and join the chunks.
 
         Chunks are cached per (backend, resolved voice, language, text) so a
-        resumed run never re-pays a gateway/Modal call, and the engine lease
+        resumed run never re-pays a gateway call, and the engine lease
         gate is honoured before every real synthesis (the same yield protocol
-        the document render uses).
+        the document render uses). Modal-only engines never reach this method:
+        :func:`submit_audiobook` rejects them, and qwen3_tts is pinned to the
+        local gateway engine below.
 
         Args:
             text: Chapter speech text.
             out_path: Chapter audio file to write (extension from the backend).
             voice: Requested voice id (resolved through ``voice_for``).
             language: ISO 639-1 language code.
-            backend: Engine that synthesizes (gateway or Modal).
+            backend: Engine that synthesizes (always via the local gateway or
+                client-side edge — never Modal).
             gate: Optional RenderGate for the digest hand-over.
 
         Returns:
@@ -532,7 +560,10 @@ class AudiobookService:
         from src.api.services.doc_tts import chunk_speech_text
         from src.api.services.tts_backends import synthesize, voice_for
 
-        resolved = await voice_for(backend, voice, language)
+        # Audiobooks never render on Modal: qwen3_tts is pinned to the local
+        # gateway engine (a book-length Modal render would cost real money),
+        # and the flag is a no-op for edge/the gateway/Kokoro.
+        resolved = await voice_for(backend, voice, language, run_in_modal=False)
         chunks = chunk_speech_text(text.strip(), 1500)
         if not chunks:
             raise RuntimeError("No text to synthesize")
@@ -546,7 +577,7 @@ class AudiobookService:
             if not cf.exists():
                 if gate is not None and await gate.should_pause():
                     await gate.yield_and_wait()
-                data = await synthesize(backend, chunk, resolved, language)
+                data = await synthesize(backend, chunk, resolved, language, run_in_modal=False)
                 if not data:
                     raise RuntimeError(
                         f"{backend.value} synthesis produced no audio for {resolved!r}"
@@ -628,8 +659,8 @@ async def submit_audiobook(
     from pathlib import Path
 
     from src.api.db.database import AudioJobsRepository
+    from src.api.models.narration import TTSBackend
     from src.api.services.doc_tts import (
-        JOB_COLLECTION,
         DocumentExtractionError,
         SubmitError,
         _uploads_dir,
@@ -651,6 +682,16 @@ async def submit_audiobook(
         backend = resolve_backend(engine or "edge")
     except TTSBackendError as exc:
         raise SubmitError(str(exc), status_code=422) from exc
+
+    # Modal is banned for audiobooks: a book renders for hours, so the two
+    # Modal-only engines would spend real GPU money. qwen3_tts stays allowed
+    # because the audiobook path always pins it to the local gateway engine.
+    if backend in (TTSBackend.ZONOS2, TTSBackend.VOXCPM2):
+        raise SubmitError(
+            "audiobooks cannot run on Modal engines (zonos2/voxcpm2): "
+            "pick edge, tts-api gateway, Kokoro or Qwen3-TTS (local gateway)",
+            status_code=422,
+        )
 
     # Reject a voice outside the chosen engine's vocabulary before storing
     # data (same rule as document TTS, but against the selected engine).
@@ -705,7 +746,7 @@ async def submit_audiobook(
     )
 
     repo = AudioJobsRepository()
-    await repo.start_job(workflow_id, collection=JOB_COLLECTION, kind=AUDIOBOOK_KIND)
+    await repo.start_job(workflow_id, collection=AUDIOBOOK_COLLECTION, kind=AUDIOBOOK_KIND)
     try:
         from src.api.services.temporal_admin import TemporalAdminService
 

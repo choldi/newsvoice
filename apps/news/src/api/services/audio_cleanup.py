@@ -55,7 +55,8 @@ def delete_job_artifacts(run_id: str, kind: str, audio_path: str = "") -> list[s
 
     Args:
         run_id: Workflow id of the run (row key with ``kind``).
-        kind: Audio job kind: 'doc_tts', 'lesson' or 'narration'.
+        kind: Audio job kind: 'doc_tts', 'lesson', 'narration' or
+            'audiobook'.
         audio_path: Stored audio path of the finished job ('' keeps the
             well-known glob-only purge, used by the tests).
 
@@ -79,6 +80,10 @@ def delete_job_artifacts(run_id: str, kind: str, audio_path: str = "") -> list[s
         validate_job_id(run_id)
         root = Path(settings.narration_cache_dir)
         audio_roots = [root]
+    elif kind == "audiobook":
+        validate_job_id(run_id)
+        root = Path(settings.audiobook_dir)
+        audio_roots = [root / "audio", root]
     else:
         raise ValueError(f"unknown audio job kind: {kind!r}")
 
@@ -92,8 +97,20 @@ def delete_job_artifacts(run_id: str, kind: str, audio_path: str = "") -> list[s
             sidecar.unlink()
             removed.append(str(sidecar))
 
-    for subdir in ("uploads", "text", "meta"):
-        folder = root / subdir
+    folders = [root / subdir for subdir in ("uploads", "text", "meta")]
+    if kind == "audiobook":
+        # Audiobooks keep the audio and the cover under audiobook_dir, but
+        # reuse the document-TTS upload/meta directories. Covers and the old
+        # tmp cover naming are keyed by the run id too.
+        folders.extend(
+            [
+                root / "covers",
+                root / "tmp",
+                Path(settings.doc_tts_dir) / "uploads",
+                Path(settings.doc_tts_dir) / "meta",
+            ]
+        )
+    for folder in folders:
         if not folder.is_dir():
             continue
         for path in folder.glob(f"{run_id}.*"):

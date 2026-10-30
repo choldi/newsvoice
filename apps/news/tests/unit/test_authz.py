@@ -55,6 +55,7 @@ class TestRequiredRole:
             "/api/admin/lessons",
             "/api/admin/narration",
             "/api/admin/documents/tts",
+            "/api/admin/audiobooks/submit",
             "/api/admin/collections/tech/run",
         ],
     )

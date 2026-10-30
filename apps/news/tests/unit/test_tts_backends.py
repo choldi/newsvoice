@@ -242,6 +242,59 @@ async def test_voice_for_modal_fails_when_the_language_has_no_profile(
         await voice_for(TTSBackend.QWEN3_TTS, "", "fr")
 
 
+async def test_voice_for_local_qwen_maps_the_profile_to_a_gateway_clone(
+    monkeypatch,
+) -> None:
+    """run_in_modal=False maps the catalog profile to its gateway clone UUID."""
+    monkeypatch.setattr("src.core.voice_catalog.load_profiles", _profiles)
+
+    async def fake_resolve(voice: str, language: str) -> str:
+        assert voice == "es_anchor_a"
+        assert language == "es"
+        return "uuid-es-anchor"
+
+    monkeypatch.setattr("src.api.services.gateway_voices.resolve_gateway_qwen_voice", fake_resolve)
+
+    resolved = await voice_for(TTSBackend.QWEN3_TTS, "es_anchor_a", "es", run_in_modal=False)
+
+    assert resolved == "uuid-es-anchor"
+
+
+async def test_voice_for_local_qwen_defaults_by_language_before_resolving(
+    monkeypatch,
+) -> None:
+    """An unset voice picks the language's profile first, then clones it."""
+    monkeypatch.setattr("src.core.voice_catalog.load_profiles", _profiles)
+    seen: dict[str, str] = {}
+
+    async def fake_resolve(voice: str, language: str) -> str:
+        seen["voice"] = voice
+        return "uuid-default"
+
+    monkeypatch.setattr("src.api.services.gateway_voices.resolve_gateway_qwen_voice", fake_resolve)
+
+    resolved = await voice_for(TTSBackend.QWEN3_TTS, "", "es", run_in_modal=False)
+
+    assert seen["voice"].startswith("es_")
+    assert resolved == "uuid-default"
+
+
+async def test_voice_for_modal_path_never_touches_the_clone_map(monkeypatch) -> None:
+    """The default (and run_in_modal=True) keep the catalog profile verbatim."""
+    monkeypatch.setattr("src.core.voice_catalog.load_profiles", _profiles)
+
+    async def boom(voice: str, language: str) -> str:
+        raise AssertionError("the clone map belongs to the local gateway path only")
+
+    monkeypatch.setattr("src.api.services.gateway_voices.resolve_gateway_qwen_voice", boom)
+
+    assert await voice_for(TTSBackend.QWEN3_TTS, "es_anchor_a", "es") == "es_anchor_a"
+    assert (
+        await voice_for(TTSBackend.QWEN3_TTS, "es_anchor_a", "es", run_in_modal=True)
+        == "es_anchor_a"
+    )
+
+
 # --- synthesize dispatch -----------------------------------------------------
 
 
@@ -283,6 +336,31 @@ async def test_synthesize_modal_requires_the_kill_switch(monkeypatch) -> None:
 
     with pytest.raises(TTSBackendError, match="modal is disabled"):
         await synthesize(TTSBackend.QWEN3_TTS, "hola", "voice", "es")
+
+
+async def test_synthesize_local_qwen_pins_the_gateway_engine(monkeypatch) -> None:
+    """run_in_modal=False posts to the gateway with engine=qwen3_tts (no Modal)."""
+    seen: dict[str, object] = {}
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.update(voice_id=voice_id, language=language, engine=kwargs.get("engine"))
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    audio = await synthesize(TTSBackend.QWEN3_TTS, "hola", "uuid-es", "es", run_in_modal=False)
+
+    assert audio == b"RIFFwav"
+    assert seen["voice_id"] == "uuid-es"
+    assert seen["engine"] == "qwen3_tts"
+
+
+async def test_synthesize_qwen_explicit_modal_still_hits_the_guards(monkeypatch) -> None:
+    """run_in_modal=True keeps the Modal spend guards, like the default."""
+    monkeypatch.setattr(tts_backends.get_settings(), "modal_enabled", False)
+
+    with pytest.raises(TTSBackendError, match="modal is disabled"):
+        await synthesize(TTSBackend.QWEN3_TTS, "hola", "voice", "es", run_in_modal=True)
 
 
 async def test_synthesize_voxcpm2_requires_the_gate(monkeypatch) -> None:

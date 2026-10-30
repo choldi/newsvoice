@@ -7,7 +7,7 @@
 # whole stack.
 #
 #   make help        list every target
-#   make status      health of all 12 services + news API + TTS gateway
+#   make status      health of all 13 services + news API + TTS gateway
 #   make check       lint + format-check + tests across both apps
 #   make test        full pytest suite for news + gateway
 #   make up / down   start / stop the unified deploy/docker-compose.yml stack

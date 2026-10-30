@@ -12,10 +12,20 @@ backend      call                                         output
 ===========  ==========================================  ========
 edge         ``edge_tts.Communicate`` (local process)     ``.mp3``
 omni_voice   ``POST {tts_api_base_url}/tts`` (tts-api)    ``.wav``
-qwen3_tts /  ``modal_client.modal_tts()`` / ``_zonos2`` ``.wav``
-zonos2 /     / ``_voxcpm2``
-voxcpm2
+kokoro       ``POST {tts_api_base_url}/tts`` (engine      ``.wav``
+             pinned to ``kokoro``)
+qwen3_tts    ``POST .../tts`` with ``engine=qwen3_tts``   ``.wav``
+             when ``run_in_modal=False`` (gateway local);
+             ``modal_client.modal_tts()`` otherwise
+zonos2 /     ``modal_client.modal_zonos2_tts()`` /        ``.wav``
+voxcpm2      ``_voxcpm2``
 ===========  ==========================================  ========
+
+The ``run_in_modal`` switch on :func:`voice_for` / :func:`synthesize` decides
+where ``qwen3_tts`` renders: ``False`` pins the gateway's local engine (the
+audiobook path always does — a book-length Modal render is too expensive),
+``True`` forces Modal, and the default ``None`` keeps the historical Modal
+behaviour for the digest and the voice preview.
 
 Downstream steps are format-agnostic: ``AudioCompressService`` feeds whatever
 ffmpeg can read, ``verify_audio`` decodes with ffmpeg, and the Telegram sender
@@ -311,13 +321,23 @@ def gateway_voice_for_language(language: str) -> str:
         ) from None
 
 
-async def voice_for(backend: TTSBackend, voice: str, language: str) -> str:
+async def voice_for(
+    backend: TTSBackend,
+    voice: str,
+    language: str,
+    *,
+    run_in_modal: bool | None = None,
+) -> str:
     """Resolve a configured voice against the chosen engine's catalogue.
 
     Args:
         backend: Engine that will synthesize.
         voice: Voice as configured on the collection. May be empty.
         language: ISO 639-1 language driving the per-backend default.
+        run_in_modal: Only meaningful for ``qwen3_tts``. ``False`` resolves the
+            voice against the **local** gateway engine (catalogue profile →
+            ``<name>__qwen3_tts`` clone UUID); ``True``/``None`` keep the
+            Modal catalogue profile. Ignored by the other backends.
 
     Returns:
         The engine's own voice identifier.
@@ -341,6 +361,15 @@ async def voice_for(backend: TTSBackend, voice: str, language: str) -> str:
             return gateway_voice_for_language(language)
         mapped = GATEWAY_VOICE_ALIASES.get(requested.lower())
         return mapped or requested
+
+    if backend is TTSBackend.QWEN3_TTS and run_in_modal is False:
+        # Local gateway qwen3_tts (Phase 10): the engine has no stock voices,
+        # so the profile (validated/defaulted exactly like the Modal path) is
+        # mapped to its `__qwen3_tts` clone UUID once and reused afterwards.
+        from src.api.services.gateway_voices import resolve_gateway_qwen_voice
+
+        profile = _modal_voice_for(requested, language)
+        return await resolve_gateway_qwen_voice(profile, language)
 
     return _modal_voice_for(requested, language)
 
@@ -425,6 +454,7 @@ async def synthesize(
     language: str,
     *,
     timeout: float | None = None,
+    run_in_modal: bool | None = None,
 ) -> bytes:
     """Synthesize ``text`` with the chosen engine.
 
@@ -434,6 +464,11 @@ async def synthesize(
         voice: Engine-specific voice id, already resolved by :func:`voice_for`.
         language: ISO 639-1 language code.
         timeout: Per-request timeout for the HTTP backends.
+        run_in_modal: Only meaningful for ``qwen3_tts``. ``False`` synthesizes
+            through the gateway's **local** ``qwen3_tts`` engine (pinned, so the
+            gateway's language routing cannot redirect the request); ``True``/
+            ``None`` keep the historical Modal call. Ignored by other backends
+            (zonos2/voxcpm2 have no local engine).
 
     Returns:
         Raw audio bytes in the backend's native format (see :func:`ext_for`).
@@ -459,6 +494,17 @@ async def synthesize(
             language,
             timeout=timeout if timeout is not None else None,
             engine="kokoro" if backend is TTSBackend.KOKORO else None,
+        )
+
+    if backend is TTSBackend.QWEN3_TTS and run_in_modal is False:
+        # Local gateway qwen3_tts, pinned the same way as Kokoro. No Modal
+        # spend guard runs here: the audio never leaves this host.
+        return await gateway_tts(
+            text,
+            voice,
+            language,
+            timeout=timeout if timeout is not None else None,
+            engine="qwen3_tts",
         )
 
     return await _modal_synthesize(backend, text, voice, language)

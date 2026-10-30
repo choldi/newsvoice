@@ -571,6 +571,16 @@ TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("voxcpm2", "VoxCPM2 (Modal)"),
 )
 
+#: Engines the audiobook form may offer (Phase 11.10). The Modal-only engines
+#: are excluded because a book renders for hours, and qwen3_tts is labelled by
+#: the route the audiobook path always takes: the local gateway engine.
+AUDIOBOOK_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("edge", "edge (local)"),
+    ("omni_voice", "tts-api gateway"),
+    ("kokoro", "Kokoro (gateway)"),
+    ("qwen3_tts", "Qwen3-TTS (local gateway)"),
+)
+
 
 def _normalize_voice_entries(entries: list[dict]) -> list[dict]:
     """Reshape engine-specific voice dicts into one template contract.
@@ -1961,6 +1971,7 @@ async def ui_create_custom_voice(request: Request) -> RedirectResponse:
             ref_segments=lines,
             role_hint=fields.get("role_hint", ""),
             generate=fields.get("generate", "") == "on",
+            run_in_modal=fields.get("run_in_modal", "") == "on",
         )
         result = await voice_catalog_admin.create_custom_voice(payload)
     except ValidationError as exc:
@@ -2326,7 +2337,7 @@ def _heuristics_payload(fields: dict[str, str]) -> PhoneticHeuristicsIn:
     target = (fields.get("language_target", "") or "").strip().lower()
     allowed = {"en", "es", "fr", "ca", "de"}
     if origin not in allowed or target not in allowed:
-        raise ValueError("language_origin/target must be in {en,es,fr,ca,de}")
+        raise ValueError("language_origin/target must be an ISO 639-1 code in {en,es,fr,ca,de}")
     return PhoneticHeuristicsIn(
         language_origin=origin,
         language_target=target,
@@ -2436,7 +2447,7 @@ async def ui_phonetics_create(request: Request) -> RedirectResponse:
         saved = await phonetic_heuristics.save(payload)
     except ValidationError as exc:
         return _flash("/ui/phonetics/new", f"Error al guardar: {_validation_message(exc)}", "error")
-    except HeuristicsError as exc:
+    except (HeuristicsError, ValueError) as exc:
         return _flash("/ui/phonetics/new", str(exc), "error")
     logger.info(
         "ui_phonetics_created",
@@ -2484,7 +2495,7 @@ async def ui_phonetics_update(row_id: int, request: Request) -> RedirectResponse
         saved = await phonetic_heuristics.save(payload, row_id=row_id)
     except ValidationError as exc:
         return _flash(back, f"Error al guardar: {_validation_message(exc)}", "error")
-    except HeuristicsError as exc:
+    except (HeuristicsError, ValueError) as exc:
         return _flash(back, str(exc), "error")
     logger.info(
         "ui_phonetics_updated",
@@ -2720,12 +2731,11 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "doc_language_options": voice_search.language_options(edge["voices"]),
             "audiobook_picker": audiobook_picker,
             "audiobook_language_options": voice_search.language_options(edge["voices"]),
-            "tts_backends": TTS_BACKEND_CHOICES,
+            "audiobook_engine_choices": AUDIOBOOK_BACKEND_CHOICES,
             "lesson_language_options": voice_search.language_options(all_voices),
             # Phase 7.16: the lesson form only offers the adaptation when the
             # teacher feature can actually run it.
             "teacher_respelling_enabled": get_settings().teacher_respelling_enabled,
-            "can_operate": True,
             **_lesson_voice_context(
                 all_voices,
                 native_language="es",
@@ -3080,11 +3090,8 @@ async def ui_fragment_tool_jobs(request: Request, kind: str = "doc_tts") -> HTML
         context["url_rows"] = [
             r for r in runs if str(r.get("workflow_id", "")).startswith("url-summary-")
         ][:20]
-    elif kind in ("doc_tts", "lesson", "narration"):
-        if kind == "audiobook":
-            jobs = await AudioJobsRepository().list_jobs(kind="audiobook")
-        else:
-            jobs = await AudioJobsRepository().list_jobs(kind=kind)
+    elif kind in ("doc_tts", "lesson", "narration", "audiobook"):
+        jobs = await AudioJobsRepository().list_jobs(kind=kind)
         context["jobs"] = await _annotated_jobs(jobs[:20], kind)
     else:
         context["error"] = f"tipo desconocido: {kind}"

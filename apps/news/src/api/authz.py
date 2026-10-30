@@ -61,6 +61,7 @@ _ROLE_RULES: tuple[tuple[str, re.Pattern[str], Role], ...] = (
     ("POST", re.compile(r"^/ui/collections/[^/]+/(run|narrate)$"), Role.USER),
     ("POST", re.compile(r"^/ui/runs/[^/]+/terminate$"), Role.USER),
     ("POST", re.compile(r"^/api/admin/documents/tts$"), Role.USER),
+    ("POST", re.compile(r"^/api/admin/audiobooks(?:/.*)?$"), Role.USER),
     ("POST", re.compile(r"^/api/admin/lessons$"), Role.USER),
     ("POST", re.compile(r"^/api/admin/narration$"), Role.USER),
     ("POST", re.compile(r"^/api/admin/collections/[^/]+/run$"), Role.USER),

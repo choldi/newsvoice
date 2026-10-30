@@ -3,7 +3,7 @@
 # status.sh — unified health check for the whole newsvoice stack (P7).
 #
 # Covers both apps from the repo root:
-#   1. All 12 docker-compose services under deploy/docker-compose.yml
+#   1. All 13 docker-compose services under deploy/docker-compose.yml
 #   2. news-engine FastAPI /health
 #   3. TTS gateway /api/v1/health
 #   3b. GPU engine lease (design window state)
@@ -90,9 +90,9 @@ fi
 # ---------------------------------------------------------------------------
 # 1. All docker-compose services
 # ---------------------------------------------------------------------------
-section "1. Docker Compose services (12)"
+section "1. Docker Compose services (13)"
 SERVICES=(
-    api worker narration-worker doc-tts-worker teacher-worker
+    api worker narration-worker doc-tts-worker audiobook-worker teacher-worker
     narration-modal-worker voice-catalog-worker there
     temporal-postgres temporal temporal-ui gateway
 )
