@@ -99,19 +99,20 @@ async def design_voice(
 
     import modal
 
+    # Deliberately not wrapped in modal_cost.measure: its billing/rate probes
+    # call Modal's private _workspace API, which replaces the process-global
+    # client and makes every later RPC hang ("outside of task context") —
+    # reproduced on modal 1.6.2 and 1.6.3. Design cost is a one-off operator
+    # action; the activity logs design_seconds. See PENDING.md.
     design = modal.Cls.from_name(settings.modal_app_name, "VoiceDesignModel")()
-    audio, _cost = await measure(
-        design.design_voice.remote.aio(
-            segments=segments,
-            instruct=instruct,
-            language=language,
-            seed=seed,
-            temperature=temperature,
-            top_p=top_p,
-        ),
-        backend="qwen3_tts",
+    return await design.design_voice.remote.aio(
+        segments=segments,
+        instruct=instruct,
+        language=language,
+        seed=seed,
+        temperature=temperature,
+        top_p=top_p,
     )
-    return audio
 
 
 @trace_function(component="modal.client")
