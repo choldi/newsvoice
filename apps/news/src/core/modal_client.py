@@ -44,9 +44,12 @@ async def modal_tts(
 
     import modal
 
-    function = modal.Function.from_name(settings.modal_app_name, "generate_tts")
+    # Class methods resolve through modal.Cls: bare Function.from_name(...).
+    # remote.aio fails at invocation with "Function not found" (verified
+    # against the deployed app); attribute hydration alone does not catch it.
+    tts = modal.Cls.from_name(settings.modal_app_name, "QwenTTS")()
     audio, _cost = await measure(
-        function.remote.aio(
+        tts.generate_tts.remote.aio(
             text=text,
             voice_ref=voice_ref,
             language=language,
@@ -96,9 +99,9 @@ async def design_voice(
 
     import modal
 
-    function = modal.Function.from_name(settings.modal_app_name, "design_voice")
+    design = modal.Cls.from_name(settings.modal_app_name, "VoiceDesignModel")()
     audio, _cost = await measure(
-        function.remote.aio(
+        design.design_voice.remote.aio(
             segments=segments,
             instruct=instruct,
             language=language,
@@ -143,9 +146,9 @@ async def modal_zonos2_tts(
 
     import modal
 
-    function = modal.Function.from_name(settings.modal_app_name, "generate_tts_zonos2")
+    zonos = modal.Cls.from_name(settings.modal_app_name, "Zonos2TTS")()
     audio, _cost = await measure(
-        function.remote.aio(
+        zonos.generate_tts_zonos2.remote.aio(
             text=text, voice_ref=voice_ref, language=language, speed=speed, emotion=emotion
         ),
         backend="zonos2",
@@ -187,9 +190,9 @@ async def modal_voxcpm2_tts(
 
     import modal
 
-    function = modal.Function.from_name(settings.modal_app_name, "generate_tts_voxcpm2")
+    voxcpm = modal.Cls.from_name(settings.modal_app_name, "VoxCPM2TTS")()
     audio, _cost = await measure(
-        function.remote.aio(
+        voxcpm.generate_tts_voxcpm2.remote.aio(
             text=text,
             voice_ref=voice_ref,
             language=language,
