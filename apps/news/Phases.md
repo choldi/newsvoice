@@ -1101,11 +1101,19 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
 - [x] **10.3 UI narración**: añadir checkbox "Ejecutar en Modal" en formularios
       de cast/colecciones (junto a Backend TTS) y en el formulario de clase de
       idiomas (`tools.html`). Persistir en `narration_spec`.
-- [ ] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
-      en creación de voz custom/clonación y en inicio de generación desde
-      catálogo. Cuando `false`, usar generación local vía worker/GPU (flow
-      actual) o el gateway según corresponda. Cuando `true`, permitir generar
-      vía Modal si habilitado.
+- [x] **10.4 Generación de voces (GUI)**: añadir checkbox "Ejecutar en Modal"
+      en creación de voz custom (junto a "Diseñar ahora"), flag
+      `run_in_modal` en `POST /admin/voices/catalog/generate` y flag `--modal`
+      en el CLI `design_voice`. `false` (default) = generación local vía
+      worker/GPU (flow actual, guarda la referencia en el gateway); `true` =
+      `modal_client.design_voice` → función Modal `design_voice`
+      (`src/core/modal_app.py`, Qwen3-TTS VoiceDesign en L4) con la semilla
+      crc32 y el muestreo 0.7/0.9 del path local (Phase 10.9), y guard
+      **non-retryable** si `MODAL_ENABLED=false` o faltan credenciales (sin
+      caer silenciosamente al worker local). La **clonación** no aplica: vive
+      en el gateway y no existe backend de clonado en Modal. Requiere
+      desplegar el app Modal (`python -m modal deploy src/core/modal_app.py`)
+      y `MODAL_ENABLED=true` en el host que lo ejecute.
 - [x] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
       incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
       se desea forzar. Documentar en `Architecture.md`/`Deploy.md`. Hecho:
@@ -1144,6 +1152,46 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
 local sin Modal habilitado; UI expone el switch; lint + tests verdes.
 
 **Effort:** 4-6 hours.
+
+
+## FASE 11: Audiolibros M4B (Fase B2)
+
+**Objetivo:** Convertir EPUB/PDF/TXT/MD en un M4B con capítulos, metadatos y
+portada, con worker y cola propios, y descarga desde la GUI.
+
+### Checklist
+- [x] **11.1 Servicio**: extracción de capítulos, síntesis con el backend
+      elegido, concatenación, loudnorm opcional, ffmetadata y portada.
+- [x] **11.2 Workflow/worker**: `AudiobookWorkflow` + actividades y
+      `run_audiobook_worker` en la cola `AUDIOBOOK_TASK_QUEUE`.
+- [x] **11.3 API admin**: submit, estado y descarga en
+      `/api/admin/audiobooks/...`; regla `Role.USER` para el submit.
+- [x] **11.4 GUI**: formulario en `/ui/tools`, motor/voz/idioma, listado de
+      jobs y descarga desde el fragmento de trabajos.
+- [x] **11.5 Caché y atomicidad**: clave con autor/portada/loudnorm y
+      publicación del M4B con `os.replace` desde un `.part`.
+- [x] **11.6 Limpieza**: borrado de audio, portada, subida, metadatos y fila.
+- [x] **11.7 Compose/docs**: worker en ambos compose, perfil `news` del split,
+      `status.sh`, `.env.example`, `Deploy.md` y `CONVENTIONS.md`.
+- [x] **11.8 Tests**: unitarios de atomicidad/caché y de integración de rutas,
+      listado y borrado.
+- [x] **11.10 Motores locales (sin Modal)**: los audiolibros nunca gastan
+      Modal — `zonos2`/`voxcpm2` se rechazan en el submit (422), `qwen3_tts`
+      se fija al engine **local** del gateway (`run_in_modal=False` en
+      `voice_for`/`synthesize`, voz de catálogo → clon `<name>__qwen3_tts`) y
+      Kokoro queda activo en el gateway vía `TTS_ENGINE=routed` +
+      `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` (el factory solo
+      honra extras en `routed`; `RoutedEngine.list_stock_voices` degrada por
+      sub-engine para que un sidecar caído no oculte las voces). La GUI ofrece
+      solo motores locales: edge / tts-api gateway / Kokoro / Qwen3 local.
+- [ ] **11.9 Verificación en prod**: render real de un EPUB con portada,
+      comprobación de capítulos en un reproductor M4B y borrado posterior.
+
+**Success criteria:** el M4B se reproduce con capítulos y portada; un fallo de
+ffmpeg no deja ficheros parciales; las rutas no duplican `/api`; lint + tests
+verdes.
+
+**Effort:** 10-14 hours.
 
 
 ## ANTI-PATTERNS TO AVOID

@@ -202,6 +202,13 @@
   `tts-api` gateway) | `qwen3_tts` | `zonos2` | `voxcpm2` (gated). `TTSBackend.EDGE` was added in
   Phase 8; `podcast_target` must map it to the **local** namespace/queue, never
   to Modal.
+- The Phase 10 local/Modal switch on the digest backends is
+  `tts_backends.voice_for`/`synthesize(run_in_modal: bool | None)`: `False`
+  resolves + pins the gateway's **local** `qwen3_tts` engine, `True` forces
+  Modal, and the default `None` keeps the historical Modal call (digest and
+  voice preview). Callers that must never spend Modal — the audiobook path —
+  pass `False` explicitly; narration/lessons carry the same flag on
+  `NarrationSpec`.
 - The digest engine is a per-collection choice (`tts_backend` in
   `collections.toml`) resolved **outside** the workflow in `pipeline_config_for`
   → `PipelineConfig.tts_backend` → the `generate_tts_activity` payload. A
@@ -275,6 +282,33 @@
   `audio_jobs.elapsed_seconds`.
 - `eta_seconds(estimate, progress)` prefers the **measured** rate as soon as one
   chunk has finished; the model is only the answer before the first one.
+
+## Audiobooks (Fase B2)
+
+- Output lives under `audiobook_dir` (`data/audiobooks`): `audio/` for the M4B,
+  `covers/` for the uploaded cover and `tmp/` for chapter cache/manifests.
+  Uploads and job metadata reuse `doc_tts_dir`.
+- The router prefix is `/admin/audiobooks`; `main.py` adds `/api`, so the public
+  paths are `/api/admin/audiobooks/...`. Never put `/api` in the router prefix.
+- Submit is a `Role.USER` exception in `authz.py`; status and download stay
+  viewer-readable. The UI submit and job fragment must use the same paths.
+- **Phase 11.10, engines:** audiobooks never render on Modal. The submit
+  rejects `zonos2`/`voxcpm2` (422) and `_synthesize_chapter` passes
+  `run_in_modal=False`, so `qwen3_tts` resolves the catalog profile through
+  `resolve_gateway_qwen_voice` and pins the local gateway engine. The form
+  offers only `AUDIOBOOK_BACKEND_CHOICES` (edge / gateway / Kokoro / Qwen3
+  local); keep that tuple and the submit guard in sync.
+- Mux to a sibling `.<stem>.<pid>.part.m4b` and publish with `os.replace`.
+  Never write ffmpeg directly to the final path: a failed run would be served
+  as a cached M4B on the next request.
+- The cache key includes title, author, language, backend, text, voice, cover
+  and `loudnorm`. Resolve the uploaded cover **before** hashing; otherwise a
+  new cover silently reuses the old file.
+- `audio_cleanup.delete_job_artifacts(kind="audiobook")` must remove audio,
+  cover, upload, meta and any old run-id temp files. Keep the delete button in
+  sync when adding new per-run artifacts.
+- The audiobook worker has its own queue (`AUDIOBOOK_TASK_QUEUE`) and must be
+  in both compose files and the split `news` profile.
 
 ## Collections (Phase 5)
 - Collections live in `collections.toml` (see `collections.toml.example`),

@@ -11,6 +11,25 @@ perfil y con un lote de 3 (`status: ok`, sin `TMPRL1103` en el historial).
 Quedan 6-10 (credenciales Modal, gate ZONOS2, vía B, merge). Los texto de
 abajo describen cómo quedó el sistema, no lo que falta.
 
+**Revisión de 6-10 (2026-10-30):**
+
+- **6 · Credenciales Modal: hecho en debwk** (`MODAL_TOKEN_ID`/`SECRET` en
+  `apps/news/.env`, `narration-modal-worker` en marcha). `MODAL_ENABLED` sigue
+  en `false` **a propósito**: el gasto Modal ahora es por operación (switches
+  `run_in_modal` de narración/lecciones/audiolibros y Phase 10.4 de voces;
+  los audiolibros rechazan Modal). Para gastar, activa `MODAL_ENABLED=true`
+  en la operación concreta.
+- **7 · Gate ZONOS2 y 8 · Gate VoxCPM2: sin ejecutar y opcionales** — solo
+  hacen falta para activar vía B (`zonos2`/`voxcpm2` por colección). Hoy
+  ninguna colección los declara; mantener dormidos salvo que se quiera el
+  producto vía B.
+- **9 · Activar vía B: no aplica aún** — `tech` usa `qwen3_tts` **local**
+  (`run_in_modal=false`), el resto edge/omni_voice.
+- **10 · Verificar: condicional** — solo después del paso 9.
+- **11 · Merge: obsoleto** — el merge al monorepo y el cutover de debwk ya se
+  hicieron (MERGE_PLAN P0-P10, 2026-10-19); la rama `phase-7.8-modal-tts` y su
+  PR ya no existen.
+
 ## 1. Namespace en el servidor (una vez)
 
 Un workflow y sus actividades viven en el mismo namespace, así que las dos

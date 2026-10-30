@@ -103,7 +103,7 @@ The stack is defined in `deploy/docker-compose.yml` with two overlays:
 
 | Overlay | File | Purpose |
 |---------|------|---------|
-| Base (Shape A) | `deploy/docker-compose.yml` | All 12 services on one host |
+| Base (Shape A) | `deploy/docker-compose.yml` | All 13 services on one host |
 | GPU reserve | `deploy/docker-compose.gpu.yml` | Adds NVIDIA GPU reservation to `gateway` |
 | Split (Shape B) | `deploy/docker-compose.split.yml` | Assigns services to `news` or `gateway` profiles |
 
@@ -119,11 +119,12 @@ docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
 ```
 
-Services started (12):
+Services started (13):
 - `api` (news-engine REST + GUI) — port `${API_PORT:-8000}`
 - `worker` (Temporal digest worker)
 - `narration-worker` (multi-speaker audio)
 - `doc-tts-worker` (document TTS)
+- `audiobook-worker` (M4B audiobooks)
 - `teacher-worker` (language lessons)
 - `voice-catalog-worker` (voice catalog sync)
 - `there` (WhatsApp gateway, internal)
@@ -328,7 +329,16 @@ curl -s -o /tmp/es.wav -w "%{http_code} %{content_type}\n" \
 Expect `200 audio/wav`. A `503` with *"requiere un fichero de referencia"*
 means `POCKET_TTS_REFERENCES` is unset or the WAV path is wrong. Sourcing
 these WAVs is the deployer's responsibility — use voices you are licensed to
-clone.
+clone (Kokoro's Apache-2.0 output works too: synthesize a stock id with
+`"engine":"kokoro"` and save the WAV).
+
+A `500` with *"Could not download the weights for the model with voice
+cloning … go to huggingface.co/kyutai/pocket-tts and accept the terms"* means
+the **gated** cloning checkpoint is unreachable: accept the terms on Hugging
+Face with the deployer's account and pass a token to the gateway
+(`HF_TOKEN` in `apps/gateway/.env`). The base model and the EN preset voices
+are public and keep working without it; only ES/FR stock voices (which render
+by cloning) need it.
 
 #### On-prem qwen3_tts with cloned voices
 
@@ -967,6 +977,23 @@ a full 24-voice batch no longer trips the server's history size limit. An
 upload to Modal is attempted **once**: it fails on configuration, not on
 flakiness, and an endless retry would wedge the workflow.
 
+**Diseñar en Modal (Phase 10.4).** La casilla "Ejecutar en Modal" de la
+tarjeta de voz custom, el flag `run_in_modal` de
+`POST /admin/voices/catalog/generate` y el `--modal` del CLI hacen que el
+workflow llame a `modal_client.design_voice` → función Modal `design_voice`
+(Qwen3-TTS VoiceDesign en L4, mismo muestreo y semilla que el worker local).
+Prerrequisitos en el host que lo ejecuta: `MODAL_ENABLED=true`,
+`MODAL_TOKEN_ID`/`MODAL_TOKEN_SECRET` y el app desplegado:
+
+```bash
+docker compose exec -T narration-modal-worker python -m modal deploy src/core/modal_app.py
+```
+
+Sin Modal configurado la actividad falla **non-retryable**
+("voice design requires modal..."): la casilla no degrada en silencio al
+worker local. El despliegue solo re-ejecuta las funciones de `modal_app.py`;
+si cambias ese fichero, vuelve a desplegarlo antes de usar el switch.
+
 #### Recovery after a migration
 
 `data/voices/` is git-ignored, so a new machine has no designed references.
@@ -1550,6 +1577,45 @@ responde 403 sin tocar código. Para retirar la cola por completo:
 `docker compose stop doc-tts-worker` (los jobs en vuelo quedan `GENERATING`;
 borra sus filas en `audio_jobs` si no te importan).
 
+### 13.7 Audiobooks M4B (Fase B2)
+
+Convierte un EPUB/PDF/TXT/MD en un **M4B con capítulos, metadatos y portada**
+desde `/ui/tools#tool-audiobook` o `POST /api/admin/audiobooks/submit`.
+
+```bash
+# Worker propio: un render M4B puede retener el lease TTS durante horas.
+docker compose up -d --build api audiobook-worker
+
+# Estado y descarga (siempre bajo /api/admin, nunca /api/api/...)
+curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/audiobooks/audiobook-ab12cd34ef56
+curl -OJ -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  http://localhost:8000/api/admin/audiobooks/audiobook-ab12cd34ef56/download
+```
+
+- La portada explícita se guarda en `data/audiobooks/covers/<run_id>.*`; si no
+  hay, se extrae del EPUB. El M4B se publica con `os.replace` solo cuando ffmpeg
+  termina: un fallo nunca deja un fichero parcial que parezca cacheado.
+- **Motores (Phase 11.10):** `edge`, `omni_voice` (gateway), `kokoro` (gateway,
+  pin `engine=kokoro`) y `qwen3_tts` **local** — el submit fija
+  `run_in_modal=False`, así la voz de catálogo se resuelve al clon
+  `<name>__qwen3_tts` y la síntesis va al gateway, nunca a Modal.
+  `zonos2`/`voxcpm2` se rechazan con 422: un audiolibro renderiza durante horas
+  y no gasta GPU de pago. El gateway debe arrancar con `TTS_ENGINE=routed` +
+  `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` (ver
+  `apps/gateway/.env.example`); para Qwen3 hace falta además el runtime local
+  de *On-prem qwen3_tts with cloned voices* (§8) con el overlay GPU.
+- La clave de caché incluye título, autor, idioma, motor, voz, portada y
+  `loudnorm`; cambiar cualquiera de ellos genera otro M4B.
+- Ajustes: `AUDIOBOOK_TASK_QUEUE` (cola del worker) y `AUDIOBOOK_DIR`
+  (`data/audiobooks`, compartido en el volumen `./data`). Subidas y metadatos
+  reutilizan `DOC_TTS_DIR`.
+- Limpieza: el botón de borrar de `/ui/tools` elimina audio, portada, subida,
+  metadatos y la fila de `audio_jobs`; también se puede borrar a mano
+  `data/audiobooks/{audio,covers}` y `data/doc_tts/{uploads,meta}`.
+- Rollback: `docker compose stop audiobook-worker`; los jobs en vuelo quedan
+  `GENERATING`. No hay kill switch de submit en esta fase.
+
 ---
 
 ## 14. Language teacher (Phase 7.12)
@@ -1908,7 +1974,7 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
   valor tecleado).
 - **Reinicio obligatorio**: los settings viven cacheados en cada proceso
   (`get_settings()`), así que la página recuerda el comando:
-  `docker compose restart api worker narration-worker doc-tts-worker teacher-worker voice-catalog-worker`.
+  `docker compose restart api worker narration-worker doc-tts-worker audiobook-worker teacher-worker voice-catalog-worker`.
 - **Límites conocidos**:
   - Solo añade/actualiza: no borra claves del `.env`.
   - Las variables que Docker fuerza en `environment:` (p.ej.

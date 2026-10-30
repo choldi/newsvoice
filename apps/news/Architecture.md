@@ -27,6 +27,8 @@ are the FastAPI microservices plus the Temporal activities in `src/workers/`.
 | **temporal-ui** | Web UI for workflows / schedules | `temporalio/ui` |
 | **worker** | Runs the digest workflow + activities | Python `temporalio.worker.Worker` |
 | **narration-worker** | Runs the narration workflow + activities | Python `temporalio.worker.Worker` |
+| **doc-tts-worker** | Long-document TTS (single MP3) | Python `temporalio.worker.Worker` |
+| **audiobook-worker** | EPUB/PDF → M4B with chapters, cover and metadata | Python `temporalio.worker.Worker` |
 | **api** | Business logic via REST endpoints | FastAPI + Python 3.11+ |
 | **llm** | Local inference server | `llama.cpp` (`/v1/chat/completions`) via LiteLLM |
 | **db** | Delivery history, dedup state | SQLite (`news.db`) |
@@ -77,18 +79,26 @@ asked for** (`tts_backend`, resolved outside the workflow by
 |---------|------|--------|
 | `edge` (default) | client-side `edge_tts.Communicate` | `.mp3` |
 | `omni_voice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
-| `qwen3_tts` | local gateway `engine=qwen3_tts` (default) or `modal_client.modal_tts()` when `run_in_modal` | `.wav` |
+| `kokoro` | same gateway POST with the sub-engine pinned (`engine=kokoro`) | `.wav` |
+| `qwen3_tts` | `modal_client.modal_tts()` — the digest carries no `run_in_modal` flag | `.wav` |
 | `zonos2` | `modal_client.modal_zonos2_tts()` | `.wav` |
 | `voxcpm2` | `modal_client.modal_voxcpm2_tts()` (48 kHz, Apache-2.0) | `.wav` |
 
-`qwen3_tts` runs locally on the gateway unless `run_in_modal` is set (Phase 10).
+A `qwen3_tts` render goes **local** (gateway `engine=qwen3_tts`) when its
+caller passes `run_in_modal=False` to `tts_backends.voice_for`/`synthesize`
+(Phase 10 switch): narration and lessons carry the explicit
+`NarrationSpec.run_in_modal` flag, and the **audiobook path always does** — a
+book renders for hours, so Modal would be unaffordable; `zonos2`/`voxcpm2`
+are rejected at audiobook submit (Phase 11.10). The digest and the voice
+preview keep the historical Modal call (they never pass the flag).
+
 The local engine has **no stock voices**, so a catalog profile name (committed
 or operator-designed) is registered once as a gateway clone pinned to
 `qwen3_tts` (`src/api/services/gateway_voices.py`), reusing the reference WAV
 and its `ref_text`; the assigned clone UUID then drives synthesis. Gateway-owned
 ids (stock ids and clone UUIDs) pass through untouched. Operator voices enter
 through the idempotent drop-in importer (`scripts/import_voice_dropin.py`):
-`voice.json` + a 5-30 s reference + its exact 100-600 character transcript are
+`voice.json` + a 5-30 s reference and its exact 100-600 character transcript are
 validated locally, then the profile and reference are written through the
 gateway and the `<name>__qwen3_tts` clone is registered (`--apply`; dry-run by
 default, `--reclone` after transcript fixes). The gateway launches `qwen-tts` as
@@ -105,7 +115,7 @@ extension-driven.
 
 ### The engine lease (Phase 8.1)
 
-The digest worker and the doc-tts worker are separate containers sharing one
+The digest, doc-tts and audiobook workers are separate containers sharing one
 `data/` volume, so synthesis is serialized by a **priority lease in SQLite**
 (migration `011_tts_lease.sql`, service `src/api/services/tts_lease.py`):
 
@@ -395,10 +405,13 @@ news-engine/
 │       ├── narration_workflows.py  # NarrationWorkflow + NarrationConfig
 │       ├── narration_activities.py # resolve script + render narration
 │       ├── run_narration_worker.py # narration worker (own task queue)
+│       ├── audiobook_workflows.py  # AudiobookWorkflow + config
+│       ├── audiobook_activities.py # extract chapters + render M4B
+│       ├── run_audiobook_worker.py # audiobook worker (own task queue)
 │       ├── trigger.py          # manual one-shot run (--collection)
 │       ├── trigger_narration.py # manual one-shot narration render
 │       └── schedule.py         # one Temporal schedule per collection
-├── data/                       # SQLite DB + tts_cache/ + narration/ (gitignored)
+├── data/                       # SQLite DB + tts_cache/ + narration/ + audiobooks/ (gitignored)
 ├── tests/
 │   ├── unit/
 │   └── integration/
