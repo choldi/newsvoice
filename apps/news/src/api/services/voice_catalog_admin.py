@@ -130,7 +130,11 @@ async def generated_voices() -> list[dict[str, Any]]:
     return rows
 
 
-async def start_generate(names: list[str] | None = None, upload: bool = False) -> str:
+async def start_generate(
+    names: list[str] | None = None,
+    upload: bool = False,
+    run_in_modal: bool = False,
+) -> str:
     """Start a voice catalog generation run in Temporal.
 
     The run is enqueued fire-and-forget: the workflow id is returned as soon as
@@ -140,6 +144,8 @@ async def start_generate(names: list[str] | None = None, upload: bool = False) -
     Args:
         names: Optional subset of profile names; empty means the whole catalog.
         upload: Also upload the produced references to the Modal Volume.
+        run_in_modal: Render the designs on Modal instead of the local GPU
+            worker (Phase 10.4; needs ``MODAL_ENABLED`` + credentials).
 
     Returns:
         The workflow id.
@@ -151,6 +157,7 @@ async def start_generate(names: list[str] | None = None, upload: bool = False) -
     config = VoiceCatalogConfig(
         names=list(names or []),
         upload=upload,
+        run_in_modal=run_in_modal,
         task_queue=settings.voice_catalog_task_queue,
         design_task_queue=settings.voice_design_task_queue,
     )
@@ -207,7 +214,11 @@ async def create_custom_voice(payload: CustomVoiceIn) -> dict[str, Any]:
     start_error = ""
     if payload.generate:
         try:
-            workflow_id = await start_generate(names=[profile.name], upload=payload.upload)
+            workflow_id = await start_generate(
+                names=[profile.name],
+                upload=payload.upload,
+                run_in_modal=payload.run_in_modal,
+            )
         except VoiceCatalogAdminError as exc:
             start_error = str(exc)
     return {"profile": profile, "workflow_id": workflow_id, "start_error": start_error}

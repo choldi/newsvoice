@@ -85,6 +85,8 @@ class CustomVoiceIn(BaseModel):
         role_hint: Intended use (anchor, cohost, narrator, ...).
         generate: Start the design workflow right after saving the profile.
         upload: Also upload the reference to the Modal Volume when starting.
+        run_in_modal: Render the design on Modal instead of the local GPU
+            worker (Phase 10.4 switch behind the GUI checkbox).
     """
 
     name: str = Field(..., min_length=1, max_length=64, description="Stable slug")
@@ -96,6 +98,9 @@ class CustomVoiceIn(BaseModel):
     role_hint: str = Field(default="", max_length=64, description="Intended role")
     generate: bool = Field(default=True, description="Queue the design workflow")
     upload: bool = Field(default=False, description="Upload the reference to Modal")
+    run_in_modal: bool = Field(
+        default=False, description="Design on Modal instead of the local GPU worker"
+    )
 
 
 class CustomVoiceOut(BaseModel):

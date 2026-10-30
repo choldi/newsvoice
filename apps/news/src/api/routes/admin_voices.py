@@ -139,10 +139,15 @@ class VoiceCatalogGenerateIn(BaseModel):
         names: Optional subset of profile names. Empty means every enabled
             profile that is missing or stale.
         upload: Also upload each generated reference to the Modal Volume.
+        run_in_modal: Render the designs on Modal instead of the local GPU
+            worker (Phase 10.4; needs ``MODAL_ENABLED`` + credentials).
     """
 
     names: list[str] = Field(default_factory=list, description="Profile names to generate")
     upload: bool = Field(default=False, description="Also upload to the Modal Volume")
+    run_in_modal: bool = Field(
+        default=False, description="Design on Modal instead of the local GPU worker"
+    )
 
 
 @router.get("/admin/voices/catalog", response_model=VoiceCatalogResponse)
@@ -182,7 +187,7 @@ async def voice_catalog_generate(payload: VoiceCatalogGenerateIn) -> dict[str, A
     """
     try:
         workflow_id = await voice_catalog_admin.start_generate(
-            names=payload.names, upload=payload.upload
+            names=payload.names, upload=payload.upload, run_in_modal=payload.run_in_modal
         )
     except voice_catalog_admin.VoiceCatalogAdminError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
