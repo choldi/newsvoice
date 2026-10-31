@@ -863,7 +863,7 @@ It also serves the staging endpoint the design box uploads to, so the server
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"   # once
-echo "VOICE_STAGING_API_KEY=<the value above>" >> ~/news-summary/.env
+echo "VOICE_STAGING_API_KEY=<the value above>" >> ~/newsvoice/apps/news/.env
 docker compose up -d api voice-catalog-worker
 ```
 
@@ -878,13 +878,20 @@ NVIDIA runtime registered, while the CUDA stack already lives in a venv
 One-time setup:
 
 ```bash
-cd ~/news-summary
+cd ~/newsvoice/apps/news
 
-# 1. the Temporal client plus httpx for the staging upload, on top of the CUDA
-#    stack already in that venv
-~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings httpx
+# 1. the Temporal client plus the pieces the monorepo import chain needs, on
+#    top of the CUDA stack already in that venv. tts_contract is a workspace
+#    member (not on PyPI); modal stays pinned to the lock's version.
+~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings httpx \
+  "modal==1.6.2" "opentelemetry-api>=1.27.0" "opentelemetry-sdk>=1.27.0" \
+  "opentelemetry-instrumentation-fastapi>=0.48b0" \
+  -e ~/newsvoice/libs/tts_contract
 
-# 2. worker unit: same box, so Temporal and the staging API are on localhost
+# 2. worker unit: same box, so Temporal and the staging API are on localhost.
+#    WorkingDirectory must be the monorepo checkout (the legacy ~/news-summary
+#    path predates the merge), and the modal SDK reads its tokens from the
+#    process environment — pydantic's .env is not enough for it.
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/news-engine-voice-worker.service <<'UNIT'
 [Unit]
@@ -893,12 +900,15 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=%h/news-summary
+WorkingDirectory=%h/newsvoice/apps/news
 Environment=PYTHONUNBUFFERED=1
 Environment=TEMPORAL_HOST=127.0.0.1:7233
 # The design activity POSTs the WAV to the server API, which is this same box.
 Environment=VOICE_STAGING_URL=http://127.0.0.1:8000
 Environment=VOICE_STAGING_API_KEY=<same value as VOICE_STAGING_API_KEY in .env>
+# Required only for the Phase 10.4 "Ejecutar en Modal" switch.
+Environment=MODAL_TOKEN_ID=<same value as MODAL_TOKEN_ID in .env>
+Environment=MODAL_TOKEN_SECRET=<same value as MODAL_TOKEN_SECRET in .env>
 ExecStart=%h/qwen3-tts/venv/bin/python -m src.workers.run_voice_worker --role design
 Restart=on-failure
 RestartSec=5
