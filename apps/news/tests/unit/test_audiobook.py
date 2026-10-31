@@ -124,6 +124,60 @@ async def test_audiobook_backend_synthesis_goes_through_the_engine(tmp_path, mon
     assert res.chapters == 2
 
 
+@pytest.mark.asyncio
+async def test_concat_lists_carry_absolute_paths(tmp_path, monkeypatch) -> None:
+    """ffmpeg resolves concat entries against the list file's directory.
+
+    Relative entries duplicated the tmp prefix in the real render (Phase 11.9:
+    `tmp/data/audiobooks/..._ch0000.wav` -> exit 254), and every unit test
+    mocked ffmpeg, so the lists themselves are asserted here: one long chapter
+    forces the inner chunk concat, the second chapter forces the merge list.
+    """
+    from src.api.models.narration import TTSBackend
+
+    service = AudiobookService(base_dir=str(tmp_path))
+    lists: list[str] = []
+
+    async def fake_synth(backend, text, voice, language, *, run_in_modal=None):
+        return b"RIFF" + b"\x00" * 40
+
+    async def fake_voice_for(backend, voice, language, *, run_in_modal=None):
+        return voice or "es-mx-male"
+
+    monkeypatch.setattr(audiobook_module, "_probe_duration", lambda p: 1.0)
+    monkeypatch.setattr("src.api.services.tts_backends.synthesize", fake_synth)
+    monkeypatch.setattr("src.api.services.tts_backends.voice_for", fake_voice_for)
+
+    def fake_run(cmd, check=True, timeout=3600, **kw):
+        if cmd[0] == "ffprobe":
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"1.0\n")
+        if cmd[0] == "ffmpeg" and "-f" in cmd and "concat" in cmd:
+            list_path = cmd[cmd.index("-i") + 1]
+            lists.append(Path(list_path).read_text())
+        if cmd[0] in {"ffmpeg", "ffprobe"}:
+            Path(cmd[-1]).write_bytes(b"fake")
+            return subprocess.CompletedProcess(cmd, 0)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    long_chapter = "Hola, esto es una frase larga. " * 90
+    res = await service.render_m4b(
+        text=f"# Cap 1\n{long_chapter}\n\n# Cap 2\nMundo",
+        title="T",
+        voice="es-mx-male",
+        language="es",
+        backend=TTSBackend.KOKORO,
+        resume=False,
+    )
+
+    assert res.chapters == 2
+    assert len(lists) >= 2, "the chunk concat and the chapter merge both write lists"
+    for content in lists:
+        for line in content.strip().splitlines():
+            assert line.startswith("file '/"), f"concat entry must be absolute: {line}"
+
+
 class _FakeUpload:
     filename = "libro.epub"
 

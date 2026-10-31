@@ -312,7 +312,7 @@ class AudiobookService:
                 mode="w", suffix=".txt", delete=False, dir=str(self._tmp_dir)
             ) as f:
                 for cf in chapter_files:
-                    f.write(f"file '{cf}'\n")
+                    f.write(f"file '{Path(cf).resolve()}'\n")
                 concat_list = f.name
             merged = self._tmp_dir / f"{digest[:12]}_merged.mp3"
             try:
@@ -596,7 +596,7 @@ class AudiobookService:
             mode="w", suffix=".txt", delete=False, dir=str(self._tmp_dir)
         ) as f:
             for cf in chunk_files:
-                f.write(f"file '{cf}'\n")
+                f.write(f"file '{Path(cf).resolve()}'\n")
             list_path = f.name
         try:
             cmd = [
