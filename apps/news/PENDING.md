@@ -30,17 +30,18 @@ abajo describen cómo quedó el sistema, no lo que falta.
   hicieron (MERGE_PLAN P0-P10, 2026-10-19); la rama `phase-7.8-modal-tts` y su
   PR ya no existen.
 
-**Hallazgo nuevo (2026-10-31) — el cost tracking envenena al SDK de Modal:**
-`modal_cost.billing_snapshot`/`rate_card` llaman a la API **privada**
-`modal._workspace`; el primer snapshot sustituye el client global del proceso
-y toda llamada modal posterior se cuelga para siempre con *"RPC request … made
-outside of task context"* (reproducido con modal 1.6.2 **y** 1.6.3, y con el
-worker y sin él). `modal_client.design_voice` ya lo evita (sin `measure`);
-los caminos `measure()`-envueltos — `modal_tts`, `modal_zonos2_tts`,
-`modal_voxcpm2_tts` y `upload_voice` — **se colgarán en cuanto se activen**
-(vía B o `--upload`). Antes de habilitarlos: reescribir esos sondeos en
-`modal_cost` (REST directo con el token, o rates estáticos de settings y sin
-snapshots) y añadir un test que invierta tras un snapshot.
+**Hallazgo (2026-10-31) — resuelto: el cost tracking envenenaba al SDK:**
+`modal_cost.billing_snapshot`/`rate_card` llamaban a la API **privada**
+`modal._workspace`; el primer snapshot sustituía el client global del proceso
+y toda llamada modal posterior se colgaba para siempre con *"RPC request …
+made outside of task context"* (reproducido con modal 1.6.2 **y** 1.6.3).
+**Solución aplicada:** se retiró el billing (snapshots, deltas y rates en
+vivo); `modal_cost` solo mide wall-clock × rates estáticos de settings y
+`billed_delta_usd` queda siempre 0. `modal_client.design_voice` vuelve a ir
+envuelto en `measure()`. Las tags (`episode_tags` → `modal.app._App`) son de
+la misma familia privada: el probe en debwk (2026-10-31) confirmó que tras
+usarlas el siguiente RPC se cuelga, así que `modal_tags_enabled` queda
+**desactivado por defecto** hasta que exista una vía pública.
 
 ## 1. Namespace en el servidor (una vez)
 

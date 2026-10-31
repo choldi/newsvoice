@@ -1118,9 +1118,13 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       `run_in_modal=True` → `Voice designed ... design_seconds=72.47
       sample_rate=24000` → perfil `generada`. Ojo: los métodos de clase de
       Modal se invocan vía `modal.Cls.from_name(...)` (el `Function.from_name`
-      directo no resuelve los métodos de clase) y `modal_cost.measure` no
-      rodea esta llamada (su sondeo de billing envenena al SDK; ver
-      PENDING.md).
+      directo no resuelve los métodos de clase). El sondeo de billing que
+      envenenaba al SDK se retiró: `modal_cost.measure` vuelve a rodear esta
+      llamada y registra coste por wall-clock con rates estáticos. Las tags
+      (`episode_tags`, `_App`) quedan **desactivadas por defecto** porque son
+      de la misma familia de API privada y envenenan el cliente (probado en
+      debwk 2026-10-31: el siguiente RPC se cuelga con *"outside of task
+      context"*); re-activar solo cuando exista una vía pública. Ver PENDING.md.
 - [x] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
       incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
       se desea forzar. Documentar en `Architecture.md`/`Deploy.md`. Hecho:

@@ -1,7 +1,7 @@
-"""Unit tests for Modal cost measurement and reconciliation (Phase 7.17)."""
+"""Unit tests for Modal wall-clock cost measurement (Phase 7.17)."""
 
-from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +10,6 @@ from src.api.db.database import ModalSpendRepository, get_db
 from src.core import modal_cost
 from src.core.config import settings
 from src.core.modal_cost import (
-    BillingSnapshot,
     CallCost,
     RateCard,
     episode_tags,
@@ -84,21 +83,10 @@ def test_fallback_rates_match_settings() -> None:
     assert card.gpu_per_hour["h100"] == Decimal(str(settings.modal_usd_per_gpu_second_h100)) * 3600
 
 
-# --- billing summary reconciliation ----------------------------------------
-
-
-def test_billing_delta_positive_and_clamped() -> None:
-    before = BillingSnapshot(metered_cost=1.0, credits_consumed=0.5, at=datetime.now(UTC))
-    after = BillingSnapshot(metered_cost=1.25, credits_consumed=0.7, at=datetime.now(UTC))
-    assert modal_cost.billing_delta(before, after) == pytest.approx(0.25)
-    assert modal_cost.billing_delta(after, before) == 0.0
-    assert modal_cost.billing_delta(None, after) == 0.0
-    assert modal_cost.billing_delta(before, None) == 0.0
-
-
-async def test_billing_snapshot_disabled_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "modal_enabled", False)
-    assert await modal_cost.billing_snapshot() is None
+async def test_rate_card_is_static_fallback() -> None:
+    """The live workspace rate card is retired; pricing is always static."""
+    card = await modal_cost.rate_card()
+    assert card == modal_cost._fallback_rates()
 
 
 # --- ledger writes ---------------------------------------------------------
@@ -117,14 +105,13 @@ async def test_record_call_writes_measured_columns() -> None:
         wall_seconds=12.5,
         gpu_seconds=12.5,
         cost_usd=0.0028,
-        billed_delta_usd=0.001,
     )
     await record_call(cost, audio_seconds=9.0)
     row = await _last_row()
     assert row["cost_source"] == "runtime_rates"
     assert row["gpu_type"] == "l4"
     assert row["wall_seconds"] == pytest.approx(12.5)
-    assert row["billed_delta_usd"] == pytest.approx(0.001)
+    assert row["billed_delta_usd"] == pytest.approx(0.0)
 
 
 async def test_record_call_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,21 +124,6 @@ async def test_record_call_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> No
     await record_call(cost)  # must not raise
 
 
-async def test_record_billing_delta_skips_zero() -> None:
-    await modal_cost.record_billing_delta(0.0, collection="tech")
-    async with get_db() as db:
-        async with db.execute("SELECT COUNT(*) FROM modal_spend") as cur:
-            (count,) = await cur.fetchone()
-    assert count == 0
-
-
-async def test_record_billing_delta_writes_row() -> None:
-    await modal_cost.record_billing_delta(0.2, collection="tech", run_id="r1", wall_seconds=42.0)
-    row = await _last_row()
-    assert row["cost_source"] == "billing_delta"
-    assert row["cost_usd"] == pytest.approx(0.2)
-
-
 # --- measure ---------------------------------------------------------------
 
 
@@ -159,13 +131,15 @@ async def test_measure_returns_result_and_cost() -> None:
     async def _call() -> bytes:
         return b"audio"
 
-    result, cost = await measure(_call(), backend="qwen3_tts", snapshot_billing=False)
+    result, cost = await measure(_call(), backend="qwen3_tts")
     assert result == b"audio"
     assert cost is not None
     assert cost.gpu_type == "l4"
     assert cost.cost_usd >= 0.0
+    assert cost.billed_delta_usd == 0.0
     row = await _last_row()
     assert row["cost_source"] == "runtime_rates"
+    assert row["billed_delta_usd"] == pytest.approx(0.0)
 
 
 async def test_measure_disabled_tracking_returns_none_cost(
@@ -176,7 +150,7 @@ async def test_measure_disabled_tracking_returns_none_cost(
     async def _call() -> int:
         return 7
 
-    result, cost = await measure(_call(), backend="judge", snapshot_billing=False)
+    result, cost = await measure(_call(), backend="judge")
     assert result == 7
     assert cost is None
 
@@ -199,6 +173,23 @@ async def test_episode_tags_best_effort_on_failure(monkeypatch: pytest.MonkeyPat
         pass
     apply.assert_awaited_once()
     assert apply.await_args.args[0]["collection"] == "tech"
+
+
+def test_tags_are_disabled_by_default() -> None:
+    """``_App`` poisons the Modal client, so tagging stays opt-in."""
+    assert settings.modal_tags_enabled is False
+
+
+# --- retired billing -------------------------------------------------------
+
+
+def test_source_has_no_private_billing_probe() -> None:
+    """The private workspace/billing SDK is gone: it poisoned the client."""
+    source = Path(modal_cost.__file__).read_text(encoding="utf-8")
+    assert "modal._workspace" not in source
+    assert "_load_rates" not in source
+    assert "billing_snapshot" not in source
+    assert "record_billing_delta" not in source
 
 
 # --- schema ----------------------------------------------------------------

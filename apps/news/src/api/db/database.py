@@ -1075,10 +1075,10 @@ class ModalSpendRepository:
             audio_seconds: Optional audio duration produced.
             cache_hit: True when the call was served from cache (zero cost).
             wall_seconds: Optional client-observed wall-clock seconds.
-            cost_source: How cost_usd was derived ('estimate', 'runtime_rates'
-                or 'billing_delta').
+            cost_source: How cost_usd was derived ('estimate' or 'runtime_rates';
+                'billing_delta' is retired).
             gpu_type: Optional short GPU name ('l4', 'h100').
-            billed_delta_usd: Optional billing-summary delta across the call.
+            billed_delta_usd: Retired billing-summary delta; always 0.
         """
         query = """
             INSERT INTO modal_spend (

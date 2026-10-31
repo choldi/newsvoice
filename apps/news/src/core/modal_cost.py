@@ -1,15 +1,10 @@
-"""Measure and reconcile the real cost of Modal calls (Phase 7.17).
+"""Measure the real cost of Modal calls from wall-clock time (Phase 7.17).
 
-Modal exposes no per-call price: :meth:`Workspace.billing.report` is bucketed by
-hour and object, and :meth:`Workspace.billing.summary` is a whole-workspace
-cycle total. Two complementary measurements are therefore recorded here:
-
-* ``runtime_rates`` -- wall-clock seconds of the call multiplied by the live
-  rate card (:meth:`Workspace.billing.rates`). Real-time and per call, but a
-  slight upper bound: it includes unbilled queue and network time.
-* ``billing_delta`` -- the change in the workspace billing summary across a
-  call or an episode. Ground truth, but coarse: the summary lags and covers the
-  whole workspace, so a short call usually reads back as zero.
+Modal exposes no per-call price and its private workspace/billing API poisons
+the process-global client (every later RPC hangs), so billing reconciliation is
+retired: the wall-clock cost -- call seconds multiplied by the static rate card
+-- is the ledger. ``billed_delta_usd`` stays in the schema as a retired column
+that is always zero.
 
 Everything here is best-effort: a failure degrades to a log line and never
 propagates into the render path. ``modal`` is imported lazily so importing this
@@ -23,7 +18,6 @@ from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, TypeVar
 
@@ -41,11 +35,9 @@ BACKEND_GPU: dict[str, str | None] = {
     "zonos2": "h100",
     "voxcpm2": "l4",
     "judge": "l4",
+    "design": "l4",
     "upload_voice": None,
 }
-
-#: Prefix Modal uses for the per-GPU hourly rate keys in the rate card.
-_GPU_RATE_PREFIX = "gpu_hour_cost_"
 
 
 @dataclass(frozen=True)
@@ -86,8 +78,8 @@ class CallCost:
         wall_seconds: Client-observed wall-clock seconds around the call.
         gpu_seconds: GPU seconds billed (equal to ``wall_seconds`` for GPU runs).
         cost_usd: Cost derived from wall-clock time and the rate card.
-        billed_delta_usd: Billing-summary delta across the call, when measured.
-        cost_source: ``runtime_rates`` or ``billing_delta``.
+        billed_delta_usd: Retired billing-summary delta; always zero.
+        cost_source: ``runtime_rates``.
     """
 
     backend: str
@@ -99,26 +91,9 @@ class CallCost:
     cost_source: str = "runtime_rates"
 
 
-@dataclass(frozen=True)
-class BillingSnapshot:
-    """A point-in-time read of the workspace billing summary.
-
-    Attributes:
-        metered_cost: Workspace cost so far this cycle, before adjustments.
-        credits_consumed: Plan credits consumed so far this cycle.
-        at: When the snapshot was taken (UTC).
-    """
-
-    metered_cost: float
-    credits_consumed: float
-    at: datetime
-
-
 #: Per-call context (collection, run id, stage) recorded alongside each row.
 _cost_context: ContextVar[dict[str, str]] = ContextVar("modal_cost_context", default={})
 
-_RATES_CACHE: tuple[float, RateCard] | None = None
-_WORKSPACE: Any = None
 _APP: Any = None
 
 
@@ -190,119 +165,22 @@ def _fallback_rates() -> RateCard:
     )
 
 
-async def _load_rates() -> RateCard:
-    """Fetch the live rate card from the workspace.
-
-    Returns:
-        The parsed rate card.
-
-    Raises:
-        Exception: Whatever the Modal SDK raises, for the caller to fall back on.
-    """
-    from modal._workspace import _Workspace
-
-    workspace = _workspace_handle(_Workspace)
-    rates = await workspace.billing.rates()
-    gpu: dict[str, Decimal] = {}
-    for key in rates:
-        if key.startswith(_GPU_RATE_PREFIX):
-            gpu[key[len(_GPU_RATE_PREFIX) :]] = Decimal(str(rates[key]))
-    return RateCard(
-        cpu_per_hour=Decimal(str(rates["cpu_hour_cost"])),
-        mem_per_hour=Decimal(str(rates["mem_gib_hour_cost"])),
-        gpu_per_hour=gpu,
-    )
-
-
-def _workspace_handle(workspace_cls: Any) -> Any:
-    """Return a cached, hydrated-on-use workspace handle.
-
-    Args:
-        workspace_cls: ``modal._workspace._Workspace`` class.
-
-    Returns:
-        A reusable workspace handle.
-    """
-    global _WORKSPACE
-    if _WORKSPACE is None:
-        _WORKSPACE = workspace_cls.from_context()
-    return _WORKSPACE
-
-
 async def rate_card() -> RateCard:
-    """Return the rate card, cached for ``settings.modal_rates_cache_seconds``.
+    """Return the static rate card built from settings.
 
-    Falls back to the static card from settings whenever Modal is disabled or
-    the live call fails, so pricing never raises into the caller.
+    The live Modal rate card came from the private workspace API, which poisons
+    the client, so pricing always uses the configured L4/H100 rates.
 
     Returns:
         The rate card to price calls with.
     """
-    global _RATES_CACHE
-    now = time.monotonic()
-    if _RATES_CACHE is not None and _RATES_CACHE[0] > now:
-        return _RATES_CACHE[1]
-    if not settings.modal_enabled:
-        card = _fallback_rates()
-    else:
-        try:
-            card = await _load_rates()
-        except Exception as exc:  # noqa: BLE001 - fall back, never fail the call
-            logger.warning("modal_rates_unavailable", error=str(exc))
-            card = _fallback_rates()
-    _RATES_CACHE = (now + settings.modal_rates_cache_seconds, card)
-    return card
+    return _fallback_rates()
 
 
 def reset_caches() -> None:
-    """Drop the cached rate card and Modal handles (mainly for tests)."""
-    global _RATES_CACHE, _WORKSPACE, _APP
-    _RATES_CACHE = None
-    _WORKSPACE = None
+    """Drop the cached Modal app handle (mainly for tests)."""
+    global _APP
     _APP = None
-
-
-async def billing_snapshot() -> BillingSnapshot | None:
-    """Read the workspace billing summary, or ``None`` when tracking is off.
-
-    Best-effort: any failure is logged and reported as ``None`` so a summary
-    hiccup can never fail a render.
-
-    Returns:
-        The snapshot, or ``None`` when disabled or unavailable.
-    """
-    if not settings.modal_enabled or not settings.modal_billing_tracking_enabled:
-        return None
-    try:
-        from modal._workspace import _Workspace
-
-        workspace = _workspace_handle(_Workspace)
-        summary = await workspace.billing.summary()
-        credits = abs(float(summary.adjustments.get("Credits", 0)))
-        return BillingSnapshot(
-            metered_cost=float(summary.metered_cost),
-            credits_consumed=credits,
-            at=datetime.now(UTC),
-        )
-    except Exception as exc:  # noqa: BLE001 - best-effort by design
-        logger.warning("modal_billing_snapshot_failed", error=str(exc))
-        return None
-
-
-def billing_delta(before: BillingSnapshot | None, after: BillingSnapshot | None) -> float:
-    """Return the non-negative metered-cost change between two snapshots.
-
-    Args:
-        before: Snapshot taken before the work.
-        after: Snapshot taken after the work.
-
-    Returns:
-        The cost delta in USD, clamped at zero when a snapshot is missing or the
-        summary moved backwards.
-    """
-    if before is None or after is None:
-        return 0.0
-    return max(0.0, after.metered_cost - before.metered_cost)
 
 
 async def record_call(cost: CallCost, *, audio_seconds: float | None = None) -> None:
@@ -347,75 +225,21 @@ async def record_call(cost: CallCost, *, audio_seconds: float | None = None) -> 
     )
 
 
-async def record_billing_delta(
-    delta_usd: float,
-    *,
-    collection: str,
-    run_id: str = "",
-    backend: str = "episode",
-    stage: str = "tts_episode",
-    wall_seconds: float = 0.0,
-) -> None:
-    """Persist one episode-level billing-summary reconciliation row.
-
-    Best-effort, like :func:`record_call`. A zero delta is not recorded: the
-    summary has not caught up yet, and a no-op row only adds noise.
-
-    Args:
-        delta_usd: Metered-cost change across the episode.
-        collection: Collection that ran.
-        run_id: Run id the episode belongs to.
-        backend: Backend label for the row.
-        stage: Stage label for the row.
-        wall_seconds: Episode wall-clock seconds, when known.
-    """
-    if delta_usd <= 0:
-        return
-    from src.api.db.database import ModalSpendRepository
-
-    try:
-        await ModalSpendRepository().record(
-            collection=collection,
-            stage=stage,
-            backend=backend,
-            run_id=run_id or None,
-            gpu_seconds=0.0,
-            cost_usd=round(delta_usd, 6),
-            wall_seconds=round(wall_seconds, 2),
-            cost_source="billing_delta",
-        )
-    except Exception as exc:  # noqa: BLE001 - best-effort accounting
-        logger.warning("modal_billing_delta_record_failed", error=str(exc))
-    logger.info(
-        "modal_billing_delta",
-        collection=collection,
-        run_id=run_id,
-        delta_usd=round(delta_usd, 6),
-    )
-
-
 async def measure(
     awaitable: Awaitable[T],
     *,
     backend: str,
-    snapshot_billing: bool | None = None,
 ) -> tuple[T, CallCost | None]:
     """Run a Modal awaitable and measure its cost.
 
     Args:
         awaitable: The pending Modal call.
         backend: Backend serving the call; selects the GPU for pricing.
-        snapshot_billing: Override for the per-call billing snapshot; defaults
-            to ``settings.modal_billing_snapshot_per_call``.
 
     Returns:
         A ``(result, cost)`` tuple. ``cost`` is ``None`` when cost tracking is
         disabled.
     """
-    snapshot = (
-        settings.modal_billing_snapshot_per_call if snapshot_billing is None else snapshot_billing
-    )
-    before = await billing_snapshot() if snapshot else None
     started = time.monotonic()
     result = await awaitable
     wall_seconds = time.monotonic() - started
@@ -426,16 +250,13 @@ async def measure(
     card = await rate_card()
     gpu = BACKEND_GPU.get(backend)
     cost_usd = compute_cost_usd(wall_seconds=wall_seconds, gpu=gpu, card=card)
-    billed_delta = 0.0
-    if before is not None:
-        billed_delta = billing_delta(before, await billing_snapshot())
     cost = CallCost(
         backend=backend,
         gpu_type=gpu,
         wall_seconds=wall_seconds,
         gpu_seconds=wall_seconds if gpu else 0.0,
         cost_usd=cost_usd,
-        billed_delta_usd=billed_delta,
+        billed_delta_usd=0.0,
     )
     await record_call(cost)
     return result, cost
