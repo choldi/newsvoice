@@ -13,8 +13,13 @@
 # al parar el gateway. El lease se libera al final, despues de restaurarlo.
 #
 # Uso:  ./scripts/design_window.sh [timeout_s]
-# Env:  TTS_GATEWAY_UNIT   unit del gateway (por defecto autodetecta
+# Env:  TTS_GATEWAY_BACKEND unit|compose  backend del gateway (autodetecta
+#                          compose si el contenedor `gateway` esta corriendo)
+#       TTS_GATEWAY_UNIT   unit del gateway (por defecto autodetecta
 #                          tts-api.service y omnivoice-api.service)
+#       TTS_COMPOSE_FILE   compose base (por defecto deploy/docker-compose.yml)
+#       TTS_GATEWAY_SERVICE servicio compose del gateway (gateway)
+#       GPU=1              añade deploy/docker-compose.gpu.yml al compose
 #       DESIGN_WINDOW_POLL    segundos entre comprobaciones (15)
 #       DESIGN_WINDOW_TIMEOUT tiempo de espera de workflows (3600)
 #       DESIGN_WINDOW_LEASE_TIMEOUT  espera del lease (900)
@@ -79,13 +84,78 @@ resolve_gateway_unit() {
   printf ''
 }
 
-GATEWAY_UNIT="$(resolve_gateway_unit)"
-if [[ -z "$GATEWAY_UNIT" ]]; then
-  log "ERROR: no encuentro la unit del gateway (tts-api.service ni omnivoice-api.service)"
-  log "define TTS_GATEWAY_UNIT=<unit> si usa otro nombre"
-  exit 1
+# Compose backend: the production deploy runs the gateway as a container, not a
+# systemd unit. Use the same base file as scripts/deploy.sh and honour GPU=1 so
+# stop/start target the exact deployment (the overlay only adds reservations;
+# the running container is the same service/project either way).
+COMPOSE_BASE="${TTS_COMPOSE_FILE:-$PROJECT_DIR/../../deploy/docker-compose.yml}"
+COMPOSE_GPU="$PROJECT_DIR/../../deploy/docker-compose.gpu.yml"
+COMPOSE=(docker compose -f "$COMPOSE_BASE")
+if [[ "${GPU:-0}" == "1" ]]; then
+  COMPOSE+=(-f "$COMPOSE_GPU")
 fi
-log "gateway: $GATEWAY_UNIT"
+GATEWAY_SERVICE="${TTS_GATEWAY_SERVICE:-gateway}"
+
+compose_gateway_id() {
+  command -v docker >/dev/null 2>&1 || return 0
+  "${COMPOSE[@]}" ps -q "$GATEWAY_SERVICE" 2>/dev/null | head -n1 || true
+}
+
+GATEWAY_BACKEND="${TTS_GATEWAY_BACKEND:-}"
+if [[ -z "$GATEWAY_BACKEND" ]]; then
+  if [[ -n "$(compose_gateway_id)" ]]; then
+    GATEWAY_BACKEND=compose
+  else
+    GATEWAY_BACKEND=unit
+  fi
+fi
+
+GATEWAY_UNIT=""
+case "$GATEWAY_BACKEND" in
+  compose)
+    log "gateway: compose service $GATEWAY_SERVICE ($COMPOSE_BASE)"
+    ;;
+  unit)
+    GATEWAY_UNIT="$(resolve_gateway_unit)"
+    if [[ -z "$GATEWAY_UNIT" ]]; then
+      log "ERROR: no encuentro la unit del gateway (tts-api.service ni omnivoice-api.service)"
+      log "define TTS_GATEWAY_UNIT=<unit> o TTS_GATEWAY_BACKEND=compose"
+      exit 1
+    fi
+    log "gateway: $GATEWAY_UNIT"
+    ;;
+  *)
+    log "ERROR: TTS_GATEWAY_BACKEND desconocido: $GATEWAY_BACKEND (usa unit|compose)"
+    exit 1
+    ;;
+esac
+
+gateway_stop() {
+  if [[ "$GATEWAY_BACKEND" == "compose" ]]; then
+    "${COMPOSE[@]}" stop "$GATEWAY_SERVICE" || true
+  else
+    systemctl --user stop "$GATEWAY_UNIT" || true
+  fi
+}
+
+gateway_start() {
+  if [[ "$GATEWAY_BACKEND" == "compose" ]]; then
+    "${COMPOSE[@]}" start "$GATEWAY_SERVICE" || true
+  else
+    systemctl --user start "$GATEWAY_UNIT" || true
+  fi
+}
+
+gateway_active() {
+  if [[ "$GATEWAY_BACKEND" == "compose" ]]; then
+    local id
+    id="$(compose_gateway_id)"
+    [[ -n "$id" ]] &&
+      [[ "$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || true)" == "true" ]]
+  else
+    systemctl --user is-active "$GATEWAY_UNIT" >/dev/null 2>&1
+  fi
+}
 
 temporal_cli() {
   docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T temporal temporal "$@"
@@ -110,7 +180,7 @@ pollers() {
 }
 
 if [[ -z "${TTS_WAS_ACTIVE:-}" ]]; then
-  if systemctl --user is-active "$GATEWAY_UNIT" >/dev/null 2>&1; then
+  if gateway_active; then
     TTS_WAS_ACTIVE=1
   else
     TTS_WAS_ACTIVE=0
@@ -122,8 +192,8 @@ cleanup() {
   log "cerrando la ventana (exit=$rc)"
   systemctl --user stop news-engine-voice-worker.service || true
   if [[ "$TTS_WAS_ACTIVE" == "1" ]]; then
-    log "restaurando el gateway ($GATEWAY_UNIT)"
-    systemctl --user start "$GATEWAY_UNIT" || true
+    log "restaurando el gateway ($GATEWAY_BACKEND)"
+    gateway_start
   fi
   if [[ -n "$LEASE_PID" ]] && kill -0 "$LEASE_PID" 2>/dev/null; then
     # Liberar el lease DESPUES de restaurar el gateway: si no, un digest que
@@ -165,8 +235,8 @@ else
   log "lease adquirido por $LEASE_OWNER"
 fi
 
-log "1/5 parando el gateway ($GATEWAY_UNIT) para liberar VRAM"
-systemctl --user stop "$GATEWAY_UNIT" || true
+log "1/5 parando el gateway ($GATEWAY_BACKEND) para liberar VRAM"
+gateway_stop
 
 if command -v ollama >/dev/null 2>&1; then
   log "2/5 descargando de la VRAM los modelos de Ollama"
