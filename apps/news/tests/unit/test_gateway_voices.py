@@ -107,6 +107,39 @@ async def test_missing_clone_is_registered_and_cached(
     service.list_cloned.assert_awaited_once()
 
 
+async def test_clone_name_resolves_to_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A requested gateway clone name resolves to its UUID without cloning."""
+    service = AsyncMock()
+    service.list_cloned.return_value = [
+        {"id": "uuid-pocket", "name": "marie_fr", "engine": "pocket_tts"},
+        {"id": "uuid-qwen", "name": "marie_fr__qwen3_tts", "engine": "qwen3_tts"},
+    ]
+    monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)
+
+    first = await gateway_voices.resolve_gateway_qwen_voice("marie_fr__qwen3_tts", "fr")
+    second = await gateway_voices.resolve_gateway_qwen_voice("marie_fr__qwen3_tts", "fr")
+
+    assert first == "uuid-qwen"
+    assert second == "uuid-qwen"
+    service.clone_voice.assert_not_called()
+    service.list_cloned.assert_awaited_once()
+
+
+async def test_missing_clone_name_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unknown gateway clone name is left for the gateway to reject loudly."""
+    service = AsyncMock()
+    service.list_cloned.return_value = [
+        {"id": "uuid-pocket", "name": "marie_fr", "engine": "pocket_tts"},
+    ]
+    monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)
+
+    resolved = await gateway_voices.resolve_gateway_qwen_voice("ghost__qwen3_tts", "fr")
+
+    assert resolved == "ghost__qwen3_tts"
+    assert "ghost__qwen3_tts" not in gateway_voices._RESOLVED
+    service.clone_voice.assert_not_called()
+
+
 async def test_gateway_failure_degrades_to_original(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

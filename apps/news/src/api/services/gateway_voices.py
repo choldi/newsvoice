@@ -108,9 +108,11 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
 
     Gateway-native ids (stock ids and clone UUIDs) are returned unchanged. A
     catalog profile name is registered once as a ``qwen3_tts`` clone of its
-    reference WAV; the returned clone UUID then drives the synthesis. When
-    registration is impossible (no reference, unreachable gateway, gateway
-    error) the voice is returned unchanged so the caller keeps its usual
+    reference WAV; the returned clone UUID then drives the synthesis. A
+    requested gateway clone name (``<voice>__qwen3_tts``) is looked up in the
+    gateway's cloned listing and resolved to its UUID. When registration or
+    lookup is impossible (no reference, unreachable gateway, gateway error) the
+    voice is returned unchanged so the caller keeps its usual
     failure/fallback behaviour.
 
     Args:
@@ -127,8 +129,12 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
     cached = _RESOLVED.get(requested)
     if cached is not None:
         return cached
-    wav = await reference_audio(requested)
+
     profile = await _profile(requested)
+    if profile is None and requested.endswith(CLONE_SUFFIX):
+        return await _resolve_clone_name(requested)
+
+    wav = await reference_audio(requested)
     if wav is None or profile is None:
         return requested
 
@@ -138,7 +144,7 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
             return cached
         try:
             service = VoicesService()
-            found = await _find_registered(service, requested)
+            found = await _find_registered(service, clone_name_for(requested))
             if found:
                 _RESOLVED[requested] = found
                 return found
@@ -166,17 +172,48 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
             return requested
 
 
-async def _find_registered(service: VoicesService, voice: str) -> str | None:
-    """Look up an already-registered qwen3_tts clone of a profile.
+async def _resolve_clone_name(requested: str) -> str:
+    """Resolve a gateway clone name (``<voice>__qwen3_tts``) to its UUID.
+
+    The audiobook/M4B path may be handed the clone name itself instead of the
+    catalog profile. The gateway's cloned listing is the source of truth, so
+    the name is looked up once and the UUID cached for later turns.
+
+    Args:
+        requested: Gateway clone name (not a catalog profile).
+
+    Returns:
+        The clone UUID, or ``requested`` when no matching clone exists.
+    """
+    async with _LOCK:
+        cached = _RESOLVED.get(requested)
+        if cached is not None:
+            return cached
+        try:
+            found = await _find_registered(VoicesService(), requested)
+        except Exception as exc:  # noqa: BLE001 - degrade to the caller's fallback
+            logger.warning(
+                "gateway_qwen_clone_lookup_failed",
+                voice=requested,
+                error=str(exc),
+            )
+            return requested
+        if found:
+            _RESOLVED[requested] = found
+            return found
+        return requested
+
+
+async def _find_registered(service: VoicesService, wanted: str) -> str | None:
+    """Look up an already-registered qwen3_tts clone by its gateway name.
 
     Args:
         service: Gateway voices client.
-        voice: Catalog profile name.
+        wanted: Gateway clone name (already engine-suffixed).
 
     Returns:
         The clone UUID, or None when no qwen3_tts clone exists yet.
     """
-    wanted = clone_name_for(voice)
     for entry in await service.list_cloned():
         if str(entry.get("name") or "") == wanted and _matches_qwen(entry):
             return _entry_id(entry)
