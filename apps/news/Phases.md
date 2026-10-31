@@ -1113,7 +1113,14 @@ flash/422 sin crear job ni guardar; el catálogo devuelto por
       caer silenciosamente al worker local). La **clonación** no aplica: vive
       en el gateway y no existe backend de clonado en Modal. Requiere
       desplegar el app Modal (`python -m modal deploy src/core/modal_app.py`)
-      y `MODAL_ENABLED=true` en el host que lo ejecute.
+      y `MODAL_ENABLED=true` en el host que lo ejecute. **Verificado en debwk
+      (2026-10-31):** run real con `run_in_modal=true` → actividad
+      `run_in_modal=True` → `Voice designed ... design_seconds=72.47
+      sample_rate=24000` → perfil `generada`. Ojo: los métodos de clase de
+      Modal se invocan vía `modal.Cls.from_name(...)` (el `Function.from_name`
+      directo no resuelve los métodos de clase) y `modal_cost.measure` no
+      rodea esta llamada (su sondeo de billing envenena al SDK; ver
+      PENDING.md).
 - [x] **10.5 Servicio catálogo/clone**: al registrar refs diseñadas en gateway,
       incluir `engine="qwen3_tts"`. Al clonar vía gateway, pasar `engine` cuando
       se desea forzar. Documentar en `Architecture.md`/`Deploy.md`. Hecho:
@@ -1184,8 +1191,15 @@ portada, con worker y cola propios, y descarga desde la GUI.
       honra extras en `routed`; `RoutedEngine.list_stock_voices` degrada por
       sub-engine para que un sidecar caído no oculte las voces). La GUI ofrece
       solo motores locales: edge / tts-api gateway / Kokoro / Qwen3 local.
-- [ ] **11.9 Verificación en prod**: render real de un EPUB con portada,
-      comprobación de capítulos en un reproductor M4B y borrado posterior.
+- [x] **11.9 Verificación en prod**: EPUB real de 3 capítulos con portada
+      incrustada renderizado en debwk con `engine=qwen3_tts` **local (GPU,
+      sin Modal)**: `FINISHED_OK`, M4B de 60 s / 980 KB, capítulos
+      `Capítulo 1..3` con tiempos y portada mjpeg 600×600, descarga 200 y
+      borrado vía `/ui/tools/jobs/audiobook/{id}/delete` (fila, audio,
+      portada, subida y metadatos fuera; status/download → 404). El primer
+      intento destapó un bug real: la lista concat escritura rutas relativas
+      y ffmpeg las resolvía contra el directorio de la lista (exit 254);
+      corregido con paths absolutos.
 
 **Success criteria:** el M4B se reproduce con capítulos y portada; un fallo de
 ffmpeg no deja ficheros parciales; las rutas no duplican `/api`; lint + tests
