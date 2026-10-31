@@ -63,7 +63,7 @@ async def test_initialize_without_url_stays_unavailable() -> None:
 
 async def test_initialize_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/health/live"
+        assert request.url.path == "/api/v1/health/live"
         return httpx.Response(200, json={"status": "ok"})
 
     _patch_client(monkeypatch, handler)
@@ -104,7 +104,7 @@ async def test_synthesize_posts_to_tts() -> None:
     engine = _engine(handler)
     result = await engine.synthesize(text="hola", voice_id="v1", language="es", emotion="calm")
     assert result == WAV_BYTES
-    assert captured["path"] == "/tts"
+    assert captured["path"] == "/api/v1/tts"
     assert captured["json"] == {
         "text": "hola",
         "voice_id": "v1",
@@ -130,7 +130,7 @@ async def test_synthesize_clone_posts_to_tts_clone() -> None:
         ref_text="hola",
     )
     assert result == WAV_BYTES
-    assert captured["path"] == "/tts/clone"
+    assert captured["path"] == "/api/v1/tts/clone"
     assert captured["json"]["reference_audio_path"] == "/app/storage/voices/1/reference.wav"
     assert captured["json"]["ref_text"] == "hola"
 
@@ -159,13 +159,13 @@ async def test_synthesize_instruct_posts_to_tts_instruct() -> None:
 
     engine = _engine(handler)
     await engine.synthesize_instruct(text="hola", instruct="male, calm", language="es")
-    assert captured["path"] == "/tts/instruct"
+    assert captured["path"] == "/api/v1/tts/instruct"
     assert captured["json"]["instruct"] == "male, calm"
 
 
 async def test_list_stock_voices() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/voices/stock"
+        assert request.url.path == "/api/v1/voices/stock"
         assert request.url.params.get("language") == "es"
         return httpx.Response(
             200,
@@ -197,7 +197,7 @@ async def test_connection_error_raises_engine_unavailable() -> None:
 
 async def test_health_check_ok() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/health"
+        assert request.url.path == "/api/v1/health"
         return httpx.Response(200, json={"engine": "omnivoice", "ready": True})
 
     engine = _engine(handler)
@@ -214,6 +214,13 @@ async def test_health_check_error() -> None:
     engine = _engine(handler)
     health = await engine.health_check()
     assert health["status"] == "error"
+
+
+def test_remote_engine_is_clone_capable() -> None:
+    """The routed gateway accepts voices pinned to the sidecar engine."""
+    from tts_api.services.voice_service import CLONE_CAPABLE_ENGINES
+
+    assert "omnivoice_remote" in CLONE_CAPABLE_ENGINES
 
 
 async def test_close_releases_client() -> None:

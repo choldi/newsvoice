@@ -23,7 +23,7 @@ from tts_api.repositories.voice_repository import VoiceRepository
 from tts_api.settings import get_settings
 
 # Engines that support voice cloning from reference audio
-CLONE_CAPABLE_ENGINES = {"omnivoice", "pocket_tts", "qwen3_tts"}
+CLONE_CAPABLE_ENGINES = {"omnivoice", "omnivoice_remote", "pocket_tts", "qwen3_tts"}
 
 
 class VoiceService:

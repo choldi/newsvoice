@@ -65,7 +65,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
 
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout)
         try:
-            response = await self._client.get("/health/live")
+            response = await self._client.get("/api/v1/health/live")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning(
@@ -127,7 +127,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         }
         if emotion:
             payload["emotion"] = emotion
-        return await self._post_audio("/tts", payload)
+        return await self._post_audio("/api/v1/tts", payload)
 
     async def synthesize_clone(
         self,
@@ -147,7 +147,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         }
         if ref_text:
             payload["ref_text"] = ref_text
-        return await self._post_audio("/tts/clone", payload)
+        return await self._post_audio("/api/v1/tts/clone", payload)
 
     async def synthesize_instruct(
         self,
@@ -167,7 +167,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         }
         if emotion:
             payload["emotion"] = emotion
-        return await self._post_audio("/tts/instruct", payload)
+        return await self._post_audio("/api/v1/tts/instruct", payload)
 
     # --- introspection -----------------------------------------------------
 
@@ -175,7 +175,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         client = self._require_client()
         params = {"language": language} if language else None
         try:
-            response = await client.get("/voices/stock", params=params)
+            response = await client.get("/api/v1/voices/stock", params=params)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise EngineUnavailableError(f"Error listando voces del sidecar: {exc}") from exc
@@ -185,7 +185,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         if self._client is None or not self._available:
             return {"status": "unavailable", "engine": self.name, "url": self._base_url}
         try:
-            response = await self._client.get("/health")
+            response = await self._client.get("/api/v1/health")
             response.raise_for_status()
             payload = dict(response.json())
         except httpx.HTTPError as exc:
