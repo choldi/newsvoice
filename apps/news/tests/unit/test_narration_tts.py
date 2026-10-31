@@ -527,6 +527,18 @@ async def test_api_key_is_sent_as_a_header_when_configured(
     await service.aclose()
 
 
+async def test_api_key_falls_back_to_shared_tts_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single shared gateway key serves both the TTS and narration paths."""
+    monkeypatch.setattr(settings, "narration_api_key", "")
+    monkeypatch.setattr(settings, "tts_api_key", "shared-key")
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200))
+
+    assert service._api_key == "shared-key"
+    await service.aclose()
+
+
 async def test_gateway_failure_falls_back_to_edge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

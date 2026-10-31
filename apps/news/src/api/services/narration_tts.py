@@ -418,7 +418,8 @@ class NarrationTTSService:
             cache_dir: Narration cache directory. Defaults to settings.narration_cache_dir.
             music_dir: Local music library. Defaults to settings.narration_music_dir.
             api_base_url: Gateway base URL. Defaults to settings.narration_base_url.
-            api_key: Gateway API key. Defaults to settings.narration_api_key.
+            api_key: Gateway API key. Defaults to settings.narration_api_key,
+                falling back to settings.tts_api_key when that is empty.
             ffmpeg_path: ffmpeg binary. Defaults to settings.ffmpeg_path.
             bitrate_kbps: M4A bitrate. Defaults to settings.narration_audio_bitrate_kbps.
             compressor: Injected M4A encoder (tests pass a stub).
@@ -428,7 +429,9 @@ class NarrationTTSService:
         self._cache_dir = Path(cache_dir or settings.narration_cache_dir)
         self._music_dir = Path(music_dir or settings.narration_music_dir)
         self._api_base_url = (api_base_url or settings.narration_base_url).rstrip("/")
-        self._api_key = settings.narration_api_key if api_key is None else api_key
+        self._api_key = (
+            settings.narration_api_key or settings.tts_api_key if api_key is None else api_key
+        )
         self._ffmpeg = ffmpeg_path or settings.ffmpeg_path
         self._compressor = compressor or AudioCompressService(
             ffmpeg_path=self._ffmpeg, bitrate_kbps=bitrate_kbps

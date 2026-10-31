@@ -8,18 +8,20 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
 import time
 
 import httpx
 
 
-async def bench(gateway: str, text: str, voices: list[str], lang: str = "es"):
+async def bench(gateway: str, text: str, voices: list[str], lang: str = "es", api_key: str = ""):
     # The API mounts every router under /api/v1; accept both spellings so
     # `--gateway http://localhost:8001` (the documented usage) works.
     base = gateway.rstrip("/")
     if not base.endswith("/api/v1"):
         base += "/api/v1"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    headers = {"X-API-Key": api_key} if api_key else {}
+    async with httpx.AsyncClient(timeout=60.0, headers=headers) as client:
         for v in voices:
             for engine in [None, "kokoro", "pocket_tts"]:
                 payload = {"text": text, "voice_id": v, "language": lang, "speed": 1.0}
@@ -60,9 +62,14 @@ def main():
     p.add_argument("--text", default="Esto es una prueba de Kokoro en español.")
     p.add_argument("--voices", default="es-mx-male")
     p.add_argument("--lang", default="es")
+    p.add_argument(
+        "--api-key",
+        default=os.environ.get("TTS_API_KEY", ""),
+        help="Gateway X-API-Key (default: $TTS_API_KEY)",
+    )
     args = p.parse_args()
     voices = [v.strip() for v in args.voices.split(",") if v.strip()]
-    asyncio.run(bench(args.gateway, args.text, voices, args.lang))
+    asyncio.run(bench(args.gateway, args.text, voices, args.lang, args.api_key))
 
 
 if __name__ == "__main__":

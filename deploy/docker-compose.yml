@@ -272,6 +272,7 @@ services:
     env_file:
       - ../apps/gateway/.env
     environment:
+      - API_KEY=${GATEWAY_API_KEY:-}
       - TTS_INSTALL_DIR=/omnivoice-external
       - DATABASE_URL=sqlite:///storage/omnivoice.db
       - TTS_FALLBACK_TO_MOCK=true
@@ -309,6 +310,7 @@ services:
     env_file:
       - ../apps/gateway/.env
     environment:
+      - API_KEY=
       - TTS_ENGINE=omnivoice
       - TTS_ENGINES=
       - TTS_INSTALL_DIR=/omnivoice-external
