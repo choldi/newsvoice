@@ -58,6 +58,9 @@ Key variables to set:
     - Shape A: `http://gateway:8000/api/v1` (container DNS; the container
       listens on 8000, the host publishes 8001)
     - Shape B: `http://<gpu-host>:8001/api/v1` (Tailscale IP or LAN IP)
+  - `TTS_API_KEY` — same value as `GATEWAY_API_KEY` in `deploy/.env`; sent as
+    `X-API-Key` on every non-public gateway call. `NARRATION_API_KEY` falls
+    back to it, so one shared key covers narration too.
   - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
   - `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (bcrypt) — preferred over legacy `ADMIN_API_TOKEN`
   - `SMTP_*` — required for email OTP login of self-registered users
@@ -68,7 +71,11 @@ Key variables to set:
   - `TTS_EXTRA_ENGINES` — comma-separated engines to load without routing any
     language to them (e.g. `omnivoice_remote`), for per-voice engine pins
   - `TTS_DEVICE` — `cuda:0` on GPU host, `cpu` otherwise
-  - `API_KEY` — protect the gateway API (required in Shape B when exposed)
+  - `API_KEY` — protect the gateway API (required in Shape B when exposed).
+    In the compose deployment `GATEWAY_API_KEY` in `deploy/.env` overrides this
+    (the `gateway` service sets `API_KEY=${GATEWAY_API_KEY:-}`), and the
+    `gateway-omnivoice` sidecar runs with an explicit empty key because only
+    the internal main gateway calls it.
   - `HF_TOKEN` — HuggingFace token with access to the gated repo
     `kyutai/pocket-tts`. pocket_tts loads that repo (438 MB) when it starts, so
     the token must be present before the gateway boots; without it
@@ -322,6 +329,7 @@ Verify with a stock ES request against the published gateway port:
 ```bash
 curl -s -o /tmp/es.wav -w "%{http_code} %{content_type}\n" \
   -X POST http://localhost:8001/api/v1/tts \
+  -H "X-API-Key: $GATEWAY_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"text":"Buenos días.","voice_id":"es-mx-male","language":"es","engine":"pocket_tts"}'
 ```
@@ -956,12 +964,23 @@ access to the shared `data/news.db`. `status` is also surfaced by
 `scripts/status.sh` (section «3b. GPU engine lease») and by `make status`.
 
 That way the daily digests and the narration always have the GPU, and the
-design window is the only thing that competes for it. Check the state with:
+design window is the only thing that competes for it. On the consolidated
+compose deployment the gateway is the `gateway` container, not a systemd unit:
+the script auto-detects it (`docker compose … ps -q gateway`) and stops/starts
+it with the same compose file as `scripts/deploy.sh`, adding
+`deploy/docker-compose.gpu.yml` when `GPU=1`. Force it with
+`TTS_GATEWAY_BACKEND=compose` (or `unit` for the legacy systemd host). Check
+the state with:
 
 ```bash
-systemctl --user is-active tts-api.service news-engine-voice-worker.service
-journalctl --user -u tts-api.service -f
+systemctl --user is-active news-engine-voice-worker.service
+docker compose -f deploy/docker-compose.yml ps gateway
+journalctl --user -u news-engine-voice-worker.service -f
 ```
+
+> Historical: before the compose cutover the gateway was the user unit
+> `tts-api.service`; `journalctl --user -u tts-api.service -f` only applies to
+> that legacy host.
 
 `voice_design_task_queue` and `temporal_voices_namespace` keep their defaults,
 so the unit only has to set `TEMPORAL_HOST` and the staging pair. The first run
@@ -1105,26 +1124,39 @@ docker compose stop worker narration-worker   # renders stop, digests continue
 Without the podcast workers the digest still completes and records the
 narration delivery as `error`, so this degrades instead of failing.
 
-## 10. Local TTS gateway (OmniVoice)
+## 10. Local TTS gateway (OmniVoice) — legacy pre-cutover
+
+> **Status: historical.** Since the compose cutover (2026-10-19) the gateway
+> runs as the `gateway` service in `deploy/docker-compose.yml`, together with
+> the `gateway-omnivoice` sidecar. The user-level `tts-api.service` described
+> below is the pre-cutover layout, kept for context and rollback archaeology.
+> Operative commands are the compose ones in §3 and at the end of this
+> section.
 
 The local narration backend is the **OmniVoice gateway** (`~/ov_api`), not the
 API container and not genpod: it is the only one that serves the contract
 news-engine calls (`/api/v1/health`, `/api/v1/voices/stock`,
-`/api/v1/voices/clone`, `/api/v1/tts`, `/api/v1/conversations`). It runs as a
-**user-level** systemd service on the host, because Docker on this box has no
-NVIDIA runtime registered and the clones are rendered on CPU anyway.
+`/api/v1/voices/clone`, `/api/v1/tts`, `/api/v1/conversations`). Before the
+cutover it ran as a **user-level** systemd service on the host, because Docker
+on that box had no NVIDIA runtime registered and the clones were rendered on
+CPU anyway.
 
-| Piece | Value |
-|-------|-------|
+| Piece | Legacy value |
+|-------|--------------|
 | Unit | `tts-api.service` (user level, enabled, port `8001`) |
 | Venv | `~/ov_api/venv-omnivoice` (do not touch `~/ov_api/.venv`) |
 | Config | `~/ov_api/.env` (read by pydantic-settings from the working dir) |
 | News-engine | `TTS_API_BASE_URL` and `NARRATION_API_BASE_URL` → `http://host.docker.internal:8001/api/v1` |
 
 ```bash
-systemctl --user status tts-api.service
+# Current (compose): container health and logs.
+docker compose -f deploy/docker-compose.yml ps gateway gateway-omnivoice
+docker compose -f deploy/docker-compose.yml logs -f gateway
 curl -s http://localhost:8001/api/v1/health
-docker compose exec -T api python -c "import httpx; print(httpx.get('http://host.docker.internal:8001/api/v1/health').json())"
+docker compose exec -T api python -c "import httpx; print(httpx.get('http://gateway:8000/api/v1/health').json())"
+
+# Legacy (pre-cutover): user unit.
+# systemctl --user status tts-api.service
 ```
 
 ### 10.1 Engine: `routed` → `pocket_tts`
@@ -1164,8 +1196,9 @@ from the working directory, where pydantic-settings picks up `.env`.
 ### 10.2 Verifying a clone by hand
 
 ```bash
-curl -s http://localhost:8001/api/v1/voices/cloned          # the clone ids
+curl -s -H "X-API-Key: $GATEWAY_API_KEY" http://localhost:8001/api/v1/voices/cloned   # the clone ids
 curl -s -X POST http://localhost:8001/api/v1/tts \
+  -H "X-API-Key: $GATEWAY_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"text":"Prueba de audio.","voice_id":"3e47fbcc-53a8-4551-be91-48f93d62a19f","language":"en"}' \
   -o /tmp/clone.wav -w '%{http_code} %{size_download}\n'
@@ -1183,14 +1216,19 @@ UUID (`src/api/services/gateway_voices.py`). A designed voice such as `marie_fr`
 therefore needs no manual step. To force a re-registration, delete the clone:
 
 ```bash
-curl -s http://localhost:8001/api/v1/voices/cloned | grep -B2 qwen3_tts
-curl -s -X DELETE http://localhost:8001/api/v1/voices/cloned/<id> -w '\n%{http_code}\n'
+curl -s -H "X-API-Key: $GATEWAY_API_KEY" http://localhost:8001/api/v1/voices/cloned | grep -B2 qwen3_tts
+curl -s -X DELETE -H "X-API-Key: $GATEWAY_API_KEY" http://localhost:8001/api/v1/voices/cloned/<id> -w '\n%{http_code}\n'
 ```
 
 ### 10.3 Rollback
 
 ```bash
-systemctl --user stop tts-api.service
+# Current (compose): stop the gateway (add -f deploy/docker-compose.gpu.yml if
+# the host was deployed with GPU=1).
+docker compose -f deploy/docker-compose.yml stop gateway
+
+# Legacy (pre-cutover): user unit.
+# systemctl --user stop tts-api.service
 ```
 
 `NarrationTTSService` degrades instead of failing: the digest still completes

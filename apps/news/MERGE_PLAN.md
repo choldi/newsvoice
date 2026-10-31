@@ -5,8 +5,8 @@
 (compose, 2026-10-17), **P3** (engines, 2026-10-17), **P4** (contrato, 2026-10-17),
 **P5** (dispatch, 2026-10-17), **P6** (catálogo de voces, 2026-10-18), **P7**
 (ops unificados, 2026-10-18), **P8** (lease de GPU, 2026-10-18) y **P9/P9.5**
-(docs+CI / export-import, 2026-10-18) completados. **P10 (cutover) preparado en
-debwk el 2026-10-19 (sin tocar producción); ejecución pendiente**.
+(docs+CI / export-import, 2026-10-18) completados. **P10 (cutover)
+completado el 2026-10-19 (§10)**.
 **Objetivo:** un solo repo, una sola solución, desplegable en **1..N servidores** por
 configuración (no por fork), con la historia de ambos repos preservada.
 
@@ -587,38 +587,32 @@ make status
    end-to-end vía DNS `gateway:8000`, `make trigger COLLECTION=tech` →
    Telegram `message_id 407, status ok`.
 
-### Follow-ups (pendientes tras el cutover)
+### Follow-ups (estado tras el cutover)
 
 - **WhatsApp `there`**: sesión inválida tras el corte (Baileys) — requiere
   re-emparejamiento manual (QR). Canal secundario; el digest por Telegram funciona.
-- **Narración gaming (OmniVoice)**: la colección `gaming` usa
-  `tts_backend='omni_voice'` con voces diseñadas (UUIDs). El engine `routed`
-  (pocket_tts/edgetts) no las conoce → «Voz no encontrada». El workflow garantiza
-  que el digest de texto se entrega igual (narration failure ≠ digest failure).
-  **Sidecar implementado y verificado** (`gateway-omnivoice`, imagen
-  `apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote` en el gateway;
-  arranca con `--profile omnivoice`): para activarlo, poner
-  `TTS_PATH=/home/jordi/ov_api` (modelo local, sin descarga),
-  `OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000`, añadir
-  `omnivoice_remote` a `TTS_EXTRA_ENGINES` y retaggear (`UPDATE
-  cloned_voices/designed_voices SET engine='omnivoice_remote'`) las voces que
-  deban servirse por el sidecar. Alternativa sin sidecar: aceptar la voz stock o
-  `TTS_FALLBACK_TO_EDGE=true` (pierde los personajes John/Peter).
-- **Stock OmniVoice en español**: verificado 2026-10-20 contra el sidecar real:
-  el clonado y el stock inglés funcionan, pero `es-mx-male` (y probablemente el
-  resto de voces ES) mapea a un instruct `"male, spanish accent"` que el modelo
-  no soporta (solo acepta los acentos listados) → `/tts` responde 503. Revisar
-  el perfil de voces stock (`omnivoice_engine._get_mock_stock_voices`) o usar
-  instructs sin acento para ES.
-- **Purga legacy (1–2 semanas, con confirmación)**: retirar `~/news-summary`,
-  `~/ov_api`, `~/qwen3-tts` y el volumen `news-summary_temporal_pg_data`. Ya hay
-  tarballs finales en `~/backups/` (`news-summary-final`, `ov_api-final` con los
-  modelos OmniVoice). No hacerlo hasta confirmar la estabilidad.
+- **Narración gaming (OmniVoice)**: sidecar `gateway-omnivoice` verificado
+  (`apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote`, arranca con
+  `--profile omnivoice` y `TTS_PATH=/home/jordi/ov_api`). Falta el retag de las
+  voces John/Peter a `engine='omnivoice_remote'` en debwk (paso 2 de la
+  secuencia, con backup de `storage/omnivoice.db`); el resto de clones
+  pocket-native no se toca.
+- ✅ **Stock OmniVoice en español**: el código ya no envía `"male, spanish
+  accent"` (OmniVoice no lo admite): `es-mx-*` mapea a `male`/`female` y el
+  idioma va aparte (`apps/gateway/tts_api/core/omnivoice_engine.py`). Pendiente
+  solo la verificación en vivo vía sidecar.
+- **Purga legacy (con confirmación) — lista revisada**: **conservar**
+  `~/qwen3-tts` (venv de diseño + `QWEN3_TTS_DIR`) y `~/ov_api` (`TTS_PATH` del
+  sidecar, modelo local sin descarga). Candidatos a borrar solo `~/news-summary`,
+  la unit `.bak-20261002` y el volumen antiguo `news-summary_temporal_pg_data`
+  (requiere OK explícito). Tarballs finales en `~/backups/`
+  (`news-summary-final`, `ov_api-final` con los modelos OmniVoice).
 - **Rotar `SMTP_PASSWORD`** (el secreto viajó en el tarball de import).
-- **Hardening API key**: el gateway quedó abierto (paridad). Considerar fijar
-  `API_KEY` y rotar cuando se exponga fuera de la LAN/Tailscale.
-- **Modo compose en `design_window.sh`**: el script maneja el gateway vía unit
-  systemd (`TTS_GATEWAY_UNIT`) — necesita soporte compose.
-- `VOICE_STAGING_API_KEY` y el worker de diseño se reconfiguran tras el corte.
-
-
+- ✅ **Hardening API key**: `GATEWAY_API_KEY` en `deploy/.env` → `API_KEY` del
+  gateway; el sidecar queda con key vacía (solo lo llama el gateway interno) y
+  news usa `TTS_API_KEY` (con fallback en `NARRATION_API_KEY`).
+- ✅ **Modo compose en `design_window.sh`**: `TTS_GATEWAY_BACKEND=unit|compose`
+  con autodetección (`docker compose … ps -q gateway`), stop/start vía compose
+  honrando el overlay `GPU=1`, y `TTS_WAS_ACTIVE` desde el estado del contenedor.
+- ✅ **Staging reconfig**: `VOICE_STAGING_API_KEY` y el worker de diseño
+  reconfigurados tras el corte (unit apuntando al checkout del monorepo).
