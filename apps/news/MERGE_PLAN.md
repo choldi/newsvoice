@@ -591,28 +591,38 @@ make status
 
 - **WhatsApp `there`**: sesión inválida tras el corte (Baileys) — requiere
   re-emparejamiento manual (QR). Canal secundario; el digest por Telegram funciona.
-- **Narración gaming (OmniVoice)**: sidecar `gateway-omnivoice` verificado
+- ✅ **Narración gaming (OmniVoice)**: sidecar `gateway-omnivoice` verificado
   (`apps/gateway/Dockerfile.omnivoice`, engine `omnivoice_remote`, arranca con
-  `--profile omnivoice` y `TTS_PATH=/home/jordi/ov_api`). Falta el retag de las
-  voces John/Peter a `engine='omnivoice_remote'` en debwk (paso 2 de la
-  secuencia, con backup de `storage/omnivoice.db`); el resto de clones
+  `--profile omnivoice` y `TTS_PATH=/home/jordi/ov_api`). Retag aplicado en
+  debwk (`MichaelScott` y `Dwight` → `engine='omnivoice_remote'`; backup
+  `apps/gateway/storage/omnivoice.db.bak-20261101-004416`) y verificado en vivo:
+  `/tts` con la voz clonada devuelve 200 y WAV 24 kHz. Se corrigieron dos bugs
+  del gateway: `omnivoice_remote` faltaba en `CLONE_CAPABLE_ENGINES` y el engine
+  remoto llamaba rutas sin el prefijo `/api/v1`; el resto de clones
   pocket-native no se toca.
 - ✅ **Stock OmniVoice en español**: el código ya no envía `"male, spanish
   accent"` (OmniVoice no lo admite): `es-mx-*` mapea a `male`/`female` y el
-  idioma va aparte (`apps/gateway/tts_api/core/omnivoice_engine.py`). Pendiente
-  solo la verificación en vivo vía sidecar.
-- **Purga legacy (con confirmación) — lista revisada**: **conservar**
-  `~/qwen3-tts` (venv de diseño + `QWEN3_TTS_DIR`) y `~/ov_api` (`TTS_PATH` del
-  sidecar, modelo local sin descarga). Candidatos a borrar solo `~/news-summary`,
-  la unit `.bak-20261002` y el volumen antiguo `news-summary_temporal_pg_data`
-  (requiere OK explícito). Tarballs finales en `~/backups/`
-  (`news-summary-final`, `ov_api-final` con los modelos OmniVoice).
+  idioma va aparte (`apps/gateway/tts_api/core/omnivoice_engine.py`). Verificado
+  en vivo vía sidecar (`es-mx-male`, 200, WAV 24 kHz).
+- ✅ **Purga legacy ejecutada**: borrados `~/news-summary`, la unit
+  `news-engine-voice-worker.service.bak-20261002` y el volumen
+  `news-summary_temporal_pg_data`; conservados `~/qwen3-tts` (venv de diseño +
+  `QWEN3_TTS_DIR`) y `~/ov_api` (`TTS_PATH` del sidecar, modelo local sin
+  descarga). Tarballs finales en `~/backups/` (`news-summary-final`,
+  `ov_api-final` con los modelos OmniVoice).
 - **Rotar `SMTP_PASSWORD`** (el secreto viajó en el tarball de import).
+- ✅ **Billing Modal retirado**: `measure()` devuelve coste por reloj sin llamar
+  a la API de billing y un RPC de control posterior responde (`App.lookup` +
+  `get_current_stats`), sin el cuelgue del cliente envenenado;
+  `billed_delta_usd` queda a 0.
 - ✅ **Hardening API key**: `GATEWAY_API_KEY` en `deploy/.env` → `API_KEY` del
   gateway; el sidecar queda con key vacía (solo lo llama el gateway interno) y
   news usa `TTS_API_KEY` (con fallback en `NARRATION_API_KEY`).
 - ✅ **Modo compose en `design_window.sh`**: `TTS_GATEWAY_BACKEND=unit|compose`
   con autodetección (`docker compose … ps -q gateway`), stop/start vía compose
   honrando el overlay `GPU=1`, y `TTS_WAS_ACTIVE` desde el estado del contenedor.
+  Smoke real en debwk OK (gateway parado y restaurado healthy); `temporal_cli`
+  ahora consulta el compose desplegado (`deploy/docker-compose.yml`) en vez de
+  `apps/news/docker-compose.yml`.
 - ✅ **Staging reconfig**: `VOICE_STAGING_API_KEY` y el worker de diseño
   reconfigurados tras el corte (unit apuntando al checkout del monorepo).
