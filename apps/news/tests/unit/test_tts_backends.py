@@ -260,6 +260,26 @@ async def test_voice_for_local_qwen_maps_the_profile_to_a_gateway_clone(
     assert resolved == "uuid-es-anchor"
 
 
+async def test_voice_for_local_qwen_passes_a_clone_name_to_the_gateway(
+    monkeypatch,
+) -> None:
+    """A gateway clone name skips the Modal catalog and resolves to its UUID."""
+    seen: dict[str, str] = {}
+
+    async def fake_resolve(voice: str, language: str) -> str:
+        seen["voice"] = voice
+        return "uuid-es-juan"
+
+    monkeypatch.setattr("src.api.services.gateway_voices.resolve_gateway_qwen_voice", fake_resolve)
+
+    resolved = await voice_for(
+        TTSBackend.QWEN3_TTS, "es_ma_juan__qwen3_tts", "es", run_in_modal=False
+    )
+
+    assert seen["voice"] == "es_ma_juan__qwen3_tts"
+    assert resolved == "uuid-es-juan"
+
+
 async def test_voice_for_local_qwen_defaults_by_language_before_resolving(
     monkeypatch,
 ) -> None:

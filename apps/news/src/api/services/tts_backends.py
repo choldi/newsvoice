@@ -366,8 +366,10 @@ async def voice_for(
         # Local gateway qwen3_tts (Phase 10): the engine has no stock voices,
         # so the profile (validated/defaulted exactly like the Modal path) is
         # mapped to its `__qwen3_tts` clone UUID once and reused afterwards.
-        from src.api.services.gateway_voices import resolve_gateway_qwen_voice
+        from src.api.services.gateway_voices import CLONE_SUFFIX, resolve_gateway_qwen_voice
 
+        if requested.endswith(CLONE_SUFFIX):
+            return await resolve_gateway_qwen_voice(requested, language)
         profile = _modal_voice_for(requested, language)
         return await resolve_gateway_qwen_voice(profile, language)
 
