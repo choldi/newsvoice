@@ -158,7 +158,11 @@ gateway_active() {
 }
 
 temporal_cli() {
-  docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T temporal temporal "$@"
+  if [[ "$GATEWAY_BACKEND" == "compose" ]]; then
+    "${COMPOSE[@]}" exec -T temporal temporal "$@"
+  else
+    docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T temporal temporal "$@"
+  fi
 }
 
 running_workflows() {
