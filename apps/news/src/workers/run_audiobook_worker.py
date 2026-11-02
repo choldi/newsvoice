@@ -25,6 +25,7 @@ def worker_activities() -> list[object]:
     return [
         audiobook_activities.extract_audiobook_activity,
         audiobook_activities.render_audiobook_activity,
+        audiobook_activities.fail_audiobook_activity,
     ]
 
 
