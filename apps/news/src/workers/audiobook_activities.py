@@ -132,7 +132,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
         await _finish_error(repo, run_id, str(exc))
         raise ApplicationError(f"audiobook engine: {exc}", non_retryable=True) from exc
 
-    async def _tick() -> None:
+    def _tick() -> None:
         activity.heartbeat()
 
     async def _on_state(paused: bool) -> None:
