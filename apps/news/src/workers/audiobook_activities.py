@@ -138,11 +138,44 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
     async def _on_state(paused: bool) -> None:
         await repo.set_status(run_id, "PAUSED" if paused else "GENERATING", kind=AUDIOBOOK_KIND)
 
+    async def _operator_paused() -> bool:
+        """Read the API-written pause flag between chunks."""
+        return await repo.is_paused(run_id, kind=AUDIOBOOK_KIND)
+
+    async def _on_progress(progress_payload: dict[str, Any]) -> None:
+        """Persist the render progress in the job metadata sidecar."""
+        from src.api.services.doc_tts import update_job_meta
+
+        fields: dict[str, Any] = {}
+        for key in ("digest", "chapters_total", "chapter_start", "chapter_end", "cached"):
+            if key in progress_payload:
+                fields[key] = progress_payload[key]
+        progress = progress_payload.get("progress")
+        if isinstance(progress, dict):
+            fields["progress"] = progress
+        if fields:
+            update_job_meta(run_id, **fields)
+
+    chapter_start = payload.get("chapter_start")
+    chapter_end = payload.get("chapter_end")
+    chapter_range = (
+        (int(chapter_start or 1), int(chapter_end or 0))
+        if chapter_start is not None or chapter_end is not None
+        else None
+    )
+
     lease = TTSLeaseService()
     try:
         async with _heartbeating(AUDIOBOOK_HEARTBEAT_INTERVAL_SECONDS):
             async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
-                gate = RenderGate(lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_state=_on_state)
+                gate = RenderGate(
+                    lease,
+                    run_id,
+                    PRIORITY_RENDER,
+                    on_tick=_tick,
+                    on_state=_on_state,
+                    user_paused=_operator_paused,
+                )
                 service = AudiobookService()
                 res = await service.render_m4b(
                     text=text,
@@ -152,7 +185,15 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
                     backend=backend,
                     gate=gate,
                     run_id=run_id,
+                    chapter_range=chapter_range,
+                    on_progress=_on_progress,
                 )
+        await repo.set_chapter_range(
+            run_id,
+            res.chapter_start,
+            res.chapter_end,
+            kind=AUDIOBOOK_KIND,
+        )
         elapsed = round(time.monotonic() - started, 2)
         try:
             await repo.finish_job(

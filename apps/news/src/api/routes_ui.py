@@ -125,10 +125,10 @@ async def _file_form(request: Request) -> tuple[dict[str, str], UploadFile | Non
 JOB_STATUS_LABELS = {
     "STARTING": "en cola",
     "GENERATING": "generando",
-    # Phase 8.4: a long document render that handed the engine to a scheduled
-    # digest. Shown as its own state so a deliberate wait is never mistaken for
-    # a stalled job.
-    "PAUSED": "en pausa (digest)",
+    # Phase 8.4: a long render that handed the engine to a scheduled digest,
+    # or an audiobook the operator paused. Shown as its own state so a
+    # deliberate wait is never mistaken for a stalled job.
+    "PAUSED": "en pausa",
     "FINISHED_OK": "completado",
     "FINISHED_ERROR": "error",
 }
@@ -2646,6 +2646,7 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
     annotated: list[dict] = []
     for job in jobs:
         row = dict(job)
+        run_id = str(job.get("run_id") or "")
         meta: dict = {}
         try:
             if kind == "doc_tts":
@@ -2666,9 +2667,26 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
         row["eta"] = eta_seconds(estimate, progress)
         row["chunks_done"] = int((progress or {}).get("done") or 0)
         row["chunks_total"] = int((progress or {}).get("total") or 0)
+        if kind == "audiobook" and not row["chunks_total"]:
+            row["chunks_total"] = int(meta.get("chapters_total") or 0)
+        row["paused"] = bool(job.get("paused"))
+        row["chapter_start"] = (
+            job.get("chapter_start")
+            if job.get("chapter_start") is not None
+            else meta.get("chapter_start")
+        )
+        row["chapter_end"] = (
+            job.get("chapter_end")
+            if job.get("chapter_end") is not None
+            else meta.get("chapter_end")
+        )
+        row["partial_url"] = None
+        if kind == "audiobook" and (
+            row["chunks_done"] > 0 or job.get("status") in ("GENERATING", "PAUSED")
+        ):
+            row["partial_url"] = f"/api/admin/audiobooks/{run_id}/partial"
         row["audio_url"] = None
         if job.get("status") == "FINISHED_OK" and job.get("audio_path"):
-            run_id = str(job.get("run_id") or "")
             try:
                 if kind == "lesson":
                     row["audio_url"] = lesson_audio_link(run_id)
@@ -2861,10 +2879,13 @@ async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
     if upload is None:
         return _flash(target, "Falta el fichero", "error")
     try:
-        from src.api.services.audiobook import submit_audiobook
+        from src.api.services.audiobook import parse_chapter_range, submit_audiobook
 
         form = await request.form()
         cover = form.get("cover")
+        chapter_start, chapter_end = parse_chapter_range(
+            fields.get("chapter_start"), fields.get("chapter_end")
+        )
         result = await submit_audiobook(
             upload=upload,
             content_length=request.headers.get("content-length", ""),
@@ -2873,6 +2894,8 @@ async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
             title=fields.get("title") or None,
             engine=fields.get("engine") or None,
             cover=cover if hasattr(cover, "filename") else None,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
         )
     except SubmitError as exc:
         return _flash(target, exc.message, "error")
@@ -2880,6 +2903,57 @@ async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
         logger.error("ui_audiobook_failed", error=str(exc), exc_info=True)
         return _flash(target, f"No se pudo lanzar: {exc}", "error")
     return _flash(target, f"Audiolibro en cola: {result['workflow_id']} ({result['title']})", "ok")
+
+
+async def _ui_set_audiobook_paused(run_id: str, paused: bool) -> RedirectResponse:
+    """Pause/resume a render from the tools page and flash the outcome."""
+    target = "/ui/tools#tool-audiobook"
+    repo = AudioJobsRepository()
+    job = await repo.get_job(run_id, kind="audiobook")
+    if job is None:
+        return _flash(target, "Audiolibro no encontrado", "error")
+    if str(job.get("status")) in ("FINISHED_OK", "FINISHED_ERROR"):
+        return _flash(target, "El audiolibro ya terminó", "error")
+    await repo.set_paused(run_id, paused, kind="audiobook")
+    message = (
+        "Pausa solicitada; el render se detendrá tras el fragmento actual"
+        if paused
+        else "Reanudando el audiolibro"
+    )
+    return _flash(target, message, "ok")
+
+
+@router.post("/ui/tools/audiobooks/{run_id}/pause", include_in_schema=False)
+async def ui_audiobook_pause(request: Request, run_id: str) -> RedirectResponse:
+    """Pause a running audiobook render."""
+    return await _ui_set_audiobook_paused(run_id, True)
+
+
+@router.post("/ui/tools/audiobooks/{run_id}/resume", include_in_schema=False)
+async def ui_audiobook_resume(request: Request, run_id: str) -> RedirectResponse:
+    """Resume a paused audiobook render."""
+    return await _ui_set_audiobook_paused(run_id, False)
+
+
+@router.get(
+    "/ui/fragments/audiobook_latest",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def ui_fragment_audiobook_latest(request: Request) -> HTMLResponse:
+    """Poll the latest audiobook run for the status/controls panel."""
+    jobs = await AudioJobsRepository().list_jobs(kind="audiobook")
+    annotated = await _annotated_jobs(jobs[:1], "audiobook")
+    return _render(
+        request,
+        "partials/_audiobook_latest.html",
+        {
+            "job": annotated[0] if annotated else None,
+            "status_labels": JOB_STATUS_LABELS,
+            "status_badges": JOB_STATUS_BADGES,
+            "fmt_iso": _fmt_iso,
+        },
+    )
 
 
 @router.post("/ui/tools/podcast", include_in_schema=False)

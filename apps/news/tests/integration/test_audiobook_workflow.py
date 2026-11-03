@@ -138,3 +138,19 @@ async def test_extract_failure_triggers_the_workflow_safety_net() -> None:
     assert RENDER_CALLS == [], "no render after a failed extraction"
     assert len(FAIL_CALLS) == 1
     assert "audiobook extract failed" in FAIL_CALLS[0]["error"]
+
+
+async def test_chapter_range_is_forwarded_to_the_render() -> None:
+    """A slice request reaches the render activity unchanged."""
+    _reset()
+    config = AudiobookConfig(
+        source_path="/data/uploads/libro.epub",
+        filename="libro.epub",
+        chapter_start=2,
+        chapter_end=5,
+    )
+
+    await _run(config, workflow_id="audiobook-range")
+
+    assert RENDER_CALLS[0]["chapter_start"] == 2
+    assert RENDER_CALLS[0]["chapter_end"] == 5

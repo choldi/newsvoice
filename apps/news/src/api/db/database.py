@@ -639,7 +639,11 @@ class AudioJobsRepository:
                 audio_path = NULL,
                 started_at = excluded.started_at,
                 finished_at = NULL,
-                elapsed_seconds = NULL
+                elapsed_seconds = NULL,
+                paused = 0,
+                chapter_start = NULL,
+                chapter_end = NULL,
+                partial_path = NULL
         """
         async with get_db(self.db_path) as db:
             await db.execute(query, (run_id, collection, kind, "STARTING", now_iso))
@@ -675,6 +679,92 @@ class AudioJobsRepository:
             await db.execute(query, (status, run_id, kind))
             await db.commit()
 
+    async def set_paused(self, run_id: str, paused: bool, kind: str = "tts") -> bool:
+        """Set or clear the operator pause flag of a running job.
+
+        This is the flag the render gate polls between chunks. It is stored in
+        the database (not the job metadata sidecar) so the API and the worker
+        never race on a read-modify-write JSON file.
+
+        Args:
+            run_id: Workflow id of the job.
+            paused: True to pause after the current chunk, False to resume.
+            kind: Audio job kind ('audiobook', ...).
+
+        Returns:
+            True when a row was updated, False when the job does not exist.
+        """
+        query = "UPDATE audio_jobs SET paused = ? WHERE run_id = ? AND kind = ?"
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(query, (1 if paused else 0, run_id, kind))
+            await db.commit()
+        return bool(cursor.rowcount)
+
+    async def is_paused(self, run_id: str, kind: str = "tts") -> bool:
+        """Return whether the operator paused this job.
+
+        Args:
+            run_id: Workflow id of the job.
+            kind: Audio job kind ('audiobook', ...).
+
+        Returns:
+            True when the pause flag is set; False for a missing row too, so a
+            deleted job never wedges a render forever.
+        """
+        query = "SELECT paused FROM audio_jobs WHERE run_id = ? AND kind = ?"
+        async with get_db(self.db_path) as db:
+            async with db.execute(query, (run_id, kind)) as cursor:
+                row = await cursor.fetchone()
+        return bool(row["paused"]) if row is not None else False
+
+    async def set_chapter_range(
+        self,
+        run_id: str,
+        chapter_start: int | None,
+        chapter_end: int | None,
+        kind: str = "tts",
+    ) -> bool:
+        """Record the chapter slice a render is actually producing.
+
+        The activity writes the clamped range after extraction, when the real
+        chapter count is known; the submit endpoint stores the requested one.
+
+        Args:
+            run_id: Workflow id of the job.
+            chapter_start: First chapter (1-based) or None for the whole book.
+            chapter_end: Last chapter (inclusive) or None for the last one.
+            kind: Audio job kind ('audiobook', ...).
+
+        Returns:
+            True when a row was updated, False when the job does not exist.
+        """
+        query = (
+            "UPDATE audio_jobs SET chapter_start = ?, chapter_end = ? WHERE run_id = ? AND kind = ?"
+        )
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(query, (chapter_start, chapter_end, run_id, kind))
+            await db.commit()
+        return bool(cursor.rowcount)
+
+    async def set_partial_path(
+        self, run_id: str, partial_path: str | None, kind: str = "tts"
+    ) -> bool:
+        """Record where the latest partial M4B of a job was written.
+
+        Args:
+            run_id: Workflow id of the job.
+            partial_path: Path of the partial file, or None to forget it.
+            kind: Audio job kind ('audiobook', ...).
+
+        Returns:
+            True when a row was updated, False when the job does not exist.
+        """
+        query = "UPDATE audio_jobs SET partial_path = ? WHERE run_id = ? AND kind = ?"
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(query, (partial_path, run_id, kind))
+            await db.commit()
+        return bool(cursor.rowcount)
+
     async def finish_job(
         self,
         run_id: str,
@@ -698,7 +788,7 @@ class AudioJobsRepository:
         query = """
             UPDATE audio_jobs
             SET status = ?, error = ?, audio_path = ?,
-                finished_at = ?, elapsed_seconds = ?
+                finished_at = ?, elapsed_seconds = ?, paused = 0
             WHERE run_id = ? AND kind = ?
         """
         async with get_db(self.db_path) as db:
@@ -720,7 +810,8 @@ class AudioJobsRepository:
         """
         query = """
             SELECT id, run_id, collection, kind, status, error, audio_path,
-                   started_at, finished_at, elapsed_seconds
+                   started_at, finished_at, elapsed_seconds,
+                   paused, chapter_start, chapter_end, partial_path
             FROM audio_jobs
             WHERE run_id = ? AND kind = ?
         """
@@ -750,7 +841,8 @@ class AudioJobsRepository:
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"""
             SELECT id, run_id, collection, kind, status, error, audio_path,
-                   started_at, finished_at, elapsed_seconds
+                   started_at, finished_at, elapsed_seconds,
+                   paused, chapter_start, chapter_end, partial_path
             FROM audio_jobs
             {where}
             ORDER BY started_at DESC

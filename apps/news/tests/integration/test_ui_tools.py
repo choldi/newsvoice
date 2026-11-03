@@ -114,6 +114,9 @@ def test_tools_page_renders_the_four_tabs() -> None:
         'action="/ui/tools/doc-tts"',
         'action="/ui/tools/lessons"',
         'action="/ui/tools/podcast"',
+        'name="chapter_start"',
+        'name="chapter_end"',
+        'id="audiobook-latest"',
     ):
         assert needle in response.text, needle
     assert '<a class="nav active" href="/ui/tools">Herramientas</a>' in response.text
@@ -790,6 +793,8 @@ def test_audiobook_submit_forwards_engine_and_voice() -> None:
                 "voice": "es-mx-male",
                 "language": "es",
                 "engine": "kokoro",
+                "chapter_start": "2",
+                "chapter_end": "4",
             },
             follow_redirects=False,
         )
@@ -799,6 +804,7 @@ def test_audiobook_submit_forwards_engine_and_voice() -> None:
     assert kwargs["engine"] == "kokoro"
     assert kwargs["voice"] == "es-mx-male"
     assert kwargs["language"] == "es"
+    assert (kwargs["chapter_start"], kwargs["chapter_end"]) == (2, 4)
 
 
 def test_audiobook_form_offers_only_local_engines() -> None:
@@ -886,3 +892,92 @@ def test_delete_audiobook_removes_audio_cover_upload_and_meta(_ui_env: Path) -> 
         assert await AudioJobsRepository().get_job(run_id, kind="audiobook") is None
 
     asyncio.run(_check())
+
+
+def test_ui_pause_and_resume_audiobook(_ui_env: Path) -> None:
+    """The tools page writes the same atomic pause flag as the admin API."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+
+    run_id = "audiobook-ui-pause1"
+
+    async def _seed() -> None:
+        repo = AudioJobsRepository()
+        await repo.start_job(run_id, collection="audiobooks", kind="audiobook")
+        await repo.set_status(run_id, "GENERATING", kind="audiobook")
+
+    asyncio.run(_seed())
+    client = _client()
+
+    pause = client.post(f"/ui/tools/audiobooks/{run_id}/pause", follow_redirects=False)
+    assert pause.status_code == 302
+    assert "Pausa solicitada" in _flash_of(pause.headers["location"])
+    assert asyncio.run(AudioJobsRepository().get_job(run_id, kind="audiobook"))["paused"] == 1
+
+    resume = client.post(f"/ui/tools/audiobooks/{run_id}/resume", follow_redirects=False)
+    assert resume.status_code == 302
+    assert "Reanudando" in _flash_of(resume.headers["location"])
+    assert asyncio.run(AudioJobsRepository().get_job(run_id, kind="audiobook"))["paused"] == 0
+
+
+def test_ui_latest_fragment_shows_progress_and_controls(_ui_env: Path) -> None:
+    """The polling panel shows the range, progress, resume and partial link."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+    from src.api.services.doc_tts import write_job_meta
+
+    run_id = "audiobook-ui-latest1"
+
+    async def _seed() -> None:
+        repo = AudioJobsRepository()
+        await repo.start_job(run_id, collection="audiobooks", kind="audiobook")
+        await repo.set_status(run_id, "PAUSED", kind="audiobook")
+        await repo.set_paused(run_id, True, kind="audiobook")
+
+    asyncio.run(_seed())
+    write_job_meta(
+        run_id,
+        {
+            "title": "Mi audiolibro",
+            "digest": "abcdefabcdef",
+            "chapters_total": 30,
+            "chapter_start": 3,
+            "chapter_end": 8,
+            "progress": {"done": 2, "total": 6, "chapter": 4, "chapter_title": "Cap 4"},
+        },
+    )
+
+    response = _client().get("/ui/fragments/audiobook_latest")
+
+    assert response.status_code == 200
+    assert "Mi audiolibro" in response.text
+    assert "2/6 capítulos" in response.text
+    assert "cap. 3–8" in response.text
+    assert f"/ui/tools/audiobooks/{run_id}/resume" in response.text
+    assert f"/api/admin/audiobooks/{run_id}/partial" in response.text
+
+
+def test_ui_pause_actions_are_not_offered_for_finished_runs(_ui_env: Path) -> None:
+    """Once a run ends the control buttons disappear."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+
+    run_id = "audiobook-ui-done1"
+
+    async def _seed() -> None:
+        repo = AudioJobsRepository()
+        await repo.start_job(run_id, collection="audiobooks", kind="audiobook")
+        await repo.finish_job(
+            run_id, status="FINISHED_OK", audio_path="/tmp/x.m4b", kind="audiobook"
+        )
+
+    asyncio.run(_seed())
+
+    response = _client().get("/ui/fragments/tool_jobs?kind=audiobook")
+
+    assert response.status_code == 200
+    assert f"/ui/tools/audiobooks/{run_id}/pause" not in response.text
+    assert f"/ui/tools/audiobooks/{run_id}/resume" not in response.text

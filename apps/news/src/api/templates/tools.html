@@ -220,6 +220,9 @@
 
 <details class="card" id="tool-audiobook">
   <summary><strong>📚 Audiolibro M4B (capítulos, loudnorm)</strong></summary>
+  <div id="audiobook-latest" hx-get="/ui/fragments/audiobook_latest" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <div class="empty">Cargando…</div>
+  </div>
 {% if can_operate %}
   <form method="post" action="/ui/tools/audiobooks" enctype="multipart/form-data">
     <div class="row">
@@ -267,6 +270,21 @@
       <div class="col">
         <label>Portada (opcional, JPG/PNG)</label>
         <input type="file" name="cover" accept="image/*">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label>Desde capítulo (opcional)</label>
+        <input type="number" name="chapter_start" min="1" placeholder="1">
+      </div>
+      <div class="col">
+        <label>Hasta capítulo (opcional)</label>
+        <input type="number" name="chapter_end" min="1" placeholder="último">
+      </div>
+      <div class="col">
+        <p class="muted" style="font-size:12px;margin-top:26px">
+          Rango 1-based inclusive. Se renderiza en su propio M4B y reutiliza la caché de capítulos.
+        </p>
       </div>
     </div>
     <button type="submit" class="primary">Generar audiolibro M4B</button>

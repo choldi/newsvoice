@@ -69,6 +69,8 @@ PRIORITY_DESIGN = 20
 
 #: Callback invoked once per poll while waiting for a turn (activity heartbeat).
 TickCallback = Callable[[], None]
+#: Predicate answering whether the operator paused this render (sync or async).
+PauseCallback = Callable[[], Any]
 
 
 class TTSLeaseError(RuntimeError):
@@ -630,6 +632,7 @@ class RenderGate:
         *,
         on_tick: TickCallback | None = None,
         on_state: Callable[[bool], Any] | None = None,
+        user_paused: PauseCallback | None = None,
     ) -> None:
         """Initialize the gate.
 
@@ -642,21 +645,42 @@ class RenderGate:
             on_state: Called with True when the render pauses and False when it
                 resumes (``audio_jobs.status`` follows it). It may be sync or
                 async; an awaitable result is awaited.
+            user_paused: Optional predicate answering whether the operator
+                paused this run (``audio_jobs.paused``). It may be sync or
+                async; an awaitable result is awaited. Unlike the lease yield,
+                an operator pause must work even when the lease is disabled.
         """
         self._lease = lease
         self._owner = owner
         self._priority = priority
         self._on_tick = on_tick
         self._on_state = on_state
+        self._user_paused = user_paused
         self._paused = False
         self._back: asyncio.Event | None = None
 
-    async def should_pause(self) -> bool:
-        """Report whether somebody outranking this render is waiting.
+    async def _operator_paused(self) -> bool:
+        """Ask the optional operator-pause predicate.
 
         Returns:
-            True when the engine must be handed over before the next chunk.
+            True when the operator asked this render to pause.
         """
+        if self._user_paused is None:
+            return False
+        outcome = self._user_paused()
+        if inspect.isawaitable(outcome):
+            return bool(await outcome)
+        return bool(outcome)
+
+    async def should_pause(self) -> bool:
+        """Report whether the render must stop before the next chunk.
+
+        Returns:
+            True when the engine must be handed over (a higher-priority waiter
+            is queued) or the operator paused this run.
+        """
+        if await self._operator_paused():
+            return True
         return await self._lease.waiter_above(self._priority)
 
     async def _notify(self, paused: bool) -> None:
@@ -694,21 +718,30 @@ class RenderGate:
         Raises:
             asyncio.CancelledError: Propagates when the caller is cancelled.
         """
-        if not self._lease.enabled:
-            return
         if self._paused:
             # Another chunk is already handing the engine over: wait it out so
             # no chunk starts synthesizing while the digest owns the engine.
             if self._back is not None:
                 await self._back.wait()
             return
+        operator_paused = await self._operator_paused()
+        if not self._lease.enabled and not operator_paused:
+            return
         self._back = asyncio.Event()
         self._paused = True
-        logger.info("tts_engine_yielding", owner=self._owner, priority=self._priority)
+        logger.info(
+            "tts_engine_yielding",
+            owner=self._owner,
+            priority=self._priority,
+            operator=operator_paused,
+        )
         await self._lease.release(self._owner)
         await self._notify(True)
         try:
-            while await self._lease.waiter_above(self._priority):
+            # The operator pause is independent of the lease: it must hold the
+            # render even when the engine is not contended (or the lease is
+            # disabled), and a digest waiter keeps it paused after a resume.
+            while await self._operator_paused() or await self._lease.waiter_above(self._priority):
                 if self._on_tick is not None:
                     self._on_tick()
                 await asyncio.sleep(self._lease.poll_seconds)

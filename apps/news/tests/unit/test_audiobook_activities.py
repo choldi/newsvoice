@@ -43,6 +43,8 @@ class _FakeService:
             m4b_path="/data/audiobooks/audio/libro.m4b",
             chapters=2,
             duration_seconds=12.0,
+            chapter_start=1,
+            chapter_end=2,
         )
 
 

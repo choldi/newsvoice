@@ -28,6 +28,9 @@ class AudiobookConfig:
     voice: str = ""
     language: str = "es"
     engine: str = "edge"
+    #: Optional 1-based inclusive chapter range (None = the whole book).
+    chapter_start: int | None = None
+    chapter_end: int | None = None
 
 
 @workflow.defn
@@ -58,8 +61,13 @@ class AudiobookWorkflow:
                     "voice": config.voice,
                     "language": config.language,
                     "engine": config.engine,
+                    "chapter_start": config.chapter_start,
+                    "chapter_end": config.chapter_end,
                 },
-                start_to_close_timeout=timedelta(hours=6),
+                # Paused time counts against start_to_close, and an operator
+                # may pause a long book for hours; 12h leaves room for a 7h
+                # render plus a long pause without changing the safety net.
+                start_to_close_timeout=timedelta(hours=12),
                 heartbeat_timeout=timedelta(seconds=600),
                 retry_policy=RetryPolicy(maximum_attempts=2),
             )

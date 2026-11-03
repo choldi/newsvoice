@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
 import subprocess
 import tempfile
+import time
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,11 +41,38 @@ class AudiobookResult:
     chapters: int
     duration_seconds: float
     cached: bool = False
+    digest: str = ""
+    chapter_start: int = 1
+    chapter_end: int = 0
+
+
+#: Callback receiving partial progress dicts while a render advances.
+ProgressCallback = Callable[[dict[str, Any]], Any]
 
 
 def _slugify(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
     return slug[:60].strip("-") or "audiobook"
+
+
+def digest_prefix_from_audio_path(audio_path: str | None) -> str:
+    """Recover the 12-char render digest from a finished M4B filename.
+
+    The job metadata stores the digest for runs started after the partial
+    download feature, but the older runs only have ``audio_path``. Their names
+    follow ``{slug}_{digest12}.m4b`` (or ``..._ch0001-0010.m4b``), so the
+    digest can still be recovered for a partial download.
+
+    Args:
+        audio_path: Value of ``audio_jobs.audio_path``.
+
+    Returns:
+        The 12-char digest prefix, or an empty string when it cannot be read.
+    """
+    if not audio_path:
+        return ""
+    match = re.search(r"_([0-9a-f]{12})(?:_ch\d{4}-\d{4})?\.m4b$", Path(audio_path).name)
+    return match.group(1) if match else ""
 
 
 def _hash(*parts: str) -> str:
@@ -155,6 +185,304 @@ def split_chapters(text: str, max_chars: int = 8000) -> list[AudiobookChapter]:
     return chapters
 
 
+def _chapter_progress(
+    *,
+    done: int,
+    total: int,
+    chapter: int,
+    title: str,
+    elapsed: float,
+    audio_seconds: float,
+    chunks_done: int = 0,
+    chunks_total: int = 0,
+) -> dict[str, Any]:
+    """Build the progress payload written to the job metadata.
+
+    Args:
+        done: Chapters of the selected range already rendered.
+        total: Chapters in the selected range.
+        chapter: 1-based global chapter number being rendered.
+        title: Chapter title shown by the GUI.
+        elapsed: Wall-clock seconds since the render started.
+        audio_seconds: Audio length of the chapters already rendered.
+        chunks_done: Chunks of the current chapter already synthesized.
+        chunks_total: Chunks the current chapter is split into.
+
+    Returns:
+        JSON-serializable progress dict.
+    """
+    return {
+        "done": done,
+        "total": total,
+        "chapter": chapter,
+        "chapter_title": title,
+        "elapsed_seconds": elapsed,
+        "audio_seconds": audio_seconds,
+        "chunks_done": chunks_done,
+        "chunks_total": chunks_total,
+    }
+
+
+def _concat_audio_files(files: list[Path], out_path: Path, tmp_dir: Path) -> Path:
+    """Join chapter audio files into one file, re-encoding only if needed.
+
+    Args:
+        files: Chapter files in playback order.
+        out_path: Destination file (extension decides the container).
+        tmp_dir: Directory for the ffmpeg concat list.
+
+    Returns:
+        ``out_path``.
+
+    Raises:
+        RuntimeError: When there is no audio to join.
+    """
+    if not files:
+        raise RuntimeError("no chapter audio to join")
+    if len(files) == 1:
+        if files[0] != out_path:
+            atomic_write(out_path, files[0].read_bytes())
+        return out_path
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir=str(tmp_dir)) as f:
+        for cf in files:
+            f.write(f"file '{Path(cf).resolve()}'\n")
+        concat_list = f.name
+    try:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list,
+            "-c",
+            "copy",
+            str(out_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, timeout=3600)
+        except Exception:
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_list,
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(out_path),
+            ]
+            subprocess.run(cmd, check=True, timeout=3600)
+    finally:
+        try:
+            os.unlink(concat_list)
+        except OSError:
+            pass
+    return out_path
+
+
+def _apply_loudnorm(src: Path, out_path: Path) -> Path:
+    """Normalize loudness to -18 LUFS / TP -1.5 into ``out_path``.
+
+    Args:
+        src: Merged audio file.
+        out_path: Normalized destination.
+
+    Returns:
+        ``out_path``.
+
+    Raises:
+        subprocess.CalledProcessError: When ffmpeg fails; callers fall back to
+            the unnormalized file.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src),
+        "-af",
+        "loudnorm=I=-18:TP=-1.5:LRA=11",
+        "-ar",
+        "44100",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, timeout=3600)
+    return out_path
+
+
+def _write_ffmeta(
+    path: Path,
+    *,
+    title: str,
+    author: str,
+    chapter_titles: list[str],
+    durations: list[float],
+) -> None:
+    """Write the ffmpeg chapter/metadata sidecar for an M4B.
+
+    Args:
+        path: Destination ``.ffmeta`` file.
+        title: Book title.
+        author: Book author (stored as ``artist``).
+        chapter_titles: Chapter titles in playback order.
+        durations: Chapter durations in seconds (missing/zero defaults to 60).
+    """
+    with path.open("w", encoding="utf-8") as mf:
+        mf.write(";FFMETADATA1\n")
+        if title:
+            mf.write(f"title={title}\n")
+        if author:
+            mf.write(f"artist={author}\n")
+        pos = 0.0
+        for idx, chapter_title in enumerate(chapter_titles):
+            dur = durations[idx] if idx < len(durations) else 60.0
+            if dur <= 0:
+                dur = 60.0
+            start_ms = int(pos * 1000)
+            end_ms = int((pos + dur) * 1000)
+            mf.write(f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start_ms}\nEND={end_ms}\n")
+            mf.write(f"title={chapter_title}\n")
+            pos += dur
+
+
+def _mux_m4b(
+    *,
+    merged: Path,
+    meta_file: Path,
+    cover_path: str | None,
+    out_path: Path,
+) -> None:
+    """Mux audio, chapters and optional cover into an M4B, atomically.
+
+    The output is written to a sibling temp file and published with
+    ``os.replace``: a failed ffmpeg run must never leave a partial ``.m4b``
+    that the next request would mistake for a finished (cached) render.
+
+    Args:
+        merged: Normalized/merged audio file.
+        meta_file: ``.ffmeta`` chapter/metadata sidecar.
+        cover_path: Optional cover image.
+        out_path: Final M4B path.
+
+    Raises:
+        Exception: Whatever ffmpeg failed with, after cleaning up the temp file.
+    """
+    cover = cover_path if cover_path and Path(cover_path).exists() else None
+    tmp_m4b = out_path.with_name(f".{out_path.stem}.{os.getpid()}.part.m4b")
+    tmp_m4b.unlink(missing_ok=True)
+    try:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(merged),
+            "-i",
+            str(meta_file),
+            "-map_metadata",
+            "1",
+            "-c",
+            "copy",
+            "-f",
+            "mp4",
+            str(tmp_m4b),
+        ]
+        if cover:
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(merged),
+                "-i",
+                str(cover),
+                "-i",
+                str(meta_file),
+                "-map",
+                "0:a",
+                "-map",
+                "1:v",
+                "-map_metadata",
+                "2",
+                "-c:a",
+                "copy",
+                "-c:v",
+                "copy",
+                "-disposition:v:0",
+                "attached_pic",
+                "-f",
+                "mp4",
+                str(tmp_m4b),
+            ]
+        try:
+            subprocess.run(cmd, check=True, timeout=7200)
+        except Exception:
+            # Fallback: re-encode the audio when the streams are incompatible.
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(merged),
+                "-i",
+                str(cover) if cover else str(meta_file),
+            ]
+            if cover:
+                cmd.extend(
+                    ["-i", str(meta_file), "-map", "0:a", "-map", "1:v", "-map_metadata", "2"]
+                )
+            else:
+                cmd.extend(["-map_metadata", "1"])
+            cmd.extend(
+                [
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    "-ar",
+                    "44100",
+                    "-c:v",
+                    "copy" if cover else "none",
+                    "-f",
+                    "mp4",
+                    str(tmp_m4b),
+                ]
+            )
+            subprocess.run(cmd, check=True, timeout=7200)
+        os.replace(tmp_m4b, out_path)
+    except Exception as exc:
+        tmp_m4b.unlink(missing_ok=True)
+        logger.error("audiobook_mux_failed", error=str(exc))
+        raise
+
+
 class AudiobookService:
     def __init__(self, base_dir: str | None = None) -> None:
         settings = get_settings()
@@ -178,12 +506,30 @@ class AudiobookService:
         gate: Any = None,
         run_id: str | None = None,
         resume: bool = True,
+        chapter_range: tuple[int, int] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> AudiobookResult:
         from src.api.services.doc_tts import DocTTSService
 
-        chapters = split_chapters(text)
-        if not chapters:
+        all_chapters = split_chapters(text)
+        if not all_chapters:
             raise RuntimeError("No chapters to render")
+        total_chapters = len(all_chapters)
+
+        if chapter_range is not None:
+            requested_start, requested_end = chapter_range
+            start = max(1, int(requested_start or 1))
+            end = int(requested_end or total_chapters)
+        else:
+            start, end = 1, total_chapters
+        end = min(end, total_chapters)
+        if start > total_chapters or start > end:
+            raise RuntimeError(
+                f"chapter range {start}-{end} is outside this book (1-{total_chapters})"
+            )
+        chapters = all_chapters[start - 1 : end]
+        ranged = start != 1 or end != total_chapters
+
         settings = get_settings()
         language = language or settings.tts_language
 
@@ -208,17 +554,62 @@ class AudiobookService:
             cover_path or "",
             "1" if loudnorm else "0",
         )
-        m4b_path = self._audio_dir / f"{_slugify(title)}_{digest[:12]}.m4b"
+        # A range render never overwrites the full-book artifacts: its output
+        # and intermediate names carry the slice, while the chapter files stay
+        # digest-keyed so the chunks and chapters are shared with a full render.
+        suffix = f"_ch{start:04d}-{end:04d}" if ranged else ""
+        m4b_path = self._audio_dir / f"{_slugify(title)}_{digest[:12]}{suffix}.m4b"
         manifest_path = self._tmp_dir / f"audiobook_{digest[:12]}.manifest.json"
+        range_key = f"{start}-{end}"
+        started = time.monotonic()
+
+        async def _emit(payload: dict[str, Any]) -> None:
+            if on_progress is None:
+                return
+            outcome = on_progress(payload)
+            if inspect.isawaitable(outcome):
+                await outcome
+
+        await _emit(
+            {
+                "digest": digest,
+                "chapters_total": total_chapters,
+                "chapter_start": start,
+                "chapter_end": end,
+                "progress": {
+                    "done": 0,
+                    "total": len(chapters),
+                    "elapsed_seconds": 0.0,
+                    "chapter_start": start,
+                    "chapter_end": end,
+                },
+            }
+        )
 
         if m4b_path.exists():
             duration = _probe_duration(m4b_path)
             if duration > 0:
+                await _emit(
+                    {
+                        "cached": True,
+                        "progress": {
+                            "done": len(chapters),
+                            "total": len(chapters),
+                            "elapsed_seconds": round(time.monotonic() - started, 2),
+                            "audio_seconds": round(duration, 2),
+                            "chapter_start": start,
+                            "chapter_end": end,
+                        },
+                    }
+                )
                 return AudiobookResult(
                     m4b_path=str(m4b_path),
                     chapters=len(chapters),
                     duration_seconds=round(duration, 2),
                     cached=True,
+                    digest=digest,
+                    chapter_start=start,
+                    chapter_end=end,
                 )
 
         # Fallback cover: extract it from the source EPUB only on a cache miss.
@@ -240,20 +631,40 @@ class AudiobookService:
             "chapters": [],
             "merged": None,
             "normed": None,
+            "ranges": {},
         }
         if resume and manifest_path.exists():
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    manifest.update(loaded)
             except Exception:
-                manifest = {"digest": digest, "chapters": [], "merged": None, "normed": None}
+                pass
+        manifest.setdefault("digest", digest)
+        manifest.setdefault("chapters", [])
+        if not isinstance(manifest.get("chapters"), list):
+            manifest["chapters"] = []
+        if not isinstance(manifest.get("ranges"), dict):
+            manifest["ranges"] = {}
+        range_state = manifest["ranges"].setdefault(range_key, {})
+
+        def _save_manifest() -> None:
+            try:
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            except Exception:
+                pass
 
         service = DocTTSService(base_dir=str(self._tmp_dir / "doc_tts"))
         chapter_files: list[Path] = []
         chapter_durations: list[float] = []
         chapter_ext = ext_for(backend)
 
-        manifest_chapters = manifest.get("chapters") or []
-        for idx, ch in enumerate(chapters):
+        manifest_chapters = manifest["chapters"]
+        completed = 0
+        audio_seconds = 0.0
+
+        for offset, ch in enumerate(chapters):
+            idx = start - 1 + offset
             if gate is not None and await gate.should_pause():
                 await gate.yield_and_wait()
             done_info = manifest_chapters[idx] if idx < len(manifest_chapters) else {}
@@ -262,8 +673,21 @@ class AudiobookService:
             )
             if resume and cf_path.exists() and done_info.get("done"):
                 chapter_files.append(cf_path)
-                chapter_durations.append(
-                    float(done_info.get("duration") or _probe_duration(cf_path))
+                d = float(done_info.get("duration") or _probe_duration(cf_path))
+                chapter_durations.append(d)
+                audio_seconds += d
+                completed += 1
+                await _emit(
+                    {
+                        "progress": _chapter_progress(
+                            done=completed,
+                            total=len(chapters),
+                            chapter=idx + 1,
+                            title=ch.title,
+                            elapsed=round(time.monotonic() - started, 2),
+                            audio_seconds=round(audio_seconds, 2),
+                        )
+                    }
                 )
                 continue
             stable = self._tmp_dir / f"{digest[:12]}_ch{idx:04d}{chapter_ext}"
@@ -283,6 +707,29 @@ class AudiobookService:
                 except Exception:
                     stable = cf
             else:
+
+                async def _chunk_progress(
+                    done_chunks: int,
+                    total_chunks: int,
+                    *,
+                    _idx: int = idx,
+                    _title: str = ch.title,
+                ) -> None:
+                    await _emit(
+                        {
+                            "progress": _chapter_progress(
+                                done=completed,
+                                total=len(chapters),
+                                chapter=_idx + 1,
+                                title=_title,
+                                elapsed=round(time.monotonic() - started, 2),
+                                audio_seconds=round(audio_seconds, 2),
+                                chunks_done=done_chunks,
+                                chunks_total=total_chunks,
+                            )
+                        }
+                    )
+
                 await self._synthesize_chapter(
                     text=ch.text,
                     out_path=stable,
@@ -290,229 +737,80 @@ class AudiobookService:
                     language=language,
                     backend=backend,
                     gate=gate,
+                    on_progress=_chunk_progress,
                 )
             chapter_files.append(stable)
             d = _probe_duration(stable)
             chapter_durations.append(d)
+            audio_seconds += d
+            completed += 1
             if idx >= len(manifest_chapters):
-                manifest_chapters.append({})
+                manifest_chapters.extend({} for _ in range(idx - len(manifest_chapters) + 1))
             manifest_chapters[idx] = {"path": str(stable), "done": True, "duration": d}
             manifest["chapters"] = manifest_chapters
-            try:
-                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            except Exception:
-                pass
+            _save_manifest()
+            await _emit(
+                {
+                    "progress": _chapter_progress(
+                        done=completed,
+                        total=len(chapters),
+                        chapter=idx + 1,
+                        title=ch.title,
+                        elapsed=round(time.monotonic() - started, 2),
+                        audio_seconds=round(audio_seconds, 2),
+                    )
+                }
+            )
 
-        # reuse merged
-        merged_cand = manifest.get("merged")
+        # Reuse the merged/normalized files of this exact range. A range keeps
+        # its intermediates under ``ranges`` so it can never overwrite the
+        # full-book ones; the full render keeps the legacy top-level keys.
+        merged_cand = range_state.get("merged") if ranged else manifest.get("merged")
+        merged = self._tmp_dir / f"{digest[:12]}{suffix}_merged.mp3"
         if resume and merged_cand and Path(merged_cand).exists():
             merged = Path(merged_cand)
         else:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".txt", delete=False, dir=str(self._tmp_dir)
-            ) as f:
-                for cf in chapter_files:
-                    f.write(f"file '{Path(cf).resolve()}'\n")
-                concat_list = f.name
-            merged = self._tmp_dir / f"{digest[:12]}_merged.mp3"
-            try:
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    concat_list,
-                    "-c",
-                    "copy",
-                    str(merged),
-                ]
-                try:
-                    subprocess.run(cmd, check=True, timeout=3600)
-                except Exception:
-                    cmd = [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-y",
-                        "-f",
-                        "concat",
-                        "-safe",
-                        "0",
-                        "-i",
-                        concat_list,
-                        "-ar",
-                        "44100",
-                        "-ac",
-                        "2",
-                        "-c:a",
-                        "libmp3lame",
-                        "-b:a",
-                        "192k",
-                        str(merged),
-                    ]
-                    subprocess.run(cmd, check=True, timeout=3600)
-            finally:
-                try:
-                    os.unlink(concat_list)
-                except Exception:
-                    pass
-            manifest["merged"] = str(merged)
-            try:
-                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            except Exception:
-                pass
+            _concat_audio_files(chapter_files, merged, self._tmp_dir)
+            if ranged:
+                range_state["merged"] = str(merged)
+            else:
+                manifest["merged"] = str(merged)
+            _save_manifest()
 
         if loudnorm:
-            normed_cand = manifest.get("normed")
+            normed_cand = range_state.get("normed") if ranged else manifest.get("normed")
+            normed = self._tmp_dir / f"{digest[:12]}{suffix}_norm.mp3"
             if resume and normed_cand and Path(normed_cand).exists():
                 merged = Path(normed_cand)
             else:
-                normed = self._tmp_dir / f"{digest[:12]}_norm.mp3"
                 try:
-                    cmd = [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-y",
-                        "-i",
-                        str(merged),
-                        "-af",
-                        "loudnorm=I=-18:TP=-1.5:LRA=11",
-                        "-ar",
-                        "44100",
-                        str(normed),
-                    ]
-                    subprocess.run(cmd, check=True, timeout=3600)
+                    _apply_loudnorm(merged, normed)
                     merged = normed
-                    manifest["normed"] = str(normed)
-                    try:
-                        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-                    except Exception:
-                        pass
+                    if ranged:
+                        range_state["normed"] = str(normed)
+                    else:
+                        manifest["normed"] = str(normed)
+                    _save_manifest()
                 except Exception as exc:
                     logger.warning("audiobook_loudnorm_failed", error=str(exc))
 
-        meta_file = self._tmp_dir / f"{digest[:12]}.ffmeta"
-        with meta_file.open("w", encoding="utf-8") as mf:
-            mf.write(";FFMETADATA1\n")
-            if title:
-                mf.write(f"title={title}\n")
-            if author:
-                mf.write(f"artist={author}\n")
-            pos = 0.0
-            for idx, ch in enumerate(chapters):
-                dur = chapter_durations[idx] if idx < len(chapter_durations) else 60.0
-                if dur <= 0:
-                    dur = 60.0
-                start_ms = int(pos * 1000)
-                end_ms = int((pos + dur) * 1000)
-                mf.write(f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start_ms}\nEND={end_ms}\n")
-                mf.write(f"title={ch.title}\n")
-                pos += dur
-
-        # Mux to a sibling temp file and publish with os.replace: a failed
-        # ffmpeg run must never leave a partial .m4b that the next request
-        # would mistake for a finished (cached) render.
-        tmp_m4b = m4b_path.with_name(f".{m4b_path.stem}.{os.getpid()}.part.m4b")
-        tmp_m4b.unlink(missing_ok=True)
-        try:
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(merged),
-                "-i",
-                str(meta_file),
-                "-map_metadata",
-                "1",
-                "-c",
-                "copy",
-                "-f",
-                "mp4",
-                str(tmp_m4b),
-            ]
-            if cover_path and Path(cover_path).exists():
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(merged),
-                    "-i",
-                    str(cover_path),
-                    "-i",
-                    str(meta_file),
-                    "-map",
-                    "0:a",
-                    "-map",
-                    "1:v",
-                    "-map_metadata",
-                    "2",
-                    "-c:a",
-                    "copy",
-                    "-c:v",
-                    "copy",
-                    "-disposition:v:0",
-                    "attached_pic",
-                    "-f",
-                    "mp4",
-                    str(tmp_m4b),
-                ]
-            try:
-                subprocess.run(cmd, check=True, timeout=7200)
-            except Exception:
-                # fallback re-encode audio if streams incompatible
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-i",
-                    str(merged),
-                    "-i",
-                    str(cover_path) if cover_path and Path(cover_path).exists() else str(meta_file),
-                ]
-                if cover_path and Path(cover_path).exists():
-                    cmd.extend(
-                        ["-i", str(meta_file), "-map", "0:a", "-map", "1:v", "-map_metadata", "2"]
-                    )
-                else:
-                    cmd.extend(["-map_metadata", "1"])
-                cmd.extend(
-                    [
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        "192k",
-                        "-ar",
-                        "44100",
-                        "-c:v",
-                        "copy" if cover_path and Path(cover_path).exists() else "none",
-                        "-f",
-                        "mp4",
-                        str(tmp_m4b),
-                    ]
-                )
-                subprocess.run(cmd, check=True, timeout=7200)
-            os.replace(tmp_m4b, m4b_path)
-        except Exception as exc:
-            tmp_m4b.unlink(missing_ok=True)
-            logger.error("audiobook_mux_failed", error=str(exc))
-            raise
+        meta_file = self._tmp_dir / f"{m4b_path.stem}.ffmeta"
+        _write_ffmeta(
+            meta_file,
+            title=title,
+            author=author,
+            chapter_titles=[ch.title for ch in chapters],
+            durations=chapter_durations,
+        )
+        _mux_m4b(
+            merged=merged,
+            meta_file=meta_file,
+            cover_path=cover_path,
+            out_path=m4b_path,
+        )
+        if ranged:
+            range_state["m4b"] = str(m4b_path)
+        _save_manifest()
 
         total_dur = sum(chapter_durations) if chapter_durations else _probe_duration(m4b_path)
         return AudiobookResult(
@@ -520,7 +818,113 @@ class AudiobookService:
             chapters=len(chapters),
             duration_seconds=round(total_dur, 2),
             cached=False,
+            digest=digest,
+            chapter_start=start,
+            chapter_end=end,
         )
+
+    def build_partial_m4b(
+        self,
+        *,
+        digest_prefix: str,
+        title: str,
+        author: str = "",
+        loudnorm: bool = True,
+        up_to: int | None = None,
+        run_id: str | None = None,
+    ) -> tuple[Path, int]:
+        """Mux the finished chapters of a render into a preview M4B.
+
+        The full render writes each chapter to the digest-keyed manifest as
+        soon as it is done, so this method can build a playable file from the
+        middle of a multi-hour run without touching the final artifacts. The
+        partial file is cached by digest, first/last chapter and loudness mode.
+
+        Args:
+            digest_prefix: First 12 hex chars of the render digest.
+            title: Book title (used for the filename and M4B metadata).
+            author: Book author.
+            loudnorm: Apply the same loudnorm as the final render.
+            up_to: Only include the first N finished chapters (None = all).
+            run_id: Optional workflow id, used to pick up an uploaded cover.
+
+        Returns:
+            Tuple of (partial M4B path, number of chapters included).
+
+        Raises:
+            RuntimeError: When the digest/manifest is unavailable or no chapter
+                has finished yet.
+        """
+        prefix = (digest_prefix or "")[:12].lower()
+        if not re.fullmatch(r"[0-9a-f]{12}", prefix):
+            raise RuntimeError("this run has no render digest yet")
+        manifest_path = self._tmp_dir / f"audiobook_{prefix}.manifest.json"
+        if not manifest_path.exists():
+            raise RuntimeError("the render manifest is not available yet")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"the render manifest is unreadable: {exc}") from exc
+        entries = manifest.get("chapters") or []
+        done: list[tuple[int, Path, float]] = []
+        for idx, info in enumerate(entries):
+            if not isinstance(info, dict) or not info.get("done"):
+                continue
+            path = Path(str(info.get("path") or ""))
+            if not path.is_file():
+                continue
+            done.append((idx, path, float(info.get("duration") or _probe_duration(path))))
+        if up_to is not None and up_to > 0:
+            done = done[:up_to]
+        if not done:
+            raise RuntimeError("no finished chapters to build a partial audiobook from")
+
+        first_idx, last_idx = done[0][0], done[-1][0]
+        partial_dir = self._base / "partial"
+        partial_dir.mkdir(parents=True, exist_ok=True)
+        out_path = (
+            partial_dir
+            / f"{_slugify(title)}_{prefix}_partial{first_idx + 1:04d}-{last_idx + 1:04d}.m4b"
+        )
+        if out_path.exists() and _probe_duration(out_path) > 0:
+            return out_path, len(done)
+
+        cover_path: str | None = None
+        if run_id:
+            covers_dir = self._base / "covers"
+            if covers_dir.is_dir():
+                for cover_file in sorted(covers_dir.glob(f"{run_id}.*")):
+                    if cover_file.is_file():
+                        cover_path = str(cover_file)
+                        break
+
+        merged = (
+            self._tmp_dir / f"{prefix}_partial{first_idx + 1:04d}-{last_idx + 1:04d}_merged.mp3"
+        )
+        _concat_audio_files([path for _, path, _ in done], merged, self._tmp_dir)
+        if loudnorm:
+            normed = merged.with_name(f"{merged.stem}_norm.mp3")
+            try:
+                _apply_loudnorm(merged, normed)
+                merged = normed
+            except Exception as exc:
+                logger.warning("audiobook_partial_loudnorm_failed", error=str(exc))
+
+        meta_file = self._tmp_dir / f"{out_path.stem}.ffmeta"
+        _write_ffmeta(
+            meta_file,
+            title=title,
+            author=author,
+            chapter_titles=[f"Capítulo {idx + 1}" for idx, _, _ in done],
+            durations=[duration for _, _, duration in done],
+        )
+        _mux_m4b(
+            merged=merged,
+            meta_file=meta_file,
+            cover_path=cover_path,
+            out_path=out_path,
+        )
+        return out_path, len(done)
 
     async def _synthesize_chapter(
         self,
@@ -531,6 +935,7 @@ class AudiobookService:
         language: str,
         backend: TTSBackend,
         gate: Any = None,
+        on_progress: Callable[[int, int], Any] | None = None,
     ) -> Path:
         """Synthesize one chapter with a non-edge engine and join the chunks.
 
@@ -549,6 +954,9 @@ class AudiobookService:
             backend: Engine that synthesizes (always via the local gateway or
                 client-side edge — never Modal).
             gate: Optional RenderGate for the digest hand-over.
+            on_progress: Optional callback ``(done_chunks, total_chunks)``
+                invoked after each chunk so the GUI can show intra-chapter
+                progress. It may be sync or async.
 
         Returns:
             ``out_path`` once the chapter file exists.
@@ -571,7 +979,8 @@ class AudiobookService:
         chunk_dir.mkdir(parents=True, exist_ok=True)
         ext = ext_for(backend)
         chunk_files: list[Path] = []
-        for chunk in chunks:
+        total_chunks = len(chunks)
+        for done_chunks, chunk in enumerate(chunks, start=1):
             key = _hash(str(backend), resolved, language, chunk)[:16]
             cf = chunk_dir / f"{key}{ext}"
             if not cf.exists():
@@ -584,6 +993,10 @@ class AudiobookService:
                     )
                 atomic_write(cf, data)
             chunk_files.append(cf)
+            if on_progress is not None:
+                outcome = on_progress(done_chunks, total_chunks)
+                if inspect.isawaitable(outcome):
+                    await outcome
 
         if len(chunk_files) == 1:
             if chunk_files[0] != out_path:
@@ -647,6 +1060,46 @@ class AudiobookService:
         return out_path
 
 
+def parse_chapter_range(
+    chapter_start: str | int | None,
+    chapter_end: str | int | None,
+) -> tuple[int | None, int | None]:
+    """Parse the optional 1-based inclusive chapter range from a form.
+
+    Args:
+        chapter_start: First chapter as submitted (string or int, may be empty).
+        chapter_end: Last chapter as submitted (string or int, may be empty).
+
+    Returns:
+        ``(start, end)`` with None for "unset".
+
+    Raises:
+        SubmitError: 422 when a value is not a positive integer or the range is
+            inverted.
+    """
+    from src.api.services.doc_tts import SubmitError
+
+    def _one(value: str | int | None, label: str) -> int | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text)
+        except (TypeError, ValueError) as exc:
+            raise SubmitError(f"{label} debe ser un número entero", status_code=422) from exc
+        if parsed < 1:
+            raise SubmitError(f"{label} debe ser mayor o igual que 1", status_code=422)
+        return parsed
+
+    start = _one(chapter_start, "chapter_start")
+    end = _one(chapter_end, "chapter_end")
+    if start is not None and end is not None and start > end:
+        raise SubmitError("chapter_start no puede ser mayor que chapter_end", status_code=422)
+    return start, end
+
+
 async def submit_audiobook(
     upload,
     content_length: str,
@@ -655,6 +1108,8 @@ async def submit_audiobook(
     title: str | None = None,
     engine: str | None = None,
     cover=None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
 ):
     from pathlib import Path
 
@@ -692,6 +1147,13 @@ async def submit_audiobook(
             "pick edge, tts-api gateway, Kokoro or Qwen3-TTS (local gateway)",
             status_code=422,
         )
+
+    if chapter_start is not None and chapter_start < 1:
+        raise SubmitError("chapter_start debe ser mayor o igual que 1", status_code=422)
+    if chapter_end is not None and chapter_end < 1:
+        raise SubmitError("chapter_end debe ser mayor o igual que 1", status_code=422)
+    if chapter_start is not None and chapter_end is not None and chapter_start > chapter_end:
+        raise SubmitError("chapter_start no puede ser mayor que chapter_end", status_code=422)
 
     # Reject a voice outside the chosen engine's vocabulary before storing
     # data (same rule as document TTS, but against the selected engine).
@@ -742,11 +1204,19 @@ async def submit_audiobook(
             "language": (language or "").strip(),
             "engine": str(backend),
             "mode": str(backend),
+            "chapter_start": chapter_start,
+            "chapter_end": chapter_end,
         },
     )
 
     repo = AudioJobsRepository()
     await repo.start_job(workflow_id, collection=AUDIOBOOK_COLLECTION, kind=AUDIOBOOK_KIND)
+    await repo.set_chapter_range(
+        workflow_id,
+        chapter_start,
+        chapter_end,
+        kind=AUDIOBOOK_KIND,
+    )
     try:
         from src.api.services.temporal_admin import TemporalAdminService
 
@@ -758,6 +1228,8 @@ async def submit_audiobook(
                 voice=(voice or "").strip(),
                 language=(language or "").strip(),
                 engine=str(backend),
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
             ),
             workflow_id,
         )

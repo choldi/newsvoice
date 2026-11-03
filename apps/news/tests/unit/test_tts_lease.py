@@ -505,3 +505,53 @@ async def test_waiters_lists_live_waiters_in_priority_order() -> None:
 
     await _expire_waiter("render-run")
     assert [w["owner"] for w in await service.waiters()] == ["design-window"]
+
+
+async def test_gate_operator_pause_hands_the_engine_back_and_waits() -> None:
+    """A paused audiobook releases the engine and re-acquires it on resume."""
+    service = _service()
+    paused = {"on": True}
+    states: list[bool] = []
+    gate = RenderGate(
+        service,
+        "render-run",
+        PRIORITY_RENDER,
+        on_state=states.append,
+        user_paused=lambda: paused["on"],
+    )
+    await service.acquire("render-run", PRIORITY_RENDER)
+
+    assert await gate.should_pause() is True
+    waiter = asyncio.create_task(gate.yield_and_wait())
+    for _ in range(200):
+        if await service.holder() is None:
+            break
+        await asyncio.sleep(0.01)
+    assert await service.holder() is None, "the engine is free while the operator holds"
+
+    paused["on"] = False
+    await waiter
+
+    assert states == [True, False]
+    assert await service.holder() == "render-run"
+
+
+async def test_gate_operator_pause_works_with_the_lease_disabled() -> None:
+    """TTS_LEASE_ENABLED=false must not disable the operator's pause button."""
+    service = _service(enabled=False)
+    paused = {"on": True}
+    states: list[bool] = []
+
+    async def _paused() -> bool:
+        return paused["on"]
+
+    gate = RenderGate(service, "render-run", on_state=states.append, user_paused=_paused)
+
+    assert await gate.should_pause() is True
+    waiter = asyncio.create_task(gate.yield_and_wait())
+    await asyncio.sleep(0.05)
+    assert not waiter.done(), "a disabled lease still honours the operator pause"
+
+    paused["on"] = False
+    await waiter
+    assert states == [True, False]

@@ -1,0 +1,58 @@
+{% if not job %}
+<div class="empty">Aún no hay audiolibros.</div>
+{% else %}
+<div class="card" style="margin:10px 0">
+  <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline">
+    <div>
+      <strong>Último audiolibro:</strong> {{ job.title or '—' }}
+      <span class="badge {{ status_badges.get(job.status, '') }}">{{ status_labels.get(job.status, job.status) }}</span>
+      {% if job.paused %}<span class="badge paused">pausa pedida</span>{% endif %}
+      {% if job.chapter_start or job.chapter_end %}
+      <span class="muted">cap. {{ job.chapter_start or 1 }}–{{ job.chapter_end or '…' }}</span>
+      {% endif %}
+    </div>
+    <div class="muted" style="font-size:12px">
+      {{ job.run_id }} · inicio {{ fmt_iso(job.started_at) }}
+      {% if job.elapsed_seconds %} · {{ '%.0f'|format(job.elapsed_seconds) }}s{% endif %}
+    </div>
+  </div>
+  {% if job.status in ['STARTING', 'GENERATING', 'PAUSED'] %}
+  <div class="muted" style="font-size:12px;margin-top:6px">
+    {% if job.chunks_total %}
+      {{ job.chunks_done }}/{{ job.chunks_total }} capítulos
+      {% if job.eta is not none %} · quedan ~{{ '%.0f'|format(job.eta) }}s{% endif %}
+    {% else %}
+      preparando el texto…
+    {% endif %}
+  </div>
+  {% if job.chunks_total %}
+  <div style="height:6px;background:rgba(255,255,255,.08);border-radius:3px;margin-top:4px;overflow:hidden">
+    <div style="height:100%;width:{{ (100 * job.chunks_done / job.chunks_total)|round(1) }}%;background:var(--accent,#4c8bf5)"></div>
+  </div>
+  {% endif %}
+  {% endif %}
+  {% if job.status == 'FINISHED_ERROR' and job.error %}
+  <div class="muted" style="font-size:12px;margin-top:6px">{{ job.error[:240] }}</div>
+  {% endif %}
+  <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+    {% if can_operate and job.status in ['STARTING', 'GENERATING', 'PAUSED'] %}
+      {% if job.paused %}
+      <form method="post" action="/ui/tools/audiobooks/{{ job.run_id }}/resume">
+        <button class="btn" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Reanudar</button>
+      </form>
+      {% else %}
+      <form method="post" action="/ui/tools/audiobooks/{{ job.run_id }}/pause">
+        <button class="btn" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Pausar</button>
+      </form>
+      {% endif %}
+    {% endif %}
+    {% if job.partial_url %}
+    <a class="btn" style="margin:0;padding:2px 8px;font-size:11px" href="{{ job.partial_url }}"
+       title="Une los capítulos ya terminados para revisarlos">Descargar parcial ({{ job.chunks_done }} cap.)</a>
+    {% endif %}
+    {% if job.audio_url %}
+    <a class="btn" style="margin:0;padding:2px 8px;font-size:11px" href="{{ job.audio_url }}">Descargar M4B</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

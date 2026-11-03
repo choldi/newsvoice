@@ -41,6 +41,9 @@
             {{ j.title or '—' }}
             {% if j.mode %}<span class="badge running">{{ j.mode }}</span>{% endif %}
             {% if j.char_count %}<span class="muted">({{ j.char_count }} car.)</span>{% endif %}
+            {% if kind == 'audiobook' and (j.chapter_start or j.chapter_end) %}
+            <span class="muted">cap. {{ j.chapter_start or 1 }}–{{ j.chapter_end or '…' }}</span>
+            {% endif %}
           </td>
           <td>
             <span class="badge {{ status_badges.get(j.status, '') }}">{{ status_labels.get(j.status, j.status) }}</span>
@@ -57,20 +60,38 @@
             <div class="muted" style="font-size:12px">
               {% if j.eta is not none %}⏳ quedan ~{{ '%.0f'|format(j.eta) }}s
               {% else %}~{{ '%.0f'|format(j.estimate) }}s estimados{% endif %}
-              {%- if j.chunks_total %} ({{ j.chunks_done }}/{{ j.chunks_total }} trozos){% endif %}
+              {%- if j.chunks_total %} ({{ j.chunks_done }}/{{ j.chunks_total }} {{ 'capítulos' if kind == 'audiobook' else 'trozos' }}){% endif %}
             </div>
             {% endif %}
           </td>
           <td>
             {% if j.audio_url %}
             <a class="btn" style="margin:0;padding:2px 8px;font-size:11px" href="{{ j.audio_url }}">Descargar</a>
-            {% elif j.status == 'FINISHED_OK' %}
-            <span class="muted" title="Sin secreto de enlaces firmados no hay URL">—</span>
-            {% else %}
-            <span class="muted">…</span>
+            {% endif %}
+            {% if j.partial_url %}
+            <a class="btn" style="margin:0;padding:2px 8px;font-size:11px" href="{{ j.partial_url }}"
+               title="Une los capítulos ya terminados">Parcial ({{ j.chunks_done }})</a>
+            {% endif %}
+            {% if not j.audio_url and not j.partial_url %}
+              {% if j.status == 'FINISHED_OK' %}
+              <span class="muted" title="Sin secreto de enlaces firmados no hay URL">—</span>
+              {% else %}
+              <span class="muted">…</span>
+              {% endif %}
             {% endif %}
           </td>
           <td>
+            {% if can_operate and kind == 'audiobook' and j.status in ['STARTING', 'GENERATING', 'PAUSED'] %}
+            {% if j.paused %}
+            <form method="post" action="/ui/tools/audiobooks/{{ j.run_id }}/resume">
+              <button class="btn" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Reanudar</button>
+            </form>
+            {% else %}
+            <form method="post" action="/ui/tools/audiobooks/{{ j.run_id }}/pause">
+              <button class="btn" type="submit" style="margin:0;padding:2px 8px;font-size:11px">Pausar</button>
+            </form>
+            {% endif %}
+            {% endif %}
             {% if j.status == 'FINISHED_OK' and j.audio_url and can_operate %}
             <form method="post" action="/ui/tools/jobs/{{ kind }}/{{ j.run_id }}/delete"
                   onsubmit="return confirm('¿Borrar este audio y todo su trabajo?')">
