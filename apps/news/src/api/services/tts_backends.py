@@ -254,6 +254,8 @@ async def gateway_tts(
     timeout: float | None = None,
     client: httpx.AsyncClient | None = None,
     engine: str | None = None,
+    speed: float = 1.0,
+    emotion: str | None = None,
 ) -> bytes:
     """Synthesize one text through the tts-api gateway.
 
@@ -267,6 +269,8 @@ async def gateway_tts(
         client: Injected client (tests pass a mock transport).
         engine: Optional sub-engine pin ('kokoro', ...); without it the
             gateway's own language routing picks the engine.
+        speed: Speaking rate multiplier, forwarded to the gateway.
+        emotion: Optional gateway emotion tag (engine-dependent).
 
     Returns:
         The WAV payload returned by the gateway.
@@ -282,6 +286,8 @@ async def gateway_tts(
         text=text,
         voice_id=voice_id,
         language=language,
+        speed=speed,
+        emotion=emotion or None,
         engine=engine or None,
     )
     payload = request.model_dump(exclude_none=True)
@@ -457,6 +463,9 @@ async def synthesize(
     *,
     timeout: float | None = None,
     run_in_modal: bool | None = None,
+    speed: float = 1.0,
+    emotion: str | None = None,
+    pitch_hz: float = 0.0,
 ) -> bytes:
     """Synthesize ``text`` with the chosen engine.
 
@@ -471,6 +480,11 @@ async def synthesize(
             gateway's language routing cannot redirect the request); ``True``/
             ``None`` keep the historical Modal call. Ignored by other backends
             (zonos2/voxcpm2 have no local engine).
+        speed: Speaking rate multiplier. Supported by Edge and the gateway
+            engines; Modal keeps its historical default.
+        emotion: Optional emotion tag for engines that support it (currently
+            the OmniVoice gateway engine).
+        pitch_hz: Pitch shift in hertz for Edge; ignored by the other engines.
 
     Returns:
         Raw audio bytes in the backend's native format (see :func:`ext_for`).
@@ -484,7 +498,14 @@ async def synthesize(
     if backend is TTSBackend.EDGE:
         from src.api.services.tts import synthesize_mp3
 
-        return await synthesize_mp3(text, voice, timeout=None if timeout is None else int(timeout))
+        edge_options: dict[str, object] = {}
+        if timeout is not None:
+            edge_options["timeout"] = int(timeout)
+        if speed != 1.0:
+            edge_options["speed"] = speed
+        if pitch_hz:
+            edge_options["pitch_hz"] = pitch_hz
+        return await synthesize_mp3(text, voice, **edge_options)
 
     if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
         # Kokoro must be pinned explicitly: without ``engine`` the gateway's
@@ -496,6 +517,8 @@ async def synthesize(
             language,
             timeout=timeout if timeout is not None else None,
             engine="kokoro" if backend is TTSBackend.KOKORO else None,
+            speed=speed,
+            emotion=emotion if backend is TTSBackend.OMNIVOICE else None,
         )
 
     if backend is TTSBackend.QWEN3_TTS and run_in_modal is False:
@@ -507,6 +530,7 @@ async def synthesize(
             language,
             timeout=timeout if timeout is not None else None,
             engine="qwen3_tts",
+            speed=speed,
         )
 
     return await _modal_synthesize(backend, text, voice, language)

@@ -261,7 +261,14 @@ async def resolve_edge_voice(voice: str, language: str) -> str:
 
 
 @trace_function(component="tts.engine")
-async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -> bytes:
+async def synthesize_mp3(
+    text: str,
+    voice: str,
+    *,
+    timeout: int | None = None,
+    speed: float = 1.0,
+    pitch_hz: float = 0.0,
+) -> bytes:
     """Synthesize text with an Edge neural voice, returning the MP3 bytes.
 
     Args:
@@ -269,6 +276,9 @@ async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -
         voice: Valid Edge voice ShortName.
         timeout: Seconds before the call is abandoned. Defaults to
             ``settings.tts_request_timeout``.
+        speed: Speaking rate multiplier. Edge receives it as a percentage
+            offset from the voice's natural tempo.
+        pitch_hz: Pitch shift in hertz (0 keeps the voice unchanged).
 
     Returns:
         Raw MP3 audio bytes.
@@ -279,7 +289,12 @@ async def synthesize_mp3(text: str, voice: str, *, timeout: int | None = None) -
     if not text.strip():
         raise RuntimeError("No text to synthesize")
     limit = timeout if timeout is not None else get_settings().tts_request_timeout
-    communicate = edge_tts.Communicate(text, voice)
+    edge_options: dict[str, str] = {}
+    if speed != 1.0:
+        edge_options["rate"] = f"{round((speed - 1.0) * 100):+d}%"
+    if pitch_hz:
+        edge_options["pitch"] = f"{round(pitch_hz):+d}Hz"
+    communicate = edge_tts.Communicate(text, voice, **edge_options)
     chunks: list[bytes] = []
 
     async def _collect() -> None:

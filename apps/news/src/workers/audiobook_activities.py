@@ -15,6 +15,7 @@ from temporalio.exceptions import ApplicationError
 
 from src.api.db.database import AudioJobsRepository
 from src.api.services.audiobook import AUDIOBOOK_KIND, AudiobookService
+from src.api.services.book_structure import BookBlock
 from src.api.services.document_text import extract_document
 from src.api.services.tts_lease import PRIORITY_RENDER, RenderGate, TTSLeaseService
 
@@ -106,7 +107,16 @@ async def extract_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
         path = Path(source_path)
         data = path.read_bytes()
         doc = extract_document(data, filename)
-        return {"text": doc.text, "title": doc.title, "filename": filename, "kind": doc.kind}
+        # Blocks already carry the full text; sending both would nearly double
+        # the Temporal payload of a 600k-character book. Keep the flat text only
+        # as the legacy fallback for a document that produced no blocks.
+        return {
+            "text": doc.text if not doc.blocks else "",
+            "title": doc.title,
+            "filename": filename,
+            "kind": doc.kind,
+            "blocks": [block.to_dict() for block in doc.blocks],
+        }
     except asyncio.CancelledError:
         await _finish_error(repo, run_id, "audiobook extract cancelled")
         raise
@@ -120,6 +130,8 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
     run_id = str(payload.get("run_id") or "")
     text = str(payload.get("text") or "")
     title = str(payload.get("title") or "")
+    raw_blocks = payload.get("blocks") or []
+    blocks = [BookBlock.from_dict(block) for block in raw_blocks if isinstance(block, dict)]
     repo = AudioJobsRepository()
     await repo.set_generating(run_id, kind=AUDIOBOOK_KIND)
     started = time.monotonic()
@@ -179,6 +191,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
                 service = AudiobookService()
                 res = await service.render_m4b(
                     text=text,
+                    blocks=blocks,
                     title=title,
                     voice=str(payload.get("voice") or ""),
                     language=str(payload.get("language") or "es"),

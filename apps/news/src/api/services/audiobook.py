@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -19,7 +20,24 @@ import structlog
 
 from src.api.models.narration import TTSBackend
 from src.api.services.audio_files import atomic_write
-from src.api.services.tts_backends import ext_for
+from src.api.services.book_structure import (
+    PROFILE_VERSION,
+    BookBlock,
+    BookRole,
+    DeliveryProfile,
+    blocks_from_markdown,
+    blocks_from_plain_text,
+    chapters_from_blocks,
+    profile_for,
+)
+from src.core.audio import (
+    CANONICAL_FORMAT,
+    AudioError,
+    build_wav,
+    concat_wavs,
+    silence_bytes,
+    wav_format,
+)
 from src.core.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -33,6 +51,7 @@ class AudiobookChapter:
     title: str
     text: str
     start_index: int = 0
+    blocks: tuple[BookBlock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,40 +168,36 @@ def extract_cover_from_epub(epub_path: Path) -> Path | None:
     return None
 
 
+def _blocks_from_text(text: str, title: str = "") -> list[BookBlock]:
+    """Parse speech text into blocks, detecting Markdown headings when present."""
+    if re.search(r"(?m)^#{1,6}\s+\S", text or ""):
+        return blocks_from_markdown(text, title)
+    return blocks_from_plain_text(text, title)
+
+
+def _chapters_from_book_blocks(
+    blocks: list[BookBlock], max_chars: int = 8000
+) -> list[AudiobookChapter]:
+    """Convert structural chapters into the renderer's chapter shape."""
+    return [
+        AudiobookChapter(title=chapter.title, text=chapter.text, blocks=chapter.blocks)
+        for chapter in chapters_from_blocks(blocks, max_chars=max_chars)
+    ]
+
+
 def split_chapters(text: str, max_chars: int = 8000) -> list[AudiobookChapter]:
+    """Split text into structural chapters, preserving heading titles.
+
+    Args:
+        text: Speech-ready text, optionally containing Markdown headings.
+        max_chars: Maximum size of a chapter without an explicit heading.
+
+    Returns:
+        Chapters in reading order; empty for blank input.
+    """
     if not text.strip():
         return []
-    # try headings
-    m = re.split(r"(?m)^#{1,3}\s+.+$", text)
-    if len(m) >= 2:
-        blocks = [b.strip() for b in m if b.strip()]
-        if len(blocks) >= 2:
-            chapters = []
-            for i, b in enumerate(blocks):
-                chapters.append(AudiobookChapter(title=f"Capítulo {i + 1}", text=b))
-            return chapters
-    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
-    if len(blocks) >= 2 and max_chars >= 8000:
-        chapters = []
-        for i, b in enumerate(blocks):
-            chapters.append(AudiobookChapter(title=f"Capítulo {i + 1}", text=b))
-        return chapters
-    chapters = []
-    buf: list[str] = []
-    total = 0
-    for b in blocks:
-        if total + len(b) > max_chars and buf:
-            chapters.append(
-                AudiobookChapter(title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf))
-            )
-            buf, total = [], 0
-        buf.append(b)
-        total += len(b)
-    if buf:
-        chapters.append(
-            AudiobookChapter(title=f"Capítulo {len(chapters) + 1}", text="\n\n".join(buf))
-        )
-    return chapters
+    return _chapters_from_book_blocks(_blocks_from_text(text), max_chars=max_chars)
 
 
 def _chapter_progress(
@@ -241,7 +256,31 @@ def _concat_audio_files(files: list[Path], out_path: Path, tmp_dir: Path) -> Pat
         raise RuntimeError("no chapter audio to join")
     if len(files) == 1:
         if files[0] != out_path:
-            atomic_write(out_path, files[0].read_bytes())
+            if files[0].suffix.lower() == out_path.suffix.lower():
+                atomic_write(out_path, files[0].read_bytes())
+            else:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(files[0]),
+                        "-ar",
+                        "44100",
+                        "-ac",
+                        "2",
+                        "-c:a",
+                        "libmp3lame",
+                        "-b:a",
+                        "192k",
+                        str(out_path),
+                    ],
+                    check=True,
+                    timeout=3600,
+                )
         return out_path
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, dir=str(tmp_dir)) as f:
@@ -491,11 +530,13 @@ class AudiobookService:
         self._tmp_dir = self._base / "tmp"
         self._audio_dir.mkdir(parents=True, exist_ok=True)
         self._tmp_dir.mkdir(parents=True, exist_ok=True)
+        self._concurrency = settings.doc_tts_concurrency
 
     async def render_m4b(
         self,
         *,
         text: str,
+        blocks: list[BookBlock] | tuple[BookBlock, ...] | None = None,
         title: str = "",
         author: str = "",
         cover_path: str | None = None,
@@ -509,9 +550,13 @@ class AudiobookService:
         chapter_range: tuple[int, int] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> AudiobookResult:
-        from src.api.services.doc_tts import DocTTSService
-
-        all_chapters = split_chapters(text)
+        structured = [
+            block if isinstance(block, BookBlock) else BookBlock.from_dict(block)
+            for block in (blocks or [])
+        ]
+        all_chapters = (
+            _chapters_from_book_blocks(structured) if structured else split_chapters(text)
+        )
         if not all_chapters:
             raise RuntimeError("No chapters to render")
         total_chapters = len(all_chapters)
@@ -544,15 +589,20 @@ class AudiobookService:
                         cover_path = str(cover_file)
                         break
 
+        block_signature = "\x1e".join(
+            f"{block.role}:{block.title}:{block.text}" for block in structured
+        )
         digest = _hash(
             title,
             author,
             language,
             str(backend),
             text,
+            block_signature,
             voice,
             cover_path or "",
             "1" if loudnorm else "0",
+            PROFILE_VERSION,
         )
         # A range render never overwrites the full-book artifacts: its output
         # and intermediate names carry the slice, while the chapter files stay
@@ -654,10 +704,9 @@ class AudiobookService:
             except Exception:
                 pass
 
-        service = DocTTSService(base_dir=str(self._tmp_dir / "doc_tts"))
         chapter_files: list[Path] = []
         chapter_durations: list[float] = []
-        chapter_ext = ext_for(backend)
+        chapter_ext = ".wav"
 
         manifest_chapters = manifest["chapters"]
         completed = 0
@@ -691,54 +740,39 @@ class AudiobookService:
                 )
                 continue
             stable = self._tmp_dir / f"{digest[:12]}_ch{idx:04d}{chapter_ext}"
-            if backend is TTSBackend.EDGE:
-                res = await service.synthesize_document(
-                    text=ch.text,
-                    voice=voice,
-                    language=language,
-                    title=f"{title} - {ch.title}",
+
+            async def _chunk_progress(
+                done_chunks: int,
+                total_chunks: int,
+                *,
+                _idx: int = idx,
+                _title: str = ch.title,
+            ) -> None:
+                await _emit(
+                    {
+                        "progress": _chapter_progress(
+                            done=completed,
+                            total=len(chapters),
+                            chapter=_idx + 1,
+                            title=_title,
+                            elapsed=round(time.monotonic() - started, 2),
+                            audio_seconds=round(audio_seconds, 2),
+                            chunks_done=done_chunks,
+                            chunks_total=total_chunks,
+                        )
+                    }
                 )
-                cf = Path(res.audio_path)
-                try:
-                    if cf != stable:
-                        import shutil
 
-                        shutil.copy2(cf, stable)
-                except Exception:
-                    stable = cf
-            else:
-
-                async def _chunk_progress(
-                    done_chunks: int,
-                    total_chunks: int,
-                    *,
-                    _idx: int = idx,
-                    _title: str = ch.title,
-                ) -> None:
-                    await _emit(
-                        {
-                            "progress": _chapter_progress(
-                                done=completed,
-                                total=len(chapters),
-                                chapter=_idx + 1,
-                                title=_title,
-                                elapsed=round(time.monotonic() - started, 2),
-                                audio_seconds=round(audio_seconds, 2),
-                                chunks_done=done_chunks,
-                                chunks_total=total_chunks,
-                            )
-                        }
-                    )
-
-                await self._synthesize_chapter(
-                    text=ch.text,
-                    out_path=stable,
-                    voice=voice,
-                    language=language,
-                    backend=backend,
-                    gate=gate,
-                    on_progress=_chunk_progress,
-                )
+            await self._synthesize_chapter(
+                text=ch.text,
+                blocks=ch.blocks,
+                out_path=stable,
+                voice=voice,
+                language=language,
+                backend=backend,
+                gate=gate,
+                on_progress=_chunk_progress,
+            )
             chapter_files.append(stable)
             d = _probe_duration(stable)
             chapter_durations.append(d)
@@ -934,25 +968,24 @@ class AudiobookService:
         voice: str,
         language: str,
         backend: TTSBackend,
+        blocks: tuple[BookBlock, ...] | list[BookBlock] | None = None,
         gate: Any = None,
         on_progress: Callable[[int, int], Any] | None = None,
     ) -> Path:
-        """Synthesize one chapter with a non-edge engine and join the chunks.
+        """Synthesize one chapter block by block and join it with pauses.
 
-        Chunks are cached per (backend, resolved voice, language, text) so a
-        resumed run never re-pays a gateway call, and the engine lease
-        gate is honoured before every real synthesis (the same yield protocol
-        the document render uses). Modal-only engines never reach this method:
-        :func:`submit_audiobook` rejects them, and qwen3_tts is pinned to the
-        local gateway engine below.
+        Every structural block carries its own :class:`DeliveryProfile`, so the
+        same chapter can mix a slow title, a calm preface and normal body
+        prose. The blocks are synthesized independently and joined into one
+        canonical WAV with the profile's paragraph and sentence pauses.
 
         Args:
-            text: Chapter speech text.
-            out_path: Chapter audio file to write (extension from the backend).
+            text: Chapter speech text (used when ``blocks`` is empty).
+            out_path: Chapter audio file to write (canonical WAV).
             voice: Requested voice id (resolved through ``voice_for``).
             language: ISO 639-1 language code.
-            backend: Engine that synthesizes (always via the local gateway or
-                client-side edge — never Modal).
+            backend: Engine that synthesizes (always the local gateway/Edge).
+            blocks: Structural blocks in reading order.
             gate: Optional RenderGate for the digest hand-over.
             on_progress: Optional callback ``(done_chunks, total_chunks)``
                 invoked after each chunk so the GUI can show intra-chapter
@@ -966,98 +999,194 @@ class AudiobookService:
             TTSBackendError: When the engine has no usable voice here.
         """
         from src.api.services.doc_tts import chunk_speech_text
-        from src.api.services.tts_backends import synthesize, voice_for
+        from src.api.services.tts_backends import voice_for
+
+        sequence = list(blocks or ())
+        if not sequence:
+            if not text.strip():
+                raise RuntimeError("No text to synthesize")
+            sequence = [BookBlock(role=BookRole.BODY, text=text)]
 
         # Audiobooks never render on Modal: qwen3_tts is pinned to the local
-        # gateway engine (a book-length Modal render would cost real money),
-        # and the flag is a no-op for edge/the gateway/Kokoro.
+        # gateway engine (a book-length Modal render would cost real money).
         resolved = await voice_for(backend, voice, language, run_in_modal=False)
-        chunks = chunk_speech_text(text.strip(), 1500)
-        if not chunks:
-            raise RuntimeError("No text to synthesize")
         chunk_dir = self._tmp_dir / "chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
-        ext = ext_for(backend)
-        chunk_files: list[Path] = []
-        total_chunks = len(chunks)
-        for done_chunks, chunk in enumerate(chunks, start=1):
-            key = _hash(str(backend), resolved, language, chunk)[:16]
-            cf = chunk_dir / f"{key}{ext}"
-            if not cf.exists():
-                if gate is not None and await gate.should_pause():
-                    await gate.yield_and_wait()
-                data = await synthesize(backend, chunk, resolved, language, run_in_modal=False)
-                if not data:
-                    raise RuntimeError(
-                        f"{backend.value} synthesis produced no audio for {resolved!r}"
+
+        plan: list[tuple[DeliveryProfile, list[tuple[str, Path, int]]]] = []
+        total_chunks = 0
+        for block in sequence:
+            speech = block.text.strip()
+            if not speech:
+                continue
+            chunks = chunk_speech_text(speech, 1500)
+            if not chunks:
+                continue
+            profile = profile_for(block.role)
+            entries: list[tuple[str, Path, int]] = []
+            for index, chunk in enumerate(chunks):
+                key = _hash(
+                    str(backend),
+                    resolved,
+                    language,
+                    PROFILE_VERSION,
+                    str(block.role),
+                    f"{profile.speed:.3f}",
+                    f"{profile.pitch_hz:.3f}",
+                    profile.emotion or "",
+                    chunk,
+                )[:16]
+                pause = (
+                    profile.sentence_pause_ms if index < len(chunks) - 1 else profile.pause_after_ms
+                )
+                entries.append((chunk, chunk_dir / f"{key}.wav", pause))
+            plan.append((profile, entries))
+            total_chunks += len(entries)
+
+        if total_chunks == 0:
+            raise RuntimeError("No text to synthesize")
+
+        semaphore = asyncio.Semaphore(self._concurrency)
+        progress_lock = asyncio.Lock()
+        done_chunks = 0
+
+        async def _prepare(profile: DeliveryProfile, chunk: str, chunk_path: Path) -> None:
+            nonlocal done_chunks
+            async with semaphore:
+                if not chunk_path.exists():
+                    if gate is not None and await gate.should_pause():
+                        await gate.yield_and_wait()
+                    data = await self._synthesize_canonical_chunk(
+                        backend=backend,
+                        text=chunk,
+                        voice=resolved,
+                        language=language,
+                        profile=profile,
                     )
-                atomic_write(cf, data)
-            chunk_files.append(cf)
-            if on_progress is not None:
-                outcome = on_progress(done_chunks, total_chunks)
-                if inspect.isawaitable(outcome):
-                    await outcome
+                    atomic_write(chunk_path, data)
+            async with progress_lock:
+                done_chunks += 1
+                if on_progress is not None:
+                    outcome = on_progress(done_chunks, total_chunks)
+                    if inspect.isawaitable(outcome):
+                        await outcome
 
-        if len(chunk_files) == 1:
-            if chunk_files[0] != out_path:
-                atomic_write(out_path, chunk_files[0].read_bytes())
-            return out_path
+        await asyncio.gather(
+            *(
+                _prepare(profile, chunk, chunk_path)
+                for profile, entries in plan
+                for chunk, chunk_path, _pause in entries
+            )
+        )
 
-        # One engine produced every chunk, so a concat demuxer joins them;
-        # the re-encode fallback covers the rare parameter mismatch.
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, dir=str(self._tmp_dir)
-        ) as f:
-            for cf in chunk_files:
-                f.write(f"file '{Path(cf).resolve()}'\n")
-            list_path = f.name
+        parts = [
+            (chunk_path.read_bytes(), pause)
+            for _profile, entries in plan
+            for _chunk, chunk_path, pause in entries
+        ]
+        last_pause = parts[-1][1]
+        if last_pause > 0:
+            parts[-1] = (parts[-1][0], 0)
+            parts.append((build_wav(silence_bytes(last_pause)), 0))
+        atomic_write(out_path, concat_wavs(parts))
+        return out_path
+
+    async def _synthesize_canonical_chunk(
+        self,
+        *,
+        backend: TTSBackend,
+        text: str,
+        voice: str,
+        language: str,
+        profile: DeliveryProfile,
+    ) -> bytes:
+        """Synthesize one chunk with its profile and return canonical WAV bytes.
+
+        Args:
+            backend: Engine to use.
+            text: Chunk speech text.
+            voice: Engine-specific resolved voice.
+            language: ISO 639-1 language code.
+            profile: Delivery profile for this structural block.
+
+        Returns:
+            Mono 16-bit PCM at the canonical narration rate.
+
+        Raises:
+            RuntimeError: When every attempt failed or the engine returned
+                no audio.
+        """
+        from src.api.services.tts_backends import synthesize
+
+        options: dict[str, Any] = {"run_in_modal": False}
+        if profile.speed != 1.0:
+            options["speed"] = profile.speed
+        if profile.emotion:
+            options["emotion"] = profile.emotion
+        if profile.pitch_hz:
+            options["pitch_hz"] = profile.pitch_hz
+
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                data = await synthesize(backend, text, voice, language, **options)
+                if not data:
+                    raise RuntimeError(f"{backend.value} synthesis produced no audio for {voice!r}")
+                return self._canonical_wav(data)
+            except Exception as exc:  # noqa: BLE001 - re-raised after the attempts
+                last_error = exc
+                if attempt < 3:
+                    logger.warning(
+                        "audiobook_chunk_retry",
+                        attempt=attempt,
+                        backend=str(backend),
+                        error=str(exc),
+                    )
+                    await asyncio.sleep(float(attempt))
+        raise RuntimeError(f"chunk synthesis failed after 3 attempts: {last_error}")
+
+    def _canonical_wav(self, data: bytes) -> bytes:
+        """Return ``data`` as canonical WAV, resampling with ffmpeg if needed.
+
+        Args:
+            data: Audio bytes in any format ffmpeg can read.
+
+        Returns:
+            Canonical WAV bytes.
+
+        Raises:
+            RuntimeError: When ffmpeg cannot convert the payload.
+        """
         try:
+            if wav_format(data) == CANONICAL_FORMAT:
+                return data
+        except AudioError:
+            pass
+
+        with tempfile.TemporaryDirectory(dir=str(self._tmp_dir)) as tmp:
+            source = Path(tmp) / "input.audio"
+            target = Path(tmp) / "canonical.wav"
+            source.write_bytes(data)
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "error",
                 "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
                 "-i",
-                list_path,
-                "-c",
-                "copy",
-                str(out_path),
+                str(source),
+                "-ac",
+                str(CANONICAL_FORMAT.channels),
+                "-ar",
+                str(CANONICAL_FORMAT.framerate),
+                "-c:a",
+                "pcm_s16le",
+                str(target),
             ]
-            try:
-                subprocess.run(cmd, check=True, timeout=3600)
-            except Exception:
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    list_path,
-                    "-ar",
-                    "44100",
-                    "-ac",
-                    "2",
-                    "-c:a",
-                    "pcm_s16le",
-                    str(out_path),
-                ]
-                subprocess.run(cmd, check=True, timeout=3600)
-        finally:
-            try:
-                os.unlink(list_path)
-            except OSError:
-                pass
-        return out_path
+            subprocess.run(cmd, check=True, timeout=600)
+            if not target.exists():
+                raise RuntimeError("ffmpeg produced no canonical WAV")
+            return target.read_bytes()
 
 
 def parse_chapter_range(

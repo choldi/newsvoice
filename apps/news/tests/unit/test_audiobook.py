@@ -5,8 +5,32 @@ from pathlib import Path
 
 import pytest
 
+from src.api.models.narration import TTSBackend
 from src.api.services import audiobook as audiobook_module
 from src.api.services.audiobook import AudiobookService, split_chapters
+from src.api.services.book_structure import BookBlock, BookRole
+from src.core.audio import build_wav, wav_duration
+
+
+def _wav_bytes() -> bytes:
+    """Return a short canonical WAV payload for engine stubs."""
+    return build_wav(b"\x00\x00" * 2400)
+
+
+def _fake_engine(monkeypatch: pytest.MonkeyPatch, *, voice: str = "es-MX-JorgeNeural") -> list:
+    """Replace the engine with an in-memory WAV producer."""
+    calls: list[tuple] = []
+
+    async def fake_synth(backend, text, voice_id, language, **kwargs):
+        calls.append((backend, text, voice_id, language, kwargs))
+        return _wav_bytes()
+
+    async def fake_voice_for(backend, voice_id, language, *, run_in_modal=None):
+        return voice_id or voice
+
+    monkeypatch.setattr("src.api.services.tts_backends.synthesize", fake_synth)
+    monkeypatch.setattr("src.api.services.tts_backends.voice_for", fake_voice_for)
+    return calls
 
 
 def test_split_chapters_markdown_headings() -> None:
@@ -33,15 +57,7 @@ async def test_audiobook_uses_lease_gate(tmp_path, monkeypatch) -> None:
         async def yield_and_wait(self):
             calls.append("gate")
 
-    class DummyRes:
-        audio_path = str(tmp_path / "ch.mp3")
-
-    class DummyDoc:
-        async def synthesize_document(self, **kw):
-            Path(DummyRes.audio_path).write_bytes(b"ID3" + b"\x00" * 10)
-            return DummyRes()
-
-    monkeypatch.setattr("src.api.services.doc_tts.DocTTSService", lambda *a, **k: DummyDoc())
+    _fake_engine(monkeypatch)
     monkeypatch.setattr(audiobook_module, "_probe_duration", lambda p: 1.0)
 
     def fake_run(cmd, check=True, timeout=3600, **kw):
@@ -61,7 +77,7 @@ async def test_audiobook_uses_lease_gate(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     res = await service.render_m4b(
-        text="Hola\n\nMundo",
+        text="# Uno\nHola\n\n# Dos\nMundo",
         title="T",
         voice="x",
         language="es",
@@ -71,6 +87,78 @@ async def test_audiobook_uses_lease_gate(tmp_path, monkeypatch) -> None:
     assert calls
     assert res.chapters == 2
     assert res.duration_seconds >= 1.0
+
+
+@pytest.mark.asyncio
+async def test_structured_chapter_uses_each_block_profile_and_pause(tmp_path, monkeypatch) -> None:
+    """A title is slower and calmer, and the paragraph pause is inserted."""
+    service = AudiobookService(base_dir=str(tmp_path))
+    calls: list[tuple[str, dict]] = []
+    progress: list[tuple[int, int]] = []
+
+    async def fake_synth(backend, text, voice, language, **kwargs):
+        calls.append((text, kwargs))
+        return build_wav(b"\x00\x00" * 2400)
+
+    async def fake_voice_for(backend, voice, language, *, run_in_modal=None):
+        return "es-MX-JorgeNeural"
+
+    monkeypatch.setattr("src.api.services.tts_backends.synthesize", fake_synth)
+    monkeypatch.setattr("src.api.services.tts_backends.voice_for", fake_voice_for)
+
+    out_path = tmp_path / "chapter.wav"
+    await service._synthesize_chapter(
+        text="Titulo\n\nCuerpo",
+        blocks=(
+            BookBlock(role=BookRole.BOOK_TITLE, text="Titulo", title="Titulo", level=1),
+            BookBlock(role=BookRole.BODY, text="Cuerpo"),
+        ),
+        out_path=out_path,
+        voice="es-MX-JorgeNeural",
+        language="es",
+        backend=TTSBackend.EDGE,
+        on_progress=lambda done, total: progress.append((done, total)),
+    )
+
+    assert [text for text, _ in calls] == ["Titulo", "Cuerpo"]
+    title_options, body_options = calls[0][1], calls[1][1]
+    assert title_options["speed"] < 1.0
+    assert title_options["emotion"] == "calm"
+    assert title_options["pitch_hz"] < 0
+    assert "speed" not in body_options
+    assert "emotion" not in body_options
+    assert progress == [(1, 2), (2, 2)]
+    assert wav_duration(out_path.read_bytes()) == pytest.approx(2.2, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_render_accepts_extracted_blocks_and_uses_their_titles(tmp_path, monkeypatch) -> None:
+    """The renderer consumes extraction blocks instead of re-splitting paragraphs."""
+    service = AudiobookService(base_dir=str(tmp_path))
+    _dummy_doc(monkeypatch, tmp_path)
+    monkeypatch.setattr(audiobook_module, "_probe_duration", lambda p: 1.0)
+
+    def fake_run(cmd, check=True, timeout=3600, **kw):
+        Path(cmd[-1]).write_bytes(b"fake")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = await service.render_m4b(
+        text="Dedicatoria\n\nPara ti.\n\nCapítulo Uno\n\nHola",
+        blocks=[
+            BookBlock(role=BookRole.DEDICATION, text="Dedicatoria", title="Dedicatoria", level=1),
+            BookBlock(role=BookRole.DEDICATION, text="Para ti."),
+            BookBlock(role=BookRole.CHAPTER, text="Capítulo Uno", title="Capítulo Uno", level=1),
+            BookBlock(role=BookRole.BODY, text="Hola"),
+        ],
+        title="T",
+        voice="x",
+        language="es",
+        resume=False,
+    )
+
+    assert result.chapters == 2
 
 
 @pytest.mark.asyncio
@@ -88,9 +176,9 @@ async def test_audiobook_backend_synthesis_goes_through_the_engine(tmp_path, mon
         async def yield_and_wait(self):
             gates.append(1)
 
-    async def fake_synth(backend, text, voice, language, *, run_in_modal=None):
+    async def fake_synth(backend, text, voice, language, **kwargs):
         synth_calls.append((str(backend.value), voice))
-        return b"RIFF" + b"\x00" * 40
+        return _wav_bytes()
 
     async def fake_voice_for(backend, voice, language, *, run_in_modal=None):
         return voice or "es-mx-male"
@@ -138,8 +226,8 @@ async def test_concat_lists_carry_absolute_paths(tmp_path, monkeypatch) -> None:
     service = AudiobookService(base_dir=str(tmp_path))
     lists: list[str] = []
 
-    async def fake_synth(backend, text, voice, language, *, run_in_modal=None):
-        return b"RIFF" + b"\x00" * 40
+    async def fake_synth(backend, text, voice, language, **kwargs):
+        return _wav_bytes()
 
     async def fake_voice_for(backend, voice, language, *, run_in_modal=None):
         return voice or "es-mx-male"
@@ -172,7 +260,7 @@ async def test_concat_lists_carry_absolute_paths(tmp_path, monkeypatch) -> None:
     )
 
     assert res.chapters == 2
-    assert len(lists) >= 2, "the chunk concat and the chapter merge both write lists"
+    assert lists, "the chapter merge writes a concat list"
     for content in lists:
         for line in content.strip().splitlines():
             assert line.startswith("file '/"), f"concat entry must be absolute: {line}"
@@ -255,10 +343,10 @@ async def test_audiobook_qwen3_renders_through_the_local_gateway(tmp_path, monke
         voice_calls.append((voice, run_in_modal))
         return "uuid-es-anchor"
 
-    async def fake_synth(backend, text, voice, language, *, run_in_modal=None):
-        synth_calls.append((voice, run_in_modal))
+    async def fake_synth(backend, text, voice, language, **kwargs):
+        synth_calls.append((voice, kwargs.get("run_in_modal")))
         assert backend is TTSBackend.QWEN3_TTS
-        return b"RIFF" + b"\x00" * 40
+        return _wav_bytes()
 
     monkeypatch.setattr("src.api.services.tts_backends.voice_for", fake_voice_for)
     monkeypatch.setattr("src.api.services.tts_backends.synthesize", fake_synth)
@@ -290,18 +378,9 @@ async def test_audiobook_qwen3_renders_through_the_local_gateway(tmp_path, monke
     assert all(voice == "uuid-es-anchor" for voice, _ in synth_calls)
 
 
-def _dummy_doc(monkeypatch, tmp_path: Path) -> None:
-    """Make edge synthesis write a tiny audio file without real TTS."""
-
-    class DummyRes:
-        audio_path = str(tmp_path / "ch.mp3")
-
-    class DummyDoc:
-        async def synthesize_document(self, **kw):
-            Path(DummyRes.audio_path).write_bytes(b"ID3" + b"\x00" * 10)
-            return DummyRes()
-
-    monkeypatch.setattr("src.api.services.doc_tts.DocTTSService", lambda *a, **k: DummyDoc())
+def _dummy_doc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Make synthesis produce tiny canonical WAV files without real TTS."""
+    _fake_engine(monkeypatch)
 
 
 @pytest.mark.asyncio
@@ -415,16 +494,15 @@ async def test_render_chapter_range_uses_global_indices_and_own_output(
     service = AudiobookService(base_dir=str(tmp_path))
     texts: list[str] = []
 
-    class DummyRes:
-        audio_path = str(tmp_path / "ch.mp3")
+    async def fake_synth(backend, text, voice, language, **kwargs):
+        texts.append(text)
+        return _wav_bytes()
 
-    class DummyDoc:
-        async def synthesize_document(self, **kw):
-            texts.append(kw["text"])
-            Path(DummyRes.audio_path).write_bytes(b"ID3" + b"\x00" * 10)
-            return DummyRes()
+    async def fake_voice_for(backend, voice, language, *, run_in_modal=None):
+        return voice or "es-MX-JorgeNeural"
 
-    monkeypatch.setattr("src.api.services.doc_tts.DocTTSService", lambda *a, **k: DummyDoc())
+    monkeypatch.setattr("src.api.services.tts_backends.synthesize", fake_synth)
+    monkeypatch.setattr("src.api.services.tts_backends.voice_for", fake_voice_for)
     monkeypatch.setattr(audiobook_module, "_probe_duration", lambda p: 1.0)
 
     def fake_run(cmd, check=True, timeout=3600, **kw):
@@ -446,10 +524,10 @@ async def test_render_chapter_range_uses_global_indices_and_own_output(
     )
 
     assert (res.chapter_start, res.chapter_end, res.chapters) == (2, 3, 2)
-    assert texts == ["Dos", "Tres"], "only the requested chapters synthesize"
+    assert texts == ["Dos", "Dos", "Tres", "Tres"], "only the requested chapters synthesize"
     assert Path(res.m4b_path).name.endswith("_ch0002-0003.m4b")
-    chapter_names = {p.name.rsplit("_ch", 1)[-1] for p in (tmp_path / "tmp").glob("*_ch????.mp3")}
-    assert chapter_names == {"0001.mp3", "0002.mp3"}, "chapter files keep global indices"
+    chapter_names = {p.name.rsplit("_ch", 1)[-1] for p in (tmp_path / "tmp").glob("*_ch????.wav")}
+    assert chapter_names == {"0001.wav", "0002.wav"}, "chapter files keep global indices"
     assert progress[0]["chapter_start"] == 2
     assert progress[0]["chapter_end"] == 3
     assert progress[-1]["progress"]["done"] == 2

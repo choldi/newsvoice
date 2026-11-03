@@ -12,6 +12,8 @@ from temporalio.testing import ActivityEnvironment
 
 from src.api.db.database import AudioJobsRepository
 from src.api.services.audiobook import AUDIOBOOK_COLLECTION, AUDIOBOOK_KIND
+from src.api.services.book_structure import BookBlock, BookRole
+from src.api.services.document_text import ExtractedDocument
 from src.workers import audiobook_activities
 
 RUN_ID = "audiobook-act1"
@@ -82,6 +84,31 @@ def _no_lease(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(audiobook_activities, "TTSLeaseService", lambda: _NoLease())
 
 
+async def test_extract_omits_duplicate_text_when_blocks_exist(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blocks carry the text; the activity does not send a second copy."""
+    source = tmp_path / "libro.txt"
+    source.write_text("Hola.", encoding="utf-8")
+    document = ExtractedDocument(
+        title="Libro",
+        text="Hola.",
+        kind="txt",
+        char_count=5,
+        blocks=(BookBlock(role=BookRole.BODY, text="Hola."),),
+    )
+    monkeypatch.setattr(audiobook_activities, "extract_document", lambda *args: document)
+    await _start_job()
+
+    result = await ActivityEnvironment().run(
+        audiobook_activities.extract_audiobook_activity,
+        {"run_id": RUN_ID, "source_path": str(source), "filename": "libro.txt"},
+    )
+
+    assert result["text"] == ""
+    assert result["blocks"] == [{"role": "body", "text": "Hola.", "title": "", "level": 0}]
+
+
 async def test_render_heartbeats_while_synthesizing(monkeypatch: pytest.MonkeyPatch) -> None:
     """A long synthesis must not silence the heartbeat until the timeout."""
     monkeypatch.setattr(audiobook_activities, "AUDIOBOOK_HEARTBEAT_INTERVAL_SECONDS", 0.01)
@@ -98,6 +125,26 @@ async def test_render_heartbeats_while_synthesizing(monkeypatch: pytest.MonkeyPa
     assert len(beats) >= 1, "the heartbeat loop must run during render_m4b"
     assert result["audio_path"] == "/data/audiobooks/audio/libro.m4b"
     assert (await _job())["status"] == "FINISHED_OK"
+
+
+async def test_render_forwards_structured_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The extract activity's blocks reach the renderer as BookBlock objects."""
+    service = _FakeService()
+    monkeypatch.setattr(audiobook_activities, "AudiobookService", lambda: service)
+    await _start_job()
+
+    await ActivityEnvironment().run(
+        audiobook_activities.render_audiobook_activity,
+        _payload(
+            blocks=[
+                {"role": "dedication", "text": "Para ti.", "title": "", "level": 0},
+                {"role": "body", "text": "Hola.", "title": "", "level": 0},
+            ]
+        ),
+    )
+
+    blocks = service.calls[0]["blocks"]
+    assert [block.role for block in blocks] == [BookRole.DEDICATION, BookRole.BODY]
 
 
 async def test_render_cancellation_closes_the_job(monkeypatch: pytest.MonkeyPatch) -> None:

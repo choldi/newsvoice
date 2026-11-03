@@ -7,6 +7,7 @@ import io
 import pytest
 from ebooklib import epub
 
+from src.api.services.book_structure import BookRole
 from src.api.services.document_text import (
     DocumentExtractionError,
     extract_document,
@@ -130,6 +131,32 @@ def test_extract_md_strips_markdown() -> None:
     assert "item uno" in document.text
 
 
+def test_extract_md_reports_structural_blocks() -> None:
+    """Markdown headings and front matter survive alongside the speech text."""
+    markdown = "# Dedicatoria\n\nPara Ana.\n\n# Capítulo 1\n\nHabía una vez.\n"
+    document = extract_document(markdown.encode(), "libro.md")
+
+    assert [block.role for block in document.blocks] == [
+        BookRole.DEDICATION,
+        BookRole.DEDICATION,
+        BookRole.CHAPTER,
+        BookRole.BODY,
+    ]
+    assert document.blocks[0].title == "Dedicatoria"
+    assert document.text.startswith("Dedicatoria")
+
+
+def test_extract_epub_reports_headings_and_front_matter_prose() -> None:
+    """EPUB headings are not flattened into anonymous paragraphs."""
+    data = build_epub([("Dedicatoria", "Para ti."), ("Capítulo 1", "Hola mundo.")])
+    document = extract_document(data, "libro.epub")
+
+    roles = [block.role for block in document.blocks]
+    assert roles[:2] == [BookRole.DEDICATION, BookRole.DEDICATION]
+    assert roles[-2:] == [BookRole.CHAPTER, BookRole.BODY]
+    assert document.blocks[2].title == "Capítulo 1"
+
+
 def test_extract_pdf_reads_page_text_and_falls_back_to_stem() -> None:
     """PDF pages are read in order; metadata has no title, so the stem is used."""
     data = build_pdf("El consejo aprobo un crecimiento del 3,5 por ciento")
@@ -138,6 +165,7 @@ def test_extract_pdf_reads_page_text_and_falls_back_to_stem() -> None:
     assert document.kind == "pdf"
     assert "3,5" in document.text
     assert document.title == "presupuesto 2027"
+    assert document.blocks and document.blocks[0].text in document.text
 
 
 def test_extract_pdf_without_text_is_rejected() -> None:

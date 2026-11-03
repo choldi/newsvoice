@@ -317,6 +317,38 @@ async def test_synthesize_streams_mp3_bytes(monkeypatch: pytest.MonkeyPatch) -> 
     assert data == _FAKE_MP3
 
 
+async def test_synthesize_mp3_forwards_speed_and_pitch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Edge receives the profile's prosody as rate and hertz options."""
+    seen: dict[str, object] = {}
+
+    class RecordingCommunicate(_FakeCommunicate):
+        def __init__(self, text: str, voice: str, **kwargs: object) -> None:
+            super().__init__(text, voice, **kwargs)
+            seen.update(kwargs)
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
+
+    await tts_module.synthesize_mp3("hola", "es-MX-JorgeNeural", speed=0.9, pitch_hz=-2.0)
+
+    assert seen == {"rate": "-10%", "pitch": "-2Hz"}
+
+
+async def test_synthesize_mp3_omits_default_prosody(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default voice is untouched: no rate/pitch overrides are sent."""
+    seen: dict[str, object] = {}
+
+    class RecordingCommunicate(_FakeCommunicate):
+        def __init__(self, text: str, voice: str, **kwargs: object) -> None:
+            super().__init__(text, voice, **kwargs)
+            seen.update(kwargs)
+
+    monkeypatch.setattr(tts_module.edge_tts, "Communicate", RecordingCommunicate)
+
+    await tts_module.synthesize_mp3("hola", "es-MX-JorgeNeural")
+
+    assert seen == {}
+
+
 async def test_synthesize_empty_audio_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """synthesize_mp3 raises when no audio chunks arrive."""
 

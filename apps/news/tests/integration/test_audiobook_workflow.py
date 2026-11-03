@@ -18,6 +18,7 @@ EXTRACTED = {
     "title": "Libro",
     "filename": "libro.epub",
     "kind": "epub",
+    "blocks": [{"role": "body", "text": "Hola mundo.", "title": "", "level": 0}],
 }
 RENDERED = {
     "audio_path": "/data/audiobooks/audio/libro.m4b",
@@ -106,6 +107,7 @@ async def test_audiobook_workflow_happy_path_skips_the_safety_net() -> None:
     assert result["run_id"] == "audiobook-test"
     assert result["audio_path"] == RENDERED["audio_path"]
     assert RENDER_CALLS[0]["text"] == EXTRACTED["text"]
+    assert RENDER_CALLS[0]["blocks"] == EXTRACTED["blocks"]
     assert FAIL_CALLS == []
 
 

@@ -417,6 +417,47 @@ async def test_gateway_tts_posts_the_documented_payload() -> None:
     assert body["text"] == "hola"
 
 
+async def test_gateway_tts_posts_speed_and_emotion() -> None:
+    """Audiobook delivery profiles reach the gateway as request fields."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content
+        return httpx.Response(200, content=b"RIFF")
+
+    client = httpx.AsyncClient(
+        base_url="http://gateway.test/api/v1",
+        transport=httpx.MockTransport(handler),
+        headers=gateway_headers(""),
+    )
+    await tts_backends.gateway_tts(
+        "hola", "es-mx-male", "es", client=client, speed=0.9, emotion="calm"
+    )
+    await client.aclose()
+
+    body = json.loads(captured["body"])
+    assert body["speed"] == 0.9
+    assert body["emotion"] == "calm"
+
+
+async def test_synthesize_gateway_forwards_prosody(monkeypatch) -> None:
+    """OmniVoice gets speed and emotion; Kokoro gets speed but no emotion."""
+    seen: list[dict[str, object]] = []
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.append(kwargs)
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+    await synthesize(TTSBackend.OMNIVOICE, "hola", "es-mx-male", "es", speed=0.9, emotion="calm")
+    await synthesize(TTSBackend.KOKORO, "hola", "es-mx-male", "es", speed=0.8, emotion="calm")
+
+    assert seen[0]["speed"] == 0.9
+    assert seen[0]["emotion"] == "calm"
+    assert seen[1]["speed"] == 0.8
+    assert seen[1]["emotion"] is None
+
+
 async def test_gateway_tts_raises_a_typed_error_on_failure() -> None:
     """A 4xx from the gateway is a TTSGatewayError, not a bare status."""
 

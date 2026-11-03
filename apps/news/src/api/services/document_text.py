@@ -19,6 +19,11 @@ from lxml import html as lxml_html
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from src.api.services.book_structure import (
+    BookBlock,
+    blocks_from_markdown,
+    blocks_from_plain_text,
+)
 from src.api.services.tts import markdown_to_speech_text
 from src.core.config import get_settings
 
@@ -47,6 +52,7 @@ class ExtractedDocument:
     text: str
     kind: str
     char_count: int
+    blocks: tuple[BookBlock, ...] = ()
 
 
 def sniff_kind(filename: str) -> str:
@@ -114,6 +120,49 @@ def _title_from_filename(filename: str) -> str:
     return title[:120] or "documento"
 
 
+_HEADING_TAGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+
+
+def _blocks_from_html(raw: bytes | str, book_title: str) -> list[BookBlock]:
+    """Turn one EPUB document into structure-preserving blocks.
+
+    Markdown-style heading markers are synthesized from the HTML heading tags,
+    then the shared Markdown parser classifies them and keeps the front/back
+    matter role on the prose that follows.
+    """
+    try:
+        root = lxml_html.fromstring(raw)
+    except (lxml_html.ParserError, ValueError):
+        return blocks_from_plain_text(
+            _decode(raw) if isinstance(raw, bytes) else str(raw), book_title
+        )
+
+    lines: list[str] = []
+    for element in root.iter():
+        tag = str(element.tag).lower() if isinstance(element.tag, str) else ""
+        if tag in _HEADING_TAGS:
+            title = " ".join((element.text_content() or "").split())
+            if title:
+                lines.append(f"{'#' * _HEADING_TAGS[tag]} {title}")
+        elif tag == "pre":
+            text = (element.text_content() or "").strip()
+            if text:
+                lines.append(text)
+        elif tag == "p":
+            text = " ".join((element.text_content() or "").split())
+            if text:
+                lines.append(text)
+        elif tag == "li" and not any(
+            str(child.tag).lower() == "p" for child in element.iterdescendants()
+        ):
+            text = " ".join((element.text_content() or "").split())
+            if text:
+                lines.append(f"- {text}")
+
+    markdown = "\n\n".join(lines) if lines else (root.text_content() or "")
+    return blocks_from_markdown(markdown, book_title)
+
+
 def _extract_pdf(data: bytes, filename: str) -> ExtractedDocument:
     """Extract text page by page from a PDF.
 
@@ -145,7 +194,10 @@ def _extract_pdf(data: bytes, filename: str) -> ExtractedDocument:
         meta_title = ""
     if str(meta_title).strip():
         title = str(meta_title).strip()[:120]
-    return ExtractedDocument(title=title, text=text, kind="pdf", char_count=len(text))
+    blocks = tuple(blocks_from_plain_text(text, title))
+    return ExtractedDocument(
+        title=title, text=text, kind="pdf", char_count=len(text), blocks=blocks
+    )
 
 
 def _extract_epub(data: bytes, filename: str) -> ExtractedDocument:
@@ -169,7 +221,17 @@ def _extract_epub(data: bytes, filename: str) -> ExtractedDocument:
     except Exception as exc:  # ebooklib raises a wide range of parse errors
         raise DocumentExtractionError(f"unreadable EPUB: {exc}") from exc
 
+    title = _title_from_filename(filename)
+    try:
+        titles = book.get_metadata("DC", "title") or []
+    except (AttributeError, KeyError, ValueError):
+        titles = []
+    book_title = str(titles[0][0]).strip() if titles else ""
+    if book_title:
+        title = book_title[:120]
+
     parts: list[str] = []
+    blocks: list[BookBlock] = []
     for idref, _linear in book.spine or []:
         item = book.get_item_with_id(idref)
         if item is None or item.get_type() != ITEM_DOCUMENT:
@@ -184,18 +246,15 @@ def _extract_epub(data: bytes, filename: str) -> ExtractedDocument:
         chunk = _clean(chunk)
         if chunk:
             parts.append(chunk)
+            blocks.extend(_blocks_from_html(raw, book_title))
     text = _clean("\n\n".join(parts))
     if not text:
         raise DocumentExtractionError("EPUB has no text content")
-    title = _title_from_filename(filename)
-    try:
-        titles = book.get_metadata("DC", "title") or []
-    except (AttributeError, KeyError, ValueError):
-        titles = []
-    book_title = str(titles[0][0]).strip() if titles else ""
-    if book_title:
-        title = book_title[:120]
-    return ExtractedDocument(title=title, text=text, kind="epub", char_count=len(text))
+    if not blocks:
+        blocks = list(blocks_from_plain_text(text, book_title))
+    return ExtractedDocument(
+        title=title, text=text, kind="epub", char_count=len(text), blocks=tuple(blocks)
+    )
 
 
 def _extract_plain(data: bytes, filename: str, kind: str) -> ExtractedDocument:
@@ -212,14 +271,17 @@ def _extract_plain(data: bytes, filename: str, kind: str) -> ExtractedDocument:
     Raises:
         DocumentExtractionError: When the decoded text is empty.
     """
-    text = _clean(_decode(data))
+    raw_text = _clean(_decode(data))
+    title = _title_from_filename(filename)
     if kind == "md":
-        text = _clean(markdown_to_speech_text(text))
+        text = _clean(markdown_to_speech_text(raw_text))
+        blocks = tuple(blocks_from_markdown(raw_text, title))
+    else:
+        text = raw_text
+        blocks = tuple(blocks_from_plain_text(text, title))
     if not text:
         raise DocumentExtractionError("document has no text content")
-    return ExtractedDocument(
-        title=_title_from_filename(filename), text=text, kind=kind, char_count=len(text)
-    )
+    return ExtractedDocument(title=title, text=text, kind=kind, char_count=len(text), blocks=blocks)
 
 
 def extract_document(data: bytes, filename: str, kind: str | None = None) -> ExtractedDocument:

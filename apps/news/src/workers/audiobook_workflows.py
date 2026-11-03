@@ -56,7 +56,8 @@ class AudiobookWorkflow:
                 render_audiobook_activity,
                 {
                     "run_id": run_id,
-                    "text": extracted["text"],
+                    "text": extracted.get("text") or "",
+                    "blocks": extracted.get("blocks") or [],
                     "title": extracted.get("title") or config.title,
                     "voice": config.voice,
                     "language": config.language,
