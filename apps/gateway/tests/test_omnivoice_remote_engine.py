@@ -254,6 +254,20 @@ async def test_health_check_model_loaded_is_derived_from_sidecar(
     assert health["model_loaded"] is expected
 
 
+async def test_health_check_forwards_the_sidecar_mode() -> None:
+    """El modo REAL/MOCK del sidecar llega al desglose del gateway."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/health"
+        return httpx.Response(200, json={"status": "ok", "mode": "REAL"})
+
+    engine = _engine(handler)
+    health = await engine.health_check()
+
+    assert health["mode"] == "REAL"
+    assert health["remote"]["mode"] == "REAL"
+
+
 def test_remote_engine_is_clone_capable() -> None:
     """The routed gateway accepts voices pinned to the sidecar engine."""
     from tts_api.services.voice_service import CLONE_CAPABLE_ENGINES

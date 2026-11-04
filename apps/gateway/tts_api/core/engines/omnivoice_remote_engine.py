@@ -210,6 +210,9 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
             "status": "ok",
             "engine": self.name,
             "model_loaded": self._remote_model_loaded(payload),
+            # El modo real (REAL/MOCK) vive en el sidecar: se reenvía para que
+            # el desglose del endpoint del gateway no muestre un modo vacío.
+            "mode": str(payload.get("mode", "")),
             "remote": payload,
         }
 
