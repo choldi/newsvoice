@@ -1,0 +1,9 @@
+# Configuration for the standalone Python tooling under scripts/.
+# Kept in its own file so the repository root stays free of a Ruff config that
+# would then apply to every app (apps/news and apps/gateway keep theirs).
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "__pycache__"]
+
+[lint]
+select = ["E", "F", "I", "N", "W", "UP"]

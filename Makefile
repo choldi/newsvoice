@@ -16,10 +16,10 @@
 #   make check NEWS_PY=/path/to/python GW_PY=/path/to/python
 # =============================================================================
 
-.PHONY: help venv install lint format format-check test test-news test-gateway \
-        coverage check commit up down ps health logs logs-api logs-gateway \
-        logs-worker logs-temporal status deploy clean urls schedule trigger \
-        namespaces
+.PHONY: help setup venv install lint format format-check test test-news \
+        test-gateway coverage check commit up down ps health logs logs-api \
+        logs-gateway logs-worker logs-temporal status deploy clean urls \
+        schedule trigger namespaces
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 
@@ -27,10 +27,14 @@ REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 NEWS_DIR   := apps/news
 GW_DIR     := apps/gateway
 CONTRACT   := libs/tts_contract
-NEWS_PY    ?= $(NEWS_DIR)/.venv/bin/python
-GW_PY      ?= $(GW_DIR)/.venv/bin/python
-NEWS_RUF   ?= $(NEWS_DIR)/.venv/bin/ruff
-GW_RUF     ?= $(GW_DIR)/.venv/bin/ruff
+# A checkout made with `uv sync` only has the workspace root .venv, while
+# `make venv` creates one per app: fall back to whichever actually exists so
+# `make lint` / `make test` work on both layouts. Env vars still win.
+VENV_BIN   := $(REPO_ROOT)/.venv/bin
+NEWS_PY    ?= $(or $(wildcard $(NEWS_DIR)/.venv/bin/python),$(wildcard $(VENV_BIN)/python),$(NEWS_DIR)/.venv/bin/python)
+GW_PY      ?= $(or $(wildcard $(GW_DIR)/.venv/bin/python),$(wildcard $(VENV_BIN)/python),$(GW_DIR)/.venv/bin/python)
+NEWS_RUF   ?= $(or $(wildcard $(NEWS_DIR)/.venv/bin/ruff),$(wildcard $(VENV_BIN)/ruff),$(NEWS_DIR)/.venv/bin/ruff)
+GW_RUF     ?= $(or $(wildcard $(GW_DIR)/.venv/bin/ruff),$(wildcard $(VENV_BIN)/ruff),$(GW_DIR)/.venv/bin/ruff)
 
 # --- Ports / compose ---------------------------------------------------------
 API_PORT     ?= 8000
@@ -42,9 +46,11 @@ help: ## Show all make targets
 	@echo "newsvoice unified make targets"
 	@echo ""
 	@echo "Setup / quality"
+	@echo "  make setup            Guided TUI for .env files and dependencies"
+	@echo "                        (python3 scripts/setup.py [--plain|--check])"
 	@echo "  make venv             Create news + gateway .venv with dev extras"
 	@echo "  make install          Alias for venv"
-	@echo "  make lint             ruff check across news, gateway, tts_contract"
+	@echo "  make lint             ruff check across news, gateway, tts_contract, scripts"
 	@echo "  make format           ruff format (in-place) across all packages"
 	@echo "  make format-check     ruff format --check across all packages"
 	@echo "  make test             pytest for news + gateway"
@@ -80,20 +86,26 @@ venv: ## Create news + gateway .venv with dev extras
 
 install: venv ## Alias for venv
 
-lint: ## ruff check across news, gateway, tts_contract
+setup: ## Guided TUI for .env + dependencies (ARGS="--plain", ARGS="--check")
+	python3 scripts/setup.py $(ARGS)
+
+lint: ## ruff check across news, gateway, tts_contract, scripts
 	$(NEWS_RUF) check $(NEWS_DIR)
 	$(GW_RUF) check $(GW_DIR)
 	$(GW_RUF) check $(CONTRACT)
+	$(NEWS_RUF) check scripts
 
 format: ## ruff format (in-place) across all packages
 	$(NEWS_RUF) format $(NEWS_DIR)
 	$(GW_RUF) format $(GW_DIR)
 	$(GW_RUF) format $(CONTRACT)
+	$(NEWS_RUF) format scripts
 
 format-check: ## ruff format --check across all packages
 	$(NEWS_RUF) format --check $(NEWS_DIR)
 	$(GW_RUF) format --check $(GW_DIR)
 	$(GW_RUF) format --check $(CONTRACT)
+	$(NEWS_RUF) format --check scripts
 
 test-news: ## pytest for apps/news only
 	cd $(NEWS_DIR) && PYTHONPATH=".:../../$(CONTRACT)" $(abspath $(NEWS_PY)) -m pytest -q

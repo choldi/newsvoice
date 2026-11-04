@@ -24,6 +24,9 @@ _bin() { # _bin <app-dir> <tool>
     local dir="$1" tool="$2"
     if [[ -x "${dir}/.venv/bin/${tool}" ]]; then
         echo "${dir}/.venv/bin/${tool}"
+    elif [[ -x ".venv/bin/${tool}" ]]; then
+        # Workspace checkout installed with `uv sync`: one .venv at the root.
+        echo ".venv/bin/${tool}"
     else
         echo "${tool}"
     fi
@@ -35,15 +38,17 @@ PYTEST_NEWS="${NEWS_PYTEST:-$(_bin apps/news pytest)}"
 PYTEST_GW="${GW_PYTEST:-$(_bin apps/gateway pytest)}"
 CONTRACT_PY="${CONTRACT_PY:-python3}"
 
-echo "==> ruff check (news, gateway, tts_contract)..."
+echo "==> ruff check (news, gateway, tts_contract, scripts)..."
 "$RUF_NEWS" check apps/news
 "$RUF_GW" check apps/gateway
 "$RUF_GW" check libs/tts_contract
+"$RUF_NEWS" check scripts
 
-echo "==> ruff format (news, gateway, tts_contract)..."
+echo "==> ruff format (news, gateway, tts_contract, scripts)..."
 "$RUF_NEWS" format apps/news
 "$RUF_GW" format apps/gateway
 "$RUF_GW" format libs/tts_contract
+"$RUF_NEWS" format scripts
 
 echo "==> pytest (news)..."
 (cd apps/news && PYTHONPATH=".:../../libs/tts_contract" "$PYTEST_NEWS" -q)

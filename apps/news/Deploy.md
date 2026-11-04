@@ -32,6 +32,25 @@ Both apps define `VOICES_DIR` with different meanings — keeping `.env` files s
 
 ### Quick start
 
+#### Option A — guided setup (recommended)
+
+The repository ships a TUI wizard that inspects the host, walks the three
+`.env` files section by section, generates the secrets and validates the
+result before anything is written:
+
+```bash
+python3 scripts/setup.py            # TUI (needs a terminal)
+python3 scripts/setup.py --plain    # line mode / CI
+python3 scripts/setup.py --check    # inspect + validate, writes nothing
+make setup                          # same entry point from make
+```
+
+Only the Python standard library is required, so it also runs on a fresh
+clone before any virtualenv exists. See the "Instalación guiado" section of
+the repository `README.md` for the full list of steps and shortcuts.
+
+#### Option B — by hand
+
 ```bash
 # 1. Repo root
 cd /path/to/newsvoice
