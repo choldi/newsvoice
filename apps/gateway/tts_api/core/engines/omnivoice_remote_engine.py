@@ -182,12 +182,49 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         return [dict(item) for item in response.json()]
 
     async def health_check(self) -> dict[str, Any]:
+        """Estado del sidecar con ``model_loaded`` presente en todos los casos.
+
+        ``RoutedEngine`` combina sus sub-engines con ``all(...)`` sobre esa
+        clave: un sub-engine que no la expone marca el gateway entero como
+        ``degraded``, aunque el resto de engines estén sanos.
+        """
         if self._client is None or not self._available:
-            return {"status": "unavailable", "engine": self.name, "url": self._base_url}
+            return {
+                "status": "unavailable",
+                "engine": self.name,
+                "url": self._base_url,
+                "model_loaded": False,
+            }
         try:
             response = await self._client.get("/api/v1/health")
             response.raise_for_status()
             payload = dict(response.json())
         except httpx.HTTPError as exc:
-            return {"status": "error", "engine": self.name, "error": str(exc)}
-        return {"status": "ok", "engine": self.name, "remote": payload}
+            return {
+                "status": "error",
+                "engine": self.name,
+                "error": str(exc),
+                "model_loaded": False,
+            }
+        return {
+            "status": "ok",
+            "engine": self.name,
+            "model_loaded": self._remote_model_loaded(payload),
+            "remote": payload,
+        }
+
+    @staticmethod
+    def _remote_model_loaded(payload: dict[str, Any]) -> bool:
+        """Deriva el estado del modelo desde la respuesta del sidecar.
+
+        El ``/api/v1/health`` del sidecar no siempre incluye ``model_loaded``
+        (el endpoint top-level no lo expone), así que se infiere de
+        ``status``/``mode``: un sidecar ``degraded`` o en ``MOCK`` no cuenta
+        como modelo real cargado.
+        """
+        if "model_loaded" in payload:
+            return bool(payload["model_loaded"])
+        status = payload.get("status")
+        if status is None:
+            return True
+        return status == "ok" and payload.get("mode", "REAL") != "MOCK"

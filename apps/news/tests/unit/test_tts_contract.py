@@ -133,6 +133,15 @@ def test_health_defaults_for_the_not_initialized_shape() -> None:
     assert health.status == "not_initialized"
     assert health.stock_voices_count == 0
     assert health.gpu_available is False
+    assert health.model_loaded is False
+
+
+def test_health_reads_model_loaded_from_the_gateway() -> None:
+    """The gateway now reports whether every sub-engine has its model."""
+    health = HealthResponse.model_validate({"status": "ok", "mode": "ROUTED", "model_loaded": True})
+
+    assert health.model_loaded is True
+    assert health.mode == "ROUTED"
 
 
 # --- engines -----------------------------------------------------------------

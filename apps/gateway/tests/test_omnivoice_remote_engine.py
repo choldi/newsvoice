@@ -87,6 +87,7 @@ async def test_initialize_unreachable_sidecar_is_non_fatal(
         "status": "unavailable",
         "engine": "omnivoice_remote",
         "url": SIDECAR_URL,
+        "model_loaded": False,
     }
     with pytest.raises(EngineUnavailableError):
         await engine.synthesize(text="hi", voice_id="x", language="en")
@@ -205,6 +206,7 @@ async def test_health_check_ok() -> None:
     assert health["status"] == "ok"
     assert health["engine"] == "omnivoice_remote"
     assert health["remote"]["ready"] is True
+    assert health["model_loaded"] is True
 
 
 async def test_health_check_error() -> None:
@@ -214,6 +216,42 @@ async def test_health_check_error() -> None:
     engine = _engine(handler)
     health = await engine.health_check()
     assert health["status"] == "error"
+    assert health["model_loaded"] is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        # Sidecar real y sano.
+        ({"status": "ok", "mode": "REAL"}, True),
+        # El sidecar responde 200 sin señales explícitas: se asume disponible.
+        ({"engine": "omnivoice", "ready": True}, True),
+        # Sidecar con el modelo cargado explícitamente.
+        ({"status": "ok", "mode": "REAL", "model_loaded": True}, True),
+        # Sidecar en MOCK o degradado: no hay modelo real cargado.
+        ({"status": "ok", "mode": "MOCK"}, False),
+        ({"status": "degraded", "mode": "ROUTED"}, False),
+        ({"status": "ok", "mode": "REAL", "model_loaded": False}, False),
+    ],
+)
+async def test_health_check_model_loaded_is_derived_from_sidecar(
+    payload: dict[str, Any],
+    expected: bool,
+) -> None:
+    """``model_loaded`` sale del payload del sidecar, que no siempre lo trae.
+
+    ``RoutedEngine`` une los sub-engines con ``all()``: sin esta clave el
+    gateway entero respondía ``degraded``.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/health"
+        return httpx.Response(200, json=payload)
+
+    engine = _engine(handler)
+    health = await engine.health_check()
+
+    assert health["model_loaded"] is expected
 
 
 def test_remote_engine_is_clone_capable() -> None:
@@ -228,3 +266,46 @@ async def test_close_releases_client() -> None:
     await engine.close()
     assert engine._client is None
     assert engine._available is False
+
+
+async def test_routed_health_with_healthy_sidecar_is_not_degraded() -> None:
+    """Regresión: sin ``model_loaded`` el routed agregado salía ``degraded``."""
+    from tts_api.core.engines.mock_engine import MockEngine
+    from tts_api.core.engines.routed_engine import RoutedEngine
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok", "mode": "REAL"})
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "omnivoice_remote": _engine(handler)},
+        routing={"_default": "mock"},
+    )
+
+    health = await routed.health_check()
+
+    assert health["model_loaded"] is True
+    assert health["sub_engines"]["omnivoice_remote"]["model_loaded"] is True
+
+
+async def test_routed_health_with_sidecar_down_points_at_the_culprit() -> None:
+    """Con el sidecar caído el gateway queda ``degraded`` y lo señala."""
+    from tts_api.core.engines.mock_engine import MockEngine
+    from tts_api.core.engines.routed_engine import RoutedEngine
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("sidecar caído", request=request)
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "omnivoice_remote": _engine(handler)},
+        routing={"_default": "mock"},
+    )
+
+    health = await routed.health_check()
+
+    assert health["model_loaded"] is False
+    assert health["sub_engines"]["omnivoice_remote"] == {
+        "status": "error",
+        "engine": "omnivoice_remote",
+        "error": "sidecar caído",
+        "model_loaded": False,
+    }

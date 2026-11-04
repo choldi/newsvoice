@@ -108,6 +108,19 @@ class KokoroEngine(TtsEngineBase):
         language = settings.KOKORO_DEFAULT_LANGUAGE or "es"
         await self._ensure_pipeline(language)
 
+    async def warmup(self) -> None:
+        """Reload the default pipeline if ``initialize()`` did not get there.
+
+        Runs from the lifespan after startup: a transient failure (network,
+        disk) leaves the gateway with an unloaded pipeline, which reports
+        ``model_loaded=False`` and degrades a routed gateway. Cheap no-op once
+        the pipeline is in memory.
+        """
+        if self._pipelines:
+            return
+        logger.info("Kokoro warmup: reloading the default pipeline")
+        await self.initialize()
+
     def _voice_table(self) -> dict[str, dict[str, str]]:
         """Return the voice_id -> voice mapping (settings override wins)."""
         table = {k: dict(v) for k, v in _DEFAULT_VOICES.items()}

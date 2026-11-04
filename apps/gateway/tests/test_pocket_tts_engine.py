@@ -335,3 +335,42 @@ def test_clone_state_se_invalida_si_cambia_la_referencia(tmp_path: Path) -> None
     engine._clone_state(fake, str(reference))
 
     assert fake.prompt_calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Warmup tras el arranque
+# ---------------------------------------------------------------------------
+
+
+async def test_warmup_reintenta_la_carga_si_initialize_no_llego(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un fallo transitorio al arrancar no deja el engine sin modelo."""
+    engine = PocketTTSEngine()
+    calls: list[str] = []
+
+    async def _initialize() -> None:
+        calls.append("initialize")
+        engine._models["es"] = _FakeModel()
+
+    monkeypatch.setattr(engine, "initialize", _initialize)
+
+    await engine.warmup()
+
+    assert calls == ["initialize"]
+    assert (await engine.health_check())["model_loaded"] is True
+
+
+async def test_warmup_es_noop_si_el_modelo_ya_esta_cargado(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Con el modelo en memoria el warmup no vuelve a descargar nada."""
+    engine = PocketTTSEngine()
+    engine._models["es"] = _FakeModel()
+
+    async def _boom() -> None:
+        raise AssertionError("initialize no debe volver a llamarse")
+
+    monkeypatch.setattr(engine, "initialize", _boom)
+
+    await engine.warmup()

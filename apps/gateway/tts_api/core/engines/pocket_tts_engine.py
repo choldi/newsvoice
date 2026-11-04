@@ -312,6 +312,18 @@ class PocketTTSEngine(TtsEngineBase):
                 logger.warning("Could not load stock voice '%s': %s", voice_id, e)
         logger.info("Pocket TTS engine initialized (default language=%s)", language)
 
+    async def warmup(self) -> None:
+        """Reintenta la carga del idioma por defecto si initialize() no llegó.
+
+        El warmup se ejecuta tras el arranque del lifespan; si la descarga del
+        checkpoint falló (red, disco) el gateway recupera el modelo aquí sin
+        reinicio. Ya cargado es un no-op barato.
+        """
+        if self._models:
+            return
+        logger.info("Pocket TTS warmup: recargando el idioma por defecto")
+        await self.initialize()
+
     async def _voice_state(self, voice_id: str) -> Any:
         """Estado de voz stock: preset upstream o prompt de referencia clonado.
 

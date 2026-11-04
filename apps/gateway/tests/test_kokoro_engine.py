@@ -200,3 +200,35 @@ async def test_kokoro_change_model_only_accepts_configured():
     engine = KokoroEngine()
     assert await engine.change_model(engine._current_model)
     assert not await engine.change_model("kokoro-v0-1.0")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_kokoro")
+async def test_kokoro_warmup_carga_la_pipeline_por_defecto():
+    """warmup() recupera el idioma por defecto si initialize() no llegó."""
+    engine = KokoroEngine()
+
+    await engine.warmup()
+
+    assert engine._pipelines
+    assert list(engine._pipelines) == ["e"]
+    assert (await engine.health_check())["model_loaded"] is True
+
+
+@pytest.mark.asyncio
+async def test_kokoro_warmup_es_noop_con_pipeline_cargada(
+    fake_kokoro, monkeypatch: pytest.MonkeyPatch
+):
+    """Con la pipeline en memoria el warmup no vuelve a construirla."""
+    engine = KokoroEngine()
+    await engine.initialize()
+    instances = len(fake_kokoro.instances)
+
+    async def _boom():
+        raise AssertionError("initialize no debe volver a llamarse")
+
+    monkeypatch.setattr(engine, "initialize", _boom)
+
+    await engine.warmup()
+
+    assert len(fake_kokoro.instances) == instances

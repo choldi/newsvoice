@@ -107,6 +107,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.exception("Fallo inicializando engine '%s': %s", engine_name, e)
             raise
 
+    # Warmup: precarga los engines perezosos (pocket_tts/kokoro/qwen3) una vez
+    # inicializados. No bloquea el arranque: un fallo deja el engine disponible
+    # en su primer uso.
+    if _active_engine is not None:
+        try:
+            await _active_engine.warmup()
+            logger.info("Engine '%s' warmup completado", _active_engine.name)
+        except Exception as e:
+            logger.warning("Warmup de '%s' falló (no bloqueante): %s", _active_engine.name, e)
+
     # Iniciar cleanup task
     start_cleanup_task(settings.OUTPUTS_DIR, ttl_seconds=settings.OUTPUT_TTL_SECONDS)
 
@@ -227,17 +237,32 @@ async def health_check() -> JSONResponse:
     mode = health.get("mode", "UNKNOWN")
     degraded = mode == "MOCK" or not health.get("model_loaded", False)
 
-    return JSONResponse(
-        content={
-            "status": "degraded" if degraded else "ok",
-            "version": settings.APP_VERSION,
-            "engine": _active_engine.name,
-            "device": health.get("device", "unknown"),
-            "mode": mode,
-            "stock_voices_count": health.get("stock_voices_count", 0),
-            "gpu_available": health.get("gpu_available", False),
+    content = {
+        "status": "degraded" if degraded else "ok",
+        "version": settings.APP_VERSION,
+        "engine": _active_engine.name,
+        "device": health.get("device", "unknown"),
+        "mode": mode,
+        "model_loaded": bool(health.get("model_loaded", False)),
+        "stock_voices_count": health.get("stock_voices_count", 0),
+        "gpu_available": health.get("gpu_available", False),
+    }
+
+    sub_engines = health.get("sub_engines")
+    if isinstance(sub_engines, dict):
+        # Desglose por sub-engine para diagnosticar `degraded` en routed.
+        # No se copia la clave `status` de cada sub-engine para que el literal
+        # `"status":"ok"` del chequeo de status.sh siga refiriéndose al top-level.
+        content["sub_engines"] = {
+            str(name): {
+                "model_loaded": bool(sub.get("model_loaded", False)),
+                "mode": str(sub.get("mode", "")),
+            }
+            for name, sub in sub_engines.items()
+            if isinstance(sub, dict)
         }
-    )
+
+    return JSONResponse(content=content)
 
 
 @app.get("/api/v1/health/live", tags=["Health"])

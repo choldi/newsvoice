@@ -174,7 +174,10 @@ class RoutedEngine(TtsEngineBase):
             try:
                 sub_health[name] = await engine.health_check()
             except Exception as e:
-                sub_health[name] = {"error": str(e)}
+                # Un sub-engine que revienta su health cuenta como no cargado
+                # y explícitamente lo dice, para que el desglose del endpoint
+                # del gateway muestre el culpable de un `degraded`.
+                sub_health[name] = {"error": str(e), "model_loaded": False}
 
         return {
             "model_loaded": all(h.get("model_loaded", False) for h in sub_health.values()),

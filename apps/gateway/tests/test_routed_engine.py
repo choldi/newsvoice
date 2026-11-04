@@ -82,3 +82,56 @@ async def test_list_stock_voices_skips_a_failing_sub_engine() -> None:
 
     assert voices, "the healthy sub-engine still contributes its voices"
     assert all(v["voice_id"] for v in voices)
+
+
+async def test_routed_health_is_ok_when_every_sub_engine_reports_loaded() -> None:
+    """Con todos los sub-engines sanos el agregado no sale ``degraded``."""
+    health = await _routed().health_check()
+
+    assert health["model_loaded"] is True
+    assert health["mode"] == "ROUTED"
+    assert set(health["sub_engines"]) == {"mock", "edgetts"}
+
+
+async def test_routed_health_marks_a_crashing_sub_engine_as_not_loaded() -> None:
+    """Un sub-engine que revienta su health se señala en el desglose."""
+
+    class _Boom:
+        name = "boom"
+
+        async def health_check(self) -> dict:
+            raise RuntimeError("fallo interno")
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "boom": _Boom()},  # type: ignore[arg-type]
+        routing={"_default": "mock"},
+    )
+
+    health = await routed.health_check()
+
+    assert health["model_loaded"] is False
+    assert health["sub_engines"]["boom"] == {"error": "fallo interno", "model_loaded": False}
+
+
+async def test_routed_health_without_model_loaded_signal_degrades() -> None:
+    """Un sub-engine que no expone la clave deja el agregado en ``False``.
+
+    Es el contrato que obliga a cada engine a reportar ``model_loaded`` (fue
+    exactamente el bug de ``omnivoice_remote``).
+    """
+
+    class _NoSignal:
+        name = "no-signal"
+
+        async def health_check(self) -> dict:
+            return {"status": "ok"}
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "no_signal": _NoSignal()},  # type: ignore[arg-type]
+        routing={"_default": "mock"},
+    )
+
+    health = await routed.health_check()
+
+    assert health["model_loaded"] is False
+    assert "model_loaded" not in health["sub_engines"]["no_signal"]

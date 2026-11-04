@@ -27,6 +27,7 @@ class HealthResponse(BaseModel):
     engine: str = ""
     device: str = ""
     mode: str = ""
+    model_loaded: bool = False
     stock_voices_count: int = 0
     gpu_available: bool = False
 
