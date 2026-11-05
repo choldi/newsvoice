@@ -286,6 +286,23 @@ class Settings(BaseSettings):
     # Path to the Docker Engine UNIX socket used to probe container health.
     # Empty disables the docker_containers check.
     monitor_docker_socket: str = "/var/run/docker.sock"
+    # --- Disk housekeeping (CleanupWorkflow, schedule id `disk-cleanup`) ----
+    # How often (minutes) the cleanup workflow wakes to delete stale files.
+    cleanup_interval_minutes: int = Field(default=1440, ge=5)
+    # Delete files older than this; 0 disables the cleanup entirely (the
+    # scheduled run becomes a no-op). The value is re-read on every run, so
+    # changing the .env does not require re-registering the schedule.
+    cleanup_max_age_days: int = Field(default=7, ge=0)
+    # Dirs under ./data with temp artifacts of a render (chunks, merged/norm
+    # files, TTS cache). Files older than cleanup_max_age_days are deleted and
+    # the empty subdirectories they leave behind are removed.
+    cleanup_temp_dirs: list[str] = Field(
+        default_factory=lambda: ["data/audiobooks/tmp", "data/tts_cache"]
+    )
+    # Dirs under ./data holding finished audio generations (audiobooks). Keep
+    # job-linked dirs (doc_tts, lessons, narration) out by default: an old job
+    # may still be opened from the GUI, opt in via the .env.
+    cleanup_generation_dirs: list[str] = Field(default_factory=lambda: ["data/audiobooks/audio"])
     tts_cache_dir: str = "data/tts_cache"
     # OmniVoice gateway endpoint (Phase 7.9/7.12): voices catalog, cloning and
     # the narration/lesson renderer all talk to it. Port 8001 is the gateway's

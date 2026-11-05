@@ -18,9 +18,10 @@ from temporalio.worker import Worker
 
 from src.api.db.database import run_migrations
 from src.core.config import settings
-from src.workers import activities
+from src.workers import activities, cleanup_activities
 from src.workers.client import build_client, configure_logging
 from src.workers.workflows import (
+    CleanupWorkflow,
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
     SystemMonitorWorkflow,
@@ -71,6 +72,7 @@ def worker_activities() -> list[object]:
         activities.set_monitor_state_activity,
         activities.run_monitor_checks_activity,
         activities.send_monitor_alert_activity,
+        cleanup_activities.cleanup_files_activity,
     ]
 
 
@@ -97,6 +99,7 @@ async def run_worker(
                 UrlSummarizeWorkflow,
                 CollectionsMonitorWorkflow,
                 SystemMonitorWorkflow,
+                CleanupWorkflow,
             ],
             activities=worker_activities(),
             activity_executor=activity_executor,

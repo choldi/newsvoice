@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
         verify_digest_activity,
         verify_tts_audio_activity,
     )
+    from src.workers.cleanup_activities import cleanup_files_activity
 
 # Reasonable per-step timeouts for activity execution.
 RSS_FETCH_TIMEOUT = timedelta(seconds=120)
@@ -83,6 +84,10 @@ EMAIL_TIMEOUT = timedelta(seconds=90)
 # across recipients/chunks; give it head-room over the Telegram timeout.
 WHATSAPP_TIMEOUT = timedelta(seconds=120)
 RECORD_RUN_TIMEOUT = timedelta(seconds=30)
+# One housekeeping pass walks a handful of directories; the scan is rarely
+# slower than a recent mtime sort and the heartbeat keeps it visible.
+CLEANUP_RUN_TIMEOUT = timedelta(hours=6)
+CLEANUP_RETRY_POLICY = RetryPolicy(maximum_attempts=2)
 
 # Phase 7.9b narration. The render no longer runs as an activity of this
 # workflow: a Temporal activity executes in the namespace of the workflow that
@@ -1374,3 +1379,40 @@ class SystemMonitorWorkflow:
         except (ActivityError, ApplicationError) as exc:
             detail = getattr(exc, "cause", None) or exc
             workflow.logger.warning(f"Monitor alert delivery failed; continuing: {detail}")
+
+
+@workflow.defn
+class CleanupWorkflow:
+    """Delete stale temp files and old generated audio on the configured cadence.
+
+    The ``disk-cleanup`` Schedule wakes this workflow; the retention window
+    (`CLEANUP_MAX_AGE_DAYS`, 0 disables) and the target dirs
+    (`CLEANUP_TEMP_DIRS`, `CLEANUP_GENERATION_DIRS`) are re-read by the
+    activity on every run, so the .env applies without re-registering.
+    """
+
+    @workflow.run
+    async def run(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run one disk housekeeping pass.
+
+        Args:
+            config: Reserved for future overrides; the .env owns every value.
+
+        Returns:
+            The cleanup report (status, per-dir deletion counts).
+        """
+        workflow.logger.info("cleanup_run_started")
+        report = await workflow.execute_activity(
+            cleanup_files_activity,
+            args=[config] if config else [],
+            start_to_close_timeout=CLEANUP_RUN_TIMEOUT,
+            retry_policy=CLEANUP_RETRY_POLICY,
+        )
+        if not isinstance(report, dict):
+            workflow.logger.info("cleanup_run_unexpected_shape")
+            return {"status": "error", "error": "unexpected report shape"}
+        workflow.logger.info(
+            f"cleanup_run_finished removed={report.get('removed_files')} "
+            f"bytes_mb={report.get('removed_bytes_mb')} status={report.get('status')}"
+        )
+        return report

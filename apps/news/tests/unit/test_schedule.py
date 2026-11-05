@@ -8,9 +8,11 @@ from src.api.models.monitoring import MonitorRunConfig
 from src.core.collections import CollectionConfig
 from src.core.config import settings
 from src.workers.schedule import (
+    CLEANUP_SCHEDULE_ID,
     MONITOR_SCHEDULE_ID,
     SYSTEM_MONITOR_SCHEDULE_ID,
     build_schedule,
+    cleanup_schedule,
     ensure_monitor_schedules,
     monitor_schedule,
     pipeline_config_for,
@@ -166,7 +168,7 @@ def test_system_monitor_schedule_id_and_config() -> None:
 
 
 async def test_ensure_monitor_schedules_creates_both(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ensure_monitor_schedules returns both monitor schedule ids."""
+    """ensure_monitor_schedules returns every utility schedule id."""
     import src.workers.schedule as schedule_pkg
 
     async def fake_create_monitor(client: object) -> str:
@@ -175,12 +177,27 @@ async def test_ensure_monitor_schedules_creates_both(monkeypatch: pytest.MonkeyP
     async def fake_create_system(client: object) -> str:
         return SYSTEM_MONITOR_SCHEDULE_ID
 
+    async def fake_create_cleanup(client: object) -> str:
+        return CLEANUP_SCHEDULE_ID
+
     monkeypatch.setattr(schedule_pkg, "create_monitor_schedule", fake_create_monitor)
     monkeypatch.setattr(schedule_pkg, "create_system_monitor_schedule", fake_create_system)
+    monkeypatch.setattr(schedule_pkg, "create_cleanup_schedule", fake_create_cleanup)
 
     ids = await ensure_monitor_schedules(object())  # type: ignore[arg-type]
 
-    assert ids == [MONITOR_SCHEDULE_ID, SYSTEM_MONITOR_SCHEDULE_ID]
+    assert ids == [MONITOR_SCHEDULE_ID, SYSTEM_MONITOR_SCHEDULE_ID, CLEANUP_SCHEDULE_ID]
+
+
+def test_cleanup_schedule_id_and_interval() -> None:
+    """The disk-cleanup schedule starts CleanupWorkflow on the configured interval."""
+    schedule = cleanup_schedule()
+
+    assert schedule.action.id == "disk-cleanup"
+    assert CLEANUP_SCHEDULE_ID == "disk-cleanup"
+    assert schedule.spec.intervals is not None
+    assert schedule.spec.intervals[0].every == timedelta(minutes=settings.cleanup_interval_minutes)
+    assert schedule.action.task_queue == settings.temporal_task_queue
 
 
 # --- Phase 8.2: engine travels with the run ----------------------------------

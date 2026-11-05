@@ -36,6 +36,7 @@ from src.core.config import settings
 from src.workers.podcast_target import podcast_target
 from src.workers.run_worker import build_client
 from src.workers.workflows import (
+    CleanupWorkflow,
     CollectionsMonitorWorkflow,
     DigestPipelineWorkflow,
     PipelineConfig,
@@ -49,6 +50,8 @@ logger = logging.getLogger(__name__)
 MONITOR_SCHEDULE_ID = "collections-config-monitor"
 # Schedule id of the recurring system-monitor workflow (health checks).
 SYSTEM_MONITOR_SCHEDULE_ID = "system-monitor"
+# Schedule id of the recurring disk-cleanup workflow.
+CLEANUP_SCHEDULE_ID = "disk-cleanup"
 
 
 def _narration_task_queue(spec: NarrationSpec | None) -> str:
@@ -273,10 +276,12 @@ def system_monitor_schedule() -> Schedule:
 
 
 async def ensure_monitor_schedules(client: Client) -> list[str]:
-    """Create or update both recurring monitor schedules.
+    """Create or update every recurring utility schedule.
 
-    Ensures the collections-config monitor and the system-monitor schedules
-    exist so a fresh deploy always gets them without a manual call.
+    Ensures the collections-config monitor, the system-monitor and the
+    disk-cleanup schedules exist so a fresh deploy always gets them without a
+    manual call. They run on the fixed cadence of their interval settings;
+    `create_schedules` updates them whenever the operator re-registers.
 
     Args:
         client: Connected Temporal client.
@@ -287,7 +292,62 @@ async def ensure_monitor_schedules(client: Client) -> list[str]:
     return [
         await create_monitor_schedule(client),
         await create_system_monitor_schedule(client),
+        await create_cleanup_schedule(client),
     ]
+
+
+def cleanup_schedule() -> Schedule:
+    """Create the recurring disk-cleanup Schedule object.
+
+    Wakes the ``CleanupWorkflow`` every configured number of minutes so it can
+    delete temp files and finished audio older than ``cleanup_max_age_days``.
+
+    Returns:
+        A Schedule starting CleanupWorkflow on a fixed interval.
+    """
+    interval_minutes = settings.cleanup_interval_minutes
+    return Schedule(
+        action=ScheduleActionStartWorkflow(
+            CleanupWorkflow.run,
+            None,
+            id="disk-cleanup",
+            task_queue=settings.temporal_task_queue,
+        ),
+        spec=ScheduleSpec(
+            intervals=[
+                ScheduleIntervalSpec(every=timedelta(minutes=interval_minutes)),
+            ]
+        ),
+    )
+
+
+async def create_cleanup_schedule(client: Client) -> str:
+    """Create (or update) the recurring disk-cleanup schedule.
+
+    Args:
+        client: Connected Temporal client.
+
+    Returns:
+        The schedule id.
+
+    Raises:
+        RPCError: If the create/update call fails.
+    """
+    schedule = cleanup_schedule()
+    schedule_id = CLEANUP_SCHEDULE_ID
+    interval_minutes = settings.cleanup_interval_minutes
+    try:
+        await client.create_schedule(schedule_id, schedule)
+        print(f"Created schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except ScheduleAlreadyRunningError:
+        handle = client.get_schedule_handle(schedule_id)
+        await handle.update(lambda _: ScheduleUpdate(schedule=schedule))
+        print(f"Updated schedule '{schedule_id}' (every {interval_minutes} min UTC)")
+    except RPCError as exc:
+        print(f"Could not create schedule '{schedule_id}': {exc}")
+        print("It may already exist; update handle instead.")
+        raise
+    return schedule_id
 
 
 async def create_system_monitor_schedule(client: Client) -> str:
