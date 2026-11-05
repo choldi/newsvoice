@@ -19,7 +19,7 @@
 .PHONY: help setup venv install lint format format-check test test-news \
         test-gateway coverage check commit up down ps health logs logs-api \
         logs-gateway logs-worker logs-temporal status deploy clean urls \
-        schedule trigger namespaces
+        schedule trigger namespaces security-venv security-scan
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
 
@@ -79,6 +79,11 @@ help: ## Show all make targets
 	@echo "Utilities"
 	@echo "  make urls             Print admin GUI, Temporal UI and gateway URLs"
 	@echo "  make clean            Remove caches, coverage and build artifacts"
+	@echo ""
+	@echo "Security"
+	@echo "  make security-venv    Create isolated .sec-venv with scanners"
+	@echo "  make security-scan    Run scanners (SCANNERS=\"pip-audit trivy checkov semgrep\")"
+	@echo "  make security-scan-ci CI mode: fail on findings"
 
 venv: ## Create news + gateway .venv with dev extras
 	cd $(NEWS_DIR) && python3 -m venv .venv && .venv/bin/python -m pip install -e ".[dev]"
@@ -183,3 +188,65 @@ clean: ## Remove caches, coverage and build artifacts
 	find $(NEWS_DIR) $(GW_DIR) $(CONTRACT) -type d -name __pycache__ -prune -exec rm -rf {} +
 	find $(NEWS_DIR) $(GW_DIR) $(CONTRACT) -type f -name "*.pyc" -delete
 	rm -rf $(NEWS_DIR)/build $(NEWS_DIR)/dist $(NEWS_DIR)/src/news_engine.egg-info
+
+# --- Security scanning --------------------------------------------------------
+# Dedicated venv to keep heavy tools (trivy, checkov, semgrep) out of dev venvs.
+SEC_VENV    := $(REPO_ROOT)/.sec-venv
+SEC_PY      := $(SEC_VENV)/bin/python
+SEC_PIP     := $(SEC_VENV)/bin/pip
+
+# Select which scanners to run (override on CLI, e.g. make security-scan SCANNERS="pip-audit trivy")
+SCANNERS    ?= pip-audit trivy checkov
+
+security-venv: ## Create the dedicated security tooling venv
+	python3 -m venv $(SEC_VENV)
+	$(SEC_PIP) install -U pip pip-audit checkov semgrep
+	@echo "NOTE: trivy must be installed separately (apt install trivy / brew install trivy / download binary)"
+	@which trivy >/dev/null || echo "  trivy not found in PATH - install it to enable Docker scanning"
+
+security-scan: security-venv ## Run security scanners (override SCANNERS="pip-audit trivy checkov semgrep")
+	@echo "=== Security scan: $(SCANNERS) ==="
+	@for scanner in $(SCANNERS); do \
+		case $$scanner in \
+			pip-audit) \
+				echo "--- pip-audit: Python dependencies ---"; \
+				tmp_reqs=$$(mktemp -d); \
+				echo "  Exporting news requirements..."; \
+				cd $(abspath $(NEWS_DIR)) && uv export --format requirements-txt 2>/dev/null | grep -v '^-e ' > $$tmp_reqs/news.txt; \
+				$(SEC_PY) -m pip_audit -r $$tmp_reqs/news.txt || true; \
+				echo "  Exporting gateway requirements..."; \
+				cd $(abspath $(GW_DIR)) && uv export --format requirements-txt 2>/dev/null | grep -v '^-e ' > $$tmp_reqs/gateway.txt; \
+				$(SEC_PY) -m pip_audit -r $$tmp_reqs/gateway.txt || true; \
+				rm -rf $$tmp_reqs; \
+				;; \
+			trivy) \
+				echo "--- Trivy: Docker images ---"; \
+				if which trivy >/dev/null; then \
+					for img in newsvoice-gateway:latest newsvoice-api:latest; do \
+						echo "  Scanning $$img..."; \
+						trivy image --exit-code 0 --severity HIGH,CRITICAL $$img || true; \
+					done; \
+				else \
+					echo "  trivy not installed - skipping (install via apt/brew/binary)"; \
+				fi; \
+				;; \
+			checkov) \
+				echo "--- Checkov: docker-compose & IaC ---"; \
+				$(SEC_VENV)/bin/checkov -d $(abspath deploy/) --framework dockerfile,secrets --quiet || true; \
+				;; \
+			semgrep) \
+				echo "--- Semgrep: SAST ---"; \
+				$(SEC_VENV)/bin/semgrep scan --config=auto --error $(abspath apps/) || true; \
+				;; \
+			*) \
+				echo "Unknown scanner: $$scanner (use pip-audit|trivy|checkov|semgrep)"; \
+				exit 1; \
+				;; \
+		esac; \
+	done
+
+security-scan-ci: ## CI-friendly: fail on any finding (no || true)
+	@$(MAKE) security-scan SCANNERS="pip-audit trivy checkov" \
+		SEC_PIP="$(SEC_PIP)" SEC_PY="$(SEC_PY)" \
+		NEWS_DIR="$(NEWS_DIR)" GW_DIR="$(GW_DIR)" \
+		| sed 's/|| true//g'
