@@ -189,6 +189,16 @@ class EnvFile:
         """
         return sorted(k for k, v in self.edits.items() if self.original(k) != v)
 
+    def reload_from_disk(self) -> None:
+        """Read the file back, discarding the staged edits.
+
+        Used right after a write so the diff baseline matches what is on disk.
+        """
+        fresh = EnvFile.load(self.path, self.example)
+        self.lines = fresh.lines
+        self.pristine = fresh.pristine
+        self.edits = {}
+
     def render(self) -> str:
         """Return the full text to write to disk.
 

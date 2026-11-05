@@ -7,8 +7,9 @@ all the data rules live in :mod:`settings`, :mod:`deps` and :mod:`validate`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from . import deps
+from . import deps, transfer
 from . import validate as validation
 from .curses_ui import App, Row, Screen
 from .detect import Report, detect
@@ -188,6 +189,9 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
     rows.extend(
         [
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
+            Row("button", label="Editar los .env ya configurados", action="edit"),
+            Row("button", label="Importar valores desde un archivo .env", action="import"),
+            Row("button", label="Exportar la configuración a un archivo", action="export"),
             Row("button", label="Volver a detectar el entorno", action="redetect"),
             Row("button", label="Validar la configuración actual", action="audit"),
             Row("button", label="Ayuda de teclado", action="help"),
@@ -199,6 +203,12 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
         if row.action == "wizard":
             app_.say("Elige el punto de partida")
             app_.push(profile_screen(app_, ctx))
+        elif row.action == "edit":
+            app_.push(edit_picker_screen(app_, ctx))
+        elif row.action == "import":
+            app_.push(import_screen(app_, ctx))
+        elif row.action == "export":
+            app_.push(export_screen(app_, ctx))
         elif row.action == "redetect":
             ctx.report = detect()
             app_.say("Entorno actualizado", "ok")
@@ -324,8 +334,16 @@ def method_screen(app: App, ctx: Context) -> Screen:
     )
 
 
-def env_screen(app: App, ctx: Context, file_key: str) -> Screen:
-    """Build the form for one env file, sections included."""
+def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False) -> Screen:
+    """Build the form for one env file, sections included.
+
+    Args:
+        app: Running application.
+        ctx: Shared wizard state.
+        file_key: One of ``deploy``, ``news`` or ``gateway``.
+        edit_mode: Swap the wizard continuation buttons for a direct
+            «guardar en disco» action (used by the edit/import screens).
+    """
     from .settings import sections_for as _sections
 
     env = ctx.envs[file_key]
@@ -358,13 +376,22 @@ def env_screen(app: App, ctx: Context, file_key: str) -> Screen:
                 )
             )
         rows.append(Row("note", label=""))
-    rows.extend(
-        [
-            Row("button", label="Ver cambios de este archivo", action="diff"),
-            Row("button", label="Guardar y continuar", action="next"),
-            Row("button", label="Atrás", action="back"),
-        ]
-    )
+    if edit_mode:
+        rows.extend(
+            [
+                Row("button", label="Ver cambios de este archivo", action="diff"),
+                Row("button", label="Guardar en disco", action="save"),
+                Row("button", label="Volver al menú de edición", action="back"),
+            ]
+        )
+    else:
+        rows.extend(
+            [
+                Row("button", label="Ver cambios de este archivo", action="diff"),
+                Row("button", label="Guardar y continuar", action="next"),
+                Row("button", label="Atrás", action="back"),
+            ]
+        )
 
     def on_change(app_: App, row: Row) -> None:
         field_ = _find_field(file_key, row)
@@ -386,6 +413,12 @@ def env_screen(app: App, ctx: Context, file_key: str) -> Screen:
                 ]
                 app_.info(f"{target.key_path} · {len(pending)} cambio(s)", *lines)
             return
+        if row.action == "save":
+            if not env.changed_keys():
+                app_.say("Sin cambios que escribir en este archivo", "")
+                return
+            app_.modal = _confirm_write_one(app_, ctx, file_key)
+            return
         if row.action == "next":
             _sync_shared_key(ctx)
             nxt = _ORDER[_ORDER.index(file_key) + 1] if file_key in _ORDER else None
@@ -395,7 +428,7 @@ def env_screen(app: App, ctx: Context, file_key: str) -> Screen:
                 app_.push(review_screen(app_, ctx))
 
     return Screen(
-        title=f"Paso 3 · {file_key}/.env",
+        title=f"{'Editar' if edit_mode else 'Paso 3'} · {file_key}/.env",
         subtitle=target.key_path,
         rows=rows,
         footer="Enter editar · g generar secreto · a avanzados · Esc atrás",
@@ -502,6 +535,223 @@ def _confirm_write(app: App, ctx: Context):
             "Las copias previas guardan .bak-<fecha>.",
         ],
         [("Cancelar", lambda a: a.close_modal()), ("Escribir", do_write)],
+    )
+
+
+def _confirm_write_one(app: App, ctx: Context, file_key: str):
+    """Return the confirmation dialog that writes a single env file."""
+    from .curses_ui import Dialog
+
+    env = ctx.envs[file_key]
+
+    def do_save(app_: App) -> None:
+        app_.close_modal()
+        names = env.changed_keys()
+        if not names:
+            app_.say("Sin cambios que escribir", "")
+            return
+        backup = env.write()
+        env.reload_from_disk()
+        app_.say(f"Escrito {env.key_path}: {len(names)} valor(es)", "ok")
+        app_.info(
+            "Guardado",
+            f"{env.key_path}: {len(names)} valor(es) escritos.",
+            f"Copia previa: {backup.name}" if backup else "Sin copia previa (archivo nuevo).",
+        )
+
+    if not env.changed_keys():
+        return None
+
+    return Dialog(
+        "Guardar en disco",
+        [
+            f"{env.key_path}: {len(env.changed_keys())} valor(es) por escribir.",
+            "Se guarda una copia previa .bak-<fecha>.",
+        ],
+        [("Cancelar", lambda a: a.close_modal()), ("Guardar", do_save)],
+    )
+
+
+def edit_picker_screen(app: App, ctx: Context) -> Screen:
+    """Build the menu that routes to one env file for direct editing."""
+
+    def build() -> list[Row]:
+        rows = [
+            Row("heading", label="Editar configuración"),
+            Row("note", label="Abre un archivo, cambia valores y guarda en disco."),
+            Row("note", label=""),
+        ]
+        for target in env_paths():
+            env = ctx.envs[target.key]
+            pending = len(env.diff_against_disk())
+            rows.append(
+                Row(
+                    "button",
+                    label=f"{target.label}",
+                    value=target.key_path,
+                    action=target.key,
+                )
+            )
+            if pending:
+                rows.append(
+                    Row(
+                        "note",
+                        label=f"  {target.key_path}: {pending} cambio(s) sin guardar",
+                        result="warn",
+                    )
+                )
+        rows.append(Row("note", label=""))
+        rows.append(Row("button", label="Atrás", action="back"))
+        return rows
+
+    def on_enter(app_: App) -> None:
+        app_.current.rows = build()
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action in ctx.envs:
+            app_.push(env_screen(app_, ctx, row.action, edit_mode=True))
+
+    return Screen(
+        title="Editar · configure los valores",
+        subtitle="elige un archivo",
+        rows=build(),
+        footer="Enter abrir archivo · Esc atrás",
+        on_enter=on_enter,
+        on_activate=activate,
+    )
+
+
+def import_screen(app: App, ctx: Context) -> Screen:
+    """Build the screen that pulls values from an external .env file."""
+    path_row = Row(
+        "text",
+        label="Ruta del .env origen",
+        value="",
+        help="Ruta absoluta o relativa al repo; solo importan claves ya existentes",
+    )
+    rows = [
+        Row("heading", label="Importar valores"),
+        Row(
+            "note",
+            label="Sube los valores de otro .env a los tres archivos (claves conocidas).",
+        ),
+        Row("note", label=""),
+        path_row,
+        Row("note", label=""),
+        Row("button", label="Importar al archivo destino", action="import"),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action != "import":
+            return
+        raw = path_row.value.strip()
+        if not raw:
+            app_.say("Escribe primero una ruta en el campo de arriba", "warn")
+            return
+        source = Path(raw).expanduser()
+        if not source.is_absolute() and not source.exists():
+            source = REPO_ROOT / source
+        if not source.is_file():
+            app_.say(f"No existe el archivo {source}", "bad")
+            return
+        text = source.read_text(encoding="utf-8", errors="replace")
+        values = transfer.parse_env_text(text)
+        if not values:
+            app_.say("El archivo no contiene claves KEY=VALUE", "warn")
+            return
+        from .transfer import import_values
+
+        applied, unknown = import_values(ctx, values)
+        summary = list(applied[:12])
+        if len(applied) > 12:
+            summary.append(f"… y {len(applied) - 12} más")
+        lines = [f"Origen: {source}"]
+        if applied:
+            lines.append(f"{len(applied)} valor(es) aplicados en memoria:")
+        for name in summary:
+            line = name if name.startswith("…") else f"  {name}"
+            lines.append(line)
+        if not applied:
+            lines.append("Ningún valor cambió: todo coincide con lo configurado.")
+        if unknown:
+            shown = ", ".join(unknown[:10]) + (", …" if len(unknown) > 10 else "")
+            lines.append(f"{len(unknown)} clave(s) sin destino (ignoradas): {shown}")
+        lines.append("(guarda con «Editar los .env» o el asistente)")
+        app_.info("Importación", *lines)
+        app_.say(f"Importados {len(applied)} valor(es) · {len(unknown)} ignorados", "ok")
+        app_.pop()
+
+    return Screen(
+        title="Importar · .env externo",
+        subtitle="claves ya presentes en los tres archivos",
+        rows=rows,
+        footer="Enter editar ruta · Enter de nuevo en Importar · Esc atrás",
+        on_activate=activate,
+    )
+
+
+def export_screen(app: App, ctx: Context) -> Screen:
+    """Build the screen that dumps the three env files to one archive."""
+    path_row = Row(
+        "text",
+        label="Ruta del archivo destino",
+        value=str(REPO_ROOT / ".env.newsvoice"),
+        help="Ahí se escribirán todos los valores activos (incluye secretos)",
+    )
+    rows = [
+        Row("heading", label="Exportar configuración"),
+        Row("note", label="Escribe los valores activos de los tres .env, agrupados por archivo."),
+        Row(
+            "note",
+            label="Atención: el resultado incluye secretos en texto claro.",
+            result="warn",
+        ),
+        Row("note", label=""),
+        path_row,
+        Row("note", label=""),
+        Row("button", label="Exportar al archivo destino", action="export"),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action != "export":
+            return
+        raw = path_row.value.strip()
+        if not raw:
+            app_.say("Escribe primero una ruta en el campo de arriba", "warn")
+            return
+        destination = Path(raw).expanduser()
+        if not destination.is_absolute() and not destination.name.startswith("."):
+            destination = REPO_ROOT / destination
+        if destination.resolve() in (t.path.resolve() for t in env_paths()):
+            app_.say("No exportes encima de un .env del proyecto", "bad")
+            return
+        transfer.export_write(ctx, destination)
+        app_.say(f"Exportado a {destination}", "ok")
+        app_.info(
+            "Exportación",
+            f"Escrito: {destination}",
+            f"Valores activos de {len(ctx.envs)} archivo(s), agrupados por sección.",
+            "Recuerda que el archivo contiene secretos en claro.",
+        )
+        app_.pop()
+
+    return Screen(
+        title="Exportar · configuración actual",
+        subtitle="los tres .env en un solo archivo",
+        rows=rows,
+        footer="Enter editar ruta · Enter de nuevo en Exportar · Esc atrás",
+        on_activate=activate,
     )
 
 

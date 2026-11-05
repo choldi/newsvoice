@@ -61,6 +61,19 @@ Pasos del asistente:
    plantillas sin rellenar, puertos, URL del gateway, dependencias y
    requisitos del host.
 
+Además del flujo guiado, desde la pantalla inicial también puedes:
+
+- **Editar los `.env` ya configurados** — abre cualquiera de los tres archivos
+  para cambiar cualquier valor (incluidos secretos y desplegables), ver el diff
+  pendiente y guardarlo en disco directamente (copia `.bak-<fecha>` incluida).
+- **Importar valores desde un archivo `.env`** — lee cualquier `KEY=VALUE`
+  (acepta comillas y `export`) y aplica a los tres archivos solo las claves que
+  ya existen en sus plantillas; las claves sin destino se listan e ignoran.
+- **Exportar la configuración** — vuelca los valores activos de los tres `.env`
+  en un único archivo agrupado por sección (por defecto `.env.newsvoice`),
+  útil para replicar la instalación. Atención: el resultado incluye secretos en
+  claro. El asistente se niega a exportar encima de los `.env` del proyecto.
+
 Teclas de la TUI: `↑/↓` mover · `Enter` editar/abrir · `Esc` atrás ·
 `g` generar secreto · `a` opciones avanzadas · `Ctrl+R` valor por defecto ·
 `?` ayuda · `q` salir.
