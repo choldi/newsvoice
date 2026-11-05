@@ -192,17 +192,26 @@ clean: ## Remove caches, coverage and build artifacts
 # --- Security scanning --------------------------------------------------------
 # Dedicated venv to keep heavy tools (trivy, checkov, semgrep) out of dev venvs.
 SEC_VENV    := $(REPO_ROOT)/.sec-venv
-SEC_PY      := $(SEC_VENV)/bin/python
-SEC_PIP     := $(SEC_VENV)/bin/pip
+SEC_BIN     := $(SEC_VENV)/bin
+SEC_PY      := $(SEC_BIN)/python
+SEC_PIP     := $(SEC_BIN)/pip
+# Trivy: downloaded binary (not a pip package)
+TRIVY_VER   ?= 0.76.2
+TRIVY_URL   := https://github.com/aquasecurity/trivy/releases/download/v$(TRIVY_VER)/trivy_$(TRIVY_VER)_Linux-64bit.tar.gz
+TRIVY_BIN   := $(SEC_BIN)/trivy
 
 # Select which scanners to run (override on CLI, e.g. make security-scan SCANNERS="pip-audit trivy")
 SCANNERS    ?= pip-audit trivy checkov
 
-security-venv: ## Create the dedicated security tooling venv
+security-venv: $(TRIVY_BIN) ## Create the dedicated security tooling venv + trivy binary
 	python3 -m venv $(SEC_VENV)
 	$(SEC_PIP) install -U pip pip-audit checkov semgrep
-	@echo "NOTE: trivy must be installed separately (apt install trivy / brew install trivy / download binary)"
-	@which trivy >/dev/null || echo "  trivy not found in PATH - install it to enable Docker scanning"
+
+$(TRIVY_BIN):
+	@echo "Downloading trivy v$(TRIVY_VER)..."
+	@mkdir -p $(SEC_BIN)
+	@curl -sSL $(TRIVY_URL) | tar -xz -C $(SEC_BIN) trivy
+	@chmod +x $(TRIVY_BIN)
 
 security-scan: security-venv ## Run security scanners (override SCANNERS="pip-audit trivy checkov semgrep")
 	@echo "=== Security scan: $(SCANNERS) ==="
@@ -221,14 +230,10 @@ security-scan: security-venv ## Run security scanners (override SCANNERS="pip-au
 				;; \
 			trivy) \
 				echo "--- Trivy: Docker images ---"; \
-				if which trivy >/dev/null; then \
-					for img in newsvoice-gateway:latest newsvoice-api:latest; do \
-						echo "  Scanning $$img..."; \
-						trivy image --exit-code 0 --severity HIGH,CRITICAL $$img || true; \
-					done; \
-				else \
-					echo "  trivy not installed - skipping (install via apt/brew/binary)"; \
-				fi; \
+				for img in newsvoice-gateway:latest newsvoice-api:latest; do \
+					echo "  Scanning $$img..."; \
+					$(TRIVY_BIN) image --exit-code 0 --severity HIGH,CRITICAL $$img || true; \
+				done; \
 				;; \
 			checkov) \
 				echo "--- Checkov: docker-compose & IaC ---"; \
