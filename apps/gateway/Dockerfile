@@ -44,6 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
+# Setuptools <84 vendors wheel 0.45.1 and jaraco.context 5.3.0 in
+# setuptools/_vendor (CVE-2026-24049, CVE-2026-23949). Bumping setuptools
+# vendors the patched copies (wheel 0.46.3 / jaraco.context 6.1.0).
+RUN pip install --no-cache-dir --upgrade "setuptools>=84.2.1"
+
 WORKDIR /app
 
 # The workspace venv carries every dependency (incl. tts_contract) and the

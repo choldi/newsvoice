@@ -12,5 +12,11 @@ readme = "README.md"
 [tool.uv.workspace]
 members = ["apps/news", "apps/gateway", "libs/tts_contract"]
 
+# The root is a workspace aggregator, not a distributable package. Without this
+# `uv sync` tries to build `newsvoice` with hatchling and fails (no `newsvoice/`
+# module directory).
+[tool.uv]
+package = false
+
 [tool.uv.sources]
 tts-contract = { workspace = true }
