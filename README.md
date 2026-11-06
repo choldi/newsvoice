@@ -81,6 +81,60 @@ Teclas de la TUI: `↑/↓` mover · `Enter` editar/abrir · `Esc` atrás ·
 La lógica vive en `scripts/setup_wizard/` (std-lib only) y está cubierta por
 `apps/news/tests/unit/test_setup_wizard.py`.
 
+## Desarrollo
+
+El workspace se instala en un único `.venv` raíz:
+
+```bash
+uv sync --all-packages                # deps base + grupos dev de news, gateway y tts_contract
+uv sync --all-packages --all-extras   # añade todos los motores TTS (torch/CUDA)
+```
+
+La raíz está declarada como proyecto virtual (`[tool.uv] package = false`), así
+que `uv sync` no intenta empaquetar `newsvoice`. Si prefieres un `.venv` por app,
+`make venv` sigue disponible.
+
+Puertas de calidad (lo mismo que corre CI):
+
+```bash
+make lint          # ruff check en news, gateway, tts_contract y scripts
+make format-check  # ruff format --check
+make test          # pytest de news + gateway
+make check         # lint + format-check + test
+```
+
+`make help` lista el resto de objetivos (compose, deploy, schedules, logs…).
+
+## Seguridad
+
+Los escáneres viven en un virtualenv aislado `.sec-venv` (ignorado por git) para
+no contaminar el entorno de desarrollo. `trivy` es un binario Go que se descarga
+automáticamente la primera vez.
+
+```bash
+make security-venv     # crea .sec-venv y descarga trivy
+make security-scan     # pip-audit + trivy + checkov
+make security-scan-ci  # igual, pero falla si hay hallazgos
+```
+
+Scanners disponibles (seleccionables con `SCANNERS="..."`):
+
+| Scanner | Qué revisa |
+|---|---|
+| `pip-audit` | dependencias Python de news y gateway (vía `uv export`) |
+| `trivy` | imágenes Docker `newsvoice-api` y `newsvoice-gateway` |
+| `checkov` | `deploy/` (compose/dockerfiles) y secretos |
+| `semgrep` | SAST sobre `apps/` |
+
+Ejemplo:
+
+```bash
+make security-scan SCANNERS="pip-audit semgrep"
+```
+
+`trivy` escanea imágenes locales, así que constrúyelas antes con `make up` en el
+host donde existan.
+
 ## Estado
 
 En construcción según `apps/news/MERGE_PLAN.md` (fases P0–P10). Remotos
