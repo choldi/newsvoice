@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import edge_tts
 import httpx
@@ -83,6 +83,9 @@ from src.core.audio import (
 from src.core.config import get_settings
 from src.core.prompts import strip_emotion_tags
 from src.core.tracing import trace_function
+
+if TYPE_CHECKING:
+    from src.api.services.tts_lease import RenderGate
 
 logger = structlog.get_logger(__name__)
 
@@ -814,7 +817,11 @@ class NarrationTTSService:
                 ) from edge_exc
 
     async def synthesize_conversation(
-        self, turns: list[dict[str, Any]], pause_ms: int, speed: float = 1.0
+        self,
+        turns: list[dict[str, Any]],
+        pause_ms: int,
+        speed: float = 1.0,
+        gate: RenderGate | None = None,
     ) -> bytes:
         """Render a conversation as several gateway requests, one per block.
 
@@ -835,6 +842,9 @@ class NarrationTTSService:
             pause_ms: Silence inserted between turns and between blocks, in
                 milliseconds. The gateway does not scale these with ``speed``.
             speed: Speaking rate applied to every turn, in [0.5, 2.0].
+            gate: Optional render gate; between blocks the render hands the
+                engine to a higher-priority waiter (a scheduled digest) and
+                takes it back before the next block.
 
         Returns:
             A single WAV payload in canonical format.
@@ -856,6 +866,8 @@ class NarrationTTSService:
         )
         parts: list[tuple[bytes, int]] = []
         for index, block in enumerate(blocks):
+            if gate is not None and await gate.should_pause():
+                await gate.yield_and_wait()
             conversation = ConversationRequest(
                 turns=[ConversationTurn.model_validate(turn) for turn in block],
                 pause_ms=pause_ms,
@@ -1270,6 +1282,7 @@ class NarrationTTSService:
         spec: NarrationSpec,
         script: NarrationScript,
         allow_fallback: bool,
+        gate: RenderGate | None = None,
     ) -> tuple[bytes, int]:
         """Synthesize every turn separately and assemble them locally.
 
@@ -1280,6 +1293,9 @@ class NarrationTTSService:
             spec: Narration spec.
             script: Script to render.
             allow_fallback: Whether to allow Edge fallback for this render.
+            gate: Optional render gate; between chunks the render hands the
+                engine to a higher-priority waiter (a scheduled digest) and
+                takes it back before the next chunk.
 
         Returns:
             Tuple of ``(canonical_wav_bytes, edge_fallback_count)``.
@@ -1293,6 +1309,8 @@ class NarrationTTSService:
             emotion = segment.emotion or role.emotion or spec.emotion
             text = segment_speech_text(segment)
             for chunk in chunk_text(text, self._max_chars):
+                if gate is not None and await gate.should_pause():
+                    await gate.yield_and_wait()
                 audio, used_edge = await self.synthesize_turn(
                     chunk,
                     role.voice_id,
@@ -1415,6 +1433,7 @@ class NarrationTTSService:
         collection: str = "default",
         day: datetime | None = None,
         strategy: RenderStrategy = RenderStrategy.TURNS,
+        gate: RenderGate | None = None,
     ) -> NarrationOut:
         """Render a script to a cached M4A, reusing a previous identical render.
 
@@ -1424,6 +1443,8 @@ class NarrationTTSService:
             collection: Collection name owning the narration.
             day: Optional datetime driving the cache filename. Defaults to now (UTC).
             strategy: Render strategy. Defaults to one request per turn.
+            gate: Optional render gate; long renders hand the engine to a
+                scheduled digest between chunks and resume automatically.
 
         Returns:
             The render result, pointing at the M4A to deliver.
@@ -1472,11 +1493,13 @@ class NarrationTTSService:
                 )
             )
             audio = await self._to_canonical(
-                await self.synthesize_conversation(turns, spec.pause_ms, speed=speed)
+                await self.synthesize_conversation(turns, spec.pause_ms, speed=speed, gate=gate)
             )
             fallbacks = 0
         else:
-            audio, fallbacks = await self._render_turns_locally(spec, script, allow_fallback)
+            audio, fallbacks = await self._render_turns_locally(
+                spec, script, allow_fallback, gate=gate
+            )
 
         if spec.music is not None:
             audio = await self._mix_music(audio, spec.music)

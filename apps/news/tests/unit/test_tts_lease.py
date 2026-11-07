@@ -277,6 +277,60 @@ async def test_gate_hands_the_engine_over_and_takes_it_back() -> None:
     assert await service.holder() == "render-run", "the render keeps the engine after resuming"
 
 
+async def test_gate_reports_lease_as_the_pause_reason() -> None:
+    """A yield caused by a scheduled digest is labelled 'lease'."""
+    service = _service()
+    transitions: list[tuple[bool, str]] = []
+
+    def _record(paused: bool, reason: str) -> None:
+        transitions.append((paused, reason))
+
+    gate = RenderGate(service, "render-run", PRIORITY_RENDER, on_transition=_record)
+    await service.acquire("render-run", PRIORITY_RENDER)
+    await service.add_waiter("digest-run", PRIORITY_DIGEST)
+
+    async def _digest_finishes() -> None:
+        await asyncio.sleep(0.05)
+        await service.acquire("digest-run", PRIORITY_DIGEST)
+        await service.remove_waiter("digest-run")
+        await service.release("digest-run")
+
+    task = asyncio.create_task(_digest_finishes())
+    await gate.yield_and_wait()
+    await task
+
+    assert transitions == [(True, "lease"), (False, "")]
+
+
+async def test_gate_reports_operator_as_the_pause_reason() -> None:
+    """A manual pause is labelled 'operator', not 'lease'."""
+    service = _service()
+    paused = {"on": True}
+    transitions: list[tuple[bool, str]] = []
+
+    def _record(state: bool, reason: str) -> None:
+        transitions.append((state, reason))
+
+    gate = RenderGate(
+        service,
+        "render-run",
+        PRIORITY_RENDER,
+        on_transition=_record,
+        user_paused=lambda: paused["on"],
+    )
+    await service.acquire("render-run", PRIORITY_RENDER)
+
+    waiter = asyncio.create_task(gate.yield_and_wait())
+    for _ in range(200):
+        if await service.holder() is None:
+            break
+        await asyncio.sleep(0.01)
+    paused["on"] = False
+    await waiter
+
+    assert transitions == [(True, "operator"), (False, "")]
+
+
 async def test_gate_releases_before_waiting_so_the_digest_never_overlaps() -> None:
     """The digest must find a free engine, not one still being used."""
     service = _service()

@@ -641,6 +641,7 @@ class AudioJobsRepository:
                 finished_at = NULL,
                 elapsed_seconds = NULL,
                 paused = 0,
+                pause_reason = NULL,
                 chapter_start = NULL,
                 chapter_end = NULL,
                 partial_path = NULL
@@ -677,6 +678,35 @@ class AudioJobsRepository:
         query = "UPDATE audio_jobs SET status = ? WHERE run_id = ? AND kind = ?"
         async with get_db(self.db_path) as db:
             await db.execute(query, (status, run_id, kind))
+            await db.commit()
+
+    async def set_pause_state(self, run_id: str, reason: str | None, kind: str = "tts") -> None:
+        """Mark a job paused for a concrete reason, or resume it.
+
+        ``audio_jobs.status`` alone cannot tell an operator pause from a render
+        that yielded the engine to a scheduled digest. The render gate reports
+        the transition with its cause, and this method persists both together so
+        the API and UI never observe a half-updated pair.
+
+        Args:
+            run_id: Workflow id of the job.
+            reason: 'operator' or 'lease' to pause; None or '' to resume.
+            kind: Audio job kind ('doc_tts', 'audiobook', ...).
+        """
+        if reason:
+            query = (
+                "UPDATE audio_jobs SET status = 'PAUSED', pause_reason = ? "
+                "WHERE run_id = ? AND kind = ?"
+            )
+            params: tuple[object, ...] = (reason, run_id, kind)
+        else:
+            query = (
+                "UPDATE audio_jobs SET status = 'GENERATING', pause_reason = NULL "
+                "WHERE run_id = ? AND kind = ?"
+            )
+            params = (run_id, kind)
+        async with get_db(self.db_path) as db:
+            await db.execute(query, params)
             await db.commit()
 
     async def set_paused(self, run_id: str, paused: bool, kind: str = "tts") -> bool:
@@ -788,7 +818,8 @@ class AudioJobsRepository:
         query = """
             UPDATE audio_jobs
             SET status = ?, error = ?, audio_path = ?,
-                finished_at = ?, elapsed_seconds = ?, paused = 0
+                finished_at = ?, elapsed_seconds = ?, paused = 0,
+                pause_reason = NULL
             WHERE run_id = ? AND kind = ?
         """
         async with get_db(self.db_path) as db:
@@ -811,7 +842,7 @@ class AudioJobsRepository:
         query = """
             SELECT id, run_id, collection, kind, status, error, audio_path,
                    started_at, finished_at, elapsed_seconds,
-                   paused, chapter_start, chapter_end, partial_path
+                   paused, pause_reason, chapter_start, chapter_end, partial_path
             FROM audio_jobs
             WHERE run_id = ? AND kind = ?
         """
@@ -842,7 +873,7 @@ class AudioJobsRepository:
         query = f"""
             SELECT id, run_id, collection, kind, status, error, audio_path,
                    started_at, finished_at, elapsed_seconds,
-                   paused, chapter_start, chapter_end, partial_path
+                   paused, pause_reason, chapter_start, chapter_end, partial_path
             FROM audio_jobs
             {where}
             ORDER BY started_at DESC

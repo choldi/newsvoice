@@ -145,3 +145,38 @@ async def test_list_jobs_filters_by_kind() -> None:
 
     assert [job["kind"] for job in await repo.list_jobs(collection="tech")] == ["narration", "tts"]
     assert [job["run_id"] for job in await repo.list_jobs(kind="tts")] == ["run-9", "run-8"]
+
+
+async def test_set_pause_state_records_reason_and_clears_on_resume() -> None:
+    repo = AudioJobsRepository()
+    await repo.start_job("run-pause", kind="audiobook")
+    await repo.set_generating("run-pause", kind="audiobook")
+
+    await repo.set_pause_state("run-pause", "lease", kind="audiobook")
+    job = await repo.get_job("run-pause", kind="audiobook")
+    assert job is not None
+    assert job["status"] == "PAUSED"
+    assert job["pause_reason"] == "lease"
+
+    await repo.set_pause_state("run-pause", None, kind="audiobook")
+    job = await repo.get_job("run-pause", kind="audiobook")
+    assert job is not None
+    assert job["status"] == "GENERATING"
+    assert job["pause_reason"] is None
+
+
+async def test_start_and_finish_clear_a_stale_pause_reason() -> None:
+    repo = AudioJobsRepository()
+    await repo.start_job("run-pause-2", kind="doc_tts")
+    await repo.set_pause_state("run-pause-2", "operator", kind="doc_tts")
+
+    await repo.start_job("run-pause-2", kind="doc_tts")
+    job = await repo.get_job("run-pause-2", kind="doc_tts")
+    assert job is not None
+    assert job["pause_reason"] is None
+
+    await repo.set_pause_state("run-pause-2", "lease", kind="doc_tts")
+    await repo.finish_job("run-pause-2", status="FINISHED_OK", kind="doc_tts")
+    job = await repo.get_job("run-pause-2", kind="doc_tts")
+    assert job is not None
+    assert job["pause_reason"] is None

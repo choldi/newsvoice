@@ -274,6 +274,19 @@ def test_status_reports_generation_progress(_lesson_env: Path) -> None:
     assert body["respelling"] is None, "no adaptation metadata unless the class asked for it"
 
 
+def test_status_reports_a_lease_pause(_lesson_env: Path) -> None:
+    """A render paused for a scheduled digest says why it is waiting."""
+    repo = AudioJobsRepository()
+    asyncio.run(repo.start_job("lesson-yield", collection="tech", kind=JOB_KIND))
+    asyncio.run(repo.set_pause_state("lesson-yield", "lease", kind=JOB_KIND))
+
+    body = client.get("/api/admin/lessons/lesson-yield").json()
+
+    assert body["job_status"] == "PAUSED"
+    assert body["pause_reason"] == "lease"
+    assert body["audio_url"] is None
+
+
 def test_status_returns_a_signed_link_when_finished(_lesson_env: Path) -> None:
     """A finished lesson answers FINISHED_OK with its signed URL."""
     from src.api.services.audio_files import atomic_write

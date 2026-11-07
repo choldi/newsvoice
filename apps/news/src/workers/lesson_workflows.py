@@ -28,8 +28,9 @@ with workflow.unsafe.imports_passed_through():
 # because generation is deterministic enough to re-run.
 LESSON_GENERATE_TIMEOUT = timedelta(minutes=30)
 # Same ceiling the narration render uses: a full class can be 10+ minutes of
-# audio across many gateway requests.
-LESSON_RENDER_TIMEOUT = timedelta(seconds=7200)
+# audio across many gateway requests, and the activity queues behind any long
+# render that currently owns the shared engine lease.
+LESSON_RENDER_TIMEOUT = timedelta(hours=12)
 LESSON_DELIVERY_TIMEOUT = timedelta(seconds=120)
 LESSON_RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 

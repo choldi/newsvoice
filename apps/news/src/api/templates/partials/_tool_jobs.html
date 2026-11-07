@@ -47,6 +47,13 @@
           </td>
           <td>
             <span class="badge {{ status_badges.get(j.status, '') }}">{{ status_labels.get(j.status, j.status) }}</span>
+            {% if j.status == 'PAUSED' %}
+            <div class="muted" style="font-size:12px">
+              {% if j.pause_reason == 'lease' %}cediendo el motor a un digest
+              {% elif j.pause_reason == 'operator' %}pausa manual
+              {% endif %}
+            </div>
+            {% endif %}
             {% if j.status == 'FINISHED_ERROR' and j.error %}
             <div class="muted" style="font-size:12px">{{ j.error[:90] }}</div>
             {% endif %}

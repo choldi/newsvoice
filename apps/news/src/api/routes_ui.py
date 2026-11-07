@@ -2670,6 +2670,7 @@ async def _annotated_jobs(jobs: list[dict], kind: str) -> list[dict]:
         if kind == "audiobook" and not row["chunks_total"]:
             row["chunks_total"] = int(meta.get("chapters_total") or 0)
         row["paused"] = bool(job.get("paused"))
+        row["pause_reason"] = job.get("pause_reason")
         row["chapter_start"] = (
             job.get("chapter_start")
             if job.get("chapter_start") is not None

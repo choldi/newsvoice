@@ -27,8 +27,10 @@ NARRATION_SCRIPT_TIMEOUT = timedelta(seconds=900)
 # bounded by narration_request_timeout, default 300s) and the result is mixed
 # and encoded locally. A 20k-character program is ~14 requests, so keep the
 # ceiling well above that; retries are cheap because identical renders hit the
-# content-hash cache.
-NARRATION_RENDER_TIMEOUT = timedelta(seconds=7200)
+# content-hash cache. It also covers waiting for the shared engine lease: a
+# long audiobook render may own the engine first, and this activity queues
+# behind it instead of synthesizing concurrently.
+NARRATION_RENDER_TIMEOUT = timedelta(hours=12)
 # Recording the audio job row and the run path is local SQLite work.
 NARRATION_RECORD_TIMEOUT = timedelta(seconds=30)
 

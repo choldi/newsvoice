@@ -9,6 +9,7 @@ from temporalio.testing import ActivityEnvironment
 
 from src.api.db.database import AudioJobsRepository, NarrationRepository, RunsRepository
 from src.api.models.narration import NarrationOut, NarrationScript, NarrationSpec
+from src.api.services.tts_lease import RenderGate
 from src.workers import narration_activities
 
 SPEC: dict[str, Any] = {
@@ -67,6 +68,7 @@ class _FakeService:
         collection: str = "default",
         day: Any = None,
         strategy: Any = None,
+        gate: Any = None,
     ) -> Any:
         self.calls.append(
             {
@@ -74,6 +76,7 @@ class _FakeService:
                 "script": script,
                 "collection": collection,
                 "strategy": str(strategy),
+                "gate": gate,
             }
         )
         if self.error is not None:
@@ -129,6 +132,7 @@ async def test_render_activity_records_the_job_and_the_run_path(
     assert runs[0]["audio_path"] is None
     assert service.calls[0]["strategy"] == "turns"
     assert service.calls[0]["collection"] == "tech"
+    assert isinstance(service.calls[0]["gate"], RenderGate)
 
 
 async def test_render_activity_uses_the_conversations_strategy(

@@ -356,10 +356,11 @@ def test_status_exposes_the_forecast_and_a_measured_eta(_doc_tts_env: Path) -> N
 def test_status_reports_a_render_that_yielded_the_engine(_doc_tts_env: Path) -> None:
     """PAUSED says 'waiting for a digest', which a stalled job cannot."""
     asyncio.run(_job_repo().start_job("doc-tts-paused", collection=JOB_COLLECTION, kind=JOB_KIND))
-    asyncio.run(_job_repo().set_status("doc-tts-paused", "PAUSED", kind=JOB_KIND))
+    asyncio.run(_job_repo().set_pause_state("doc-tts-paused", "lease", kind=JOB_KIND))
 
     body = client.get("/api/admin/documents/tts/doc-tts-paused").json()
 
     assert body["job_status"] == "PAUSED"
     assert body["paused"] is True
+    assert body["pause_reason"] == "lease"
     assert body["audio_url"] is None

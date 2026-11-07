@@ -58,6 +58,13 @@ class DocTTSJobOut(BaseModel):
         default=False,
         description="True while the render has yielded the engine to a scheduled digest",
     )
+    pause_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the job is paused: 'operator' (manual pause) or 'lease' "
+            "(handed the engine to a scheduled digest); null otherwise"
+        ),
+    )
     chunk_count: int = Field(default=0, description="Number of synthesized chunks")
     audio_url: str | None = Field(
         default=None,

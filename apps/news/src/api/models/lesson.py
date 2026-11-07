@@ -53,6 +53,13 @@ class LessonJobOut(BaseModel):
     status: str = Field(default="ok", description="Execution status: ok or error")
     workflow_id: str = Field(..., description="Temporal workflow id of the lesson")
     job_status: str = Field(..., description="STARTING, GENERATING, FINISHED_OK or FINISHED_ERROR")
+    pause_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the render is paused: 'operator' (manual pause) or 'lease' "
+            "(handed the engine to a scheduled digest); null otherwise"
+        ),
+    )
     title: str = Field(default="", description="Lesson title")
     mode: str = Field(default="", description="Lesson mode")
     target_language: str = Field(default="", description="Language being taught")

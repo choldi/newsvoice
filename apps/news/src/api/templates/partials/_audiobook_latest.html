@@ -6,6 +6,7 @@
     <div>
       <strong>Último audiolibro:</strong> {{ job.title or '—' }}
       <span class="badge {{ status_badges.get(job.status, '') }}">{{ status_labels.get(job.status, job.status) }}</span>
+      {% if job.pause_reason == 'lease' %}<span class="badge paused" title="El render liberó el motor para un digest programado y se reanudará solo">cediendo motor</span>{% endif %}
       {% if job.paused %}<span class="badge paused">pausa pedida</span>{% endif %}
       {% if job.chapter_start or job.chapter_end %}
       <span class="muted">cap. {{ job.chapter_start or 1 }}–{{ job.chapter_end or '…' }}</span>

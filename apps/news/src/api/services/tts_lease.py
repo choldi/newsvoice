@@ -632,6 +632,7 @@ class RenderGate:
         *,
         on_tick: TickCallback | None = None,
         on_state: Callable[[bool], Any] | None = None,
+        on_transition: Callable[[bool, str], Any] | None = None,
         user_paused: PauseCallback | None = None,
     ) -> None:
         """Initialize the gate.
@@ -645,6 +646,10 @@ class RenderGate:
             on_state: Called with True when the render pauses and False when it
                 resumes (``audio_jobs.status`` follows it). It may be sync or
                 async; an awaitable result is awaited.
+            on_transition: Richer alternative to ``on_state``; called with the
+                pause flag plus its cause ('operator', 'lease', or '' on
+                resume). When given it takes precedence, letting the worker
+                persist the status and the reason atomically.
             user_paused: Optional predicate answering whether the operator
                 paused this run (``audio_jobs.paused``). It may be sync or
                 async; an awaitable result is awaited. Unlike the lease yield,
@@ -655,6 +660,7 @@ class RenderGate:
         self._priority = priority
         self._on_tick = on_tick
         self._on_state = on_state
+        self._on_transition = on_transition
         self._user_paused = user_paused
         self._paused = False
         self._back: asyncio.Event | None = None
@@ -683,20 +689,25 @@ class RenderGate:
             return True
         return await self._lease.waiter_above(self._priority)
 
-    async def _notify(self, paused: bool) -> None:
+    async def _notify(self, paused: bool, reason: str = "") -> None:
         """Report a pause/resume transition to the caller.
 
         Args:
             paused: True when the engine was handed over, False when it came
                 back.
+            reason: Why the render paused: 'operator' or 'lease'. Empty on
+                resume.
 
         Raises:
             Exception: Whatever the callback raises; a failed status update must
                 surface instead of leaving the GUI on the wrong state.
         """
-        if self._on_state is None:
+        if self._on_transition is not None:
+            outcome = self._on_transition(paused, reason)
+        elif self._on_state is not None:
+            outcome = self._on_state(paused)
+        else:
             return
-        outcome = self._on_state(paused)
         if inspect.isawaitable(outcome):
             await outcome
 
@@ -736,7 +747,7 @@ class RenderGate:
             operator=operator_paused,
         )
         await self._lease.release(self._owner)
-        await self._notify(True)
+        await self._notify(True, "operator" if operator_paused else "lease")
         try:
             # The operator pause is independent of the lease: it must hold the
             # render even when the engine is not contended (or the lease is

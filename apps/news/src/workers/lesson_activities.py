@@ -38,6 +38,7 @@ from src.api.services.lesson import (
     validate_notes,
 )
 from src.api.services.narration_tts import NarrationTTSService, RenderStrategy
+from src.api.services.tts_lease import PRIORITY_RENDER, RenderGate, TTSLeaseService
 from src.core.config import get_settings
 from src.core.respelling import respell_lesson_script
 
@@ -335,16 +336,34 @@ async def render_lesson_activity(payload: dict[str, Any]) -> dict[str, Any]:
     await repo.set_generating(run_id, kind=LESSON_JOB_KIND)
     started = time.monotonic()
 
+    def _tick() -> None:
+        # Heartbeat while queued for the engine and while paused so a
+        # heartbeat_timeout never mistakes a deliberate wait for a stall.
+        activity.heartbeat()
+
+    async def _on_transition(paused: bool, reason: str) -> None:
+        await repo.set_pause_state(run_id, reason if paused else None, kind=LESSON_JOB_KIND)
+
+    lease = TTSLeaseService()
     try:
         spec = _validated_spec(payload.get("spec"))
         raw_script = Path(script_path).read_text(encoding="utf-8")
         script = NarrationScript.model_validate_json(raw_script, context={"spec": spec})
-        result = await NarrationTTSService().render(
-            spec,
-            script,
-            collection=collection,
-            strategy=RenderStrategy.TURNS,
-        )
+        async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
+            gate = RenderGate(
+                lease,
+                run_id,
+                PRIORITY_RENDER,
+                on_tick=_tick,
+                on_transition=_on_transition,
+            )
+            result = await NarrationTTSService().render(
+                spec,
+                script,
+                collection=collection,
+                strategy=RenderStrategy.TURNS,
+                gate=gate,
+            )
     except Exception as exc:
         await repo.finish_job(
             run_id,

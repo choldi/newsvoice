@@ -141,6 +141,7 @@ async def get_document_tts(workflow_id: str) -> DocTTSJobOut:
         chunks_done=int(progress.get("done") or 0),
         chunks_total=int(progress.get("total") or 0),
         paused=job["status"] == "PAUSED",
+        pause_reason=job.get("pause_reason"),
         chunk_count=int(meta.get("chunk_count") or 0),
         audio_url=audio_url,
         error=job.get("error"),

@@ -32,6 +32,7 @@ from src.api.services.narration_tts import (
     NarrationTTSService,
     RenderStrategy,
 )
+from src.api.services.tts_lease import PRIORITY_RENDER, RenderGate, TTSLeaseService
 from src.core.budget import preflight
 from src.core.config import settings
 from src.core.modal_cost import (
@@ -342,9 +343,33 @@ async def render_narration_activity(payload: dict[str, Any]) -> dict[str, Any]:
     # Tag the Modal app so the billing report attributes the interval; each
     # Modal call records its own wall-clock cost against the spend ledger.
     set_cost_context(collection=collection, run_id=run_id, stage="tts")
+
+    def _tick() -> None:
+        # Heartbeat while queued for the engine and while paused so a
+        # heartbeat_timeout never mistakes a deliberate wait for a stall.
+        activity.heartbeat()
+
+    async def _on_transition(paused: bool, reason: str) -> None:
+        await jobs.set_pause_state(run_id, reason if paused else None, kind=NARRATION_JOB_KIND)
+
+    lease = TTSLeaseService()
     try:
         async with episode_tags(collection, run_id):
-            result = await service.render(spec, script, collection=collection, strategy=strategy)
+            async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
+                gate = RenderGate(
+                    lease,
+                    run_id,
+                    PRIORITY_RENDER,
+                    on_tick=_tick,
+                    on_transition=_on_transition,
+                )
+                result = await service.render(
+                    spec,
+                    script,
+                    collection=collection,
+                    strategy=strategy,
+                    gate=gate,
+                )
     except Exception as exc:
         await jobs.finish_job(
             run_id,

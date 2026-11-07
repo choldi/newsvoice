@@ -147,8 +147,8 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
     def _tick() -> None:
         activity.heartbeat()
 
-    async def _on_state(paused: bool) -> None:
-        await repo.set_status(run_id, "PAUSED" if paused else "GENERATING", kind=AUDIOBOOK_KIND)
+    async def _on_state(paused: bool, reason: str) -> None:
+        await repo.set_pause_state(run_id, reason if paused else None, kind=AUDIOBOOK_KIND)
 
     async def _operator_paused() -> bool:
         """Read the API-written pause flag between chunks."""
@@ -185,7 +185,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
                     run_id,
                     PRIORITY_RENDER,
                     on_tick=_tick,
-                    on_state=_on_state,
+                    on_transition=_on_state,
                     user_paused=_operator_paused,
                 )
                 service = AudiobookService()

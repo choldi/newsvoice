@@ -152,6 +152,7 @@ async def get_lesson(workflow_id: str) -> LessonJobOut:
         status="ok",
         workflow_id=workflow_id,
         job_status=str(job["status"]),
+        pause_reason=job.get("pause_reason"),
         title=str(meta.get("title") or ""),
         mode=str(meta.get("mode") or ""),
         target_language=str(meta.get("target_language") or ""),

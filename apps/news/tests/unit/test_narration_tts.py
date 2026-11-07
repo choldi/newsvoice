@@ -2103,3 +2103,72 @@ def test_narration_spec_accepts_the_kokoro_backend() -> None:
         tts_backend=TTSBackend.KOKORO,
     )
     assert spec.tts_backend == TTSBackend.KOKORO
+
+
+# --- Engine lease: long renders yield between chunks -----------------------
+
+
+class _YieldOnceGate:
+    """Gate that asks to yield exactly once, before the second chunk/block."""
+
+    def __init__(self) -> None:
+        self.checks = 0
+        self.yields = 0
+
+    async def should_pause(self) -> bool:
+        """Report True on the second check only."""
+        self.checks += 1
+        return self.checks == 2
+
+    async def yield_and_wait(self) -> None:
+        """Record the hand-over."""
+        self.yields += 1
+
+
+async def test_render_yields_the_engine_between_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scheduled digest can take the engine between two synthesized turns."""
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    spec = _spec()
+    script = _script(spec)
+    gate = _YieldOnceGate()
+
+    result = await service.render(spec, script, collection="tech", gate=gate)
+
+    assert gate.yields == 1
+    assert len(calls) == 2, "both turns still rendered around the hand-over"
+    assert result.duration_seconds == pytest.approx(0.7, abs=0.01)
+    await service.aclose()
+
+
+async def test_synthesize_conversation_yields_the_engine_between_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The conversations strategy also yields between gateway blocks."""
+    service, _ = _service(tmp_path, lambda request: httpx.Response(200, content=b""))
+    monkeypatch.setattr(service, "_conv_max_chars", 5)
+    monkeypatch.setattr(service, "_conv_max_turns", 1)
+    monkeypatch.setattr(service, "_conv_min_turns", 1)
+    blocks: list[int] = []
+
+    async def _block(payload: dict, *, index: int) -> bytes:
+        blocks.append(index)
+        return _wav(frames=2400)
+
+    monkeypatch.setattr(service, "_post_conversation_block", _block)
+    turns = [{"voice_id": "es-mx-male", "text": f"Turno {i}", "language": "es"} for i in range(4)]
+    gate = _YieldOnceGate()
+
+    await service.synthesize_conversation(turns, pause_ms=0, gate=gate)
+
+    assert gate.yields == 1
+    assert blocks == [0, 1, 2, 3]
+    await service.aclose()

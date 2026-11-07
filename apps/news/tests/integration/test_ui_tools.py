@@ -613,6 +613,25 @@ def test_job_fragment_marks_failed_jobs(_ui_env: Path) -> None:
     assert "Descargar" not in response.text
 
 
+def test_job_fragment_explains_a_lease_pause(_ui_env: Path) -> None:
+    """A doc render paused for a digest says so instead of looking stalled."""
+    import asyncio
+
+    from src.api.db.database import AudioJobsRepository
+
+    async def _job() -> None:
+        repo = AudioJobsRepository()
+        await repo.start_job("doc-yield", collection="documents", kind="doc_tts")
+        await repo.set_pause_state("doc-yield", "lease", kind="doc_tts")
+
+    asyncio.run(_job())
+
+    response = _client().get("/ui/fragments/tool_jobs?kind=doc_tts")
+
+    assert "en pausa" in response.text
+    assert "cediendo el motor a un digest" in response.text
+
+
 # ---------------------------------------------------------------------------
 # Phase 9.8
 # ---------------------------------------------------------------------------
@@ -933,7 +952,7 @@ def test_ui_latest_fragment_shows_progress_and_controls(_ui_env: Path) -> None:
     async def _seed() -> None:
         repo = AudioJobsRepository()
         await repo.start_job(run_id, collection="audiobooks", kind="audiobook")
-        await repo.set_status(run_id, "PAUSED", kind="audiobook")
+        await repo.set_pause_state(run_id, "lease", kind="audiobook")
         await repo.set_paused(run_id, True, kind="audiobook")
 
     asyncio.run(_seed())
@@ -955,6 +974,7 @@ def test_ui_latest_fragment_shows_progress_and_controls(_ui_env: Path) -> None:
     assert "Mi audiolibro" in response.text
     assert "2/6 capítulos" in response.text
     assert "cap. 3–8" in response.text
+    assert "cediendo motor" in response.text
     assert f"/ui/tools/audiobooks/{run_id}/resume" in response.text
     assert f"/api/admin/audiobooks/{run_id}/partial" in response.text
 

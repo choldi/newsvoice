@@ -199,8 +199,8 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
         # 600 s heartbeat_timeout never mistakes a deliberate wait for a stall.
         activity.heartbeat()
 
-    async def _on_state(paused: bool) -> None:
-        await repo.set_status(run_id, "PAUSED" if paused else "GENERATING", kind=DOC_TTS_JOB_KIND)
+    async def _on_state(paused: bool, reason: str) -> None:
+        await repo.set_pause_state(run_id, reason if paused else None, kind=DOC_TTS_JOB_KIND)
 
     lease = TTSLeaseService()
     try:
@@ -209,7 +209,9 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
         # renewing it; inside the loop the gate hands it over to any scheduled
         # digest that shows up, and takes it back once the digest is done.
         async with lease.hold(run_id, PRIORITY_RENDER, on_tick=_tick):
-            gate = RenderGate(lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_state=_on_state)
+            gate = RenderGate(
+                lease, run_id, PRIORITY_RENDER, on_tick=_tick, on_transition=_on_state
+            )
             result = await DocTTSService().synthesize_document(
                 text=text,
                 voice=voice,

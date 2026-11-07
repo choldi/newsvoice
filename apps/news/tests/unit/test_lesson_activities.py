@@ -11,9 +11,14 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from src.api.db.database import AudioJobsRepository
-from src.api.models.narration import NarrationSpec
+from src.api.models.narration import NarrationOut, NarrationScript, NarrationSpec
 from src.api.services.lesson import lesson_script_path, lesson_text_path
-from src.workers.lesson_activities import LESSON_JOB_KIND, generate_lesson_activity
+from src.api.services.tts_lease import RenderGate
+from src.workers.lesson_activities import (
+    LESSON_JOB_KIND,
+    generate_lesson_activity,
+    render_lesson_activity,
+)
 
 RUN_ID = "lesson-act1"
 
@@ -299,3 +304,72 @@ async def test_generate_rejects_adaptation_on_the_wrong_backend(
     respell.assert_not_awaited()
     job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
     assert job is not None and job["status"] == "FINISHED_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Engine lease: lesson renders yield to scheduled digests
+# ---------------------------------------------------------------------------
+
+
+class _FakeNarration:
+    """NarrationTTSService stand-in that records the render gate."""
+
+    def __init__(self, result: NarrationOut) -> None:
+        self.result = result
+        self.gates: list[object] = []
+
+    async def render(
+        self,
+        spec: NarrationSpec,
+        script: NarrationScript,
+        collection: str = "default",
+        day: object = None,
+        strategy: object = None,
+        gate: object = None,
+    ) -> NarrationOut:
+        """Record the gate and return the configured result."""
+        self.gates.append(gate)
+        return self.result
+
+
+async def test_render_activity_passes_the_engine_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lesson render participates in the lease like an audiobook/doc render."""
+    from src.workers import lesson_activities as lesson_module
+
+    await AudioJobsRepository().start_job(RUN_ID, collection="tech", kind=LESSON_JOB_KIND)
+    script = NarrationScript.model_validate(
+        {"segments": [{"role": "profe", "text": "Bonjour, on va pratiquer."}]},
+        context={"spec": SPEC},
+    )
+    script_path = Path(lesson_script_path(RUN_ID))
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(script.model_dump_json(), encoding="utf-8")
+
+    result = NarrationOut(
+        audio_path=str(tmp_path / "lesson.m4a"),
+        wav_path=str(tmp_path / "lesson.wav"),
+        duration_seconds=1.0,
+        cached=False,
+        segments=1,
+        char_count=28,
+        voices=["voice-1"],
+    )
+    service = _FakeNarration(result)
+    monkeypatch.setattr(lesson_module, "NarrationTTSService", lambda *a, **k: service)
+    monkeypatch.setattr(lesson_module, "lesson_audio_link", lambda run_id: "/audio/lesson")
+
+    payload = {
+        "run_id": RUN_ID,
+        "script_path": str(script_path),
+        "spec": SPEC.model_dump(),
+        "collection": "tech",
+    }
+    rendered = await ActivityEnvironment().run(render_lesson_activity, payload)
+
+    assert rendered["audio_path"] == result.audio_path
+    assert len(service.gates) == 1
+    assert isinstance(service.gates[0], RenderGate)
+    job = await AudioJobsRepository().get_job(RUN_ID, kind=LESSON_JOB_KIND)
+    assert job is not None and job["status"] == "FINISHED_OK"

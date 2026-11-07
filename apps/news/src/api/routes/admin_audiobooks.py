@@ -73,6 +73,7 @@ async def _job_payload(workflow_id: str) -> dict:
         "finished_at": job.get("finished_at"),
         "elapsed_seconds": job.get("elapsed_seconds"),
         "paused": bool(job.get("paused")),
+        "pause_reason": job.get("pause_reason"),
         "chapter_start": chapter_start,
         "chapter_end": chapter_end,
         "chapters_done": done,
