@@ -46,3 +46,6 @@ Thumbs.db
 
 # Local backups (output of scripts/export_config.sh)
 backups/
+
+# Deploy state report (make report — generated artifact, per-machine)
+deploy-report.md
