@@ -20,13 +20,30 @@ from tts_api.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+_API_PREFIX = "/api/v1"
+
+
+def normalize_sidecar_base_url(url: str) -> str:
+    """Normalize a sidecar URL to the service root.
+
+    The engine calls absolute paths such as ``/api/v1/tts``, so the base URL
+    must not carry the API prefix. Both documented spellings
+    (``http://host:8000`` and ``http://host:8000/api/v1``) therefore work.
+    """
+    normalized = url.strip().rstrip("/")
+    if normalized.endswith(_API_PREFIX):
+        normalized = normalized[: -len(_API_PREFIX)].rstrip("/")
+    return normalized
+
 
 class OmniVoiceRemoteEngine(TtsEngineBase):
     """Proxy that forwards synthesis to a remote OmniVoice ``tts_api`` instance."""
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
         settings = get_settings()
-        self._base_url = (base_url or settings.OMNIVOICE_REMOTE_URL).strip().rstrip("/")
+        self._base_url = normalize_sidecar_base_url(
+            base_url or settings.OMNIVOICE_REMOTE_URL
+        )
         self._timeout = timeout or settings.OMNIVOICE_REMOTE_TIMEOUT
         self._client: httpx.AsyncClient | None = None
         self._available = False
@@ -58,8 +75,8 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         """
         if not self._base_url:
             logger.warning(
-                "OMNIVOICE_REMOTE_URL no configurada; el engine omnivoice_remote "
-                "quedará no disponible"
+                "URL del sidecar no configurada para %s; el engine quedará no disponible",
+                self.name,
             )
             return
 
@@ -69,8 +86,8 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning(
-                "Sidecar OmniVoice no disponible en %s: %s; el engine "
-                "omnivoice_remote quedará no disponible",
+                "Sidecar de %s no disponible en %s: %s; el engine quedará no disponible",
+                self.name,
                 self._base_url,
                 exc,
             )
@@ -88,8 +105,8 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
     def _require_client(self) -> httpx.AsyncClient:
         if self._client is None or not self._available:
             raise EngineUnavailableError(
-                "Sidecar OmniVoice no disponible; configura OMNIVOICE_REMOTE_URL "
-                "y asegúrate de que el servicio gateway-omnivoice está arriba"
+                f"Sidecar de {self.name} no disponible; revisa la URL del sidecar "
+                "y que su servicio esté arriba"
             )
         return self._client
 
@@ -100,11 +117,13 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise EngineUnavailableError(
-                f"El sidecar OmniVoice rechazó {path}: "
+                f"El sidecar de {self.name} rechazó {path}: "
                 f"{exc.response.status_code} {exc.response.text[:300]}"
             ) from exc
         except httpx.HTTPError as exc:
-            raise EngineUnavailableError(f"Error llamando al sidecar OmniVoice: {exc}") from exc
+            raise EngineUnavailableError(
+                f"Error llamando al sidecar de {self.name}: {exc}"
+            ) from exc
         return response.content
 
     # --- synthesis ---------------------------------------------------------

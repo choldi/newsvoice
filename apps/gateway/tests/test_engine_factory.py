@@ -55,6 +55,7 @@ def test_create_single_engine_qwen3_uses_the_remote_sidecar(monkeypatch):
 
     assert engine.name == "qwen3_tts"
     assert engine.__class__.__name__ == "Qwen3RemoteEngine"
+    assert engine._base_url == "http://gateway-qwen3:8000"
 
 
 def test_create_single_engine_qwen3_defaults_to_the_local_worker(monkeypatch):

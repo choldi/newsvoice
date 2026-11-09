@@ -9,7 +9,10 @@ from typing import Any
 import httpx
 import pytest
 
-from tts_api.core.engines.omnivoice_remote_engine import OmniVoiceRemoteEngine
+from tts_api.core.engines.omnivoice_remote_engine import (
+    OmniVoiceRemoteEngine,
+    normalize_sidecar_base_url,
+)
 from tts_api.core.exceptions import EngineUnavailableError
 
 SIDECAR_URL = "http://omnivoice-sidecar:8000"
@@ -70,6 +73,41 @@ async def test_initialize_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = OmniVoiceRemoteEngine(base_url=SIDECAR_URL)
     await engine.initialize()
     assert engine._available is True
+    await engine.close()
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("http://host:8000", "http://host:8000"),
+        ("http://host:8000/", "http://host:8000"),
+        ("http://host:8000/api/v1", "http://host:8000"),
+        ("http://host:8000/api/v1/", "http://host:8000"),
+        ("  http://host:8000/api/v1  ", "http://host:8000"),
+        ("", ""),
+    ],
+)
+def test_sidecar_base_url_strips_the_api_prefix(given: str, expected: str) -> None:
+    """The engine posts absolute ``/api/v1/...`` paths itself."""
+    assert normalize_sidecar_base_url(given) == expected
+
+
+async def test_initialize_with_api_prefix_probes_the_real_health_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A documented URL carrying ``/api/v1`` must not double the prefix."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"status": "ok"})
+
+    _patch_client(monkeypatch, handler)
+    engine = OmniVoiceRemoteEngine(base_url=f"{SIDECAR_URL}/api/v1")
+    await engine.initialize()
+
+    assert engine._available is True
+    assert seen == [f"{SIDECAR_URL}/api/v1/health/live"]
     await engine.close()
 
 
