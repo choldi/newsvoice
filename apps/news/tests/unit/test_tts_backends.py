@@ -35,6 +35,8 @@ def test_resolve_backend_accepts_every_documented_name() -> None:
     assert resolve_backend("qwen3_tts") is TTSBackend.QWEN3_TTS
     assert resolve_backend("zonos2") is TTSBackend.ZONOS2
     assert resolve_backend("voxcpm2") is TTSBackend.VOXCPM2
+    assert resolve_backend("fish_tts") is TTSBackend.FISH
+    assert resolve_backend("openai_tts") is TTSBackend.OPENAI
 
 
 def test_resolve_backend_maps_operator_spellings() -> None:
@@ -44,6 +46,9 @@ def test_resolve_backend_maps_operator_spellings() -> None:
     assert resolve_backend("OmniVoice") is TTSBackend.OMNIVOICE
     assert resolve_backend("edgetts") is TTSBackend.EDGE
     assert resolve_backend("voxcpm") is TTSBackend.VOXCPM2
+    assert resolve_backend("fish") is TTSBackend.FISH
+    assert resolve_backend("fish_audio") is TTSBackend.FISH
+    assert resolve_backend("openai") is TTSBackend.OPENAI
 
 
 def test_resolve_backend_empty_uses_the_configured_default(
@@ -86,6 +91,8 @@ def test_is_modal_classifies_the_paid_engines() -> None:
     assert is_modal(TTSBackend.VOXCPM2) is True
     assert is_modal(TTSBackend.EDGE) is False
     assert is_modal(TTSBackend.OMNIVOICE) is False
+    assert is_modal(TTSBackend.FISH) is False
+    assert is_modal(TTSBackend.OPENAI) is False
 
 
 # --- gateway contract --------------------------------------------------------
@@ -334,6 +341,38 @@ async def test_synthesize_edge_calls_the_local_engine(monkeypatch) -> None:
     assert seen["voice"] == "es-MX-JorgeNeural"
 
 
+async def test_voice_for_openai_defaults_to_its_stock_voice(monkeypatch) -> None:
+    """An empty/Edge voice picks the provider's stock id for the language."""
+    from src.api.services.voices import VoicesService
+
+    async def fake_stock(self, language=None, force=False):
+        return [
+            {"voice_id": "es-mx-male", "language": "es", "engine": "omni_voice"},
+            {"voice_id": "es_openai", "language": "es", "engine": "openai_tts"},
+        ]
+
+    monkeypatch.setattr(VoicesService, "list_stock", fake_stock)
+
+    assert await voice_for(TTSBackend.OPENAI, "", "es") == "es_openai"
+    assert await voice_for(TTSBackend.OPENAI, "es-MX-JorgeNeural", "es") == "es_openai"
+
+
+async def test_voice_for_fish_resolves_catalog_profiles_to_clones(monkeypatch) -> None:
+    """Fish catalog profiles go through the inline-clone resolver."""
+    seen: dict[str, str] = {}
+
+    async def fake_fish(voice: str, language: str) -> str:
+        seen.update(voice=voice, language=language)
+        return "fish-clone-uuid"
+
+    monkeypatch.setattr(
+        "src.api.services.gateway_voices.resolve_gateway_fish_voice", fake_fish
+    )
+
+    assert await voice_for(TTSBackend.FISH, "marie_fr", "fr") == "fish-clone-uuid"
+    assert seen == {"voice": "marie_fr", "language": "fr"}
+
+
 async def test_synthesize_gateway_calls_the_gateway(monkeypatch) -> None:
     """The gateway branch posts to tts-api and returns its WAV."""
     seen: dict[str, object] = {}
@@ -348,6 +387,24 @@ async def test_synthesize_gateway_calls_the_gateway(monkeypatch) -> None:
 
     assert audio == b"RIFFwav"
     assert seen["voice_id"] == "es-mx-male"
+
+
+async def test_synthesize_cloud_engines_pin_the_gateway_engine(monkeypatch) -> None:
+    """Fish/OpenAI never take the Modal branch and always pin their engine."""
+    seen: list[dict[str, object]] = []
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.append({"voice_id": voice_id, "engine": kwargs.get("engine")})
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    assert await synthesize(TTSBackend.FISH, "hola", "es_fish", "es") == b"RIFFwav"
+    assert await synthesize(TTSBackend.OPENAI, "hola", "es_openai", "es") == b"RIFFwav"
+    assert seen == [
+        {"voice_id": "es_fish", "engine": "fish_tts"},
+        {"voice_id": "es_openai", "engine": "openai_tts"},
+    ]
 
 
 async def test_synthesize_modal_requires_the_kill_switch(monkeypatch) -> None:
@@ -415,6 +472,35 @@ async def test_gateway_tts_posts_the_documented_payload() -> None:
     assert body["voice_id"] == "es-mx-male"
     assert body["language"] == "es"
     assert body["text"] == "hola"
+
+
+async def test_gateway_instruct_posts_the_design_payload() -> None:
+    """Voice design through the gateway pins qwen3_tts and sends the instruct."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, content=b"RIFF")
+
+    client = httpx.AsyncClient(
+        base_url="http://gateway.test/api/v1",
+        transport=httpx.MockTransport(handler),
+        headers=gateway_headers(""),
+    )
+    audio = await tts_backends.gateway_instruct(
+        "Hello", "warm baritone", "en", client=client
+    )
+    await client.aclose()
+
+    assert audio == b"RIFF"
+    assert captured["url"] == "http://gateway.test/api/v1/tts/instruct"
+    assert captured["body"] == {
+        "text": "Hello",
+        "instruct": "warm baritone",
+        "language": "en",
+        "engine": "qwen3_tts",
+    }
 
 
 async def test_gateway_tts_posts_speed_and_emotion() -> None:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -30,11 +31,14 @@ logger = structlog.get_logger(__name__)
 
 #: Engine pinned on the clone so ``/tts`` routes it to the local worker.
 QWEN_ENGINE = "qwen3_tts"
+#: Cloud engine that accepts inline reference audio for catalog profiles.
+FISH_ENGINE = "fish_tts"
 
 #: Clone name suffix: catalog voices may already be cloned for another engine
 #: (e.g. ``pocket_tts``), and the gateway refuses duplicate names, so the
 #: qwen3_tts clone is always stored under its own suffixed name.
 CLONE_SUFFIX = "__qwen3_tts"
+FISH_CLONE_SUFFIX = "__fish_tts"
 
 _UUID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -44,9 +48,11 @@ _UUID = re.compile(
 #: In-process cache of resolved profile names -> clone UUID. Reset on failure
 #: so a transient error is retried on the next turn.
 _RESOLVED: dict[str, str] = {}
+_FISH_RESOLVED: dict[str, str] = {}
 
 #: Serializes the first-resolution path so a multi-role render clones once.
 _LOCK = asyncio.Lock()
+_FISH_LOCK = asyncio.Lock()
 
 
 def clone_name_for(voice: str) -> str:
@@ -61,17 +67,15 @@ def clone_name_for(voice: str) -> str:
     return f"{voice}{CLONE_SUFFIX}"
 
 
-def _matches_qwen(entry: dict[str, Any]) -> bool:
-    """Report whether a cloned-voice listing entry was pinned on qwen3_tts.
+def fish_clone_name_for(voice: str) -> str:
+    """Return the deterministic Fish gateway clone name for a profile name."""
+    return f"{voice}{FISH_CLONE_SUFFIX}"
 
-    Args:
-        entry: One item of ``GET /voices/cloned``.
 
-    Returns:
-        True when the entry's ``engine`` field contains ``qwen3_tts``.
-    """
+def _matches_engine(entry: dict[str, Any], engine: str) -> bool:
+    """Report whether a cloned-voice listing entry was pinned on an engine."""
     engines = str(entry.get("engine") or "")
-    return QWEN_ENGINE in {part.strip() for part in engines.split(",")}
+    return engine in {part.strip() for part in engines.split(",")}
 
 
 def _entry_id(entry: dict[str, Any]) -> str:
@@ -106,14 +110,32 @@ async def _profile(name: str) -> VoiceProfile | None:
 async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
     """Resolve one voice to a gateway id usable by the local qwen3_tts engine.
 
-    Gateway-native ids (stock ids and clone UUIDs) are returned unchanged. A
-    catalog profile name is registered once as a ``qwen3_tts`` clone of its
-    reference WAV; the returned clone UUID then drives the synthesis. A
-    requested gateway clone name (``<voice>__qwen3_tts``) is looked up in the
-    gateway's cloned listing and resolved to its UUID. When registration or
-    lookup is impossible (no reference, unreachable gateway, gateway error) the
-    voice is returned unchanged so the caller keeps its usual
-    failure/fallback behaviour.
+    Args:
+        voice: Voice as configured (profile name, stock id or clone UUID).
+        language: ISO 639-1 language code used when the profile has no
+            language of its own.
+
+    Returns:
+        The gateway voice id to put in the ``/tts`` payload.
+    """
+    return await _resolve_engine_voice(
+        voice,
+        language,
+        engine=QWEN_ENGINE,
+        suffix=CLONE_SUFFIX,
+        cache=_RESOLVED,
+        lock=_LOCK,
+        clone_name=clone_name_for,
+    )
+
+
+async def resolve_gateway_fish_voice(voice: str, language: str) -> str:
+    """Resolve a catalog profile to a Fish Audio inline-clone id.
+
+    Fish accepts the reference WAV inline, so catalog profiles can be cloned
+    once via the gateway's normal clone endpoint (pinned to ``fish_tts``) and
+    reused as a reference UUID. Stock ids, clone UUIDs and unknown ids pass
+    through unchanged so the operator's Fish ``reference_id`` still works.
 
     Args:
         voice: Voice as configured (profile name, stock id or clone UUID).
@@ -123,98 +145,109 @@ async def resolve_gateway_qwen_voice(voice: str, language: str) -> str:
     Returns:
         The gateway voice id to put in the ``/tts`` payload.
     """
+    return await _resolve_engine_voice(
+        voice,
+        language,
+        engine=FISH_ENGINE,
+        suffix=FISH_CLONE_SUFFIX,
+        cache=_FISH_RESOLVED,
+        lock=_FISH_LOCK,
+        clone_name=fish_clone_name_for,
+    )
+
+
+async def _resolve_engine_voice(
+    voice: str,
+    language: str,
+    *,
+    engine: str,
+    suffix: str,
+    cache: dict[str, str],
+    lock: asyncio.Lock,
+    clone_name: Callable[[str], str],
+) -> str:
+    """Shared profile -> engine clone resolution for clone-capable engines."""
     requested = (voice or "").strip()
     if not requested or _UUID.match(requested):
         return requested
-    cached = _RESOLVED.get(requested)
+    cached = cache.get(requested)
     if cached is not None:
         return cached
 
     profile = await _profile(requested)
-    if profile is None and requested.endswith(CLONE_SUFFIX):
-        return await _resolve_clone_name(requested)
+    if profile is None and requested.endswith(suffix):
+        return await _resolve_clone_name(requested, engine=engine, cache=cache, lock=lock)
 
     wav = await reference_audio(requested)
     if wav is None or profile is None:
         return requested
 
-    async with _LOCK:
-        cached = _RESOLVED.get(requested)
+    async with lock:
+        cached = cache.get(requested)
         if cached is not None:
             return cached
         try:
             service = VoicesService()
-            found = await _find_registered(service, clone_name_for(requested))
+            found = await _find_registered(service, clone_name(requested), engine)
             if found:
-                _RESOLVED[requested] = found
+                cache[requested] = found
                 return found
             response = await service.clone_voice(
-                name=clone_name_for(requested),
+                name=clone_name(requested),
                 language=profile.language or language,
                 reference_audio=wav,
                 filename=f"{requested}.wav",
                 ref_text=ref_text_for(profile),
-                engines=QWEN_ENGINE,
+                engines=engine,
             )
             cloned_id = str(response.get("voice_id") or response.get("id") or "")
             if cloned_id:
-                _RESOLVED[requested] = cloned_id
+                cache[requested] = cloned_id
                 return cloned_id
-            _RESOLVED.pop(requested, None)
+            cache.pop(requested, None)
             return requested
         except Exception as exc:  # noqa: BLE001 - degrade to the caller's fallback
             logger.warning(
-                "gateway_qwen_clone_failed",
+                "gateway_engine_clone_failed",
                 voice=requested,
+                engine=engine,
                 error=str(exc),
             )
-            _RESOLVED.pop(requested, None)
+            cache.pop(requested, None)
             return requested
 
 
-async def _resolve_clone_name(requested: str) -> str:
-    """Resolve a gateway clone name (``<voice>__qwen3_tts``) to its UUID.
-
-    The audiobook/M4B path may be handed the clone name itself instead of the
-    catalog profile. The gateway's cloned listing is the source of truth, so
-    the name is looked up once and the UUID cached for later turns.
-
-    Args:
-        requested: Gateway clone name (not a catalog profile).
-
-    Returns:
-        The clone UUID, or ``requested`` when no matching clone exists.
-    """
-    async with _LOCK:
-        cached = _RESOLVED.get(requested)
+async def _resolve_clone_name(
+    requested: str,
+    *,
+    engine: str,
+    cache: dict[str, str],
+    lock: asyncio.Lock,
+) -> str:
+    """Resolve a gateway clone name to its UUID for one engine."""
+    async with lock:
+        cached = cache.get(requested)
         if cached is not None:
             return cached
         try:
-            found = await _find_registered(VoicesService(), requested)
+            found = await _find_registered(VoicesService(), requested, engine)
         except Exception as exc:  # noqa: BLE001 - degrade to the caller's fallback
             logger.warning(
-                "gateway_qwen_clone_lookup_failed",
+                "gateway_clone_lookup_failed",
                 voice=requested,
+                engine=engine,
                 error=str(exc),
             )
             return requested
         if found:
-            _RESOLVED[requested] = found
+            cache[requested] = found
             return found
         return requested
 
 
-async def _find_registered(service: VoicesService, wanted: str) -> str | None:
-    """Look up an already-registered qwen3_tts clone by its gateway name.
-
-    Args:
-        service: Gateway voices client.
-        wanted: Gateway clone name (already engine-suffixed).
-
-    Returns:
-        The clone UUID, or None when no qwen3_tts clone exists yet.
-    """
+async def _find_registered(service: VoicesService, wanted: str, engine: str) -> str | None:
+    """Look up an already-registered engine clone by its gateway name."""
     for entry in await service.list_cloned():
-        if str(entry.get("name") or "") == wanted and _matches_qwen(entry):
+        if str(entry.get("name") or "") == wanted and _matches_engine(entry, engine):
             return _entry_id(entry)
     return None

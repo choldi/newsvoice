@@ -24,7 +24,7 @@ The monorepo separates **compose-level** variables (ports, host paths, profile s
 
 | File | Purpose | Source |
 |------|---------|--------|
-| `deploy/.env` | Compose interpolation (`API_PORT`, `GATEWAY_PORT`, `TTS_PATH`, `COMPOSE_PROFILES`) | `deploy/.env.example` |
+| `deploy/.env` | Compose interpolation (`API_PORT`, `GATEWAY_PORT`, `COMPOSE_PROFILES`, `QWEN3_TTS_REMOTE_URL`) | `deploy/.env.example` |
 | `apps/news/.env` | news-engine runtime (LLM, Temporal, Telegram, collections, admin auth) | `apps/news/.env.example` |
 | `apps/gateway/.env` | TTS gateway runtime (engine, device, API key, storage) | `apps/gateway/.env.example` |
 
@@ -57,7 +57,7 @@ cd /path/to/newsvoice
 
 # 2. Compose-level vars
 cp deploy/.env.example deploy/.env
-# edit deploy/.env if you need non-default ports or a custom TTS_PATH
+# edit deploy/.env if you need non-default ports or to enable the qwen3 sidecar
 
 # 3. Per-app vars
 cp apps/news/.env.example apps/news/.env
@@ -120,6 +120,23 @@ Key variables to set:
     resolve without routing any language to it; leave the URL empty to keep the
     proxy disabled.
   - `OMNIVOICE_REMOTE_TIMEOUT` — proxy timeout in seconds (default `300`).
+  - `QWEN3_TTS_REMOTE_URL` — address of the self-contained `gateway-qwen3`
+    sidecar, e.g. `http://gateway-qwen3:8000/api/v1`. In compose this value
+    comes from `deploy/.env`; in a host run set it here. Empty leaves
+    `qwen3_tts` unavailable in the container.
+  - `FISH_API_KEY` / `FISH_MODEL` / `FISH_API_BASE_URL` — optional Fish Audio
+    cloud provider. Empty key disables it; enable its voices with
+    `TTS_EXTRA_ENGINES=fish_tts` or a per-voice `engine=fish_tts` pin.
+  - `OPENAI_TTS_BASE_URL` / `OPENAI_TTS_API_KEY` / `OPENAI_TTS_MODEL` —
+    optional OpenAI-compatible `/audio/speech` provider. Base URL must include
+    the API version; empty disables it. Stock voices only, no cloning/design.
+  - `TTS_EXTRA_ENGINES` — add `fish_tts` / `openai_tts` only when their
+    credentials are configured; they stay optional and never degrade gateway
+    health. `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` is the
+    default for the on-prem/GPU setup.
+
+The TUI asks for these under **Motor de síntesis**, **GPU y sidecars** and
+**Proveedores cloud**; the advanced toggle (`a`) exposes the optional ones.
 
 ---
 
@@ -163,10 +180,17 @@ Optional, opt-in with `--profile omnivoice` (never started by the `news` or
   OmniVoice engine in its own image/venv so its deps (librosa/numba,
   transformers>=5.3) cannot clash with pocket_tts (numpy>=2). The gateway talks
   to it through `OMNIVOICE_REMOTE_URL`; it is unused unless `omnivoice_remote`
-  is added to `TTS_EXTRA_ENGINES`. It reads the model from `${TTS_PATH}/models`
-  when present (e.g. the legacy `~/ov_api`); otherwise it downloads
+  is added to `TTS_EXTRA_ENGINES`. It downloads
   `ModelsLab/omnivoice-singing` (~3.1 GB) once into the `gateway_hf_cache`
-  volume.
+  volume; there is no host install/path mount.
+
+Optional, opt-in with `--profile qwen3` plus the GPU overlay:
+- `gateway-qwen3` (Qwen3 sidecar, internal) — self-contained image with torch +
+  `qwen-tts` and its own `qwen3_hf_cache` volume. The main gateway proxies to
+  it through `QWEN3_TTS_REMOTE_URL` while the public engine stays `qwen3_tts`.
+  Start it with `GPU=1 QWEN3=1 ./scripts/deploy.sh production` or
+  `docker compose ... --profile qwen3 ...`. See *On-prem qwen3_tts with cloned
+  voices* in §8.
 
 Container DNS in Shape A: `TTS_API_BASE_URL=http://gateway:8000/api/v1` in `apps/news/.env`
 (the gateway container listens on 8000; the host publishes 8001 for Shape B).
@@ -387,44 +411,47 @@ require editing `collections.toml`. Import the WAV + transcript first with
 `apps/news/scripts/import_voice_dropin.py` (see
 `examples/voice_dropin/README.md`).
 
-**Host runtime for qwen3_tts.** The gateway image does not install torch or
-`qwen-tts`: it runs the model out-of-process in an external venv so the
-`transformers==4.57.3` pin cannot clash with `pocket_tts`. On the Docker host,
-create the venv with the interpreter the GPU image expects (Python 3.13 in the
-default overlay) and install a CUDA build of torch plus `qwen-tts`:
+**Runtime for qwen3_tts (self-contained sidecar).** The main gateway image does
+not install torch or `qwen-tts`, because the `transformers==4.57.3` pin cannot
+clash with `pocket_tts` in the same venv. The preferred runtime is the
+`gateway-qwen3` sidecar (`apps/gateway/Dockerfile.qwen3`), which carries torch
+and `qwen-tts` in its own image and persists the three 1.7B checkpoints in the
+`qwen3_hf_cache` volume (~3.5 GB each). Start it with the GPU overlay and the
+`qwen3` profile, then point the gateway at it:
 
 ```bash
-python3.13 -m venv /opt/qwen3-tts/venv
-/opt/qwen3-tts/venv/bin/pip install --upgrade pip
-/opt/qwen3-tts/venv/bin/pip install torch qwen-tts soundfile
+# deploy/.env (or the deploy invocation); keep the GPU overlay enabled.
+QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1
+
+# starts gateway-qwen3 and exports QWEN3_TTS_REMOTE_URL for this run
+GPU=1 QWEN3=1 ./scripts/deploy.sh production
 ```
 
-Point the GPU overlay at that runtime in `deploy/.env` (paths are on the host;
-the container sees `/qwen3-tts/venv/bin/python`):
+In `apps/gateway/.env` keep `TTS_EXTRA_ENGINES=qwen3_tts` (or route a language
+to `qwen3_tts` in `TTS_ENGINES`). The gateway proxies to the sidecar while the
+public engine name stays `qwen3_tts`, so per-voice pins and
+`resolve_gateway_qwen_voice` are unchanged. When the sidecar is only an extra
+engine (not routed), its absence is non-fatal and does not degrade gateway
+health.
 
-```bash
-QWEN3_TTS_DIR=/opt/qwen3-tts
-QWEN3_TTS_HOST_PYTHON=/usr/bin/python3.13
-QWEN3_TTS_HOST_STDLIB=/usr/lib/python3.13
-QWEN3_TTS_HOST_INCLUDE=/usr/include/python3.13
-QWEN3_TTS_HOST_ARCH_INCLUDE=/usr/include/x86_64-linux-gnu/python3.13
-QWEN3_TTS_HOST_LIBPYTHON=/usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
-QWEN3_TTS_HF_CACHE=/home/jordi/.cache/huggingface
-```
+There is no host-venv fallback: torch and `qwen-tts` live only in the
+sidecar image, so no host interpreter/stdlib/libpython is mounted. The GPU
+image ships `gcc`/`g++` because Triton compiles CUDA kernels on first
+synthesis. The sidecar keeps one model resident at a time; the first render
+downloads the checkpoints into its `HF_HOME` volume.
 
-The gateway image now ships `gcc`/`g++` because Triton compiles CUDA kernels on
-first synthesis. In `apps/gateway/.env`, set
-`QWEN3_TTS_PYTHON=/qwen3-tts/venv/bin/python` and either route a language to
-`qwen3_tts` in `TTS_ENGINES` or load it as an extra engine
-(`TTS_EXTRA_ENGINES=qwen3_tts`). The first render downloads the three 1.7B
-checkpoints into `QWEN3_TTS_HF_CACHE` (~3.5 GB each); the engine keeps one model
-resident at a time.
+To design catalog voices through the same container, set
+`QWEN_TTS_DESIGN_VIA_GATEWAY=true` on the voice-design worker. The activity
+then calls `POST /tts/instruct` with `engine=qwen3_tts` instead of importing
+`qwen_tts` in the worker venv; `run_voice_worker --role design` still polls the
+queue but no longer needs torch. Keep the worker pointed at the gateway with
+the usual `TTS_API_BASE_URL`/`TTS_API_KEY`.
 
-Local qwen3 renders in the `news-engine-podcast-modal` namespace (see §9), so
-the `narration-modal-worker` must be running even though the synthesis goes to
-the local gateway. `MODAL_ENABLED=false` is valid for this path: the spend
-guard is enforced only for `zonos2`, `voxcpm2` and `qwen3_tts` with
-`run_in_modal = true`.
+Local qwen3 (`run_in_modal = false`) renders in the local narration namespace
+(see §9), so `narration-worker` must be running; the `narration-modal-worker`
+is only needed for Modal backends or `run_in_modal = true`.
+`MODAL_ENABLED=false` is valid for this path: the spend guard is enforced only
+for `zonos2`, `voxcpm2` and `qwen3_tts` with `run_in_modal = true`.
 
 Respelling runs inside `resolve_narration_script_activity` and persists
 `tts_text` on the stored script. Configure it in `apps/news/.env`:
@@ -898,27 +925,21 @@ docker compose up -d api voice-catalog-worker
 
 Since the consolidation the server and the GPU are the **same machine**
 (debwk, `100.75.148.68`), so the design worker is a **user-level** systemd
-service on debwk, not a container and not a second box: Docker there has no
-NVIDIA runtime registered, while the CUDA stack already lives in a venv
-(`torch 2.14.1+cu130`, `qwen_tts 0.1.1`).
+service on debwk, not a container and not a second box. The worker itself no
+longer needs torch or `qwen_tts`: with `QWEN_TTS_DESIGN_VIA_GATEWAY=true` it
+calls `POST /tts/instruct` on the gateway, which proxies to the
+`gateway-qwen3` sidecar.
 
 One-time setup:
 
 ```bash
 cd ~/newsvoice/apps/news
+uv sync
 
-# 1. the Temporal client plus the pieces the monorepo import chain needs, on
-#    top of the CUDA stack already in that venv. tts_contract is a workspace
-#    member (not on PyPI); modal stays pinned to the lock's version.
-~/qwen3-tts/venv/bin/pip install temporalio structlog pydantic-settings httpx \
-  "modal==1.6.2" "opentelemetry-api>=1.27.0" "opentelemetry-sdk>=1.27.0" \
-  "opentelemetry-instrumentation-fastapi>=0.48b0" \
-  -e ~/newsvoice/libs/tts_contract
-
-# 2. worker unit: same box, so Temporal and the staging API are on localhost.
-#    WorkingDirectory must be the monorepo checkout (the legacy ~/news-summary
-#    path predates the merge), and the modal SDK reads its tokens from the
-#    process environment — pydantic's .env is not enough for it.
+# Worker unit: same box, so Temporal and the staging API are on localhost.
+# WorkingDirectory must be the monorepo checkout (the legacy ~/news-summary
+# path predates the merge), and the modal SDK reads its tokens from the
+# process environment — pydantic's .env is not enough for it.
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/news-engine-voice-worker.service <<'UNIT'
 [Unit]
@@ -930,13 +951,17 @@ Wants=network-online.target
 WorkingDirectory=%h/newsvoice/apps/news
 Environment=PYTHONUNBUFFERED=1
 Environment=TEMPORAL_HOST=127.0.0.1:7233
+# Design runs on the gateway-qwen3 sidecar, not in this process.
+Environment=QWEN_TTS_DESIGN_VIA_GATEWAY=true
+Environment=TTS_API_BASE_URL=http://127.0.0.1:8001/api/v1
+Environment=TTS_API_KEY=<same value as GATEWAY_API_KEY in deploy/.env>
 # The design activity POSTs the WAV to the server API, which is this same box.
 Environment=VOICE_STAGING_URL=http://127.0.0.1:8000
 Environment=VOICE_STAGING_API_KEY=<same value as VOICE_STAGING_API_KEY in .env>
 # Required only for the Phase 10.4 "Ejecutar en Modal" switch.
 Environment=MODAL_TOKEN_ID=<same value as MODAL_TOKEN_ID in .env>
 Environment=MODAL_TOKEN_SECRET=<same value as MODAL_TOKEN_SECRET in .env>
-ExecStart=%h/qwen3-tts/venv/bin/python -m src.workers.run_voice_worker --role design
+ExecStart=%h/newsvoice/apps/news/.venv/bin/python -m src.workers.run_voice_worker --role design
 Restart=on-failure
 RestartSec=5
 
@@ -1117,7 +1142,7 @@ namespace that owns the backend.
 ```bash
 ./scripts/create_namespaces.sh   # once, and after any Temporal restore
 docker compose up -d worker narration-worker voice-catalog-worker
-docker compose --profile modal up -d narration-modal-worker   # Modal creds for Modal backends; also serves local qwen3
+docker compose --profile modal up -d narration-modal-worker   # Modal creds for Modal backends only
 ```
 
 `src/workers/podcast_target.py` maps a spec's `tts_backend` to its namespace
@@ -1670,8 +1695,9 @@ curl -OJ -H "X-Admin-Token: $ADMIN_API_TOKEN" \
   `zonos2`/`voxcpm2` se rechazan con 422: un audiolibro renderiza durante horas
   y no gasta GPU de pago. El gateway debe arrancar con `TTS_ENGINE=routed` +
   `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` (ver
-  `apps/gateway/.env.example`); para Qwen3 hace falta además el runtime local
-  de *On-prem qwen3_tts with cloned voices* (§8) con el overlay GPU.
+  `apps/gateway/.env.example`); para Qwen3 hace falta además el sidecar
+  `gateway-qwen3` de *On-prem qwen3_tts with cloned voices* (§8), arrancado con
+  `GPU=1 QWEN3=1 ./scripts/deploy.sh`.
 - La clave de caché incluye título, autor, idioma, motor, voz, portada y
   `loudnorm`; cambiar cualquiera de ellos genera otro M4B.
 - Ajustes: `AUDIOBOOK_TASK_QUEUE` (cola del worker) y `AUDIOBOOK_DIR`

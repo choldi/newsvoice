@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _create_single_engine(name: str) -> TtsEngineBase:
+def _create_single_engine(name: str) -> TtsEngineBase:  # noqa: PLR0912
     """Create a single engine instance by name."""
     name = name.lower().strip()
 
@@ -32,9 +32,15 @@ def _create_single_engine(name: str) -> TtsEngineBase:
 
         engine_class = EdgeTTSEngine
     elif name == "qwen3_tts":
-        from tts_api.core.engines.qwen3_tts_engine import Qwen3TTSEngine
+        settings = get_settings()
+        if settings.QWEN3_TTS_REMOTE_URL.strip():
+            from tts_api.core.engines.qwen3_remote_engine import Qwen3RemoteEngine
 
-        engine_class = Qwen3TTSEngine
+            engine_class: type[TtsEngineBase] = Qwen3RemoteEngine
+        else:
+            from tts_api.core.engines.qwen3_tts_engine import Qwen3TTSEngine
+
+            engine_class = Qwen3TTSEngine
     elif name == "omnivoice":
         from tts_api.core.engines.omnivoice_engine_adapter import OmniVoiceAdapter
 
@@ -59,6 +65,14 @@ def _create_single_engine(name: str) -> TtsEngineBase:
         from tts_api.core.engines.chatterbox_engine import ChatterboxEngine
 
         engine_class = ChatterboxEngine
+    elif name == "fish_tts":
+        from tts_api.core.engines.fish_tts_engine import FishTTSEngine
+
+        engine_class = FishTTSEngine
+    elif name == "openai_tts":
+        from tts_api.core.engines.openai_tts_engine import OpenAITTSEngine
+
+        engine_class = OpenAITTSEngine
     else:
         raise ValueError(f"Engine desconocido: '{name}'")
 
@@ -96,6 +110,23 @@ def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngi
     engine_names.discard("_default")
     engine_names.update(name.strip() for name in extra_engines.split(",") if name.strip())
 
+    # Cloud engines are opt-in: instantiate them only when configured or
+    # explicitly requested in TTS_EXTRA_ENGINES. They never make health fail.
+    settings = get_settings()
+    if settings.fish_configured:
+        engine_names.add("fish_tts")
+    if settings.openai_tts_configured:
+        engine_names.add("openai_tts")
+    if settings.QWEN3_TTS_REMOTE_URL.strip():
+        engine_names.add("qwen3_tts")
+    routed_names = set(routing.values())
+    optional_engines = {
+        name
+        for name in engine_names
+        if name in {"fish_tts", "openai_tts"}
+        or (name == "qwen3_tts" and name not in routed_names)
+    }
+
     if not engine_names:
         raise ValueError("TTS_ENGINES no contiene ningún engine válido")
 
@@ -105,12 +136,17 @@ def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngi
         engines[name] = _create_single_engine(name)
 
     logger.info(
-        "Created routed engine: routing=%s, sub-engines=%s",
+        "Created routed engine: routing=%s, sub-engines=%s, optional=%s",
         routing,
         list(engines.keys()),
+        sorted(optional_engines),
     )
 
-    return RoutedEngine(engines=engines, routing=routing)
+    return RoutedEngine(
+        engines=engines,
+        routing=routing,
+        optional_engines=optional_engines,
+    )
 
 
 def create_engine(engine_name: str | None = None) -> TtsEngineBase:

@@ -19,7 +19,9 @@ LOCAL_SPEC = NarrationSpec(
     pause_ms=400,
 )
 
-MODAL_SPEC = LOCAL_SPEC.model_copy(update={"tts_backend": TTSBackend.QWEN3_TTS})
+MODAL_SPEC = LOCAL_SPEC.model_copy(
+    update={"tts_backend": TTSBackend.QWEN3_TTS, "run_in_modal": True}
+)
 
 
 def test_local_backend_targets_the_local_namespace_and_queue() -> None:
@@ -36,6 +38,24 @@ def test_modal_backend_targets_the_modal_namespace_and_queue() -> None:
     assert target.namespace == settings.temporal_podcast_modal_namespace
     assert target.task_queue == settings.narration_modal_task_queue
     assert target.modal is True
+
+
+def test_local_qwen3_targets_the_local_namespace() -> None:
+    """run_in_modal=False renders through the local gateway engine."""
+    spec = LOCAL_SPEC.model_copy(update={"tts_backend": TTSBackend.QWEN3_TTS})
+
+    target = podcast_target(spec.model_dump())
+
+    assert target.modal is False
+    assert target.namespace == settings.temporal_podcast_local_namespace
+
+
+def test_fish_and_openai_targets_the_local_gateway() -> None:
+    """Cloud providers are reached through the local gateway worker."""
+    for backend in (TTSBackend.FISH, TTSBackend.OPENAI):
+        spec = LOCAL_SPEC.model_copy(update={"tts_backend": backend})
+
+        assert podcast_target(spec.model_dump()).modal is False
 
 
 def test_zonos2_is_also_modal() -> None:

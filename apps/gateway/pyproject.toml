@@ -47,6 +47,7 @@ dependencies = [
     # Seguridad / DX
     "slowapi>=0.1.9",
     "httpx>=0.27.0",
+    "msgpack>=1.1",
     "tts-contract",
 ]
 
@@ -223,6 +224,7 @@ mypy_path = ["../../libs/tts_contract"]
 module = [
     "soundfile",
     "pydub",
+    "msgpack",
     "edge_tts",
     "faster_whisper",
     "pocket_tts",

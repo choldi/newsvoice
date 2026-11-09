@@ -53,6 +53,7 @@ _CLONE_UUID = re.compile(
 _BACKEND_PREFERENCE: tuple[TTSBackend, ...] = (
     TTSBackend.OMNIVOICE,
     TTSBackend.KOKORO,
+    TTSBackend.FISH,
     TTSBackend.EDGE,
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
@@ -112,7 +113,9 @@ def engines_for_voice(voice: str) -> set[str]:
         # Edge maps gateway stock ids through LEGACY_VOICE_ALIASES.
         engines.update((str(TTSBackend.EDGE), str(TTSBackend.OMNIVOICE)))
     if _CLONE_UUID.match(name):
-        engines.add(str(TTSBackend.OMNIVOICE))
+        # Clone UUIDs are engine-agnostic: the gateway can hold OmniVoice and
+        # Fish clones behind the same id shape.
+        engines.update((str(TTSBackend.OMNIVOICE), str(TTSBackend.FISH)))
     if name in _modal_names():
         engines.update((str(TTSBackend.QWEN3_TTS), str(TTSBackend.ZONOS2), str(TTSBackend.VOXCPM2)))
     # Kokoro maps gateway stock ids (es-mx-male, ...) through its stock table.

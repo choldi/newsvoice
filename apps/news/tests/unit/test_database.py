@@ -1,5 +1,6 @@
 """Unit tests for SQLite database layer and migrations."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,25 @@ async def test_run_migrations(tmp_path: Path) -> None:
         assert "deliveries" in tables
         assert "schema_migrations" in tables
         assert "digest_runs" in tables
+
+
+@pytest.mark.asyncio
+async def test_concurrent_migrations_do_not_duplicate_versions(tmp_path: Path) -> None:
+    """Two workers starting together serialise migrations instead of colliding."""
+    db_file = tmp_path / "test_news.db"
+
+    await asyncio.wait_for(
+        asyncio.gather(run_migrations(str(db_file)), run_migrations(str(db_file))),
+        timeout=30,
+    )
+
+    async with get_db(str(db_file)) as db:
+        query = "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
+        async with db.execute(query) as cursor:
+            rows = await cursor.fetchall()
+
+    assert rows
+    assert all(row[1] == 1 for row in rows)
 
 
 @pytest.mark.asyncio

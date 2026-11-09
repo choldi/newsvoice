@@ -42,9 +42,9 @@ def test_gateway_stock_ids_are_reachable_from_both_network_engines() -> None:
     assert engines_for_voice("es-mx-male") == {"edge", "omni_voice", "kokoro"}
 
 
-def test_clone_uuid_is_gateway_only() -> None:
+def test_clone_uuid_is_shared_by_clone_capable_gateway_engines() -> None:
     uuid = "123e4567-e89b-12d3-a456-426614174000"
-    assert engines_for_voice(uuid) == {"omni_voice"}
+    assert engines_for_voice(uuid) == {"omni_voice", "fish_tts"}
 
 
 def test_modal_catalog_names_select_all_modal_engines(modal_catalog: None) -> None:

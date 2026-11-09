@@ -47,6 +47,26 @@ def test_create_single_engine_omnivoice_remote():
     assert engine.name == "omnivoice_remote"
 
 
+def test_create_single_engine_qwen3_uses_the_remote_sidecar(monkeypatch):
+    """A configured remote URL switches qwen3_tts to the HTTP proxy."""
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "http://gateway-qwen3:8000/api/v1")
+
+    engine = _create_single_engine("qwen3_tts")
+
+    assert engine.name == "qwen3_tts"
+    assert engine.__class__.__name__ == "Qwen3RemoteEngine"
+
+
+def test_create_single_engine_qwen3_defaults_to_the_local_worker(monkeypatch):
+    """Without a remote URL the engine keeps the external-venv worker path."""
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "")
+
+    engine = _create_single_engine("qwen3_tts")
+
+    assert engine.name == "qwen3_tts"
+    assert engine.__class__.__name__ == "Qwen3TTSEngine"
+
+
 def test_create_single_engine_zono2():
     """Test creating a zono2 engine."""
     engine = _create_single_engine("zono2")
@@ -73,6 +93,20 @@ def test_create_single_engine_chatterbox():
     engine = _create_single_engine("chatterbox")
     assert isinstance(engine, TtsEngineBase)
     assert engine.name == "chatterbox"
+
+
+def test_create_single_engine_fish_tts():
+    """Fish Audio is instantiable even before credentials are validated."""
+    engine = _create_single_engine("fish_tts")
+    assert isinstance(engine, TtsEngineBase)
+    assert engine.name == "fish_tts"
+
+
+def test_create_single_engine_openai_tts():
+    """The OpenAI-compatible provider is instantiable from the factory."""
+    engine = _create_single_engine("openai_tts")
+    assert isinstance(engine, TtsEngineBase)
+    assert engine.name == "openai_tts"
 
 
 def test_create_single_engine_unknown():
@@ -123,6 +157,50 @@ def test_create_routed_engine_with_extra_engines():
     )
     assert engine.name.startswith("routed(")
     assert set(engine._engines) == {"mock", "omnivoice_remote"}
+
+
+def test_routed_adds_configured_cloud_engines(monkeypatch):
+    """Configured cloud engines join the routed union as optional engines."""
+    monkeypatch.setenv("FISH_API_KEY", "fish-key")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "https://tts.example/v1")
+    engine = _create_routed_engine('{"es":"mock","_default":"mock"}', extra_engines="")
+
+    assert {"fish_tts", "openai_tts"} <= set(engine._engines)
+    assert engine._optional_engines == {"fish_tts", "openai_tts"}
+
+
+def test_routed_skips_unconfigured_cloud_engines(monkeypatch):
+    """An empty key/base URL keeps cloud engines out of the local stack."""
+    monkeypatch.setenv("FISH_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "")
+    engine = _create_routed_engine('{"es":"mock","_default":"mock"}', extra_engines="")
+
+    assert "fish_tts" not in engine._engines
+    assert "openai_tts" not in engine._engines
+
+
+def test_routed_adds_qwen3_remote_as_optional(monkeypatch):
+    """A configured sidecar joins the union but does not gate routed health."""
+    monkeypatch.setenv("FISH_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "")
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "http://gateway-qwen3:8000/api/v1")
+
+    engine = _create_routed_engine('{"es":"mock","_default":"mock"}', extra_engines="")
+
+    assert "qwen3_tts" in engine._engines
+    assert engine._optional_engines == {"qwen3_tts"}
+
+
+def test_routed_keeps_qwen3_remote_required_when_routed(monkeypatch):
+    """A language explicitly routed to qwen3_tts makes it a required engine."""
+    monkeypatch.setenv("FISH_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "")
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "http://gateway-qwen3:8000/api/v1")
+
+    engine = _create_routed_engine('{"es":"qwen3_tts","_default":"mock"}', extra_engines="")
+
+    assert "qwen3_tts" in engine._engines
+    assert "qwen3_tts" not in engine._optional_engines
 
 
 def test_create_engine_reads_extra_engines(monkeypatch):

@@ -4,8 +4,8 @@
 # Run from the repo root:
 #   docker compose -f deploy/docker-compose.yml up -d
 # Compose resolves build contexts / env_file / volumes relative to THIS file.
-# Compose-level interpolation variables (ports, TTS_PATH, COMPOSE_PROFILES)
-# come from deploy/.env; the containers' own variables come from each app's
+# Compose-level interpolation variables (ports, COMPOSE_PROFILES) come from
+# deploy/.env; the containers' own variables come from each app's
 # .env (apps/news/.env, apps/gateway/.env) — they are kept separate on purpose
 # because both apps define VOICES_DIR with different meanings/paths.
 #
@@ -273,12 +273,16 @@ services:
       - ../apps/gateway/.env
     environment:
       - API_KEY=${GATEWAY_API_KEY:-}
-      - TTS_INSTALL_DIR=/omnivoice-external
+      - TTS_INSTALL_DIR=/app
+      - TTS_VENV_DIR=/app/.venv
       - DATABASE_URL=sqlite:///storage/omnivoice.db
       - TTS_FALLBACK_TO_MOCK=true
+      # Empty leaves qwen3_tts unavailable in this image (no torch/qwen-tts).
+      # Set to the sidecar URL (http://gateway-qwen3:8000/api/v1) to use the
+      # isolated qwen3 image.
+      - QWEN3_TTS_REMOTE_URL=${QWEN3_TTS_REMOTE_URL:-}
     volumes:
       - ../apps/gateway/storage:/app/storage
-      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
       # Persiste los pesos de pocket_tts (~438 MB) descargados de HuggingFace en
       # el primer arranque; sin este volumen se re-descargan en cada recreate.
       - gateway_hf_cache:/root/.cache/huggingface
@@ -292,6 +296,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # qwen3 sidecar (apps/gateway, TTS_ENGINE=qwen3_tts)
+  # ---------------------------------------------------------------------------
+  # Optional, self-contained Qwen3 runtime: torch + qwen-tts live in this
+  # image instead of a host venv. Activate with the "qwen3" profile and point
+  # the main gateway at it (deploy/.env:
+  # QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1).
+  gateway-qwen3:
+    profiles: ["qwen3"]
+    build:
+      context: ..
+      dockerfile: apps/gateway/Dockerfile.qwen3
+    container_name: news_engine_gateway_qwen3
+    env_file:
+      - ../apps/gateway/.env
+    environment:
+      - API_KEY=
+      - TTS_ENGINE=qwen3_tts
+      - TTS_ENGINES=
+      - TTS_EXTRA_ENGINES=
+      - QWEN3_TTS_REMOTE_URL=
+      - QWEN3_TTS_PYTHON=/opt/qwen3-tts/venv/bin/python
+      - QWEN3_TTS_DEVICE=cuda:0
+      - QWEN3_TTS_HF_CACHE=/models/huggingface
+      - HF_HOME=/models/huggingface
+      - TTS_FALLBACK_TO_MOCK=false
+      - DATABASE_URL=sqlite:///storage/omnivoice.db
+    volumes:
+      - ../apps/gateway/storage:/app/storage
+      - qwen3_hf_cache:/models/huggingface
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -313,16 +349,18 @@ services:
       - API_KEY=
       - TTS_ENGINE=omnivoice
       - TTS_ENGINES=
-      - TTS_INSTALL_DIR=/omnivoice-external
+      - TTS_INSTALL_DIR=/app
+      - TTS_VENV_DIR=/app/.venv
       - TTS_DEVICE=cuda:0
+      - HF_HOME=/root/.cache/huggingface
       - TTS_FALLBACK_TO_MOCK=false
       - DATABASE_URL=sqlite:///storage/omnivoice.db
     volumes:
       - ../apps/gateway/storage:/app/storage
-      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
       - gateway_hf_cache:/root/.cache/huggingface
     restart: unless-stopped
 
 volumes:
   temporal_pg_data:
   gateway_hf_cache:
+  qwen3_hf_cache:

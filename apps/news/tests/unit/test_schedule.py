@@ -98,10 +98,22 @@ def test_narration_routes_to_local_queue_for_omni_voice() -> None:
     assert config.narration["task_queue"] == settings.narration_local_task_queue
 
 
-def test_narration_routes_to_modal_queue_for_qwen3_tts() -> None:
+def test_narration_routes_to_local_queue_for_qwen3_tts() -> None:
+    """Qwen3 defaults to the local gateway; only run_in_modal uses Modal."""
     collection = _collection(
         narration_enabled=True,
         narration_spec=_narration_spec(tts_backend="qwen3_tts"),
+    )
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.narration is not None
+    assert config.narration["task_queue"] == settings.narration_local_task_queue
+
+
+def test_narration_routes_to_modal_queue_for_qwen3_tts_when_requested() -> None:
+    collection = _collection(
+        narration_enabled=True,
+        narration_spec=_narration_spec(tts_backend="qwen3_tts", run_in_modal=True),
     )
     config = pipeline_config_for(collection, tts_flag=None)
 

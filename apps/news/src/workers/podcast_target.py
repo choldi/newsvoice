@@ -49,6 +49,33 @@ def backend_from_spec(spec: dict[str, Any] | None) -> str:
     return str(spec.get("tts_backend") or "omni_voice")
 
 
+#: Backends that always render on the local worker. Cloud Fish/OpenAI go
+#: through the local gateway, so they are local too.
+LOCAL_BACKENDS: frozenset[str] = frozenset(
+    {"edge", "omni_voice", "kokoro", "fish_tts", "openai_tts"}
+)
+
+
+def spec_uses_modal(spec: dict[str, Any] | None) -> bool:
+    """Report whether this spec needs the Modal worker.
+
+    ``qwen3_tts`` is local unless the spec explicitly sets ``run_in_modal``;
+    the local gateway engine must not be sent to the Modal namespace.
+
+    Args:
+        spec: Serialized ``NarrationSpec`` payload, or None.
+
+    Returns:
+        True when the render needs Modal credentials and GPU spend.
+    """
+    backend = backend_from_spec(spec)
+    if backend in LOCAL_BACKENDS:
+        return False
+    if backend == "qwen3_tts":
+        return bool(spec.get("run_in_modal")) if isinstance(spec, dict) else False
+    return True
+
+
 def podcast_target(spec: dict[str, Any] | None) -> PodcastTarget:
     """Resolve the namespace and task queue for a narration spec.
 
@@ -62,7 +89,7 @@ def podcast_target(spec: dict[str, Any] | None) -> PodcastTarget:
     Returns:
         The PodcastTarget for this render.
     """
-    if backend_from_spec(spec) not in ("omni_voice", "edge"):
+    if spec_uses_modal(spec):
         return PodcastTarget(
             namespace=settings.temporal_podcast_modal_namespace,
             task_queue=settings.narration_modal_task_queue,

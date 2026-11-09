@@ -487,6 +487,10 @@ class Settings(BaseSettings):
     # flash-attn, which keeps the worker off the CUDA runtime.
     qwen_tts_device: str = "cuda:0"
     qwen_tts_attn_implementation: str = "sdpa"
+    # Optional container path: instead of importing qwen_tts in the design
+    # worker, ask the gateway's `/tts/instruct` endpoint (backed by the
+    # gateway-qwen3 sidecar). Keeps the GPU runtime out of this worker's venv.
+    qwen_tts_design_via_gateway: bool = False
     # VoxCPM2 runs in its own Modal image (Python 3.12, voxcpm). It clones in
     # audio-continuation mode, so it reuses the catalog reference plus its
     # transcript for the highest sample similarity, and emits native 48 kHz.

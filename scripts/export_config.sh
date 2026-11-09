@@ -150,7 +150,7 @@ else
 # =============================================================================
 API_PORT=8000
 GATEWAY_PORT=8001
-TTS_PATH=/opt/omnivoice
+QWEN3_TTS_REMOTE_URL=
 COMPOSE_PROFILES=news,gateway
 EOF
 fi

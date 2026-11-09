@@ -105,6 +105,23 @@ class VoicesService:
             voices = [v for v in voices if v.get("language") == language]
         return voices
 
+    async def list_engines(self) -> list[dict[str, Any]]:
+        """List the gateway engine descriptors (``GET /engines``).
+
+        Returns:
+            The ``engines`` list, each item with at least ``name`` and
+            ``available``. Empty when the gateway answers an unexpected shape.
+
+        Raises:
+            httpx.HTTPError: On transport or non-2xx errors.
+        """
+        data = await self._get("engines")
+        if isinstance(data, dict):
+            data = data.get("engines")
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
     async def list_languages(self, force: bool = False) -> list[str]:
         """List unique ISO 639-1 language codes across stock voices.
 

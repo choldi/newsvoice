@@ -46,6 +46,10 @@ def _stage(name: str, wav: bytes = WAV) -> None:
     voice_staging.write_staged(name, gzip.compress(wav))
 
 
+async def _stage_ok(name: str, wav: bytes) -> int:
+    return len(wav)
+
+
 def _store_payload(profile: dict[str, Any], wav: bytes = WAV) -> dict[str, Any]:
     """Build the store activity input for a profile and a design result."""
     _stage(profile["name"], wav)
@@ -225,6 +229,37 @@ async def test_design_voice_activity_runs_on_modal_when_requested(
     assert seen["temperature"] == settings.qwen_tts_design_temperature
     assert seen["top_p"] == settings.qwen_tts_design_top_p
     assert seen["staged"] == ("anchor_neutral_m", WAV)
+    assert result["sample_rate"] == 24000
+
+
+async def test_design_voice_activity_can_use_the_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The container path asks the gateway's qwen3 sidecar instead of loading torch."""
+    seen: dict[str, object] = {}
+
+    async def fake_gateway_instruct(
+        text: str, instruct: str, language: str, *, engine: str | None = None
+    ) -> bytes:
+        seen.update(text=text, instruct=instruct, language=language, engine=engine)
+        return WAV
+
+    def local_must_not_run(*args, **kwargs):
+        raise AssertionError("the local qwen runtime must not load in container mode")
+
+    monkeypatch.setattr(
+        "src.api.services.tts_backends.gateway_instruct", fake_gateway_instruct
+    )
+    monkeypatch.setattr("src.core.local_tts.design_voice", local_must_not_run)
+    monkeypatch.setattr("src.api.services.voice_staging.stage_from_design", _stage_ok)
+    monkeypatch.setattr(settings, "qwen_tts_design_via_gateway", True)
+    monkeypatch.setattr(settings, "voices_dir", str(tmp_path / "voices"))
+
+    result = await ActivityEnvironment().run(voice_activities.design_voice_activity, _profile())
+
+    assert seen["text"] == _profile()["ref_text"]
+    assert seen["instruct"] == _profile()["instruct"]
+    assert seen["engine"] == "qwen3_tts"
     assert result["sample_rate"] == 24000
 
 

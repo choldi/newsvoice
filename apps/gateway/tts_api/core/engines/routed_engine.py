@@ -22,10 +22,16 @@ class RoutedEngine(TtsEngineBase):
     The ``_default`` key is used when a language has no explicit mapping.
     """
 
-    def __init__(self, engines: dict[str, TtsEngineBase], routing: dict[str, str]) -> None:
+    def __init__(
+        self,
+        engines: dict[str, TtsEngineBase],
+        routing: dict[str, str],
+        optional_engines: set[str] | None = None,
+    ) -> None:
         self._engines = engines  # engine_name -> engine instance
         self._routing = routing  # language_code -> engine_name
         self._default_engine_name = routing.get("_default", next(iter(engines)))
+        self._optional_engines = set(optional_engines or set())
 
     @property
     def name(self) -> str:
@@ -86,6 +92,11 @@ class RoutedEngine(TtsEngineBase):
                 await engine.initialize()
                 logger.info("RoutedEngine: sub-engine '%s' initialized", name)
             except Exception as e:
+                if name in self._optional_engines:
+                    logger.warning(
+                        "RoutedEngine: optional sub-engine '%s' unavailable: %s", name, e
+                    )
+                    continue
                 logger.error("RoutedEngine: failed to initialize '%s': %s", name, e)
                 raise
 
@@ -165,8 +176,17 @@ class RoutedEngine(TtsEngineBase):
                 vid = v["voice_id"]
                 if vid not in seen:
                     seen.add(str(vid))
-                    all_voices.append(v)
+                    item = dict(v)
+                    item.setdefault("engine", self._engine_tag(name))
+                    all_voices.append(item)
         return all_voices
+
+    @staticmethod
+    def _engine_tag(name: str) -> str:
+        """Return the canonical gateway engine id for a sub-engine name."""
+        if name in {"omnivoice", "omnivoice_remote"}:
+            return "omni_voice"
+        return name
 
     async def health_check(self) -> dict[str, Any]:
         sub_health: dict[str, Any] = {}
@@ -179,8 +199,11 @@ class RoutedEngine(TtsEngineBase):
                 # del gateway muestre el culpable de un `degraded`.
                 sub_health[name] = {"error": str(e), "model_loaded": False}
 
+        required = [
+            health for name, health in sub_health.items() if name not in self._optional_engines
+        ]
         return {
-            "model_loaded": all(h.get("model_loaded", False) for h in sub_health.values()),
+            "model_loaded": all(h.get("model_loaded", False) for h in required),
             "gpu_available": any(h.get("gpu_available", False) for h in sub_health.values()),
             "device": "routed",
             "stock_voices_count": sum(h.get("stock_voices_count", 0) for h in sub_health.values()),
@@ -188,6 +211,7 @@ class RoutedEngine(TtsEngineBase):
             "mode": "ROUTED",
             "engine": self.name,
             "routing": self._routing,
+            "optional_engines": sorted(self._optional_engines),
             "sub_engines": sub_health,
         }
 

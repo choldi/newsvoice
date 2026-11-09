@@ -24,6 +24,8 @@ KNOWN_ENGINES = (
     "chatterbox",
     "zono2",
     "kokoro",
+    "fish_tts",
+    "openai_tts",
     "mock",
 )
 
@@ -31,6 +33,18 @@ KNOWN_ENGINES = (
 def _descriptor(name: str) -> EngineDescriptor:
     """Build the catalog descriptor for a single engine."""
     from tts_api.core.engine_factory import create_engine
+
+    settings = get_settings()
+    missing = {
+        "fish_tts": ("FISH_API_KEY", settings.fish_configured),
+        "openai_tts": ("OPENAI_TTS_BASE_URL", settings.openai_tts_configured),
+    }.get(name)
+    if missing and not missing[1]:
+        return EngineDescriptor(
+            name=name,
+            available=False,
+            error=f"{missing[0]} no configurada",
+        )
 
     try:
         caps = create_engine(name).capabilities

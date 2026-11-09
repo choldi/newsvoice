@@ -40,6 +40,7 @@ class StockVoice:
     language: str
     gender: str
     name: str
+    engine: str = ""
 
 
 @dataclass
@@ -227,6 +228,7 @@ class OmniVoiceEngineClient:
                 language=str(v["language"]),
                 gender=str(v["gender"]),
                 name=str(v["name"]),
+                engine=str(v.get("engine", "")),
             )
             for v in voices_dicts
         ]

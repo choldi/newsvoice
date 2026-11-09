@@ -66,7 +66,10 @@ from src.api.models.narration import (
 from src.api.services.audio_compress import AudioCompressService
 from src.api.services.audio_files import atomic_write, read_sidecar, sidecar_path
 from src.api.services.gateway import GatewayClient, GatewayError, gateway_headers
-from src.api.services.gateway_voices import resolve_gateway_qwen_voice
+from src.api.services.gateway_voices import (
+    resolve_gateway_fish_voice,
+    resolve_gateway_qwen_voice,
+)
 from src.api.services.tts import DEFAULT_VOICE_BY_LANGUAGE, LEGACY_VOICE_ALIASES
 from src.core.audio import (
     CANONICAL_CHANNELS,
@@ -722,6 +725,69 @@ class NarrationTTSService:
                 speed=speed,
                 engine="qwen3_tts",
                 emotion=emotion or None,
+            ).model_dump(exclude_none=True)
+            try:
+                return await self._post_audio("tts", payload), False
+            except NarrationGatewayError as exc:
+                fallback_allowed = (
+                    self._fallback_to_edge if allow_edge_fallback is None else allow_edge_fallback
+                )
+                if not fallback_allowed:
+                    raise
+                edge_voice = edge_voice_for(voice_id, language)
+                logger.warning(
+                    "narration_gateway_fallback_to_edge",
+                    voice_id=voice_id,
+                    edge_voice=edge_voice,
+                    status_code=exc.status_code,
+                    error_type=exc.error_type,
+                    error=str(exc),
+                )
+                try:
+                    return await self._edge_synthesize(text, edge_voice, speed=speed), True
+                except Exception as edge_exc:
+                    raise NarrationGatewayError(
+                        f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
+                    ) from edge_exc
+        if backend is TTSBackend.FISH:
+            resolved_voice = await resolve_gateway_fish_voice(voice_id, language)
+            payload: dict[str, Any] = TTSRequest(
+                text=text,
+                voice_id=resolved_voice,
+                language=language,
+                speed=speed,
+                engine=TTSBackend.FISH.value,
+            ).model_dump(exclude_none=True)
+            try:
+                return await self._post_audio("tts", payload), False
+            except NarrationGatewayError as exc:
+                fallback_allowed = (
+                    self._fallback_to_edge if allow_edge_fallback is None else allow_edge_fallback
+                )
+                if not fallback_allowed:
+                    raise
+                edge_voice = edge_voice_for(voice_id, language)
+                logger.warning(
+                    "narration_gateway_fallback_to_edge",
+                    voice_id=voice_id,
+                    edge_voice=edge_voice,
+                    status_code=exc.status_code,
+                    error_type=exc.error_type,
+                    error=str(exc),
+                )
+                try:
+                    return await self._edge_synthesize(text, edge_voice, speed=speed), True
+                except Exception as edge_exc:
+                    raise NarrationGatewayError(
+                        f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
+                    ) from edge_exc
+        if backend is TTSBackend.OPENAI:
+            payload: dict[str, Any] = TTSRequest(
+                text=text,
+                voice_id=voice_id,
+                language=language,
+                speed=speed,
+                engine=TTSBackend.OPENAI.value,
             ).model_dump(exclude_none=True)
             try:
                 return await self._post_audio("tts", payload), False

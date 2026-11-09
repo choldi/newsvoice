@@ -57,6 +57,32 @@ async def test_gateway_options_tags_stock_and_cloned(monkeypatch: pytest.MonkeyP
     assert by_id["uuid-1"].label == "mario"
 
 
+async def test_gateway_options_use_the_reported_sub_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fish/Kokoro stock voices are not mislabelled as OmniVoice."""
+    from src.api.services.voices import VoicesService
+
+    monkeypatch.setattr(VoicesService, "list_languages", AsyncMock(return_value=["es"]))
+    monkeypatch.setattr(
+        VoicesService,
+        "list_stock",
+        AsyncMock(
+            return_value=[
+                {"voice_id": "es_fish", "language": "es", "engine": "fish_tts"},
+                {"voice_id": "es-kokoro", "language": "es", "engine": "kokoro"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(VoicesService, "list_cloned", AsyncMock(return_value=[]))
+
+    _, voices = await voice_registry.gateway_options()
+
+    by_id = {voice.id: voice for voice in voices}
+    assert by_id["es_fish"].engines == ["fish_tts"]
+    assert by_id["es-kokoro"].engines == ["kokoro"]
+
+
 async def test_gateway_options_degrade_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

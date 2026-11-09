@@ -165,6 +165,21 @@ def test_sections_cover_exactly_the_declared_fields() -> None:
         assert from_sections == [f.key for f in fields_for(file_key)]
 
 
+def test_tts_fields_expose_cloud_engines_and_sidecars() -> None:
+    """The TUI keeps the new engines and their optional credentials reachable."""
+    gateway = {field.key: field for field in fields_for("gateway")}
+    news = {field.key: field for field in fields_for("news")}
+
+    assert {"qwen3_tts", "omnivoice_remote", "fish_tts", "openai_tts"} <= set(
+        gateway["TTS_ENGINE"].options
+    )
+    assert {"kokoro", "fish_tts", "openai_tts"} <= set(news["TTS_DEFAULT_BACKEND"].options)
+    assert gateway["FISH_API_KEY"].kind == "secret"
+    assert gateway["OPENAI_TTS_BASE_URL"].advanced
+    assert gateway["QWEN3_TTS_REMOTE_URL"].advanced
+    assert gateway["QWEN3_TTS_REMOTE_TIMEOUT"].default == "300"
+
+
 def test_profiles_only_touch_keys_that_exist() -> None:
     """Every profile default targets a declared field of that file."""
     known = {

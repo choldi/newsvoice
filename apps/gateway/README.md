@@ -1,18 +1,24 @@
 # TTS API — Multi-Engine
 
-> **EN:** REST API for multilingual TTS with **multiple engine backends**: Pocket TTS (CPU, voice cloning), EdgeTTS (cloud, 400+ voices incl. Catalan), and OmniVoice (GPU, full features). Selectable via `TTS_ENGINE` env var with language-based routing support.
+> **EN:** REST API for multilingual TTS with **multiple engine backends**: Pocket TTS, EdgeTTS, Kokoro, OmniVoice, Qwen3-TTS, Fish Audio and any OpenAI-compatible `/audio/speech` provider. Selectable via `TTS_ENGINE` with language-based routing.
 
 API REST para síntesis de voz (TTS) multilingüe con **múltiples engines**:
 - **Pocket TTS** — CPU, clonado de voz, es/en/fr
 - **EdgeTTS** — Cloud, 400+ voces (incluye catalán ca-ES), sin clonado
+- **Kokoro** — CPU, voces stock es/en/fr/it/pt/hi, sin catalán ni clonado
 - **OmniVoice** — GPU, emociones, voice design, instrucciones
+- **OmniVoice remoto** — proxy HTTP al sidecar `gateway-omnivoice`
+- **Qwen3-TTS** — GPU, clonado y voice design, local o sidecar `gateway-qwen3`
+- **Fish Audio** — cloud, reference ids y clones inline, sin voice design
+- **OpenAI-compatible** — cloud, `/audio/speech`, solo voces stock
 
 > Ver [`docs/Architecture.md`](docs/Architecture.md) para detalles de arquitectura.
 
 ## Características
 
-- 🔀 **Multi-engine** — cambia de motor con `TTS_ENGINE=pocket_tts|edgetts|omnivoice|mock|routed`
+- 🔀 **Multi-engine** — `TTS_ENGINE=routed|pocket_tts|edgetts|kokoro|qwen3_tts|omnivoice|omnivoice_remote|fish_tts|openai_tts|mock`
 - 🌐 **Enrutado por idioma** — `TTS_ENGINE=routed` distribuye es/en/fr → Pocket TTS, ca → EdgeTTS
+- ☁️ **Cloud opt-in** — Fish Audio y OpenAI-compatible se activan con sus credenciales y nunca degradan el health global
 - 🎙️ **TTS multilingüe** con voces stock predefinidas
 - 🔄 **Clonado de voz** multi-engine (`engines=pocket_tts,omnivoice`)
 - 🏷️ **Etiquetado por engine** — cada voz clonada sabe para qué engines sirve
@@ -31,8 +37,8 @@ API REST para síntesis de voz (TTS) multilingüe con **múltiples engines**:
   No instales `librosa` en este proyecto: su dependencia `numba` fija o
   downgradea `numpy` y rompe `torch 2.5.1` + `pocket-tts` (ver
   `docs/CONVENTIONS.md`, secciones 1 y 11).
-- **GPU NVIDIA con CUDA** — solo necesario para `TTS_ENGINE=omnivoice`
-- **Internet** — necesario para `TTS_ENGINE=edgetts` (cloud) y descarga de modelos Pocket TTS
+- **GPU NVIDIA con CUDA** — necesario para `omnivoice`, `qwen3_tts` y `chatterbox`; los sidecars `gateway-omnivoice` / `gateway-qwen3` aíslan sus dependencias
+- **Internet** — `edgetts`, Fish Audio y OpenAI-compatible; también la primera descarga de modelos locales
 
 ## Instalación rápida
 
@@ -69,8 +75,13 @@ cp .env.example .env
 
 | Variable | Descripción | Default |
 |----------|-------------|---------|
-| `TTS_ENGINE` | Engine activo: `pocket_tts`, `edgetts`, `omnivoice`, `mock`, `routed` | `omnivoice` |
+| `TTS_ENGINE` | Engine activo: `routed`, `pocket_tts`, `edgetts`, `piper`, `chatterbox`, `kokoro`, `qwen3_tts`, `omnivoice`, `omnivoice_remote`, `fish_tts`, `openai_tts`, `mock` | `omnivoice` |
 | `TTS_ENGINES` | JSON de enrutado por idioma (cuando `TTS_ENGINE=routed`) | `""` |
+| `TTS_EXTRA_ENGINES` | Engines instanciados sin rutear idioma, para pins `engine=...` | `""` |
+| `QWEN3_TTS_REMOTE_URL` | URL del sidecar `gateway-qwen3`; vacío = `qwen3_tts` no disponible | `""` |
+| `OMNIVOICE_REMOTE_URL` | URL del sidecar `gateway-omnivoice`; vacío mantiene el proxy inactivo | `http://gateway-omnivoice:8000` |
+| `FISH_API_KEY` | Clave de Fish Audio; vacío desactiva el engine | `""` |
+| `OPENAI_TTS_BASE_URL` | Base OpenAI-compatible con `/v1`; vacío desactiva el engine | `""` |
 | `POCKET_TTS_DEFAULT_LANGUAGE` | Idioma por defecto (ISO 639-1) que se carga al arrancar | `es` |
 | `POCKET_TTS_MODEL` | Override global del checkpoint (config YAML/ruta/URL) | `""` |
 | `POCKET_TTS_REFERENCES` | JSON de WAVs de referencia para voces stock ES/FR clonadas | `""` |
@@ -88,7 +99,14 @@ cp .env.example .env
 ```env
 TTS_ENGINE=routed
 TTS_ENGINES={"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
+# Opcional: engines GPU/cloud que no rutean ningún idioma
+TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote
 ```
+
+Los engines cloud son opt-in: `fish_tts` necesita `FISH_API_KEY` y
+`openai_tts` necesita `OPENAI_TTS_BASE_URL` (más `OPENAI_TTS_API_KEY` si el
+proveedor lo exige). También puedes fijarlos por voz con
+`TTS_ENGINE=fish_tts` / `openai_tts`, o añadirlos a `TTS_EXTRA_ENGINES`.
 
 ## Endpoints principales
 
@@ -180,16 +198,25 @@ curl -X POST "http://localhost:8000/api/v1/conversations" \
 
 ## Capacidades por engine
 
-| Feature | Pocket TTS | EdgeTTS | OmniVoice | Mock |
-|---------|:----------:|:-------:|:---------:|:----:|
-| Voces stock | ✅ | ✅ | ✅ | ✅ |
-| Clonado de voz | ✅ | ❌ | ✅ | ❌ |
-| Voice design (instruct) | ❌ | ❌ | ✅ | ✅ |
-| Emociones | ❌ | ❌ | ✅ | ❌ |
-| Idiomas es/en/fr | ✅ | ✅ | ✅ | ✅ |
-| Catalán (ca) | ❌ | ✅ | ❌ | ✅ |
-| GPU requerida | ❌ | ❌ | ✅ | ❌ |
-| Internet requerido | Solo 1ª vez | ✅ | ❌ | ❌ |
+| Feature | Pocket TTS | EdgeTTS | Kokoro | OmniVoice | Qwen3-TTS | Mock |
+|---------|:----------:|:-------:|:------:|:---------:|:---------:|:----:|
+| Voces stock | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+| Clonado de voz | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Voice design (instruct) | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Emociones | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Idiomas es/en/fr | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Catalán (ca) | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| GPU requerida | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Internet requerido | Solo 1ª vez | ✅ | Solo 1ª vez | ❌ | Solo 1ª vez | ❌ |
+
+| Feature | Fish Audio | OpenAI-compatible |
+|---------|:----------:|:-----------------:|
+| Voces stock | ✅ (reference ids) | ✅ |
+| Clonado de voz | ✅ (inline references) | ❌ |
+| Voice design / emociones | ❌ | ❌ |
+| Idiomas | Amplio (`FISH_LANGUAGES`) | `OPENAI_TTS_LANGUAGES` |
+| GPU requerida | ❌ | ❌ |
+| Internet requerido | ✅ | ✅ |
 
 ## Estructura del proyecto
 
@@ -205,8 +232,16 @@ ov_api/
 │   │   ├── engines/             # Implementaciones
 │   │   │   ├── pocket_tts_engine.py
 │   │   │   ├── edgetts_engine.py
-│   │   │   ├── mock_engine.py
+│   │   │   ├── kokoro_engine.py
+│   │   │   ├── piper_engine.py
+│   │   │   ├── chatterbox_engine.py
+│   │   │   ├── qwen3_tts_engine.py
+│   │   │   ├── qwen3_remote_engine.py
 │   │   │   ├── omnivoice_engine_adapter.py
+│   │   │   ├── omnivoice_remote_engine.py
+│   │   │   ├── fish_tts_engine.py
+│   │   │   ├── openai_tts_engine.py
+│   │   │   ├── mock_engine.py
 │   │   │   └── routed_engine.py
 │   │   ├── audio.py             # Validación de audio (24k/22k)
 │   │   └── exceptions.py
@@ -245,6 +280,17 @@ echo 'TTS_ENGINES={"es":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}' >>
 # Iniciar
 make run
 ```
+
+En el monorepo, los engines pesados se despliegan como sidecars internos:
+
+- `gateway-omnivoice` (`--profile omnivoice`) — OmniVoice real; el gateway lo
+  consume con `OMNIVOICE_REMOTE_URL` y `omnivoice_remote`.
+- `gateway-qwen3` (`--profile qwen3`, requiere overlay GPU) — torch + qwen-tts
+  en su propia imagen; se consume con `QWEN3_TTS_REMOTE_URL` y el nombre
+  público sigue siendo `qwen3_tts`.
+
+Fish Audio y OpenAI-compatible no necesitan sidecar: se configuran con sus
+variables en `.env` y se activan como extra o por pin de voz.
 
 Ver `docs/deployment/` para guías con Docker y Nginx/Caddy.
 

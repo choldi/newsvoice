@@ -54,7 +54,10 @@ Pasos del asistente:
    `apps/gateway/.env` a partir de sus `.env.example`, sección por sección y
    con la explicación de cada variable. Los secretos se generan con `g`, la
    clave compartida del gateway se copia sola a `TTS_API_KEY` y `API_KEY`, y el
-   hash bcrypt del administrador se crea desde su propio diálogo.
+   hash bcrypt del administrador se crea desde su propio diálogo. El motor TTS
+   (`routed`, `qwen3_tts`, `fish_tts`, `openai_tts`…), los sidecars y las
+   credenciales cloud tienen su propia sección; `a` muestra las opciones
+   avanzadas.
 5. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
    copia `.bak-<fecha>`.
 6. **Valida** — valores obligatorios, secretos coherentes entre archivos,

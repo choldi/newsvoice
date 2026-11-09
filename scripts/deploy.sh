@@ -15,6 +15,8 @@ set -euo pipefail
 #           host GPU; requires nvidia-container-toolkit). Shape A on a GPU host.
 #   MODAL=1 run with --profile modal so the Modal narration worker starts too
 #           (parity with the pre-merge production stack).
+#   QWEN3=1 start the self-contained qwen3 sidecar (profile qwen3) and point the
+#           gateway at it. Requires GPU=1.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -36,6 +38,12 @@ fi
 if [[ "${MODAL:-0}" == "1" ]]; then
     DC+=(--profile modal)
     echo "==> Modal profile enabled (narration-modal-worker will start)"
+fi
+
+if [[ "${QWEN3:-0}" == "1" ]]; then
+    DC+=(--profile qwen3)
+    export QWEN3_TTS_REMOTE_URL="${QWEN3_TTS_REMOTE_URL:-http://gateway-qwen3:8000/api/v1}"
+    echo "==> qwen3 sidecar enabled (gateway -> ${QWEN3_TTS_REMOTE_URL})"
 fi
 
 _read_env() {

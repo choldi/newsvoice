@@ -1,20 +1,23 @@
-version: "3.8"
-
 services:
   api:
-    build: .
+    build:
+      context: ..
+      dockerfile: apps/gateway/Dockerfile.omnivoice
     ports:
       - "8000:8000"
     volumes:
       - ./storage:/app/storage
-      - ${TTS_PATH:-/opt/omnivoice}:/omnivoice-external:ro
+      - gateway_hf_cache:/root/.cache/huggingface
     environment:
+      - TTS_ENGINE=omnivoice
       - TTS_USE_MOCK=${TTS_USE_MOCK:-false}
       - TTS_FALLBACK_TO_MOCK=true
       - DATABASE_URL=sqlite:///storage/omnivoice.db
       - API_KEY=${API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TTS_INSTALL_DIR=/omnivoice-external
+      - TTS_INSTALL_DIR=/app
+      - TTS_VENV_DIR=/app/.venv
+      - HF_HOME=/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -27,4 +30,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 60s
+
+volumes:
+  gateway_hf_cache:

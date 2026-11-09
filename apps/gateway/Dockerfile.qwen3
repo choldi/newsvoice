@@ -1,0 +1,67 @@
+# Qwen3-TTS sidecar image.
+#
+# Qwen3 pins transformers==4.57.3/accelerate==1.12.0, which cannot coexist with
+# the main gateway's pocket_tts/transformers stack. This image therefore runs
+# the same tts_api app with TTS_ENGINE=qwen3_tts and a dedicated venv holding
+# torch + qwen-tts. The main gateway reaches it over HTTP through the
+# qwen3_tts proxy engine (QWEN3_TTS_REMOTE_URL); its public engine name stays
+# qwen3_tts so per-voice pins in news-engine keep working.
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml uv.lock ./
+COPY libs/tts_contract ./libs/tts_contract
+COPY apps/gateway/pyproject.toml apps/gateway/README.md ./apps/gateway/
+RUN pip install --no-cache-dir uv && \
+    uv sync --frozen --no-dev --no-install-project --package tts-api && \
+    uv cache clean
+
+COPY apps/gateway/tts_api ./apps/gateway/tts_api
+COPY apps/gateway/voice_profiles.json ./voice_profiles.json
+RUN uv sync --frozen --no-dev --package tts-api
+
+# Dedicated runtime: the API process only talks to this interpreter over the
+# line protocol, so qwen-tts' pins never touch the API venv.
+RUN python -m venv /opt/qwen3-tts/venv && \
+    /opt/qwen3-tts/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/qwen3-tts/venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu124 torch torchaudio && \
+    /opt/qwen3-tts/venv/bin/pip install --no-cache-dir \
+        "qwen-tts==0.1.1" "accelerate==1.12.0" soundfile
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade "setuptools>=84.2.1"
+
+WORKDIR /app
+
+COPY --from=builder /app /app
+COPY --from=builder /opt/qwen3-tts /opt/qwen3-tts
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:${PATH}"
+ENV TTS_ENGINE=qwen3_tts
+ENV QWEN3_TTS_PYTHON=/opt/qwen3-tts/venv/bin/python
+ENV QWEN3_TTS_REMOTE_URL=
+ENV HF_HOME=/models/huggingface
+ENV TTS_FALLBACK_TO_MOCK=false
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python -c "import httpx; r=httpx.get('http://localhost:8000/api/v1/health/live'); exit(0 if r.status_code==200 else 1)"
+
+CMD ["uvicorn", "tts_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

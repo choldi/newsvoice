@@ -8,8 +8,20 @@ import pytest
 from src.api.services.voices import VoicesService
 
 STOCK = [
-    {"voice_id": "es-mx-male", "language": "es", "gender": "male", "name": "Spanish MX Male"},
-    {"voice_id": "en-us-female", "language": "en", "gender": "female", "name": "English US Female"},
+    {
+        "voice_id": "es-mx-male",
+        "language": "es",
+        "gender": "male",
+        "name": "Spanish MX Male",
+        "engine": "",
+    },
+    {
+        "voice_id": "en-us-female",
+        "language": "en",
+        "gender": "female",
+        "name": "English US Female",
+        "engine": "",
+    },
 ]
 
 

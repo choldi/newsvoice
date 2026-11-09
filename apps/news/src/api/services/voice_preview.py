@@ -48,7 +48,10 @@ _PREFERENCE: tuple[TTSBackend, ...] = (
     TTSBackend.ZONOS2,
     TTSBackend.VOXCPM2,
     TTSBackend.OMNIVOICE,
+    TTSBackend.KOKORO,
     TTSBackend.EDGE,
+    TTSBackend.FISH,
+    TTSBackend.OPENAI,
 )
 
 #: Safe on-disk names for cached samples: slug, engine, digest, extension.

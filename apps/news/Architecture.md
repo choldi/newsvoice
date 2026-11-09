@@ -101,8 +101,9 @@ through the idempotent drop-in importer (`scripts/import_voice_dropin.py`):
 `voice.json` + a 5-30 s reference and its exact 100-600 character transcript are
 validated locally, then the profile and reference are written through the
 gateway and the `<name>__qwen3_tts` clone is registered (`--apply`; dry-run by
-default, `--reclone` after transcript fixes). The gateway launches `qwen-tts` as
-an external venv subprocess because `transformers==4.57.3` conflicts with the
+default, `--reclone` after transcript fixes). In Docker the gateway proxies to
+the self-contained `gateway-qwen3` sidecar, whose dedicated venv holds
+`torch`/`qwen-tts` because `transformers==4.57.3` conflicts with the
 `pocket_tts` pins; one 1.7B model stays resident at a time.
 
 `src/api/services/tts_backends.py` owns the dispatch, the per-engine voice

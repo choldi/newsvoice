@@ -29,6 +29,7 @@ def _profile(name: str, language: str = "fr") -> VoiceProfile:
 def _clear_cache() -> None:
     """Keep the module-level resolution cache from leaking across tests."""
     gateway_voices._RESOLVED.clear()
+    gateway_voices._FISH_RESOLVED.clear()
 
 
 def _install_catalog(wav: bool = True) -> None:
@@ -158,3 +159,36 @@ async def test_gateway_failure_degrades_to_original(
 def test_clone_name_is_engine_scoped() -> None:
     """The clone name is suffixed so it never clashes with another engine."""
     assert gateway_voices.clone_name_for("marie_fr") == "marie_fr__qwen3_tts"
+    assert gateway_voices.fish_clone_name_for("marie_fr") == "marie_fr__fish_tts"
+
+
+async def test_fish_profile_is_registered_as_fish_clone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A catalog profile resolves to a Fish clone pinned on fish_tts."""
+    _install_catalog()
+    service = AsyncMock()
+    service.list_cloned.return_value = []
+    service.clone_voice.return_value = {"voice_id": "uuid-fish"}
+    monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)
+
+    resolved = await gateway_voices.resolve_gateway_fish_voice("marie_fr", "fr")
+
+    assert resolved == "uuid-fish"
+    _, kwargs = service.clone_voice.call_args
+    assert kwargs["name"] == "marie_fr__fish_tts"
+    assert kwargs["engines"] == "fish_tts"
+
+
+async def test_existing_fish_clone_is_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing fish_tts clone is reused without cloning again."""
+    _install_catalog()
+    service = AsyncMock()
+    service.list_cloned.return_value = [
+        {"id": "uuid-qwen", "name": "marie_fr__qwen3_tts", "engine": "qwen3_tts"},
+        {"id": "uuid-fish", "name": "marie_fr__fish_tts", "engine": "fish_tts"},
+    ]
+    monkeypatch.setattr(gateway_voices, "VoicesService", lambda: service)
+
+    assert await gateway_voices.resolve_gateway_fish_voice("marie_fr", "fr") == "uuid-fish"
+    service.clone_voice.assert_not_called()

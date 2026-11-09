@@ -29,6 +29,7 @@ class StockVoice(BaseModel):
     language: str = ""
     gender: str = ""
     name: str = ""
+    engine: str = ""
 
 
 class ClonedVoice(BaseModel):

@@ -49,6 +49,10 @@ class TTSBackend(StrEnum):
             (speed is post-processed with atempo).
         KOKORO: Kokoro-82M via the tts-api gateway (stock voices only, CPU-first,
             24 kHz). No cloning/emotion/instruct; good for es/en/fr/it/pt/hi.
+        FISH: Fish Audio cloud API via the gateway. Stock reference ids and
+            inline reference-audio clones; no voice design, no audiobooks.
+        OPENAI: Generic OpenAI-compatible ``/audio/speech`` provider via the
+            gateway. Stock voices only; no cloning, design or audiobooks.
     """
 
     EDGE = "edge"
@@ -57,6 +61,8 @@ class TTSBackend(StrEnum):
     ZONOS2 = "zonos2"
     VOXCPM2 = "voxcpm2"
     KOKORO = "kokoro"
+    FISH = "fish_tts"
+    OPENAI = "openai_tts"
 
 
 class SpeakerRole(BaseModel):

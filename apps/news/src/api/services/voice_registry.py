@@ -37,6 +37,48 @@ MODAL_ENGINES: tuple[str, ...] = (
     TTSBackend.VOXCPM2.value,
 )
 
+#: Gateway sub-engine name -> public backend value. ``pocket_tts`` et al. are
+#: reached through the routed OmniVoice backend unless they have their own
+#: public value (Kokoro, Fish, OpenAI).
+_GATEWAY_ENGINE_VALUES: dict[str, str] = {
+    "omnivoice": TTSBackend.OMNIVOICE.value,
+    "omnivoice_remote": TTSBackend.OMNIVOICE.value,
+    "edgetts": TTSBackend.EDGE.value,
+    "kokoro": TTSBackend.KOKORO.value,
+    "qwen3_tts": TTSBackend.QWEN3_TTS.value,
+    "zono2": TTSBackend.ZONOS2.value,
+    "zonos2": TTSBackend.ZONOS2.value,
+    "voxcpm2": TTSBackend.VOXCPM2.value,
+    "fish_tts": TTSBackend.FISH.value,
+    "openai_tts": TTSBackend.OPENAI.value,
+}
+
+
+def _gateway_engine_values(item: dict, *, category: str) -> list[str]:
+    """Tag one gateway catalogue item with the public engine(s) that accept it.
+
+    The gateway now reports the sub-engine that owns each stock voice; clones
+    carry a comma-separated engine pin. Legacy payloads without the field keep
+    the historical OmniVoice tag.
+
+    Args:
+        item: Stock or cloned voice dict from the gateway.
+        category: ``stock`` or ``cloned``.
+
+    Returns:
+        Canonical ``TTSBackend`` values, in the order the gateway reported them.
+    """
+    raw = str(item.get("engine") or "").strip()
+    if not raw:
+        return [TTSBackend.OMNIVOICE.value]
+    values: list[str] = []
+    for part in raw.split(","):
+        name = part.strip().lower()
+        if not name:
+            continue
+        values.append(_GATEWAY_ENGINE_VALUES.get(name, TTSBackend.OMNIVOICE.value))
+    return list(dict.fromkeys(values)) or [TTSBackend.OMNIVOICE.value]
+
 
 def _dedupe(voices: list[VoiceOption]) -> list[VoiceOption]:
     """Merge entries that repeat an id across sources.
@@ -92,7 +134,7 @@ async def gateway_options() -> tuple[list[str], list[VoiceOption]]:
                     id=identifier,
                     label=str(item.get("name") or identifier),
                     language=str(item.get("language") or ""),
-                    engines=[TTSBackend.OMNIVOICE.value],
+                    engines=_gateway_engine_values(item, category=category),
                     category=category,
                 )
             )

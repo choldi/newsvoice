@@ -1270,9 +1270,17 @@ async def submit_audiobook(
     # Modal is banned for audiobooks: a book renders for hours, so the two
     # Modal-only engines would spend real GPU money. qwen3_tts stays allowed
     # because the audiobook path always pins it to the local gateway engine.
-    if backend in (TTSBackend.ZONOS2, TTSBackend.VOXCPM2):
+    # Cloud per-character providers are banned too: a book would be expensive
+    # and their APIs are not intended for multi-hour renders.
+    if backend in (
+        TTSBackend.ZONOS2,
+        TTSBackend.VOXCPM2,
+        TTSBackend.FISH,
+        TTSBackend.OPENAI,
+    ):
         raise SubmitError(
-            "audiobooks cannot run on Modal engines (zonos2/voxcpm2): "
+            "audiobooks cannot run on Modal or cloud TTS engines "
+            "(zonos2/voxcpm2/fish_tts/openai_tts): "
             "pick edge, tts-api gateway, Kokoro or Qwen3-TTS (local gateway)",
             status_code=422,
         )

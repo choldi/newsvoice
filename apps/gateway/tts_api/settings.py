@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # mock: test tones (for development/testing)
     # routed: multi-engine, dispatches by language (requires TTS_ENGINES config)
     # omnivoice_remote: proxy HTTP al sidecar OmniVoice (ver OMNIVOICE_REMOTE_URL)
+    # fish_tts: Fish Audio cloud API (stock reference ids + inline clones)
+    # openai_tts: generic OpenAI-compatible /audio/speech provider
     TTS_ENGINE: Literal[
         "omnivoice",
         "omnivoice_remote",
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
         "chatterbox",
         "qwen3_tts",
         "kokoro",
+        "fish_tts",
+        "openai_tts",
         "mock",
         "routed",
     ] = "omnivoice"
@@ -64,6 +68,11 @@ class Settings(BaseSettings):
     QWEN3_TTS_DEVICE: str = "cuda:0"
     QWEN3_TTS_DTYPE: str = "bfloat16"
     QWEN3_TTS_ATTN: Literal["sdpa", "flash_attention_2", "eager"] = "sdpa"
+    # Optional HTTP sidecar (Dockerfile.qwen3) that runs the worker in its own
+    # image/venv. When set, the main gateway proxies qwen3_tts requests to it
+    # instead of spawning the local external-venv worker.
+    QWEN3_TTS_REMOTE_URL: str = ""
+    QWEN3_TTS_REMOTE_TIMEOUT: float = 300.0
 
     # Pocket TTS config (when TTS_ENGINE=pocket_tts)
     # Idioma por defecto (ISO 639-1) cuyo checkpoint se carga al arrancar; el
@@ -132,6 +141,33 @@ class Settings(BaseSettings):
     OMNIVOICE_REMOTE_URL: str = ""
     # Timeout (segundos) de las llamadas al sidecar; la síntesis puede tardar.
     OMNIVOICE_REMOTE_TIMEOUT: float = 300.0
+
+    # --- Fish Audio (when TTS_ENGINE=fish_tts or as an optional routed engine) ---
+    # Empty API key disables the engine: routed mode only instantiates it when
+    # configured, so a missing key never breaks the local stack.
+    FISH_API_BASE_URL: str = "https://api.fish.audio"
+    FISH_API_KEY: str = ""
+    FISH_MODEL: str = "s2.1-pro-free"
+    FISH_SAMPLE_RATE: int = 24000
+    FISH_TIMEOUT: float = 300.0
+    # Inline reference audio requires MessagePack. Disabling it rejects clone
+    # requests (there is no Fish reference_id for an arbitrary catalog WAV).
+    FISH_USE_INLINE_REFERENCES: bool = True
+    # Optional stock voices: JSON object mapping gateway voice_id to either a
+    # Fish reference_id string or {"reference_id", "name", "language", "gender"}.
+    FISH_VOICES: str = ""
+    FISH_LANGUAGES: str = "es,en,fr,de,it,pt,zh,ja,ko"
+
+    # --- OpenAI-compatible TTS (when TTS_ENGINE=openai_tts or routed) ---
+    # Base URL must include the API version, e.g. https://api.openai.com/v1.
+    OPENAI_TTS_BASE_URL: str = ""
+    OPENAI_TTS_API_KEY: str = ""
+    OPENAI_TTS_MODEL: str = "tts-1"
+    OPENAI_TTS_TIMEOUT: float = 120.0
+    # JSON object mapping gateway voice_id to either the provider voice name or
+    # {"voice", "name", "language", "gender"}.
+    OPENAI_TTS_VOICES: str = ""
+    OPENAI_TTS_LANGUAGES: str = "es,en"
 
     # --- Mock / Real engine toggle ---
     # Si True, usa generación de tonos mock (útil para tests sin GPU/modelo).
@@ -237,6 +273,69 @@ class Settings(BaseSettings):
         return {str(k): str(v) for k, v in parsed.items()}
 
     @property
+    def fish_configured(self) -> bool:
+        """Report whether Fish Audio has the credentials it needs."""
+        return bool(self.FISH_API_KEY.strip())
+
+    @property
+    def openai_tts_configured(self) -> bool:
+        """Report whether the OpenAI-compatible provider is configured."""
+        return bool(self.OPENAI_TTS_BASE_URL.strip())
+
+    @staticmethod
+    def _csv_languages(raw: str) -> list[str]:
+        """Normalize a comma-separated language list."""
+        return [item.strip().lower() for item in raw.split(",") if item.strip()]
+
+    @property
+    def fish_languages(self) -> list[str]:
+        """Languages accepted by the Fish engine."""
+        return self._csv_languages(self.FISH_LANGUAGES)
+
+    @property
+    def openai_tts_languages(self) -> list[str]:
+        """Languages accepted by the OpenAI-compatible engine."""
+        return self._csv_languages(self.OPENAI_TTS_LANGUAGES)
+
+    @staticmethod
+    def _voice_config(raw: str) -> dict[str, dict[str, str]]:
+        """Parse a flexible voice JSON map.
+
+        Values may be a plain string (the provider voice/reference id) or an
+        object with ``voice``/``reference_id``, ``name``, ``language`` and
+        ``gender`` keys.
+        """
+        text = (raw or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        voices: dict[str, dict[str, str]] = {}
+        for key, value in parsed.items():
+            voice_id = str(key).strip()
+            if not voice_id:
+                continue
+            if isinstance(value, str):
+                voices[voice_id] = {"voice": value.strip()}
+            elif isinstance(value, dict):
+                voices[voice_id] = {str(k): str(v) for k, v in value.items() if v is not None}
+        return voices
+
+    @property
+    def fish_voices(self) -> dict[str, dict[str, str]]:
+        """Configured Fish stock voices keyed by gateway voice id."""
+        return self._voice_config(self.FISH_VOICES)
+
+    @property
+    def openai_tts_voices(self) -> dict[str, dict[str, str]]:
+        """Configured OpenAI-compatible stock voices keyed by gateway voice id."""
+        return self._voice_config(self.OPENAI_TTS_VOICES)
+
+    @property
     def omnilang_list(self) -> list[str]:
         """Idiomas soportados por OmniVoice.
 
@@ -256,6 +355,10 @@ class Settings(BaseSettings):
                     langs.extend(["ca", "ru"])
         if self.TTS_ENGINE == "qwen3_tts":
             langs.extend(["ca", "ru"])
+        if self.fish_configured:
+            langs.extend(self.fish_languages)
+        if self.openai_tts_configured:
+            langs.extend(self.openai_tts_languages)
         return sorted(set(langs))
 
 

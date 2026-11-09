@@ -933,6 +933,60 @@ async def test_synthesize_turn_local_qwen_uses_resolved_clone(
     await service.aclose()
 
 
+async def test_synthesize_turn_fish_resolves_and_pins_fish_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav(frames=2400))
+
+    async def fake_resolve(voice: str, language: str) -> str:
+        assert voice == "marie_fr"
+        return "uuid-fish"
+
+    monkeypatch.setattr(
+        "src.api.services.narration_tts.resolve_gateway_fish_voice", fake_resolve
+    )
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+
+    audio, used_edge = await service.synthesize_turn(
+        "Bonjour", "marie_fr", "fr", backend=TTSBackend.FISH
+    )
+
+    assert used_edge is False
+    assert wav_format(audio).framerate == CANONICAL_RATE
+    assert calls[0]["voice_id"] == "uuid-fish"
+    assert calls[0]["engine"] == "fish_tts"
+    assert "emotion" not in calls[0]
+    await service.aclose()
+
+
+async def test_synthesize_turn_openai_pins_openai_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, content=_wav())
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+
+    await service.synthesize_turn(
+        "Hola", "es_openai", "es", speed=1.1, backend=TTSBackend.OPENAI
+    )
+
+    assert calls[0]["engine"] == "openai_tts"
+    assert calls[0]["voice_id"] == "es_openai"
+    assert calls[0]["speed"] == 1.1
+    assert "emotion" not in calls[0]
+    await service.aclose()
+
+
 async def test_post_modal_tts_wraps_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing_modal(**kwargs: object) -> bytes:
         raise RuntimeError("boom")

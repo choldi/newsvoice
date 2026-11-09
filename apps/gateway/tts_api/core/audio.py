@@ -18,6 +18,8 @@ ENGINE_SAMPLE_RATES: dict[str, int] = {
     "edgetts": 24000,
     "qwen3_tts": 24000,
     "omnivoice": 22050,
+    "fish_tts": 24000,
+    "openai_tts": 24000,
     "mock": 22050,
 }
 

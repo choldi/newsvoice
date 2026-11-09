@@ -1,5 +1,6 @@
 """Database management and SQLite connection layer using aiosqlite."""
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -10,10 +11,31 @@ from typing import Any
 import aiosqlite
 import structlog
 
+try:  # pragma: no cover - fcntl is unavailable on Windows
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
+
 from src.api.models.narration import NarrationScript
 from src.core.config import settings
 
 logger = structlog.get_logger()
+
+
+def _acquire_migration_lock(target_path: str):
+    """Serialises migrations across processes sharing the same SQLite file."""
+    lock_path = Path(f"{target_path}.migrate.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+")
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    return handle
+
+
+def _release_migration_lock(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    handle.close()
 
 
 def get_migrations_dir() -> Path:
@@ -42,36 +64,40 @@ async def run_migrations(db_path: str | None = None) -> None:
 
     migration_files = sorted(migrations_dir.glob("*.sql"))
 
-    async with aiosqlite.connect(target_path) as db:
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA busy_timeout=5000")
-        await db.execute("PRAGMA foreign_keys=ON")
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version TEXT PRIMARY KEY,
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
-        await db.commit()
+    lock_handle = await asyncio.to_thread(_acquire_migration_lock, target_path)
+    try:
+        async with aiosqlite.connect(target_path) as db:
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA busy_timeout=30000")
+            await db.execute("PRAGMA foreign_keys=ON")
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            await db.commit()
 
-        async with db.execute("SELECT version FROM schema_migrations") as cursor:
-            applied_rows = await cursor.fetchall()
-            applied_versions = {row[0] for row in applied_rows}
+            async with db.execute("SELECT version FROM schema_migrations") as cursor:
+                applied_rows = await cursor.fetchall()
+                applied_versions = {row[0] for row in applied_rows}
 
-        for file_path in migration_files:
-            version = file_path.name
-            if version not in applied_versions:
-                logger.info("applying_migration", version=version)
-                sql_content = file_path.read_text(encoding="utf-8")
-                await db.executescript(sql_content)
-                await db.execute(
-                    "INSERT INTO schema_migrations (version) VALUES (?)",
-                    (version,),
-                )
-                await db.commit()
-                logger.info("migration_applied_successfully", version=version)
+            for file_path in migration_files:
+                version = file_path.name
+                if version not in applied_versions:
+                    logger.info("applying_migration", version=version)
+                    sql_content = file_path.read_text(encoding="utf-8")
+                    await db.executescript(sql_content)
+                    await db.execute(
+                        "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)",
+                        (version,),
+                    )
+                    await db.commit()
+                    logger.info("migration_applied_successfully", version=version)
+    finally:
+        await asyncio.to_thread(_release_migration_lock, lock_handle)
 
 
 @asynccontextmanager

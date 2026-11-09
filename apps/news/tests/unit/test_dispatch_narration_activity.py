@@ -126,13 +126,14 @@ async def test_dispatch_starts_the_workflow_in_the_requested_namespace(
 async def test_dispatch_follows_the_backend_when_the_target_is_unpinned(
     fake_client: FakeClient,
 ) -> None:
-    """A Modal spec must land in the Modal namespace when nothing pins it."""
+    """An explicit Modal spec lands in the Modal namespace when unpinned."""
     payload = _payload(namespace="", task_queue="")
     del payload["namespace"]
     del payload["task_queue"]
     payload["spec"] = {
         **SPEC,
         "tts_backend": "qwen3_tts",
+        "run_in_modal": True,
         "roles": [
             {"name": "anchor", "voice_id": "anchor_neutral_m"},
             {"name": "guest", "voice_id": "anchor_neutral_f"},

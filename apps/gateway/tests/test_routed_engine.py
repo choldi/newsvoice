@@ -84,6 +84,59 @@ async def test_list_stock_voices_skips_a_failing_sub_engine() -> None:
     assert all(v["voice_id"] for v in voices)
 
 
+async def test_optional_engine_failure_does_not_degrade_health() -> None:
+    """A missing cloud engine is reported but does not make routed health fail."""
+
+    class _CloudDown:
+        name = "fish_tts"
+
+        async def health_check(self) -> dict:
+            return {"model_loaded": False, "error": "401"}
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "fish_tts": _CloudDown()},  # type: ignore[arg-type]
+        routing={"_default": "mock"},
+        optional_engines={"fish_tts"},
+    )
+
+    health = await routed.health_check()
+
+    assert health["model_loaded"] is True
+    assert "fish_tts" in health["sub_engines"]
+    assert health["optional_engines"] == ["fish_tts"]
+
+
+async def test_optional_engine_initialize_failure_is_non_fatal() -> None:
+    """Routed startup survives an unconfigured optional sub-engine."""
+
+    class _CantInit:
+        name = "openai_tts"
+
+        async def initialize(self) -> None:
+            raise RuntimeError("missing key")
+
+    routed = RoutedEngine(
+        engines={"mock": MockEngine(), "openai_tts": _CantInit()},  # type: ignore[arg-type]
+        routing={"_default": "mock"},
+        optional_engines={"openai_tts"},
+    )
+
+    await routed.initialize()
+
+
+async def test_routed_stock_voices_are_tagged_by_engine() -> None:
+    """Stock voices expose which sub-engine produced them."""
+    routed = RoutedEngine(
+        engines={"mock": MockEngine()},
+        routing={"_default": "mock"},
+    )
+
+    voices = await routed.list_stock_voices()
+
+    assert voices
+    assert all(v["engine"] == "mock" for v in voices)
+
+
 async def test_routed_health_is_ok_when_every_sub_engine_reports_loaded() -> None:
     """Con todos los sub-engines sanos el agregado no sale ``degraded``."""
     health = await _routed().health_check()

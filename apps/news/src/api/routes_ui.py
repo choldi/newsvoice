@@ -566,6 +566,8 @@ TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("edge", "edge (local)"),
     ("omni_voice", "tts-api gateway"),
     ("kokoro", "Kokoro (gateway)"),
+    ("fish_tts", "Fish Audio (cloud)"),
+    ("openai_tts", "OpenAI-compatible (cloud)"),
     ("qwen3_tts", "Qwen3-TTS (Modal)"),
     ("zonos2", "ZONOS2 (Modal)"),
     ("voxcpm2", "VoxCPM2 (Modal)"),
@@ -652,6 +654,32 @@ def _modal_voice_options() -> dict:
     return _registry_options(languages, voices)
 
 
+async def _tts_backend_choices() -> tuple[tuple[str, str], ...]:
+    """Return the TTS dropdown choices, hiding unconfigured cloud engines.
+
+    The gateway reports Fish/OpenAI as unavailable until their credentials are
+    set. If the gateway cannot be reached, every choice is kept so an outage
+    does not silently change the operator's options.
+
+    Returns:
+        The visible ``(value, label)`` pairs in menu order.
+    """
+    from src.api.services.voices import VoicesService
+
+    try:
+        engines = await VoicesService().list_engines()
+    except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
+        logger.warning("tts_backend_choices_failed", error=str(exc))
+        return TTS_BACKEND_CHOICES
+    if not engines:
+        return TTS_BACKEND_CHOICES
+    available = {str(item.get("name") or "") for item in engines if item.get("available")}
+    cloud = {"fish_tts", "openai_tts"}
+    return tuple(
+        choice for choice in TTS_BACKEND_CHOICES if choice[0] not in cloud or choice[0] in available
+    )
+
+
 async def _tts_voice_options(backend: str) -> dict:
     """Return the language and voice catalogue of one TTS engine.
 
@@ -671,6 +699,24 @@ async def _tts_voice_options(backend: str) -> dict:
         return await _edge_voice_options()
     if backend in ("qwen3_tts", "zonos2", "voxcpm2"):
         return _modal_voice_options()
+    if backend == "fish_tts":
+        gateway = await _omni_options()
+        catalog = _modal_voice_options()
+        fish = [v for v in gateway["voices"] if "fish_tts" in v["engines"]]
+        clones = [dict(v, engines=["fish_tts"]) for v in catalog["voices"]]
+        seen: set[str] = set()
+        voices = []
+        for voice in [*fish, *clones]:
+            if voice["id"] not in seen:
+                seen.add(voice["id"])
+                voices.append(voice)
+        languages = sorted({v["language"] for v in voices if v["language"]})
+        return {"languages": languages, "voices": voices}
+    if backend == "openai_tts":
+        gateway = await _omni_options()
+        voices = [v for v in gateway["voices"] if "openai_tts" in v["engines"]]
+        languages = sorted({v["language"] for v in voices if v["language"]})
+        return {"languages": languages, "voices": voices}
     gateway = await _omni_options()
     return {
         "languages": gateway["languages"],
@@ -1044,13 +1090,14 @@ async def ui_collections(request: Request) -> HTMLResponse:
     }
     cast_engines.add("omni_voice")  # the create form defaults to the gateway
     cast_options = await _tts_options_by_backend(cast_engines)
+    tts_backends = await _tts_backend_choices()
     return _render(
         request,
         "collections.html",
         {
             "collections": collections,
             "omni": omni,
-            "tts_backends": TTS_BACKEND_CHOICES,
+            "tts_backends": tts_backends,
             "tts_options": tts_options,
             "cast_options": cast_options,
             "emotion_tags": EMOTION_TAGS,
@@ -1490,12 +1537,13 @@ async def ui_fragment_tts_options(
     except Exception:  # noqa: BLE001 - an unknown engine renders as the default
         engine = "edge"
     options = await _tts_voice_options(engine) if tts_enabled else {"languages": [], "voices": []}
+    tts_backends = await _tts_backend_choices()
     return _render(
         request,
         "partials/_tts_options.html",
         {
             "tts_enabled": bool(tts_enabled),
-            "tts_backends": TTS_BACKEND_CHOICES,
+            "tts_backends": tts_backends,
             "current_backend": engine,
             "tts_options": {engine: options},
             "current_language": language,

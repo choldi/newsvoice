@@ -78,6 +78,11 @@ BACKEND_ALIASES: dict[str, str] = {
     "voxcpm2": TTSBackend.VOXCPM2,
     "voxcpm": TTSBackend.VOXCPM2,
     "kokoro": TTSBackend.KOKORO,
+    "fish": TTSBackend.FISH,
+    "fish_tts": TTSBackend.FISH,
+    "fish_audio": TTSBackend.FISH,
+    "openai": TTSBackend.OPENAI,
+    "openai_tts": TTSBackend.OPENAI,
 }
 
 #: Every value a collection may declare for ``tts_backend``.
@@ -88,6 +93,8 @@ ALLOWED_BACKENDS: tuple[str, ...] = (
     TTSBackend.ZONOS2,
     TTSBackend.VOXCPM2,
     TTSBackend.KOKORO,
+    TTSBackend.FISH,
+    TTSBackend.OPENAI,
 )
 
 #: Edge ShortName -> gateway stock id. Inverse of ``tts.LEGACY_VOICE_ALIASES``,
@@ -205,7 +212,7 @@ def wall_seconds_for(backend: TTSBackend, char_count: float) -> float:
     settings = get_settings()
     if backend is TTSBackend.EDGE:
         return char_count / settings.tts_edge_chars_per_second
-    if backend is TTSBackend.OMNIVOICE:
+    if backend in (TTSBackend.OMNIVOICE, TTSBackend.KOKORO, TTSBackend.FISH, TTSBackend.OPENAI):
         return char_count / settings.tts_gateway_chars_per_second
     from src.core.budget import estimate_gpu_seconds
 
@@ -302,6 +309,58 @@ async def gateway_tts(
         return await dispatcher.post_audio("tts", payload)
 
 
+async def gateway_instruct(
+    text: str,
+    instruct: str,
+    language: str,
+    *,
+    engine: str | None = "qwen3_tts",
+    api_base_url: str | None = None,
+    api_key: str | None = None,
+    timeout: float | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> bytes:
+    """Design a voice through the gateway's instruct endpoint.
+
+    Args:
+        text: Reference text to speak.
+        instruct: VoiceDesign persona description.
+        language: ISO 639-1 language code.
+        engine: Optional sub-engine pin; defaults to ``qwen3_tts`` so a routed
+            gateway targets the Qwen sidecar rather than language routing.
+        api_base_url: Gateway base URL; defaults to ``settings.tts_api_base_url``.
+        api_key: Gateway key; defaults to ``settings.tts_api_key``.
+        timeout: Per-request timeout; defaults to ``settings.tts_request_timeout``.
+        client: Injected client (tests pass a mock transport).
+
+    Returns:
+        The WAV payload returned by the gateway.
+
+    Raises:
+        TTSGatewayError: On transport errors, non-2xx answers or an empty body.
+    """
+    settings = get_settings()
+    base = (api_base_url or settings.tts_api_base_url).rstrip("/")
+    key = settings.tts_api_key if api_key is None else api_key
+    limit = timeout if timeout is not None else float(settings.tts_request_timeout)
+    payload: dict[str, object] = {
+        "text": text,
+        "instruct": instruct,
+        "language": language,
+    }
+    if engine:
+        payload["engine"] = engine
+
+    if client is not None:
+        injected = GatewayClient(client=client, error_cls=TTSGatewayError)
+        return await injected.post_audio("tts/instruct", payload)
+
+    async with GatewayClient(
+        base_url=base, api_key=key, timeout=limit, error_cls=TTSGatewayError
+    ) as dispatcher:
+        return await dispatcher.post_audio("tts/instruct", payload)
+
+
 # --- voice resolution --------------------------------------------------------
 
 
@@ -325,6 +384,48 @@ def gateway_voice_for_language(language: str) -> str:
             f"no default tts-api voice for language {language!r}: "
             "set 'voice' on the collection to a stock id from /api/v1/voices/stock"
         ) from None
+
+
+async def _cloud_voice_for(backend: TTSBackend, voice: str, language: str) -> str:
+    """Resolve a Fish/OpenAI voice, falling back to that engine's stock list.
+
+    Edge ShortNames are filled in by the pipeline defaults even when the
+    collection switched engines; they are foreign to these providers, so an
+    empty/Edge selection is resolved to the first stock voice the gateway
+    reports for the requested engine and language.
+
+    Args:
+        backend: ``fish_tts`` or ``openai_tts``.
+        voice: Configured voice id (may be empty or an Edge ShortName).
+        language: ISO 639-1 language code.
+
+    Returns:
+        A gateway voice id known to belong to that provider, or the configured
+        id when the gateway cannot report one.
+
+    Raises:
+        TTSBackendError: When no configured/stock voice exists for the language.
+    """
+    requested = (voice or "").strip()
+    if requested and not requested.lower().endswith("neural"):
+        return GATEWAY_VOICE_ALIASES.get(requested.lower(), requested)
+
+    from src.api.services.voices import VoicesService
+
+    try:
+        stock = await VoicesService().list_stock(language=language)
+    except Exception as exc:  # noqa: BLE001 - a dead gateway must not mask the configured id
+        logger.warning("tts_cloud_voice_listing_failed", backend=backend.value, error=str(exc))
+        stock = []
+    for item in stock:
+        if str(item.get("engine") or "") == backend.value:
+            return str(item.get("voice_id") or "").strip()
+    if requested:
+        return GATEWAY_VOICE_ALIASES.get(requested.lower(), requested)
+    raise TTSBackendError(
+        f"no {backend.value} stock voice for language {language!r}: configure one on "
+        "the gateway (FISH_VOICES/OPENAI_TTS_VOICES) and pick it on the collection"
+    )
 
 
 async def voice_for(
@@ -367,6 +468,14 @@ async def voice_for(
             return gateway_voice_for_language(language)
         mapped = GATEWAY_VOICE_ALIASES.get(requested.lower())
         return mapped or requested
+
+    if backend in (TTSBackend.FISH, TTSBackend.OPENAI):
+        resolved = await _cloud_voice_for(backend, requested, language)
+        if backend is TTSBackend.FISH:
+            from src.api.services.gateway_voices import resolve_gateway_fish_voice
+
+            return await resolve_gateway_fish_voice(resolved, language)
+        return resolved
 
     if backend is TTSBackend.QWEN3_TTS and run_in_modal is False:
         # Local gateway qwen3_tts (Phase 10): the engine has no stock voices,
@@ -507,16 +616,21 @@ async def synthesize(
             edge_options["pitch_hz"] = pitch_hz
         return await synthesize_mp3(text, voice, **edge_options)
 
-    if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
-        # Kokoro must be pinned explicitly: without ``engine`` the gateway's
-        # language routing would hand the request to whatever engine serves
-        # that language (pocket_tts, ...) instead of Kokoro.
+    if backend in (
+        TTSBackend.OMNIVOICE,
+        TTSBackend.KOKORO,
+        TTSBackend.FISH,
+        TTSBackend.OPENAI,
+    ):
+        # Kokoro/Fish/OpenAI must be pinned explicitly: without ``engine`` the
+        # gateway's language routing would hand the request to whatever engine
+        # serves that language instead of the selected one.
         return await gateway_tts(
             text,
             voice,
             language,
             timeout=timeout if timeout is not None else None,
-            engine="kokoro" if backend is TTSBackend.KOKORO else None,
+            engine=backend.value if backend is not TTSBackend.OMNIVOICE else None,
             speed=speed,
             emotion=emotion if backend is TTSBackend.OMNIVOICE else None,
         )
