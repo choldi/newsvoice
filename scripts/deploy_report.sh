@@ -299,6 +299,39 @@ section_host() {
             "newgrp docker   # o cierra y vuelve a entrar"
     fi
 
+    # Cliente y demonio se comprueban por separado: en WSL2 el CLI de Docker
+    # Desktop responde mientras la integración de la distro sigue apagada.
+    if have docker; then
+        local dserver dclient
+        dclient="$(timeout 5 docker --version 2>/dev/null || true)"
+        dserver="$(timeout 5 docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+        if [[ -n "$dserver" ]]; then
+            emit "| daemon docker | ✅ | $(esc "$dserver") |"
+            okc
+        else
+            emit "| daemon docker | ❌ inaccesible | cliente: \`${dclient:-n/d}\` |"
+            if [[ "$wsl" == "sí" ]]; then
+                deep warn "Docker instalado pero el demonio no responde desde WSL" \
+                    "El cliente responde (\`docker --version\` → ${dclient:-n/d}) pero \`docker version\` no alcanza el socket desde esta distro." \
+                    "Docker Desktop está instalado y su integración con esta distro WSL está desactivada (o no se aplicó tras cambiarla); si el motor es nativo, el servicio docker no está arrancado." \
+                    "docker compose no puede listar ni levantar nada: tablas de servicios y health vacíos y build imposibles, aunque el CLI funcione a medias." \
+                    "Activar la integración de la distro en Docker Desktop (Settings → Resources → WSL Integration, «Use WSL 2 based engine») y pulsar Apply & restart; con motor nativo, arrancar el servicio." \
+                    "grep -qiE 'microsoft|wsl' /proc/version   # confirma que estás en WSL" \
+                    "# Docker Desktop → Settings → Resources → WSL Integration → Apply & restart" \
+                    "sudo service docker start   # solo si docker está instalado dentro de WSL"
+            else
+                deep warn "Docker instalado pero el demonio no responde" \
+                    "El cliente responde (\`docker --version\` → ${dclient:-n/d}) pero \`docker version\` no puede hablar con el daemon." \
+                    "El servicio docker está parado, no hay permisos sobre /var/run/docker.sock, o el socket apunta a otro daemon (DOCKER_HOST)." \
+                    "Nada del stack se puede listar, construir ni levantar: el informe mostrará servicios y salud vacíos." \
+                    "Arrancar el daemon y dar permisos al usuario." \
+                    "sudo systemctl start docker && sudo systemctl enable docker" \
+                    "sudo usermod -aG docker \$USER   # relogin después" \
+                    "docker version --format '{{.Server.Version}}'   # debe imprimir la versión"
+            fi
+        fi
+    fi
+
     if have nvidia-smi; then
         local gpu
         gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null | head -2 | paste -sd'; ' -)"

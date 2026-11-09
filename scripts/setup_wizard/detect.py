@@ -10,6 +10,7 @@ from __future__ import annotations
 import socket
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .util import REPO_ROOT, EnvPaths, env_paths, tool_version, which
 
@@ -78,20 +79,56 @@ def _port_busy(port: int) -> bool:
         return False
 
 
+def _is_wsl() -> bool:
+    """Report whether this process runs inside the Windows Subsystem for Linux.
+
+    Returns:
+        True when the kernel banner mentions Microsoft/WSL.
+    """
+    try:
+        banner = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+    return "microsoft" in banner or "wsl" in banner
+
+
 def _docker_status() -> tuple[str, str]:
-    """Check the docker binary and its daemon.
+    """Check the docker binary, its client and its daemon.
+
+    ``docker --version`` only exercises the client binary, while every other
+    docker subcommand talks to the daemon: on WSL2 those two regularly
+    disagree (Docker Desktop installed but its integration with this distro
+    switched off), so they are probed separately.
 
     Returns:
         Tuple of ``(status, detail)``.
     """
     if not which("docker"):
         return "bad", "docker no está instalado (hace falta solo para el stack)"
-    version = tool_version(["docker", "version", "--format", "{{.Server.Version}}"], timeout=12.0)
-    if version:
-        return "ok", f"docker {version} con el demonio en marcha"
-    if tool_version(["docker", "version"], timeout=12.0):
-        return "warn", "docker instalado pero el demonio no responde (¿sudo usermod?)"
-    return "warn", "docker instalado; no se pudo leer la versión del servidor"
+
+    # Cliente: no toca el demonio, responde aunque Docker Desktop esté parado.
+    client = tool_version(["docker", "--version"])
+    # Demonio: `docker version` sale con rc != 0 si el socket no responde.
+    server = tool_version(["docker", "version", "--format", "{{.Server.Version}}"], timeout=8.0)
+
+    if server:
+        return "ok", f"docker {server} con el demonio en marcha"
+    if _is_wsl():
+        return (
+            "warn",
+            f"{client or 'cliente docker'} instalado, pero esta distro WSL no alcanza el "
+            "demonio: activa Settings → Resources → WSL Integration de Docker Desktop "
+            "(«Use WSL 2 based engine») y aplícalo; si usas docker nativo en WSL, "
+            "arranca el servicio (sudo service docker start)",
+        )
+    if client:
+        return (
+            "warn",
+            f"{client} (cliente) pero el demonio no responde: ¿Docker Desktop "
+            "o docker.service arrancado? (sudo systemctl start docker · "
+            "sudo usermod -aG docker $USER)",
+        )
+    return "warn", "docker instalado; no se pudo leer la versión del cliente"
 
 
 def detect() -> Report:
@@ -286,6 +323,10 @@ def prerequisites(report: Report) -> list[Prerequisite]:
     status, detail = state("docker")
     if status == "ok":
         remedy: tuple[str, ...] = ()
+    elif which("docker") and _is_wsl():
+        # Docker Desktop se integra desde su GUI; un `systemctl start` solo
+        # sirve si el motor es nativo dentro de WSL.
+        remedy = ()
     elif which("docker"):
         remedy = ("sudo systemctl start docker", "sudo usermod -aG docker $USER")
     else:

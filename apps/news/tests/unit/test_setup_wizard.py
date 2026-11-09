@@ -722,3 +722,67 @@ def test_validate_flags_consumers_that_disagree_without_deploy_key(
     assert by_name["clave compartida"].status == "bad"
     assert "news.TTS_API_KEY" in by_name["clave compartida"].detail
     assert "gateway.API_KEY" in by_name["clave compartida"].detail
+
+
+# -- docker client vs daemon (WSL2) -------------------------------------------
+
+
+def test_docker_status_reports_the_daemon_when_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reachable daemon is reported with the server version."""
+    from setup_wizard import detect as detect_mod
+
+    def fake_tool_version(command: list[str], timeout: float = 10.0) -> str | None:
+        if "--version" in command:
+            return "Docker version 29.0.0, build abc"
+        if any("Server.Version" in part for part in command):
+            return "29.0.0"
+        return None
+
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
+
+    status, detail = detect_mod._docker_status()
+
+    assert status == "ok"
+    assert "29.0.0" in detail
+
+
+def test_docker_status_separates_client_from_daemon_on_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`docker --version` works while the daemon is unreachable on WSL2."""
+    from setup_wizard import detect as detect_mod
+
+    def fake_tool_version(command: list[str], timeout: float = 10.0) -> str | None:
+        return "Docker version 29.0.0, build abc" if "--version" in command else None
+
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
+    monkeypatch.setattr(detect_mod, "_is_wsl", lambda: True)
+
+    status, detail = detect_mod._docker_status()
+
+    assert status == "warn"
+    assert "Docker version 29.0.0" in detail
+    assert "WSL Integration" in detail
+
+
+def test_docker_prerequisite_is_manual_on_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Docker Desktop is toggled from its GUI, so the wizard offers no command."""
+    from setup_wizard import detect as detect_mod
+
+    report = _report_with(Finding("docker", "warn", "cliente docker instalado"))
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "_is_wsl", lambda: True)
+
+    items = {item.key: item for item in detect_mod.prerequisites(report)}
+
+    assert items["docker"].missing is True
+    assert items["docker"].remedy == ()
+    assert items["docker"].automated is False
