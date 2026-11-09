@@ -11,7 +11,17 @@ import sys
 
 from . import deps
 from . import validate as validation
-from .app import Context, _apply_profile, _mask, _shown, _sync_shared_key, load_context
+from .app import (
+    Context,
+    _apply_profile,
+    _mask,
+    _shared_key_conflicts,
+    _shown,
+    _sync_shared_key,
+    _unify_shared_key,
+    load_context,
+)
+from .detect import detect, prerequisites
 from .settings import PROFILES, fields_for
 
 __all__ = ["run_plain"]
@@ -111,6 +121,40 @@ def run_plain(
     for finding in ctx.report.findings:
         print(f"  [{finding.status:>4}] {finding.name}: {finding.detail}")
 
+    # 0. prerequisites ------------------------------------------------------
+    items = prerequisites(ctx.report)
+    missing = [item for item in items if item.missing]
+    _title("Paso 0 · requisitos del sistema")
+    if not missing:
+        print(f"  ✓ los {len(items)} requisitos están listos")
+    for item in missing:
+        print(f"  [{item.status:>4}] {item.name} — {item.detail}")
+        print(f"          hace falta porque: {item.why}")
+        for command in item.remedy:
+            print(f"          $ {command}")
+        if not item.remedy:
+            print("          instalación manual (sin comando seguro)")
+    automated = [item for item in missing if item.automated]
+    if automated:
+        if assume_yes:
+            print(
+                "  (modo --yes: no se instalan paquetes del sistema; "
+                "ejecuta los comandos a mano)"
+            )
+        elif _confirm(
+            f"¿Instalar ahora {len(automated)} requisito(s) con esos comandos? [s/N]:",
+            assume_yes=False,
+        ):
+            steps = deps.prereq_steps(automated)
+            deps.execute(
+                steps,
+                lambda status, title, detail: print(f"  [{status}] {title}: {detail}"),
+            )
+            ctx.report = detect()
+            print("  → requisitos actualizados")
+        else:
+            print("  (pendiente: ejecuta los comandos anteriores a mano)")
+
     # 1. profile ------------------------------------------------------------
     if profile_hint:
         match = next((p for p in PROFILES if p.key == profile_hint), None)
@@ -180,6 +224,13 @@ def run_plain(
 
     # 4. review -------------------------------------------------------------
     _title("Paso 4 · revisión de cambios")
+    conflicts = _shared_key_conflicts(ctx)
+    if conflicts:
+        print(f"  ✗ clave del gateway distinta en {', '.join(conflicts)}: respondería 401")
+        if _confirm("¿Unificar la clave en los tres archivos? [s/N]:", assume_yes=True):
+            print(f"  → unificada en {_unify_shared_key(ctx)} archivo(s)")
+        else:
+            print("  (se mantiene la diferencia: la validación la marcará como error)")
     total = 0
     for file_key in _ORDER:
         changes = ctx.envs[file_key].diff_against_disk()

@@ -17,18 +17,21 @@ from setup_wizard import deps
 from setup_wizard import validate as validation
 from setup_wizard.app import (
     Context,
+    _shared_key_conflicts,
+    _unify_shared_key,
     apply_screen,
     env_screen,
     final_screen,
     load_context,
     method_screen,
+    prereq_screen,
     profile_screen,
     review_screen,
     validate_screen,
     welcome_screen,
 )
 from setup_wizard.curses_ui import App, Row, Screen
-from setup_wizard.detect import Report
+from setup_wizard.detect import Finding, Report, prerequisites
 from setup_wizard.envfile import EnvFile
 from setup_wizard.plain import run_plain
 from setup_wizard.settings import PROFILES, fields_for, hash_password, sections_for
@@ -451,6 +454,7 @@ def test_all_screens_build_usable_rows(wizard_context: Context) -> None:
     app = App("test")
     screens = [
         welcome_screen(app, wizard_context),
+        prereq_screen(app, wizard_context, return_to="profile"),
         profile_screen(app, wizard_context),
         method_screen(app, wizard_context),
         env_screen(app, wizard_context, "deploy"),
@@ -594,3 +598,127 @@ def test_load_context_reads_the_repository() -> None:
     for env in ctx.envs.values():
         after = env.path.stat().st_mtime_ns if env.path.exists() else 0
         assert after == before[env.path]
+
+
+# -- system prerequisites -----------------------------------------------------
+
+
+def _report_with(*findings: Finding) -> Report:
+    """Build a detection report holding only the given findings."""
+    report = Report(python="3.12.0")
+    report.findings.extend(findings)
+    return report
+
+
+def test_missing_optional_tool_offers_its_install_command() -> None:
+    """A missing tool is listed with the command that provides it."""
+    items = {item.key: item for item in prerequisites(_report_with(
+        Finding("uv", "warn", "no está en PATH (opcional)")
+    ))}
+
+    assert items["uv"].missing is True
+    assert items["uv"].required is False
+    assert items["uv"].automated is True
+    assert items["uv"].symbol == "⚠"
+    assert any("astral.sh/uv" in command for command in items["uv"].remedy)
+
+
+def test_missing_python_is_blocking_and_manual() -> None:
+    """Python cannot be self-installed, so the wizard only explains it."""
+    items = {item.key: item for item in prerequisites(_report_with(
+        Finding("Python", "bad", "3.10 es demasiado viejo: hace falta 3.11+")
+    ))}
+
+    assert items["python"].required is True
+    assert items["python"].remedy == ()
+    assert items["python"].automated is False
+    assert items["python"].symbol == "✗"
+
+
+def test_prerequisite_steps_wrap_every_command_in_a_shell() -> None:
+    """Remedies may contain pipes, so they run through ``bash -lc``."""
+    steps = deps.prereq_steps(prerequisites(_report_with(
+        Finding("ffmpeg", "bad", "ffmpeg no está en PATH")
+    )))
+
+    assert steps, "ffmpeg tiene comando de instalación"
+    assert all(step.command[:2] == ["bash", "-lc"] for step in steps)
+    assert any("apt-get install -y ffmpeg" in step.command[2] for step in steps)
+    assert all(step.env and "PATH" in step.env for step in steps)
+
+
+def test_prereq_screen_lists_the_missing_tool_and_its_command(
+    wizard_context: Context,
+) -> None:
+    """The screen explains why each tool is needed and how to get it."""
+    wizard_context.report = Report(
+        python="3.12.0",
+        findings=[Finding("uv", "warn", "no está en PATH (opcional)")],
+    )
+    app = App("test")
+    screen = prereq_screen(app, wizard_context, return_to="profile")
+
+    labels = [row.label for row in screen.rows]
+    assert any("uv" in label for label in labels)
+    assert any("hace falta porque" in label for label in labels)
+    assert any("$ curl -LsSf https://astral.sh/uv" in label for label in labels)
+    assert any(row.action == "install" for row in screen.rows if row.kind == "button")
+
+
+# -- shared gateway key -------------------------------------------------------
+
+
+def test_editing_any_gateway_key_updates_the_other_two_files(
+    wizard_context: Context,
+) -> None:
+    """Typing the key in one file stages the same value in the other two."""
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "deploy"))
+    row = next(r for r in app.current.rows if r.label == "Clave del gateway")
+    app.focus = app.current.rows.index(row)
+    app.handle(10)  # start editing
+    for char in "aabbccddeeff00112233445566778899":
+        app.handle(ord(char))
+    app.handle(10)  # commit
+
+    assert wizard_context.envs["deploy"].get("GATEWAY_API_KEY").startswith("aabb")
+    assert wizard_context.envs["news"].get("TTS_API_KEY") == (
+        wizard_context.envs["deploy"].get("GATEWAY_API_KEY")
+    )
+    assert wizard_context.envs["gateway"].get("API_KEY") == (
+        wizard_context.envs["deploy"].get("GATEWAY_API_KEY")
+    )
+
+
+def test_conflicting_gateway_keys_are_reported_and_unified(
+    wizard_context: Context,
+) -> None:
+    """Diverging copies are listed and collapsed onto one value."""
+    wizard_context.envs["deploy"].set("GATEWAY_API_KEY", "aaaa")
+    wizard_context.envs["news"].set("TTS_API_KEY", "bbbb")
+    wizard_context.envs["gateway"].set("API_KEY", "cccc")
+
+    assert _shared_key_conflicts(wizard_context) == [
+        "news/TTS_API_KEY",
+        "gateway/API_KEY",
+    ]
+    assert _unify_shared_key(wizard_context) == 2
+    assert _shared_key_conflicts(wizard_context) == []
+    assert wizard_context.envs["news"].get("TTS_API_KEY") == "aaaa"
+    assert wizard_context.envs["gateway"].get("API_KEY") == "aaaa"
+
+
+def test_validate_flags_consumers_that_disagree_without_deploy_key(
+    tmp_path: Path,
+) -> None:
+    """Even with deploy/.env empty, two different consumers are an error."""
+    envs = _write_env_files(tmp_path)
+    envs["news"].set("TTS_API_KEY", "aaa")
+    envs["gateway"].set("API_KEY", "bbb")
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["clave compartida"].status == "bad"
+    assert "news.TTS_API_KEY" in by_name["clave compartida"].detail
+    assert "gateway.API_KEY" in by_name["clave compartida"].detail

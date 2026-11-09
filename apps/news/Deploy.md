@@ -49,6 +49,20 @@ Only the Python standard library is required, so it also runs on a fresh
 clone before any virtualenv exists. See the "Instalación guiado" section of
 the repository `README.md` for the full list of steps and shortcuts.
 
+The wizard also:
+
+- lists the **missing prerequisites** (docker, compose plugin, ffmpeg, uv,
+  virtualenvs) with the command that provides each one and offers to run them;
+- keeps the **gateway key coherent across the three files**
+  (`GATEWAY_API_KEY` / `TTS_API_KEY` / `API_KEY`) — divergent copies would
+  answer `401` at runtime, so an edit propagates and the validation screen
+  offers **«Unificar la clave del gateway»**;
+- marks every failing line with the command that fixes it.
+
+`make report` produces `deploy-report.md`: the findings index plus a
+**deep analysis** where each problem carries its root cause, its impact, the
+solution and the exact commands.
+
 #### Option B — by hand
 
 ```bash

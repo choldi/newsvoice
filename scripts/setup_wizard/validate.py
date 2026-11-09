@@ -118,46 +118,63 @@ def validate(
             )
 
     # 4. Shared gateway key ------------------------------------------------
+    # compose injects deploy/GATEWAY_API_KEY into the gateway container while
+    # news-engine sends TTS_API_KEY as X-API-Key: three copies of one secret.
+    # A divergence is a runtime 401, so it is reported as an error together
+    # with the fix the wizard offers.
     deploy = envs.get("deploy")
     news = envs.get("news")
     gateway = envs.get("gateway")
     if deploy is not None:
         shared = deploy.get("GATEWAY_API_KEY").strip()
-        if not shared:
-            checks.append(
-                Check(
-                    "clave compartida",
-                    "warn",
-                    "GATEWAY_API_KEY vacía: el gateway queda abierto en la red",
-                )
-            )
-        else:
-            diffs = []
-            if news is not None and news.get("TTS_API_KEY").strip() not in ("", shared):
-                diffs.append("news.TTS_API_KEY")
-            if gateway is not None and gateway.get("API_KEY").strip() not in ("", shared):
-                diffs.append("gateway.API_KEY")
-            if diffs:
+        consumers: list[tuple[str, str]] = []
+        if news is not None:
+            consumers.append(("news.TTS_API_KEY", news.get("TTS_API_KEY").strip()))
+        if gateway is not None:
+            consumers.append(("gateway.API_KEY", gateway.get("API_KEY").strip()))
+        fix = (
+            " — unifica los tres valores (el asistente lo hace con "
+            "«Unificar la clave del gateway»)"
+        )
+        conflict = [name for name, value in consumers if shared and value != shared and value]
+        absent = [name for name, value in consumers if not value]
+        if shared:
+            if conflict:
                 checks.append(
                     Check(
                         "clave compartida",
                         "bad",
-                        "valores distintos a GATEWAY_API_KEY: " + ", ".join(diffs),
+                        "valores distintos a GATEWAY_API_KEY: " + ", ".join(conflict) + fix,
                     )
                 )
-            else:
-                missing = []
-                if news is not None and not news.get("TTS_API_KEY").strip():
-                    missing.append("news.TTS_API_KEY")
-                if gateway is not None and not gateway.get("API_KEY").strip():
-                    missing.append("gateway.API_KEY")
+            elif absent:
                 checks.append(
                     Check(
                         "clave compartida",
-                        "ok" if not missing else "warn",
-                        "coincide con GATEWAY_API_KEY"
-                        if not missing
-                        else "falta copiar a: " + ", ".join(missing),
+                        "warn",
+                        "coincide con GATEWAY_API_KEY; falta copiar a: " + ", ".join(absent),
+                    )
+                )
+            else:
+                checks.append(Check("clave compartida", "ok", "coincide con GATEWAY_API_KEY"))
+        else:
+            filled = [name for name, value in consumers if value]
+            if len(set(value for _name, value in consumers if value)) > 1:
+                checks.append(
+                    Check(
+                        "clave compartida",
+                        "bad",
+                        "GATEWAY_API_KEY vacía y los consumidores no coinciden: "
+                        + ", ".join(filled)
+                        + fix,
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "clave compartida",
+                        "warn",
+                        "GATEWAY_API_KEY vacía: el gateway queda abierto en la red",
                     )
                 )
 
@@ -235,10 +252,27 @@ def validate(
             checks.append(Check("gateway url", "ok", url))
 
     # 8. Host prerequisites ------------------------------------------------
+    # The detail carries the very command that fixes it, so a red line in the
+    # validation screen is always actionable.
     if report is not None:
+        from .detect import prerequisites
+
+        remedies = {item.key: item for item in prerequisites(report)}
+        by_finding = {
+            "Python": "python",
+            "docker": "docker",
+            "compose": "compose",
+            "ffmpeg": "ffmpeg",
+        }
         for finding in report.findings:
-            if finding.status == "bad" and finding.name in ("ffmpeg", "Python", "compose"):
-                checks.append(Check(finding.name, "bad", finding.detail))
+            if finding.status != "bad" or finding.name not in by_finding:
+                continue
+            severity = "bad"
+            if finding.name in ("docker", "compose") and profile == "local":
+                severity = "warn"  # a host-only run does not need compose
+            item = remedies[by_finding[finding.name]]
+            hint = f" · instala con: {item.remedy[0]}" if item.remedy else ""
+            checks.append(Check(finding.name, severity, finding.detail + hint))
         if report.venvs:
             checks.append(Check("dependencias", "ok", "venv presente: " + ", ".join(report.venvs)))
         else:

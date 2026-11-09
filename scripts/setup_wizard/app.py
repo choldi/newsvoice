@@ -12,7 +12,7 @@ from pathlib import Path
 from . import deps, transfer
 from . import validate as validation
 from .curses_ui import App, Row, Screen
-from .detect import Report, detect
+from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
 from .settings import PROFILES, Field, Profile
 from .util import REPO_ROOT, env_paths
@@ -82,6 +82,73 @@ _SECRET_KEYS = frozenset(
         "HF_TOKEN",
     }
 )
+
+# The gateway key is one secret stored in three files: compose injects
+# deploy/GATEWAY_API_KEY into the gateway container while news-engine sends
+# TTS_API_KEY as X-API-Key. Any divergence turns into 401s at runtime.
+_SHARED_KEYS: tuple[tuple[str, str], ...] = (
+    ("deploy", "GATEWAY_API_KEY"),
+    ("news", "TTS_API_KEY"),
+    ("gateway", "API_KEY"),
+)
+_SHARED_KEY_LABELS = frozenset({"Clave del gateway", "Clave gateway", "API key"})
+
+
+def _shared_key_values(ctx: Context) -> dict[tuple[str, str], str]:
+    """Return the current value of the gateway key in each file."""
+    return {
+        (file_key, key): ctx.envs[file_key].get(key).strip()
+        for file_key, key in _SHARED_KEYS
+        if file_key in ctx.envs
+    }
+
+
+def _shared_key_source(ctx: Context) -> str:
+    """Return the value every file should hold (deploy wins when set)."""
+    values = _shared_key_values(ctx)
+    if values.get(("deploy", "GATEWAY_API_KEY")):
+        return values[("deploy", "GATEWAY_API_KEY")]
+    return next((value for value in values.values() if value), "")
+
+
+def _shared_key_conflicts(ctx: Context) -> list[str]:
+    """Return ``file:key`` labels whose value differs from the source one."""
+    source = _shared_key_source(ctx)
+    if not source:
+        return []
+    return [
+        f"{file_key}/{key}"
+        for (file_key, key), value in _shared_key_values(ctx).items()
+        if value and value != source
+    ]
+
+
+def _unify_shared_key(ctx: Context) -> int:
+    """Write the source gateway key into every file.
+
+    Returns:
+        Number of files that had to change.
+    """
+    source = _shared_key_source(ctx)
+    if not source:
+        return 0
+    changed = 0
+    for (file_key, key), value in _shared_key_values(ctx).items():
+        if value != source:
+            ctx.envs[file_key].set(key, source)
+            changed += 1
+    return changed
+
+
+def _propagate_shared_key(app: App, ctx: Context, value: str) -> None:
+    """Keep the three copies of the gateway key equal while the user types."""
+    for file_key, key in _SHARED_KEYS:
+        if file_key in ctx.envs and ctx.envs[file_key].get(key).strip() != value:
+            ctx.envs[file_key].set(key, value)
+    for screen in app.screens:
+        for row in screen.rows:
+            if row.label in _SHARED_KEY_LABELS:
+                row.value = value
 
 
 def _value_for(ctx: Context, field_: Field) -> str:
@@ -189,6 +256,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
     rows.extend(
         [
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
+            Row("button", label="Requisitos del sistema", action="prereqs"),
             Row("button", label="Editar los .env ya configurados", action="edit"),
             Row("button", label="Importar valores desde un archivo .env", action="import"),
             Row("button", label="Exportar la configuración a un archivo", action="export"),
@@ -201,8 +269,18 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "wizard":
-            app_.say("Elige el punto de partida")
-            app_.push(profile_screen(app_, ctx))
+            missing = [item for item in prerequisites(ctx.report) if item.missing]
+            if missing:
+                app_.say(
+                    f"Faltan {len(missing)} requisito(s): revísalos antes de continuar",
+                    "warn",
+                )
+                app_.push(prereq_screen(app_, ctx, return_to="profile"))
+            else:
+                app_.say("Elige el punto de partida")
+                app_.push(profile_screen(app_, ctx))
+        elif row.action == "prereqs":
+            app_.push(prereq_screen(app_, ctx, return_to="welcome"))
         elif row.action == "edit":
             app_.push(edit_picker_screen(app_, ctx))
         elif row.action == "import":
@@ -231,6 +309,128 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
         subtitle="instalador guiado",
         rows=rows,
         footer="↑/↓  mover    Enter  ejecutar    ?  ayuda    q  salir",
+        on_activate=activate,
+    )
+
+
+def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Screen:
+    """Build the prerequisite list, each one with the command that provides it.
+
+    Args:
+        app: Running application.
+        ctx: Shared wizard state.
+        return_to: ``profile`` keeps the guided flow going, ``welcome`` goes
+            back to the menu (the entry point of a standalone inspection).
+    """
+
+    def build() -> list[Row]:
+        items = prerequisites(ctx.report)
+        missing = [item for item in items if item.missing]
+        automated = [item for item in items if item.automated]
+        hard = any(item.status == "bad" for item in items)
+        rows: list[Row] = [
+            Row("heading", label="Requisitos del sistema"),
+            Row(
+                "note",
+                label=(
+                    f"{len(items) - len(missing)}/{len(items)} listos · "
+                    + (f"faltan {len(missing)}" if missing else "nada que instalar")
+                ),
+                result="bad" if hard else ("warn" if missing else "ok"),
+            ),
+            Row("note", label=""),
+        ]
+        for item in items:
+            rows.append(
+                Row(
+                    "note",
+                    label=f"{item.symbol} {item.name} — {item.detail}",
+                    result=item.status,
+                )
+            )
+            if not item.missing:
+                continue
+            rows.append(Row("note", label=f"   hace falta porque: {item.why}"))
+            if item.remedy:
+                rows.extend(Row("note", label=f"   $ {command}") for command in item.remedy)
+            else:
+                rows.append(Row("note", label="   instalación manual (sin comando seguro)"))
+        if any("sudo" in command for item in items for command in item.remedy):
+            rows.extend(
+                [
+                    Row("note", label=""),
+                    Row(
+                        "note",
+                        label="sudo necesita contraseña en tu terminal: si el paso falla, "
+                        "copia el comando y ejecútalo a mano.",
+                        result="warn",
+                    ),
+                ]
+            )
+        rows.append(Row("note", label=""))
+        if automated:
+            rows.append(Row("button", label="Instalar los que se pueda ahora", action="install"))
+        rows.append(Row("button", label="Ver todos los comandos", action="cmds"))
+        rows.append(Row("button", label="Volver a detectar", action="redetect"))
+        rows.append(
+            Row(
+                "button",
+                label="Ir al perfil" if return_to == "profile" else "Volver al menú",
+                action="next",
+            )
+        )
+        rows.append(Row("button", label="Atrás", action="back"))
+        return rows
+
+    def on_enter(app_: App) -> None:
+        app_.current.rows = build()
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "redetect":
+            ctx.report = detect()
+            app_.current.rows = build()
+            app_.refocus()
+            app_.say("Entorno actualizado", "ok")
+            return
+        if row.action == "cmds":
+            lines = []
+            for item in prerequisites(ctx.report):
+                lines.append(f"{item.name}: " + (" · ".join(item.remedy) or "manual"))
+            app_.info("Instalación de requisitos", *lines)
+            return
+        if row.action == "next":
+            if return_to == "profile":
+                app_.push(profile_screen(app_, ctx))
+            else:
+                app_.pop()
+            return
+        if row.action != "install":
+            return
+        steps = deps.prereq_steps(prerequisites(ctx.report))
+        if not steps:
+            app_.say("Nada se puede instalar automáticamente desde aquí")
+            return
+        emit = _emit_factory(app_)
+        app_.say("Instalando requisitos…")
+        app_.redraw()
+        ok = deps.execute(steps, emit)
+        ctx.report = detect()
+        app_.say(
+            "Requisitos instalados" if ok else "Algunos comandos han fallado: cópialos a mano",
+            "ok" if ok else "warn",
+        )
+        app_.current.rows = build()
+        app_.refocus()
+
+    return Screen(
+        title="Paso 0 · requisitos",
+        subtitle="qué falta y cómo instalarlo",
+        rows=build(),
+        footer="Enter ejecutar opción · Esc atrás",
+        on_enter=on_enter,
         on_activate=activate,
     )
 
@@ -397,7 +597,13 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         field_ = _find_field(file_key, row)
         if field_ is None:
             return
-        ctx.envs[file_key].set(field_.key, row.value)
+        shared = (file_key, field_.key) in _SHARED_KEYS
+        value = row.value.strip() if shared else row.value
+        ctx.envs[file_key].set(field_.key, value)
+        if shared:
+            row.value = value
+            _propagate_shared_key(app_, ctx, value)
+            app_.say("Clave del gateway sincronizada en los tres archivos", "ok")
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
@@ -474,6 +680,20 @@ def review_screen(app: App, ctx: Context) -> Screen:
                 total += 1
             rows.append(Row("note", label=""))
         rows.append(Row("note", label=f"Total: {total} valor(es) por escribir."))
+        conflicts = _shared_key_conflicts(ctx)
+        if conflicts:
+            rows.extend(
+                [
+                    Row("note", label=""),
+                    Row(
+                        "note",
+                        label=f"Clave del gateway distinta en {', '.join(conflicts)}: "
+                        "el gateway respondería 401",
+                        result="bad",
+                    ),
+                    Row("button", label="Unificar la clave del gateway", action="unify"),
+                ]
+            )
         rows.append(Row("note", label=""))
         rows.extend(
             [
@@ -490,6 +710,12 @@ def review_screen(app: App, ctx: Context) -> Screen:
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "unify":
+            changed = _unify_shared_key(ctx)
+            app_.say(f"Clave del gateway unificada en {changed} archivo(s)", "ok")
+            app_.current.rows = build()
+            app_.refocus()
             return
         if row.action == "validate":
             app_.push(validate_screen(app_, ctx, write_mode=False))
@@ -867,6 +1093,18 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
         for check in checks:
             rows.append(Row("note", label=f"{check.name}: {check.detail}", result=check.status))
         rows.append(Row("note", label=""))
+        conflicts = _shared_key_conflicts(ctx)
+        if conflicts:
+            rows.extend(
+                [
+                    Row(
+                        "note",
+                        label=f"Corrige la clave antes de desplegar: {', '.join(conflicts)}",
+                        result="bad",
+                    ),
+                    Row("button", label="Unificar la clave del gateway", action="unify"),
+                ]
+            )
         rows.extend(
             [
                 Row("button", label="Volver a validar", action="again"),
@@ -883,6 +1121,12 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "unify":
+            changed = _unify_shared_key(ctx)
+            app_.current.rows = build()
+            app_.refocus()
+            app_.say(f"Clave del gateway unificada en {changed} archivo(s)", "ok")
             return
         if row.action == "again":
             ctx.report = detect()

@@ -63,12 +63,23 @@ def _print_report(report) -> None:
     Args:
         report: Detection report.
     """
+    from .detect import prerequisites
+
     print(f"Python {report.python}")
     for finding in report.findings:
         print(f"  {_SYMBOLS.get(finding.status, '·')} {finding.name}: {finding.detail}")
     for port, busy in report.ports.items():
         if busy:
             print(f"  ⚠ puerto {port}: ya está en uso")
+    pending = [item for item in prerequisites(report) if item.missing]
+    if pending:
+        print("requisitos pendientes (qué falta y cómo instalarlo):")
+        for item in pending:
+            print(f"  {item.symbol} {item.name}: {item.why}")
+            for command in item.remedy:
+                print(f"      $ {command}")
+            if not item.remedy:
+                print("      (instalación manual)")
 
 
 def _check(include_detect: bool = True, profile: str = "") -> int:

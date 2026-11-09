@@ -5,8 +5,10 @@
 # Recorre el host y el stack unificado (deploy/docker-compose.yml) y produce
 # un Markdown autocontenido con: dependencias del host, configuración (.env,
 # secrets enmascarados), servicios desplegados, salud de cada endpoint,
-# GPU + runtime externo de qwen3_tts, colecciones/backends, dependencias
-# externas (LLM, Telegram) y un índice de hallazgos (❌ crítico / ⚠️ aviso).
+# GPU + sidecars de engines pesados (gateway-qwen3 / gateway-omnivoice),
+# colecciones/backends, dependencias externas (LLM, Telegram), un índice de
+# hallazgos (❌ crítico / ⚠️ aviso) y un análisis en profundidad que empareja
+# cada problema con su causa raíz y su solución (comandos incluidos).
 #
 # El objetivo es pegarlo tal cual en una herramienta AI para que indique
 # exactamente qué falta y con qué comandos remediarlo (ver pie del informe).
@@ -36,20 +38,56 @@ OUT="${1:-deploy-report.md}"
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
 
 BODY="$(mktemp)"
-trap 'rm -f "$BODY"' EXIT
+ANALYSIS="$(mktemp)"
+trap 'rm -f "$BODY" "$ANALYSIS"' EXIT
 
 declare -a MISS=() WARNS=()
+# Análisis en profundidad: cada problema con su causa y su solución.
+declare -a D_SEV=() D_TITLE=() D_WHAT=() D_CAUSE=() D_IMPACT=() D_FIX=() D_CMD=()
 OKC=0
 
 # --- Primitivas --------------------------------------------------------------
 msg() { printf '· %s\n' "$*" >&2; }
 emit() { printf '%s\n' "$*" >>"$BODY"; }
+emit_a() { printf '%s\n' "$*" >>"$ANALYSIS"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 miss() { MISS+=("$*"); }
 warn() { WARNS+=("$*"); }
 okc() { OKC=$((OKC + 1)); }
+
+# deep <bad|warn> <título> <qué> <causa> <impacto> <solución> [comando...]
+# Registra un problema del análisis; el título también entra en el índice.
+deep() {
+    local sev="$1" title="$2" what="$3" cause="$4" impact="$5" fix="$6"
+    shift 6
+    D_SEV+=("$sev")
+    D_TITLE+=("$title")
+    D_WHAT+=("$what")
+    D_CAUSE+=("$cause")
+    D_IMPACT+=("$impact")
+    D_FIX+=("$fix")
+    D_CMD+=("$(printf '%s\n' "$@")")
+    # El índice no se duplica: si otra sección ya reportó este título, el
+    # análisis aporta la detalle sin repetir la línea en "Hallazgos".
+    local seen item
+    seen=0
+    for item in "${MISS[@]:-}" "${WARNS[@]:-}"; do
+        if [[ -n "$item" && "$item" == "$title" ]]; then
+            seen=1
+            break
+        fi
+    done
+    if [[ "$seen" -eq 1 ]]; then
+        return 0
+    fi
+    if [[ "$sev" == "bad" ]]; then
+        miss "$title"
+    else
+        warn "$title"
+    fi
+}
 
 sec() {
     emit ""
@@ -181,8 +219,34 @@ section_host() {
         else
             emit "| \`$c\` | ❌ ausente | |"
             case "$c" in
-                python3) miss "python3 ausente en el host (necesario para tests, setup y este informe)" ;;
-                ffmpeg) warn "ffmpeg ausente en el host: mezcla de audio/transcode de digest lo hace el contenedor, pero faltará para tareas locales" ;;
+                python3)
+                    deep bad "python3 ausente en el host" \
+                        "El binario python3 no está en PATH." \
+                        "Host recién aprovisionado sin el intérprete de Python (o solo con otro nombre)." \
+                        "No corren el asistente, los tests, el lint ni este informe; las apps en local son imposibles." \
+                        "Instalar Python 3.11+ con el gestor de paquetes del sistema." \
+                        "sudo apt-get install -y python3 python3-pip" ;;
+                uv)
+                    deep warn "uv ausente en el host" \
+                        "El binario uv no está en PATH (opcional)." \
+                        "Nunca se instaló el gestor de entornos de Astral." \
+                        "Sin él hay que usar la alternativa pip/venv (make venv): los pasos «uv sync» del asistente no funcionarán." \
+                        "Instalar uv (recomendado) o elegir el método «pip · un .venv por app»." \
+                        "curl -LsSf https://astral.sh/uv/install.sh | sh" ;;
+                ffmpeg)
+                    deep warn "ffmpeg ausente en el host" \
+                        "El binario ffmpeg no está en PATH." \
+                        "Host sin los códecs multimedia (el proyecto no los empaqueta)." \
+                        "En Docker el contenedor ya lo lleva, pero las tareas locales de audio (mezcla, transcode, loudnorm) fallarán." \
+                        "Instalar ffmpeg del repositorio del sistema." \
+                        "sudo apt-get install -y ffmpeg" ;;
+                git|curl)
+                    deep warn "$c ausente en el host" \
+                        "El binario $c no está en PATH." \
+                        "Instalación mínima del sistema." \
+                        "Sin $c no se puede clonar/actualizar el repo ni descargar dependencias." \
+                        "Instalar el paquete del sistema." \
+                        "sudo apt-get install -y $c" ;;
             esac
         fi
     done
@@ -203,18 +267,36 @@ section_host() {
             okc
         else
             emit "| \`docker compose\` | ❌ plugin v2 ausente | |"
-            miss "Falta el plugin Docker Compose v2 (Deploy.md exige Docker Engine ≥24 + Compose v2)"
+            deep bad "Docker Compose v2 ausente" \
+                "El plugin \`docker compose\` no responde." \
+                "Docker instalado sin el paquete docker-compose-plugin (o solo con el binario legacy v1)." \
+                "Ningún comando del proyecto funciona: make up, make deploy y scripts/deploy.sh usan la sintaxis del plugin v2." \
+                "Instalar el plugin v2." \
+                "sudo apt-get install -y docker-compose-plugin"
         fi
         if docker info 2>/dev/null | grep -qi nvidia; then
             emit "| runtime \`nvidia\` de Docker | ✅ | nvidia-container-toolkit configurado |"
             okc
         else
             emit "| runtime \`nvidia\` de Docker | ❌ no detectado | |"
-            warn "Docker no tiene el runtime nvidia: sin \`nvidia-ctk runtime configure\` el gateway arranca sin GPU y qwen3_tts no puede renderizar (Deploy.md §1)"
+            deep warn "Docker sin runtime nvidia" \
+                "\`docker info\` no anuncia el runtime nvidia." \
+                "Falta nvidia-container-toolkit o no se ejecutó \`nvidia-ctk runtime configure\`." \
+                "Los contenedores no reciben la GPU: qwen3_tts y omnivoice locales quedan en CPU (o no arrancan) aunque la tarjeta exista." \
+                "Instalar el toolkit, registrar el runtime y reiniciar el demonio." \
+                "sudo apt-get install -y nvidia-container-toolkit" \
+                "sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
         fi
     else
         emit "| \`docker\` | ❌ ausente | |"
-        miss "Docker ausente: el stack completo es compose-based (Deploy.md §1: Docker Engine ≥24)"
+        deep bad "Docker ausente" \
+            "El binario docker no está en PATH." \
+            "Host recién creado sin el motor de contenedores." \
+            "El stack completo es compose-based: no hay forma de levantar nada (Deploy.md §1: Docker Engine ≥24 + Compose v2)." \
+            "Instalar Docker con el script oficial y dar permisos al usuario." \
+            "curl -fsSL https://get.docker.com | sh" \
+            "sudo usermod -aG docker \$USER" \
+            "newgrp docker   # o cierra y vuelve a entrar"
     fi
 
     if have nvidia-smi; then
@@ -227,7 +309,13 @@ section_host() {
         fi
     else
         emit "| \`nvidia-smi\` | ❌ ausente/sin driver | |"
-        warn "Sin nvidia-smi en el host: no hay GPU accesible (qwen3_tts/omnivoice locales no podrán usar CUDA; revisa driver o modo CPU)"
+        deep warn "Sin nvidia-smi en el host" \
+            "El binario nvidia-smi no está (sin driver NVIDIA o sin tarjeta)." \
+            "Host sin el driver NVIDIA instalado (o VM sin GPU passthrough)." \
+            "qwen3_tts y omnivoice locales no pueden usar CUDA: solo quedan los engines CPU/cloud y Modal." \
+            "Instalar el driver y validar antes de desplegar con GPU=1." \
+            "ubuntu-drivers autoinstall && sudo reboot" \
+            "nvidia-smi"
     fi
 
     if have tailscale; then
@@ -263,11 +351,12 @@ section_config() {
     if [[ -f apps/gateway/.env ]]; then
         curated_table apps/gateway/.env \
             TTS_ENGINE TTS_ENGINES TTS_EXTRA_ENGINES API_KEY \
-            QWEN3_TTS_PYTHON QWEN3_TTS_DTYPE QWEN3_TTS_DEVICE \
+            QWEN3_TTS_REMOTE_URL OMNIVOICE_REMOTE_URL \
+            FISH_API_KEY OPENAI_TTS_BASE_URL \
             TTS_USE_MOCK TTS_FALLBACK_TO_MOCK
         # La key puede venir por compose (deploy/.env GATEWAY_API_KEY → env API_KEY).
         if [[ -z "$(read_env apps/gateway/.env API_KEY '')" && -z "$(read_env deploy/.env GATEWAY_API_KEY '')" ]]; then
-            warn "Sin API key del gateway (ni apps/gateway/.env API_KEY ni deploy/.env GATEWAY_API_KEY) — la API queda abierta (hardening P3)"
+            warn "Gateway sin API key"
         fi
         [[ -z "$(read_env apps/gateway/.env TTS_ENGINE '')" ]] &&
             warn "apps/gateway/.env: \`TTS_ENGINE\` sin definir (default omnivoice)"
@@ -286,7 +375,7 @@ section_config() {
             ADMIN_USERNAME ADMIN_API_TOKEN DATABASE_PATH
         local llm tg
         llm="$(read_env apps/news/.env LLM_API_BASE '')"
-        [[ -z "$llm" ]] && miss "apps/news/.env: \`LLM_API_BASE\` no definido — ningún workflow LLM puede ejecutarse"
+        [[ -z "$llm" ]] && miss "LLM_API_BASE sin definir"
         tg="$(read_env apps/news/.env TELEGRAM_BOT_TOKEN '')"
         if [[ -z "$tg" || "$tg" == your_* ]]; then
             warn "apps/news/.env: \`TELEGRAM_BOT_TOKEN\` sin token real — la entrega Telegram fallará"
@@ -632,129 +721,160 @@ print('latest_delivered:', q('SELECT MAX(delivered_at) FROM deliveries'))
 }
 
 section_gpu_qwen() {
-    msg "GPU y runtime qwen3_tts"
-    sec "5. GPU y runtime externo de qwen3_tts"
+    msg "GPU y sidecars de engines pesados"
+    sec "5. GPU y sidecars de engines pesados (\`gateway-qwen3\`, \`gateway-omnivoice\`)"
 
-    # 5.1 venv en el host
-    local qdir qpy_env qpy_host
-    qdir="$(read_env deploy/.env QWEN3_TTS_DIR "")"
-    qpy_env="$(read_env apps/gateway/.env QWEN3_TTS_PYTHON "")"
-    if [[ -z "$qpy_env" ]]; then
-        qpy_env="<no definida → default del engine>"
-        qpy_host="${QWEN3_TTS_PYTHON:-$HOME/qwen3-tts/venv/bin/python}"
-    elif [[ "$qpy_env" == /qwen3-tts/* ]]; then
-        # Ruta interna al contenedor (mount del overlay): el análogo en el
-        # host es QWEN3_TTS_DIR con el mismo sufijo (p. ej. debwk).
-        qpy_host="${qdir:-$HOME/qwen3-tts}${qpy_env#/qwen3-tts}"
-    else
-        qpy_host="$qpy_env"
-    fi
-    emit "### En el host"
+    emit "> El runtime legacy de qwen3 (venv en el host: \`QWEN3_TTS_DIR\`,"
+    emit "> \`QWEN3_TTS_PYTHON\`, montajes de intérprete) quedó retirado: torch y"
+    emit "> \`qwen-tts\` viven solo en la imagen del sidecar."
     emit ""
-    emit "- \`QWEN3_TTS_PYTHON\` (gateway .env): \`$qpy_env\` → se comprueba en el host como \`$qpy_host\`"
-    if [[ -n "$qdir" ]]; then
-        if [[ -d "$qdir" ]]; then
-            emit "- \`QWEN3_TTS_DIR=$qdir\`: ✅ existe"; okc
+
+    # --- 5.1 GPU del host ----------------------------------------------------
+    emit "### GPU del host"
+    emit ""
+    if have nvidia-smi; then
+        local gpu_line
+        gpu_line="$(nvidia-smi --query-gpu=name,memory.total,driver_version \
+            --format=csv,noheader 2>/dev/null | head -3 | paste -sd'; ' -)"
+        emit "- \`nvidia-smi\`: ${gpu_line:-sin GPUs visibles}"
+        if [[ -n "$gpu_line" ]]; then okc; fi
+        if have docker && docker info 2>/dev/null | grep -qi nvidia; then
+            emit "- runtime \`nvidia\` de Docker: ✅"
+            okc
         else
-            emit "- \`QWEN3_TTS_DIR=$qdir\`: ❌ no existe"
-            miss "QWEN3_TTS_DIR ($qdir) no existe en el host: crea el venv de qwen3_tts (Deploy.md §Host runtime)"
-        fi
-    fi
-    if [[ -x "$qpy_host" ]]; then
-        emit "- venv host \`$qpy_host\`: ✅ ejecutable"; okc
-        local th
-        th="$(timeout 60 "$qpy_host" -c 'import torch;print("torch", torch.__version__, "| cuda build:", torch.version.cuda, "| disponible:", torch.cuda.is_available())' 2>&1 | head -3 || true)"
-        if [[ -n "$th" ]]; then
-            emit ""
-            emit '```'
-            emit "$th"
-            emit '```'
+            emit "- runtime \`nvidia\` de Docker: ❌ no detectado"
+            warn "Docker sin runtime nvidia: los sidecars GPU no verán la tarjeta (\`sudo nvidia-ctk runtime configure && sudo systemctl restart docker\`)"
         fi
     else
-        emit "- venv host \`$qpy_host\`: ❌ no encontrado"
-        if grep -qE '^(TTS_ENGINE|TTS_EXTRA_ENGINES)=.*qwen3' apps/gateway/.env 2>/dev/null; then
-            miss "qwen3_tts habilitado en el gateway pero falta el venv host ($qpy_host) — crea el venv e instala torch+qwen-tts (Deploy.md §Host runtime)"
-        fi
+        emit "- \`nvidia-smi\`: ❌ ausente (sin driver NVIDIA o sin GPU)"
+        emit "  (el detalle y la remediación están en la sección 1 y en el análisis)"
     fi
-
-    # 5.2 paths del overlay
-    local hk paths_ok=1
-    for hk in QWEN3_TTS_HOST_PYTHON QWEN3_TTS_HOST_STDLIB QWEN3_TTS_HOST_LIBPYTHON QWEN3_TTS_HOST_INCLUDE QWEN3_TTS_HF_CACHE; do
-        local p
-        p="$(read_env deploy/.env "$hk" "")"
-        [[ -z "$p" ]] && continue
-        if [[ -e "$p" ]]; then
-            emit "- \`$hk=$p\`: ✅"
-        else
-            emit "- \`$hk=$p\`: ❌ no existe (docker lo crearía vacío y rompería el runtime)"
-            miss "Mount del overlay GPU apunta a un path inexistente: $hk=$p"
-            paths_ok=0
-        fi
-    done
-
-    # 5.3 dentro del contenedor gateway
     emit ""
-    emit "### Dentro del contenedor \`gateway\`"
+
+    # --- 5.2 sidecars --------------------------------------------------------
+    local running="" qwen_url omni_url qwen_up omni_up
+    if have docker; then
+        running="$(docker compose -f "$COMPOSE_FILE" ps --status running \
+            --format '{{.Service}}' 2>/dev/null || true)"
+    fi
+    qwen_url="$(read_env deploy/.env QWEN3_TTS_REMOTE_URL "")"
+    [[ -z "$qwen_url" ]] && qwen_url="$(read_env apps/gateway/.env QWEN3_TTS_REMOTE_URL "")"
+    omni_url="$(read_env apps/gateway/.env OMNIVOICE_REMOTE_URL "")"
+    qwen_up="⏸ parado / no creado"
+    grep -qx "gateway-qwen3" <<<"$running" && qwen_up="✅ running"
+    omni_up="⏸ parado / no creado"
+    grep -qx "gateway-omnivoice" <<<"$running" && omni_up="✅ running"
+
+    emit "### Sidecars internos"
     emit ""
-    if ! have docker || ! docker compose -f "$COMPOSE_FILE" ps --status running --format '{{.Service}}' 2>/dev/null | grep -qx gateway; then
-        emit "> contenedor \`gateway\` no está en marcha"
-    else
-        local cpy
-        cpy="$(docker compose -f "$COMPOSE_FILE" exec -T gateway printenv QWEN3_TTS_PYTHON 2>/dev/null || true)"
-        emit "- \`QWEN3_TTS_PYTHON\` (container): \`${cpy:-<no definida → default ~/qwen3-tts/venv/bin/python>}\`"
-        local exists
-        exists="$(docker compose -f "$COMPOSE_FILE" exec -T gateway sh -c 'test -x "${QWEN3_TTS_PYTHON:-/qwen3-tts/venv/bin/python}" && echo si || echo no' 2>/dev/null || echo error)"
-        if [[ "$exists" == "si" ]]; then
-            emit "- intérprete qwen en el contenedor: ✅"; okc
-        else
-            emit "- intérprete qwen en el contenedor: ❌ no existe (el engine quedará NOT_AVAILABLE)"
-            miss "El contenedor gateway no ve el venv de qwen3_tts: despliega con el overlay GPU (GPU=1 ./scripts/deploy.sh production) o corrige QWEN3_TTS_PYTHON/QWEN3_TTS_DIR"
-        fi
-        local mnt="" gw_cid
-        gw_cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway 2>/dev/null | head -1)"
-        if [[ -n "$gw_cid" ]]; then
-            mnt="$(docker inspect "$gw_cid" --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}' 2>/dev/null \
-                | grep -iE 'qwen|python3|huggingface' || true)"
-        fi
-        emit "- mounts relevantes:"
+    emit "| Sidecar | Perfil compose | URL que ve el gateway | Contenedor |"
+    emit "|---|---|---|---|"
+    emit "| \`gateway-qwen3\` | \`qwen3\` | \`${qwen_url:-<vacía>}\` | $qwen_up |"
+    emit "| \`gateway-omnivoice\` | \`omnivoice\` | \`${omni_url:-<vacía>}\` | $omni_up |"
+    emit ""
+
+    local extra route
+    extra="$(read_env apps/gateway/.env TTS_EXTRA_ENGINES "")"
+    route="$(read_env apps/gateway/.env TTS_ENGINES "")"
+
+    if ! grep -q "qwen3" <<<"$extra$route"; then
+        emit "- \`qwen3_tts\` no está en \`TTS_EXTRA_ENGINES\` ni en \`TTS_ENGINES\`: el sidecar no se usa"
         emit ""
-        emit '```'
-        if [[ -n "$mnt" ]]; then
-            while IFS= read -r mline; do emit "$mline"; done <<<"$mnt"
+    elif [[ -z "$qwen_url" ]]; then
+        emit "- ❌ \`qwen3_tts\` está habilitado pero \`QWEN3_TTS_REMOTE_URL\` está vacía:"
+        emit "  el engine queda NOT_AVAILABLE y sus voces degradan a Edge."
+        emit "- Solución: añadir \`QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1\`"
+        emit "  a \`deploy/.env\` y desplegar con \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`."
+        emit ""
+        miss "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)"
+    elif [[ "$qwen_up" == ✅* ]]; then
+        emit "- ✅ sidecar \`gateway-qwen3\` arriba; el gateway le hace proxy (nombre público \`qwen3_tts\`)"
+        okc
+        emit ""
+        emit "#### Pruebas dentro de \`gateway-qwen3\`"
+        emit ""
+        local q_health q_torch q_vol
+        q_health="$(docker compose -f "$COMPOSE_FILE" exec -T gateway-qwen3 python -c \
+            'import httpx;print(httpx.get("http://127.0.0.1:8000/api/v1/health/live",timeout=6).status_code)' \
+            2>/dev/null || echo "error")"
+        if [[ "$q_health" == "200" ]]; then
+            emit "- \`/api/v1/health/live\` del sidecar: ✅ 200"
+            okc
         else
-            emit '(sin mounts qwen/python/hf — overlay GPU no aplicado)'
+            emit "- \`/api/v1/health/live\` del sidecar: ❌ ($q_health)"
+            miss "gateway-qwen3 responde $q_health al healthcheck: revisa \`docker compose logs gateway-qwen3\`"
         fi
-        emit '```'
-        local torch_out
-        torch_out="$(docker compose -f "$COMPOSE_FILE" exec -T gateway sh -c '
-            P="${QWEN3_TTS_PYTHON:-/qwen3-tts/venv/bin/python}"
-            if [ -x "$P" ]; then
-                timeout 90 "$P" - <<"PY"
-import torch
-print("torch:", torch.__version__, "| cuda build:", torch.version.cuda)
-print("cuda disponible:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0), "| cap:", torch.cuda.get_device_capability(0))
-print("archs:", torch.cuda.get_arch_list())
-PY
-            else
-                echo "sin intérprete qwen"
-            fi
-        ' 2>&1 | head -12 || true)"
-        if [[ -n "$torch_out" ]]; then
+        q_torch="$(docker compose -f "$COMPOSE_FILE" exec -T gateway-qwen3 \
+            /opt/qwen3-tts/venv/bin/python -c \
+            'import torch;print("torch",torch.__version__,"| cuda:",torch.version.cuda,"| disponible:",torch.cuda.is_available(),"| GPU:",torch.cuda.get_device_name(0) if torch.cuda.is_available() else "n/a")' \
+            2>&1 | tail -2 || true)"
+        if [[ -n "$q_torch" ]]; then
             emit ""
             emit '```'
-            emit "$torch_out"
+            emit "$q_torch"
             emit '```'
-            if grep -q "cuda disponible: True" <<<"$torch_out"; then
-                okc
-                if grep -q "archs: \[\]" <<<"$torch_out"; then
-                    warn "torch no informa de arquitecturas GPU (¿build CPU o sin GPU visible?)"
-                elif ! grep -q "sm_61" <<<"$torch_out" && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qi "1070\|1060\|1080\|pascal"; then
-                    warn "torch sin sm_61: GPU Pascal detectada pero el wheel de torch ya no la soporta — ancla un build CUDA ≤12.8 (torch==2.6.0+cu124) y re-verifica"
-                fi
-            fi
         fi
+        if ! grep -qi "disponible: True" <<<"$q_torch"; then
+            warn "torch en gateway-qwen3 no ve CUDA: el sidecar estático en CPU (¿overlay GPU aplicado?)"
+        else
+            okc
+        fi
+        q_vol="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -c 'qwen3_hf_cache' || true)"
+        if [[ "$q_vol" -gt 0 ]]; then
+            emit "- volumen \`qwen3_hf_cache\` (pesos 1.7B): ✅ creado"
+            okc
+        else
+            emit "- volumen \`qwen3_hf_cache\`: ⏸ no creado (se crea en la primera síntesis)"
+        fi
+    else
+        emit "- ❌ \`QWEN3_TTS_REMOTE_URL\` apunta a \`gateway-qwen3\` pero el contenedor no corre:"
+        emit "  el proxy fallará y las voces qwen3 degradan a Edge."
+        emit "- Solución: \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`"
+        emit "  (o \`docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml --profile qwen3 up -d\`)."
+        emit ""
+        miss "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado"
+    fi
+
+    emit ""
+    if [[ "$omni_up" == ✅* && -n "$omni_url" ]]; then
+        emit "- ✅ sidecar \`gateway-omnivoice\` arriba (\`$omni_url\`); el engine \`omnivoice_remote\` lo alcanza"
+        okc
+    elif grep -q "omnivoice_remote" <<<"$extra$route"; then
+        if [[ -z "$omni_url" ]]; then
+            emit "- ❌ \`omnivoice_remote\` está en \`TTS_EXTRA_ENGINES\` pero \`OMNIVOICE_REMOTE_URL\` está vacía"
+            miss "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)"
+        else
+            emit "- ❌ \`OMNIVOICE_REMOTE_URL=$omni_url\` pero el contenedor no corre"
+            miss "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada (\`docker compose --profile omnivoice up -d gateway-omnivoice\`)"
+        fi
+    else
+        emit "- \`omnivoice_remote\` inactivo (sin URL o fuera de \`TTS_EXTRA_ENGINES\`)"
+    fi
+
+    # Reserva de GPU del contenedor gateway (overlay).
+    emit ""
+    local gw_cid gw_gpu
+    gw_cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway 2>/dev/null | head -1)"
+    gw_gpu=""
+    if [[ -n "$gw_cid" ]]; then
+        gw_gpu="$(docker inspect "$gw_cid" --format '{{.HostConfig.DeviceRequests}}' 2>/dev/null || true)"
+    fi
+    if [[ -z "$gw_gpu" || "$gw_gpu" == "[]" ]]; then
+        emit "- contenedor \`gateway\` sin reserva GPU: falta \`deploy/docker-compose.gpu.yml\`"
+        warn "gateway sin reserva GPU: despliega con \`GPU=1\` para añadir el overlay del GPU"
+    else
+        emit "- contenedor \`gateway\` con reserva GPU: ✅"
+        okc
+    fi
+
+    # Variables legacy que ya no hacen nada.
+    local legacy
+    legacy="$(read_env deploy/.env QWEN3_TTS_DIR "")"
+    [[ -z "$legacy" ]] && legacy="$(read_env apps/gateway/.env QWEN3_TTS_PYTHON "")"
+    if [[ -n "$legacy" ]]; then
+        emit ""
+        emit "- ⚠️ variable legacy presente (\`$legacy\`): sin efecto desde el sidecar; puedes borrarla"
+        warn "Variable legacy de venv qwen3 en el .env ($legacy): el runtime es el sidecar gateway-qwen3; bórrala"
     fi
 }
 
@@ -861,7 +981,13 @@ print(", ".join(ids[:8]) + (" …" if len(ids) > 8 else ""))
             okc
         else
             emit "- \`GET $models_url\`: ❌ sin respuesta"
-            miss "LLM inaccesible en $models_url — ningún paso de digest/clustering/respelling funcionará (levanta Ollama/llama.cpp o corrige LLM_API_BASE)"
+            deep bad "LLM inaccesible" \
+                "GET $models_url no devuelve JSON válido." \
+                "El servidor LLM (Ollama/llama.cpp) está parado, en otro puerto, o la ruta no es OpenAI-compatible en $models_url." \
+                "Ningún paso del digest (resumen, clustering, respelling, verificación) puede ejecutarse aunque el resto del stack esté sano." \
+                "Arrancar el servidor LLM y alinear LLM_API_BASE con la ruta real de /v1/models." \
+                "curl -sS $models_url   # debe responder JSON con \"data\": [...]" \
+                "# grep -E '^(LLM_API_BASE|LLM_MODEL)=' apps/news/.env"
         fi
     fi
 
@@ -937,6 +1063,275 @@ section_repo() {
     kv "Puertos" "API=${API_PORT:-$(read_env deploy/.env API_PORT 8000)} · Gateway=${GATEWAY_PORT:-$(read_env deploy/.env GATEWAY_PORT 8001)} · Temporal UI=8081"
 }
 
+render_analysis() {
+    emit_a "## Análisis en profundidad"
+    emit_a ""
+    if [[ ${#D_TITLE[@]} -eq 0 ]]; then
+        emit_a "> Sin problemas detectados en el análisis en profundidad."
+        emit_a ""
+        return 0
+    fi
+    emit_a "Cada entrada expone **qué** falla, **por qué**, **qué implica** y **cómo arreglarlo**."
+    emit_a ""
+    local idx n=0 mark
+    for ((idx = 0; idx < ${#D_TITLE[@]}; idx++)); do
+        if [[ "${D_SEV[idx]}" == "bad" ]]; then mark="❌"; else mark="⚠️"; fi
+        n=$((n + 1))
+        emit_a "### $mark $n. ${D_TITLE[idx]}"
+        emit_a ""
+        emit_a "- **Qué**: ${D_WHAT[idx]}"
+        emit_a "- **Causa raíz**: ${D_CAUSE[idx]}"
+        emit_a "- **Impacto**: ${D_IMPACT[idx]}"
+        emit_a "- **Solución**: ${D_FIX[idx]}"
+        if [[ -n "${D_CMD[idx]}" ]]; then
+            emit_a ""
+            emit_a '```bash'
+            emit_a "${D_CMD[idx]}"
+            emit_a '```'
+        fi
+        emit_a ""
+    done
+}
+
+section_analysis() {
+    msg "Análisis en profundidad"
+    local deploy_key gw_key news_key extra route fish_key oa_base
+    local news_url gw_port llm llm_code cmds diffs
+
+    extra="$(read_env apps/gateway/.env TTS_EXTRA_ENGINES "")"
+    route="$(read_env apps/gateway/.env TTS_ENGINES "")"
+    fish_key="$(read_env apps/gateway/.env FISH_API_KEY "")"
+    oa_base="$(read_env apps/gateway/.env OPENAI_TTS_BASE_URL "")"
+
+    # --- 1. una misma clave en tres archivos -------------------------------
+    if [[ -f deploy/.env || -f apps/news/.env || -f apps/gateway/.env ]]; then
+        deploy_key="$(read_env deploy/.env GATEWAY_API_KEY "")"
+        gw_key="$(read_env apps/gateway/.env API_KEY "")"
+        news_key="$(read_env apps/news/.env TTS_API_KEY "")"
+        diffs=()
+        if [[ -n "$deploy_key" ]]; then
+            [[ -n "$gw_key" && "$gw_key" != "$deploy_key" ]] && diffs+=("apps/gateway/.env API_KEY")
+            [[ -n "$news_key" && "$news_key" != "$deploy_key" ]] && diffs+=("apps/news/.env TTS_API_KEY")
+        elif [[ -n "$gw_key" && -n "$news_key" && "$gw_key" != "$news_key" ]]; then
+            diffs+=("apps/gateway/.env API_KEY" "apps/news/.env TTS_API_KEY")
+        fi
+
+        if [[ ${#diffs[@]} -gt 0 ]]; then
+            if [[ -n "$deploy_key" ]]; then
+                cmds="$(cat <<'EOS'
+KEY=$(grep -E '^GATEWAY_API_KEY=' deploy/.env | cut -d= -f2-)
+sed -i "s|^TTS_API_KEY=.*|TTS_API_KEY=${KEY}|" apps/news/.env
+sed -i "s|^API_KEY=.*|API_KEY=${KEY}|" apps/gateway/.env
+EOS
+)"
+            else
+                cmds="$(cat <<'EOS'
+KEY=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
+sed -i "s|^GATEWAY_API_KEY=.*|GATEWAY_API_KEY=${KEY}|" deploy/.env
+sed -i "s|^TTS_API_KEY=.*|TTS_API_KEY=${KEY}|" apps/news/.env
+sed -i "s|^API_KEY=.*|API_KEY=${KEY}|" apps/gateway/.env
+EOS
+)"
+            fi
+            deep bad "Claves del gateway incoherentes" \
+                "El mismo secreto está en tres archivos y no coinciden: ${diffs[*]}" \
+                "Cada .env guarda su propia copia de la clave y se rellenaron por separado (o se generó una nueva solo en uno de ellos). compose inyecta deploy/GATEWAY_API_KEY en el contenedor gateway, con prioridad sobre apps/gateway/.env." \
+                "El gateway valida X-API-Key contra una única copia: news-engine recibe 401 en /tts, /voices/* y /engines, los digests degradan a Edge y el catálogo de voces no sincroniza." \
+                "Igualar los tres valores (el asistente lo hace con «Unificar la clave del gateway» en la pantalla de validación, o ejecutando los comandos)." \
+                "$cmds"
+        elif [[ -z "$deploy_key" && -z "$gw_key" && -z "$news_key" ]]; then
+            deep warn "Gateway sin API key" \
+                "GATEWAY_API_KEY (deploy), API_KEY (gateway) y TTS_API_KEY (news) están vacías." \
+                "Plantillas recién copiadas sin rellenar; el asistente solo genera el secreto cuando se pide." \
+                "La API del gateway queda abierta: cualquiera que alcance el puerto publicado puede sintetizar voz y clonar voces a tu costa (en Shape B el puerto queda en la red/ Tailscale)." \
+                "Generar una clave y copiarla a los tres archivos (el asistente la propaga sola al escribirla en cualquiera de los tres)." \
+                'KEY=$(python3 -c "import secrets;print(secrets.token_hex(32))")' \
+                'sed -i "s|^GATEWAY_API_KEY=.*|GATEWAY_API_KEY=${KEY}|" deploy/.env' \
+                'sed -i "s|^TTS_API_KEY=.*|TTS_API_KEY=${KEY}|" apps/news/.env' \
+                'sed -i "s|^API_KEY=.*|API_KEY=${KEY}|" apps/gateway/.env'
+        else
+            okc
+        fi
+    fi
+
+    # --- 2. URL del gateway -------------------------------------------------
+    if [[ -f apps/news/.env ]]; then
+        news_url="$(read_env apps/news/.env TTS_API_BASE_URL "")"
+        gw_port="$(read_env deploy/.env GATEWAY_PORT 8001)"
+        if [[ -z "$news_url" ]]; then
+            if [[ "$(read_env apps/news/.env TTS_DEFAULT_BACKEND edge)" != "edge" ]]; then
+                deep bad "TTS_API_BASE_URL sin definir" \
+                    "apps/news/.env no dice dónde está el gateway." \
+                    "La plantilla se copió y no se completó la sección «TTS y gateway»." \
+                    "TTS_DEFAULT_BACKEND=$(read_env apps/news/.env TTS_DEFAULT_BACKEND '?') necesita un gateway: la síntesis fallará con error de conexión." \
+                    "Apuntar a la URL correcta según el despliegue." \
+                    'sed -i "s|^TTS_API_BASE_URL=.*|TTS_API_BASE_URL=http://gateway:8000/api/v1|" apps/news/.env   # Shape A (Docker)' \
+                    '# Shape B / host: TTS_API_BASE_URL=http://<gpu-host>:8001/api/v1'
+            fi
+        else
+            case "$news_url" in
+                http://gateway:8000|http://gateway:8000/*) okc ;;
+                *:8000|*:8000/*)
+                    deep bad "TTS_API_BASE_URL apunta al puerto 8000" \
+                        "apps/news/.env apunta a ${news_url} (8000 es el puerto de la API news, el gateway publica ${gw_port})." \
+                        "Se confundió el puerto interno del contenedor gateway (8000, el que usa la DNS interna http://gateway:8000) con el publicado en el host (GATEWAY_PORT=${gw_port})." \
+                        "Toda llamada a /tts, /voices/* y /engines responde 404 o connection refused: ningún backend ≠ edge puede sintetizar." \
+                        "Usar la DNS interna en Shape A o el puerto publicado fuera de Docker." \
+                        "sed -i \"s|^TTS_API_BASE_URL=.*|TTS_API_BASE_URL=http://gateway:8000/api/v1|\" apps/news/.env   # Shape A (Docker)" \
+                        "# sed -i \"s|^TTS_API_BASE_URL=.*|TTS_API_BASE_URL=http://localhost:${gw_port}/api/v1|\" apps/news/.env   # host"
+                    ;;
+                *)
+                    url_port="$(printf '%s' "$news_url" | sed -E 's#^[a-z]+://[^:/]+:([0-9]+).*#\1#')"
+                    if [[ "$url_port" =~ ^[0-9]+$ && "$url_port" != "$gw_port" && "$news_url" != *":${gw_port}/"* ]]; then
+                        deep warn "Puerto de gateway distinto de GATEWAY_PORT" \
+                            "TTS_API_BASE_URL=$news_url pero deploy/.env fija GATEWAY_PORT=${gw_port}." \
+                            "Se cambió el puerto publicado en un archivo y no en el otro." \
+                            "Si el gateway se publica en ${gw_port}, la URL no le alcanza (connection refused)." \
+                            "Alinear el puerto de la URL con GATEWAY_PORT (o al revés)." \
+                            "grep -E '^(GATEWAY_PORT|TTS_API_BASE_URL)=' deploy/.env apps/news/.env"
+                    else
+                        okc
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+
+    # --- 3. engines cloud y sidecars ---------------------------------------
+    if grep -q "fish_tts" <<<"$extra$route"; then
+        if [[ -z "$fish_key" ]]; then
+            deep warn "Fish habilitado sin credenciales" \
+                "fish_tts aparece en TTS_EXTRA_ENGINES/TTS_ENGINES pero FISH_API_KEY está vacía." \
+                "Se añadió el engine a la configuración sin dar de alta la cuenta de Fish Audio." \
+                "En routed el engine queda inactivo (no degrada el health global), pero todo pin engine=fish_tts falla con 400 y sus voces no aparecen en /engines." \
+                "Rellenar FISH_API_KEY (y revisar FISH_MODEL/FISH_API_BASE_URL) o quitar fish_tts de TTS_EXTRA_ENGINES." \
+                "# sed -i 's|^FISH_API_KEY=.*|FISH_API_KEY=<tu clave de fish.audio>|' apps/gateway/.env"
+        else
+            okc
+        fi
+    fi
+    if grep -q "openai_tts" <<<"$extra$route"; then
+        if [[ -z "$oa_base" ]]; then
+            deep warn "OpenAI-compatible habilitado sin endpoint" \
+                "openai_tts aparece en TTS_EXTRA_ENGINES/TTS_ENGINES pero OPENAI_TTS_BASE_URL está vacía." \
+                "Se copió la plantilla del proveedor sin apuntar a ningún servidor /audio/speech." \
+                "El engine queda inactivo en routed; los pins engine=openai_tts devuelven 400 y la voz no aparece en /engines." \
+                "Definir OPENAI_TTS_BASE_URL (incluyendo /v1) y OPENAI_TTS_API_KEY si el proveedor lo exige, o quitar openai_tts de los extras." \
+                "# OPENAI_TTS_BASE_URL=https://api.openai.com/v1"
+        else
+            okc
+        fi
+    elif [[ -n "$oa_base" || -n "$fish_key" ]]; then
+        deep warn "Credenciales cloud sin engine habilitado" \
+            "Hay credenciales cloud configuradas pero el engine correspondiente no está en TTS_EXTRA_ENGINES." \
+            "Se configuró el proveedor sin añadirlo a la ruta/extra del gateway." \
+            "El proveedor no se instancia: sus voces siguen ocultas en el selector y /engines no lo reporta disponible." \
+            "Añadir fish_tts u openai_tts a TTS_EXTRA_ENGINES (o rutear un idioma a él)." \
+            "# TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote,fish_tts"
+    fi
+
+    # --- 3b. sidecars (títulos idénticos a la sección 5: solo aportan el
+    # análisis, no repiten la línea del índice) ---------------------------
+    local qwen_url omni_url running_side=""
+    qwen_url="$(read_env deploy/.env QWEN3_TTS_REMOTE_URL "")"
+    [[ -z "$qwen_url" ]] && qwen_url="$(read_env apps/gateway/.env QWEN3_TTS_REMOTE_URL "")"
+    omni_url="$(read_env apps/gateway/.env OMNIVOICE_REMOTE_URL "")"
+    if have docker; then
+        running_side="$(docker compose -f "$COMPOSE_FILE" ps --status running --format '{{.Service}}' 2>/dev/null || true)"
+    fi
+    if grep -q "qwen3" <<<"$extra$route"; then
+        if [[ -z "$qwen_url" ]]; then
+            deep bad "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)" \
+                "TTS_EXTRA_ENGINES/TTS_ENGINES mencionan qwen3_tts pero el gateway no tiene URL de sidecar." \
+                "El sidecar se añadió a la configuración sin desplegarlo con QWEN3=1 (deploy/.env no define QWEN3_TTS_REMOTE_URL)." \
+                "qwen3_tts queda NOT_AVAILABLE en /engines: los pines engine=qwen3_tts fallan y TTS_FALLBACK_TO_EDGE reescribe la síntesis con Edge, perdiendo la voz del catálogo." \
+                "Publicar la URL del sidecar y arrancarlo con el perfil qwen3 y el overlay GPU." \
+                "echo 'QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1' >> deploy/.env" \
+                "GPU=1 QWEN3=1 ./scripts/deploy.sh production"
+        elif ! grep -qx "gateway-qwen3" <<<"$running_side"; then
+            deep bad "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado" \
+                "QWEN3_TTS_REMOTE_URL=$qwen_url pero el servicio gateway-qwen3 no corre." \
+                "El perfil compose qwen3 no estaba activo en el último up (o el contenedor se cayó por un fallo de build/GPU)." \
+                "El proxy del gateway no alcanza el sidecar: /engines lo marca no disponible y las voces qwen3 degradan a Edge." \
+                "Arrancar el sidecar con su perfil y el overlay GPU." \
+                "GPU=1 QWEN3=1 ./scripts/deploy.sh production" \
+                "# docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml --profile qwen3 up -d"
+        else
+            okc
+        fi
+    fi
+    if grep -q "omnivoice_remote" <<<"$extra$route"; then
+        if [[ -z "$omni_url" ]]; then
+            deep bad "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)" \
+                "omnivoice_remote está en TTS_EXTRA_ENGINES/TTS_ENGINES pero OMNIVOICE_REMOTE_URL está vacía." \
+                "Se añadió el engine sin apuntar al contenedor gateway-omnivoice (que es el que instala las dependencias reales de OmniVoice)." \
+                "El engine no se instancia: los clones con engine=omnivoice_remote no resuelven y la narración local falla." \
+                "Definir la URL interna del sidecar y arrancarlo con su perfil." \
+                "sed -i 's|^OMNIVOICE_REMOTE_URL=.*|OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000|' apps/gateway/.env" \
+                "docker compose -f deploy/docker-compose.yml --profile omnivoice up -d gateway-omnivoice"
+        elif ! grep -qx "gateway-omnivoice" <<<"$running_side"; then
+            deep bad "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada (\`docker compose --profile omnivoice up -d gateway-omnivoice\`)" \
+                "OMNIVOICE_REMOTE_URL=$omni_url pero el servicio gateway-omnivoice no corre." \
+                "El perfil compose omnivoice no estaba activo en el último up (o el contenedor se cayó)." \
+                "Todo pin engine=omnivoice_remote y toda narración local que dependa de él responde con engine no disponible." \
+                "Arrancar solo el sidecar (no levanta nada más)." \
+                "docker compose -f deploy/docker-compose.yml --profile omnivoice up -d gateway-omnivoice"
+        else
+            okc
+        fi
+    fi
+
+    # --- 4. LLM -------------------------------------------------------------
+    if [[ -f apps/news/.env ]]; then
+        llm="$(read_env apps/news/.env LLM_API_BASE "")"
+        if [[ -z "$llm" ]]; then
+            deep bad "LLM_API_BASE sin definir" \
+                "apps/news/.env no define endpoint de LLM." \
+                "Plantilla copiada sin completar la sección «LLM» (paso 3 del asistente)." \
+                "Ningún workflow puede ejecutarse: el digest, la reescritura y la verificación LLM terminan en error." \
+                "Apuntar al servidor local (llama.cpp/Ollama) con el modelo correcto." \
+                "# sed -i 's|^LLM_API_BASE=.*|LLM_API_BASE=http://host.docker.internal:8080/v1|' apps/news/.env"
+        fi
+    fi
+
+    # --- 5. secretos sin rellenar ------------------------------------------
+    local stale="" k
+    for k in TELEGRAM_CHAT_ID DOC_TTS_LINK_SECRET ADMIN_PASSWORD_HASH; do
+        local v
+        v="$(read_env apps/news/.env "$k" "")"
+        if [[ "$v" == your_* || "$v" == changeme* || "$v" == "<"* ]]; then
+            stale+="${stale:+, }$k"
+        fi
+    done
+    if [[ -n "$stale" ]]; then
+        deep warn "Secretos todavía en modo plantilla" \
+            "Valores placeholder en apps/news/.env: $stale." \
+            "Se copió .env.example sin sustituir los valores marcados como your_*/cambiar." \
+            "Telegram no entrega boletines (token inválido), los enlaces de audio responden 503 si DOC_TTS_LINK_SECRET es placeholder y el acceso admin puede quedar débil." \
+            "Sustituir cada placeholder por un valor real (el asistente genera los secretos con «g»)." \
+            "grep -nE '^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|DOC_TTS_LINK_SECRET)=' apps/news/.env"
+    else
+        [[ -f apps/news/.env ]] && okc
+    fi
+
+    # --- 7. stack ------------------------------------------------------------
+    if have docker && docker compose -f "$COMPOSE_FILE" ps --format '{{.Service}}' >/dev/null 2>&1; then
+        local up_list
+        up_list="$(docker compose -f "$COMPOSE_FILE" ps --status running --format '{{.Service}}' 2>/dev/null || true)"
+        if ! grep -qx "api" <<<"$up_list" || ! grep -qx "gateway" <<<"$up_list"; then
+            deep bad "Stack sin desplegar (falta api o gateway)" \
+                "Los servicios críticos no están en marcha (en marcha: ${up_list:-ninguno})." \
+                "Nunca se ejecutó el despliegue en este host, o se paró con docker compose down." \
+                "No hay panel, ni API, ni gateway TTS: nada responde en los puertos publicados." \
+                "Desplegar el stack completo (idempotente)." \
+                "GPU=1 ./scripts/deploy.sh production   # añade QWEN3=1 si usas qwen3_tts"
+        else
+            okc
+        fi
+    fi
+
+}
+
 # =============================================================================
 # Ensamblado: cabecera + hallazgos + cuerpo + instrucción para la IA
 # =============================================================================
@@ -951,12 +1346,15 @@ section_collections
 section_external
 section_logs
 section_repo
+section_analysis
+render_analysis
 
 HEADER="$(cat <<EOF
 # newsvoice — informe de despliegue
 
 > Generado: **$(date -Is 2>/dev/null || date)** · host: **$(hostname 2>/dev/null || echo '?')** · git: **$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')@$(git rev-parse --short HEAD 2>/dev/null || echo '?')**
 > Propósito: pegar este Markdown en una herramienta AI para que indique **qué falta** y los comandos de remediación.
+> El **análisis en profundidad** (justo tras los hallazgos) empareja cada problema con su causa raíz, su impacto y su solución.
 > Los valores de secrets aparecen solo como \`<set (N chars)>\` / \`<vacío>\` / \`<placeholder>\`.
 
 ## Hallazgos
@@ -982,6 +1380,8 @@ EOF
         printf -- '\n> %d comprobaciones OK (detalle en cada sección).\n' "$OKC"
     fi
     printf '\n---\n'
+    cat "$ANALYSIS"
+    printf -- '---\n\n'
     cat "$BODY"
     cat <<'EOF'
 

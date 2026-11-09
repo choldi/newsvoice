@@ -10,9 +10,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .detect import Prerequisite
 from .util import REPO_ROOT, CommandResult, which
 
-__all__ = ["METHODS", "Step", "execute", "plan"]
+__all__ = ["METHODS", "Step", "execute", "plan", "prereq_steps", "verify", "method_available"]
 
 #: (id, label, description) for each supported installation method.
 METHODS: tuple[tuple[str, str, str], ...] = (
@@ -206,3 +207,42 @@ def _tail(text: str, lines: int = 6) -> str:
     """
     kept = [line.rstrip() for line in text.splitlines() if line.strip()]
     return " · ".join(kept[-lines:])[:300]
+
+
+def prereq_steps(items: list[Prerequisite]) -> list[Step]:
+    """Build the shell steps that install the prerequisites with a remedy.
+
+    Each command runs through a login shell so pipes (``curl | sh``) work and
+    a ``uv`` installed a moment earlier is reachable through
+    ``~/.local/bin``. Steps are not linked: a failing ``sudo`` (no passwordless
+    access) is reported and the operator is told to run it by hand.
+
+    Args:
+        items: Prerequisites as produced by :func:`setup_wizard.detect.prerequisites`.
+
+    Returns:
+        Ordered commands, empty when nothing can be automated.
+    """
+    import os
+    from pathlib import Path
+
+    local_bin = str(Path.home() / ".local" / "bin")
+    path = os.environ.get("PATH", "")
+    if local_bin not in path.split(os.pathsep):
+        path = f"{local_bin}{os.pathsep}{path}"
+
+    steps: list[Step] = []
+    for item in items:
+        if not item.automated:
+            continue
+        for command in item.remedy:
+            steps.append(
+                Step(
+                    title=f"instalar {item.name}",
+                    command=["bash", "-lc", command],
+                    detail=item.why,
+                    required=True,
+                    env={"PATH": path},
+                )
+            )
+    return steps

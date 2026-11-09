@@ -45,24 +45,31 @@ Pasos del asistente:
 
 1. **Detecta el entorno** — Python, uv, docker, ffmpeg, GPU, puertos ocupados,
    `.env` existentes y virtualenvs.
-2. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
+2. **Revisa los requisitos** — si falta algo (docker, plugin compose, ffmpeg,
+   uv, virtualenvs…) aparece el paso **0 · requisitos**: qué se rompe sin él y
+   el comando exacto para instalarlo, con un botón que lo ejecuta por ti
+   (los pasos con `sudo` se te dejan copiados por si prefieren correrlos a mano).
+3. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
    solo revisión; cada uno precarga sus valores por defecto sin pisar lo que
    ya hayas escrito a mano.
-3. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
+4. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
    por app con pip (`make venv`) o más tarde.
-4. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
+5. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
    `apps/gateway/.env` a partir de sus `.env.example`, sección por sección y
    con la explicación de cada variable. Los secretos se generan con `g`, la
    clave compartida del gateway se copia sola a `TTS_API_KEY` y `API_KEY`, y el
    hash bcrypt del administrador se crea desde su propio diálogo. El motor TTS
    (`routed`, `qwen3_tts`, `fish_tts`, `openai_tts`…), los sidecars y las
    credenciales cloud tienen su propia sección; `a` muestra las opciones
-   avanzadas.
-5. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
-   copia `.bak-<fecha>`.
-6. **Valida** — valores obligatorios, secretos coherentes entre archivos,
-   plantillas sin rellenar, puertos, URL del gateway, dependencias y
-   requisitos del host.
+   avanzadas. La clave del gateway es **un mismo valor en los tres archivos**:
+   escribirla en cualquiera las sincroniza en las otras dos.
+6. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
+   copia `.bak-<fecha>`. Si las tres claves del gateway no coinciden, la
+   revisión y la validación lo marcan como error y ofrecen
+   **«Unificar la clave del gateway»** (evita los 401 en tiempo de ejecución).
+7. **Valida** — valores obligatorios, claves coherentes entre archivos,
+   plantillas sin rellenar, puertos, URL del gateway, requisitos del host y
+   dependencias; cada línea roja incluye el comando que la arregla.
 
 Además del flujo guiado, desde la pantalla inicial también puedes:
 
@@ -107,6 +114,12 @@ make check         # lint + format-check + test
 ```
 
 `make help` lista el resto de objetivos (compose, deploy, schedules, logs…).
+
+`make report` genera `deploy-report.md` en Markdown, pensado para pegarlo en
+una herramienta AI: índice de hallazgos (`❌` crítico / `⚠️` aviso) y un
+**análisis en profundidad** que empareja cada problema con su causa raíz, su
+impacto, la solución y los comandos exactos (requisitos del host, coherencia
+de claves, sidecars qwen3/omnivoice, LLM, secretos de plantilla…).
 
 ## Seguridad
 
