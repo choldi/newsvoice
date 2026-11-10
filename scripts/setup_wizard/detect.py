@@ -7,7 +7,9 @@ operator can run (or let the wizard run for them) lives in
 
 from __future__ import annotations
 
+import os
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,18 +94,76 @@ def _is_wsl() -> bool:
     return "microsoft" in banner or "wsl" in banner
 
 
+def _docker_candidates() -> list[str]:
+    """List every ``docker`` binary reachable through ``PATH``, in order.
+
+    Returns:
+        Absolute paths, first match first, without duplicates.
+    """
+    found: list[str] = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidate = Path(directory) / "docker"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            found.append(str(candidate))
+    return list(dict.fromkeys(found))
+
+
+def _docker_failure_reason() -> str:
+    """Classify why ``docker version`` could not talk to the daemon.
+
+    Returns:
+        Short human phrase, empty when the cause cannot be identified.
+    """
+    try:
+        proc = subprocess.run(
+            ["docker", "version"],
+            capture_output=True,
+            text=True,
+            timeout=8.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = f"{proc.stdout}\n{proc.stderr}".lower()
+    if "permission denied" in text:
+        return "permiso denegado en el socket"
+    if "deadline exceeded" in text or "timeout" in text or "timed out" in text:
+        return "el demonio tarda demasiado en contestar"
+    if "cannot connect" in text or "refused" in text:
+        return "el demonio no está escuchando"
+    return ""
+
+
+def _docker_desktop_integration() -> bool:
+    """Report whether Docker Desktop's WSL integration is mounted here.
+
+    Returns:
+        True when the docker-desktop mount or its socket proxy is visible.
+    """
+    if Path("/mnt/wsl/docker-desktop").exists():
+        return True
+    try:
+        return "docker-desktop" in str(Path("/var/run/docker.sock").resolve())
+    except OSError:
+        return False
+
+
 def _docker_status() -> tuple[str, str]:
     """Check the docker binary, its client and its daemon.
 
     ``docker --version`` only exercises the client binary, while every other
     docker subcommand talks to the daemon: on WSL2 those two regularly
-    disagree (Docker Desktop installed but its integration with this distro
-    switched off), so they are probed separately.
+    disagree (Docker Desktop stopped, integration off, a snap/apt docker
+    shadowing Desktop's client, or socket permissions), so a failed daemon
+    probe is diagnosed instead of collapsing every cause into one message.
 
     Returns:
         Tuple of ``(status, detail)``.
     """
-    if not which("docker"):
+    primary = which("docker")
+    if not primary:
         return "bad", "docker no está instalado (hace falta solo para el stack)"
 
     # Cliente: no toca el demonio, responde aunque Docker Desktop esté parado.
@@ -113,22 +173,54 @@ def _docker_status() -> tuple[str, str]:
 
     if server:
         return "ok", f"docker {server} con el demonio en marcha"
+
+    detail = f"{client or 'cliente docker'} instalado, pero el demonio no responde"
+    docker_host = os.environ.get("DOCKER_HOST", "").strip()
+    if docker_host:
+        detail += f" vía DOCKER_HOST={docker_host}"
+    reason = _docker_failure_reason()
+    if reason:
+        detail += f": {reason}"
+
+    # Un segundo cliente (snap, apt) puede sombrear al de Docker Desktop:
+    # si alguno alcanza el demonio, el fallo es del PATH, no del motor.
+    for candidate in _docker_candidates():
+        if candidate == primary:
+            continue
+        if tool_version([candidate, "version", "--format", "{{.Server.Version}}"], timeout=8.0):
+            return (
+                "warn",
+                f"{detail}; «docker» resuelve a {primary} pero {candidate} sí alcanza "
+                "el demonio: quita el paquete que lo sombrea (sudo snap remove docker · "
+                "sudo apt purge docker.io docker-ce-cli) o reordena el PATH",
+            )
+
+    if reason == "permiso denegado en el socket":
+        return (
+            "warn",
+            f"{detail}: el usuario no está en el grupo docker — "
+            "sudo usermod -aG docker $USER y vuelve a entrar",
+        )
+    if _docker_desktop_integration():
+        return (
+            "warn",
+            f"{detail}: la integración de Docker Desktop está montada en esta distro, "
+            "pero su motor no contesta — abre Docker Desktop en Windows y espera a "
+            "«Engine running» (o reinícialo si ya estaba abierto)",
+        )
     if _is_wsl():
         return (
             "warn",
-            f"{client or 'cliente docker'} instalado, pero esta distro WSL no alcanza el "
-            "demonio: activa Settings → Resources → WSL Integration de Docker Desktop "
-            "(«Use WSL 2 based engine») y aplícalo; si usas docker nativo en WSL, "
-            "arranca el servicio (sudo service docker start)",
+            f"{detail}: abre Docker Desktop en Windows con Settings → Resources → "
+            "WSL Integration activo para esta distro («Use WSL 2 based engine»); "
+            "si usas docker nativo en WSL, arranca el servicio "
+            "(sudo service docker start)",
         )
-    if client:
-        return (
-            "warn",
-            f"{client} (cliente) pero el demonio no responde: ¿Docker Desktop "
-            "o docker.service arrancado? (sudo systemctl start docker · "
-            "sudo usermod -aG docker $USER)",
-        )
-    return "warn", "docker instalado; no se pudo leer la versión del cliente"
+    return (
+        "warn",
+        f"{detail}: ¿Docker Desktop o docker.service arrancado? "
+        "(sudo systemctl start docker · sudo usermod -aG docker $USER)",
+    )
 
 
 def detect() -> Report:
@@ -323,6 +415,9 @@ def prerequisites(report: Report) -> list[Prerequisite]:
     status, detail = state("docker")
     if status == "ok":
         remedy: tuple[str, ...] = ()
+    elif which("docker") and "grupo docker" in detail:
+        # El socket responde pero niega el paso: solo falta el grupo.
+        remedy = ("sudo usermod -aG docker $USER",)
     elif which("docker") and _is_wsl():
         # Docker Desktop se integra desde su GUI; un `systemctl start` solo
         # sirve si el motor es nativo dentro de WSL.

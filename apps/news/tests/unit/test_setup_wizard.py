@@ -763,12 +763,114 @@ def test_docker_status_separates_client_from_daemon_on_wsl(
     )
     monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
     monkeypatch.setattr(detect_mod, "_is_wsl", lambda: True)
+    monkeypatch.setattr(detect_mod, "_docker_candidates", lambda: [])
+    monkeypatch.setattr(detect_mod, "_docker_failure_reason", lambda: "")
+    monkeypatch.setattr(detect_mod, "_docker_desktop_integration", lambda: False)
 
     status, detail = detect_mod._docker_status()
 
     assert status == "warn"
     assert "Docker version 29.0.0" in detail
     assert "WSL Integration" in detail
+
+
+def test_docker_status_points_at_a_shadowing_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A snap/apt docker in PATH shadowing Desktop's working client is named."""
+    from setup_wizard import detect as detect_mod
+
+    def fake_tool_version(command: list[str], timeout: float = 10.0) -> str | None:
+        if command[:1] == ["docker"]:
+            return "Docker version 29.0.0, build abc" if "--version" in command else None
+        if any("Server.Version" in part for part in command):
+            return "29.0.0"
+        return None
+
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/snap/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
+    monkeypatch.setattr(
+        detect_mod, "_docker_candidates", lambda: ["/snap/bin/docker", "/usr/bin/docker"]
+    )
+    monkeypatch.setattr(detect_mod, "_docker_failure_reason", lambda: "no escucha")
+
+    status, detail = detect_mod._docker_status()
+
+    assert status == "warn"
+    assert "/snap/bin/docker" in detail
+    assert "/usr/bin/docker" in detail
+    assert "sombrea" in detail
+
+
+def test_docker_status_blames_the_engine_when_integration_is_mounted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Desktop's integration mount exists, so the engine (not the toggle) failed."""
+    from setup_wizard import detect as detect_mod
+
+    def fake_tool_version(command: list[str], timeout: float = 10.0) -> str | None:
+        return "Docker version 29.0.0, build abc" if "--version" in command else None
+
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
+    monkeypatch.setattr(detect_mod, "_docker_candidates", lambda: [])
+    monkeypatch.setattr(detect_mod, "_docker_failure_reason", lambda: "no escucha")
+    monkeypatch.setattr(detect_mod, "_docker_desktop_integration", lambda: True)
+
+    status, detail = detect_mod._docker_status()
+
+    assert status == "warn"
+    assert "Engine running" in detail
+    assert "integración de Docker Desktop está montada" in detail
+
+
+def test_docker_status_offers_the_group_remedy_on_permission_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket that refuses the handshake points at the docker group."""
+    from setup_wizard import detect as detect_mod
+
+    def fake_tool_version(command: list[str], timeout: float = 10.0) -> str | None:
+        return "Docker version 29.0.0, build abc" if "--version" in command else None
+
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+    monkeypatch.setattr(detect_mod, "tool_version", fake_tool_version)
+    monkeypatch.setattr(detect_mod, "_docker_candidates", lambda: [])
+    monkeypatch.setattr(
+        detect_mod, "_docker_failure_reason", lambda: "permiso denegado en el socket"
+    )
+    monkeypatch.setattr(detect_mod, "_docker_desktop_integration", lambda: False)
+
+    status, detail = detect_mod._docker_status()
+
+    assert status == "warn"
+    assert "grupo docker" in detail
+    assert "usermod -aG docker" in detail
+
+
+def test_docker_prerequisite_offers_the_group_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permission failure is the one WSL/docker case a command can fix."""
+    from setup_wizard import detect as detect_mod
+
+    report = _report_with(
+        Finding("docker", "warn", "cliente docker, permiso denegado: grupo docker")
+    )
+    monkeypatch.setattr(
+        detect_mod, "which", lambda name: "/usr/bin/docker" if name == "docker" else None
+    )
+
+    items = {item.key: item for item in detect_mod.prerequisites(report)}
+
+    assert items["docker"].remedy == ("sudo usermod -aG docker $USER",)
+    assert items["docker"].automated is True
 
 
 def test_docker_prerequisite_is_manual_on_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
