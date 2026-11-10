@@ -204,11 +204,15 @@ async def test_wait_for_turn_waits_for_the_holder_to_finish() -> None:
     await service.acquire("render-run", PRIORITY_RENDER)
     ticks: list[int] = []
 
-    async def _release_soon() -> None:
-        await asyncio.sleep(0.05)
+    # Release only after the waiter demonstrably waited: a clock-based
+    # release races with the first acquire attempt under a loaded loop
+    # (pytest-xdist), which granted the lease with zero heartbeats.
+    async def _release_after_first_tick() -> None:
+        while not ticks:
+            await asyncio.sleep(0.01)
         await service.release("render-run")
 
-    release = asyncio.create_task(_release_soon())
+    release = asyncio.create_task(_release_after_first_tick())
     granted = await service.wait_for_turn(
         "digest-run", PRIORITY_DIGEST, on_tick=lambda: ticks.append(1)
     )
@@ -499,8 +503,10 @@ async def test_wait_for_turn_design_takes_over_after_render_releases() -> None:
     assert granted is True
     assert await service.holder() == "design-window"
     # A brief free gap during the handoff is the point; any other *owner*
-    # would mean the two held the engine at the same time.
-    assert set(observed) <= {"render-run", None}
+    # would mean the two held the engine at the same time. Seeing
+    # "design-window" itself is the watcher noticing the takeover between
+    # its two holder() reads of one loop iteration, not an overlap.
+    assert set(observed) <= {"render-run", None, "design-window"}
 
 
 async def test_note_round_trips_through_hold_and_holder_info() -> None:

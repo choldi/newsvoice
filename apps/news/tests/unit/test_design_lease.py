@@ -149,8 +149,12 @@ async def test_open_releases_when_the_renewal_loses_the_lease() -> None:
     """Losing the lease mid-window exits 1 instead of pretending to hold it."""
     service = _service(ttl_seconds=0.3)
 
+    # Steal only once OWNER demonstrably holds: a clock-based steal races
+    # with wait_for_turn's first acquire under a loaded loop (pytest-xdist),
+    # leaving the renewal loop renewing a lease nobody will ever take away.
     async def _steal() -> None:
-        await asyncio.sleep(0.05)
+        while await service.holder() != OWNER:
+            await asyncio.sleep(0.01)
         await service.release(OWNER)
         await service.acquire("digest-run", 10)
 

@@ -59,6 +59,8 @@ help: ## Show all make targets
 	@echo "  make coverage         pytest with coverage for both apps"
 	@echo "  make check            lint + format-check + test (pre-commit gate)"
 	@echo "  make commit MSG=..    Commit via scripts/auto_commit.sh"
+	@echo "                        TESTS=apps/news/tests/unit/test_x.py for an"
+	@echo "                        incremental gate (only those tests run)"
 	@echo ""
 	@echo "Docker compose ($(COMPOSE_FILE))"
 	@echo "  make up               Build and start the whole stack"
@@ -114,11 +116,11 @@ format-check: ## ruff format --check across all packages
 	$(GW_RUF) format --check $(CONTRACT)
 	$(NEWS_RUF) format --check scripts
 
-test-news: ## pytest for apps/news only
-	cd $(NEWS_DIR) && PYTHONPATH=".:../../$(CONTRACT)" $(abspath $(NEWS_PY)) -m pytest -q
+test-news: ## pytest for apps/news only (pytest-xdist, -n auto)
+	cd $(NEWS_DIR) && PYTHONPATH=".:../../$(CONTRACT)" $(abspath $(NEWS_PY)) -m pytest -q -n auto
 
-test-gateway: ## pytest for apps/gateway only
-	cd $(GW_DIR) && PYTHONPATH="../../$(CONTRACT)" $(abspath $(GW_PY)) -m pytest -q
+test-gateway: ## pytest for apps/gateway only (pytest-xdist, -n auto)
+	cd $(GW_DIR) && PYTHONPATH="../../$(CONTRACT)" $(abspath $(GW_PY)) -m pytest -q -n auto
 
 test: test-news test-gateway ## pytest for news + gateway
 
