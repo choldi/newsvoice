@@ -86,7 +86,12 @@ Además del flujo guiado, desde la pantalla inicial también puedes:
 
 Teclas de la TUI: `↑/↓` mover · `Enter` editar/abrir · `Esc` atrás ·
 `g` generar secreto · `a` opciones avanzadas · `Ctrl+R` valor por defecto ·
-`?` ayuda · `q` salir.
+`t`/`F2` cambiar tema · `?` ayuda · `q` salir.
+
+El tema por defecto es `auto`: detecta fondo claro u oscuro con `COLORFGBG` y
+elige la paleta adecuada. `t`/`F2` rota entre `auto`, `oscuro`, `claro` y
+`monocromo` (alto contraste sin depender del color). También se puede fijar el
+tema inicial con `NEWSVOICE_TUI_THEME=dark|light|mono`.
 
 La lógica vive en `scripts/setup_wizard/` (std-lib only) y está cubierta por
 `apps/news/tests/unit/test_setup_wizard.py`.

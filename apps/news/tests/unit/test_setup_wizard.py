@@ -440,6 +440,73 @@ def test_advanced_rows_stay_hidden_until_toggled() -> None:
     assert [r.label for r in app.visible_rows()] == ["Base", "Avanzado"]
 
 
+def test_auto_theme_follows_the_terminal_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    """COLORFGBG selects the light or dark palette for the auto theme."""
+    from setup_wizard import curses_ui
+
+    monkeypatch.setenv("COLORFGBG", "0;15")
+    assert curses_ui.resolve_theme("auto").key == "light"
+    monkeypatch.setenv("COLORFGBG", "15;0")
+    assert curses_ui.resolve_theme("auto").key == "dark"
+
+
+def test_theme_hotkey_cycles_every_palette() -> None:
+    """The t hotkey walks through all visually different themes."""
+    from setup_wizard.curses_ui import THEME_CYCLE, resolve_theme
+
+    app = _demo_app()
+    app.theme_key = "auto"
+    app._theme = resolve_theme("auto")
+    app._colors = 8
+    seen = {app._theme.key}
+    for _ in range(len(THEME_CYCLE) - 1):
+        app.handle(ord("t"))
+        seen.add(app._theme.key)
+    assert seen == {"dark", "light", "mono"}
+    assert app.message_level == "ok"
+
+
+def test_wrap_text_breaks_long_messages_on_word_boundaries() -> None:
+    """Wrapping keeps words whole, respects newlines and splits long tokens."""
+    from setup_wizard.curses_ui import _wrap_text
+
+    lines = _wrap_text("uno dos tres cuatro cinco seis", 10)
+    assert all(len(line) <= 10 for line in lines)
+    assert " ".join(lines) == "uno dos tres cuatro cinco seis"
+    assert _wrap_text("línea uno\nlínea dos", 40) == ["línea uno", "línea dos"]
+    assert _wrap_text("x" * 25, 10) == ["x" * 10, "x" * 10, "x" * 5]
+    assert _wrap_text("   sangría conservada", 40) == ["   sangría conservada"]
+
+
+def test_long_notes_take_multiple_visual_lines() -> None:
+    """A long note expands the row layout instead of being truncated."""
+    from setup_wizard.curses_ui import _wrap_text
+
+    note = "palabra " * 30
+    app = App("test")
+    app.push(Screen(title="x", rows=[Row("note", label=note)], footer=""))
+
+    layout = app._build_layout(30)
+    assert len(layout[0][2]) == len(_wrap_text(note, 27)) > 1
+
+
+def test_dialog_page_keys_scroll_long_messages() -> None:
+    """Long dialogs can be scrolled so every wrapped line is reachable."""
+    from setup_wizard.curses_ui import Dialog
+
+    app = App("test")
+    app.push(Screen(title="x", rows=[], footer=""))
+    dialog = Dialog("Aviso", ["línea"] * 30)
+    app.modal = dialog
+
+    app.handle(curses.KEY_NPAGE)
+    assert dialog.offset == 5
+    app.handle(curses.KEY_PPAGE)
+    assert dialog.offset == 0
+    app.handle(curses.KEY_END)
+    assert dialog.offset == 10**9
+
+
 # -- screen flow ------------------------------------------------------------
 
 

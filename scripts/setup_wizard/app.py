@@ -299,7 +299,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
                 "↑/↓ mover · Enter editar/abrir · Esc atrás",
                 "Tab siguiente · a mostrar avanzados",
                 "g generar secreto · Ctrl+R valor por defecto",
-                "q salir del instalador",
+                "t / F2 cambiar tema · q salir del instalador",
             )
         elif row.action == "quit":
             app_.ask_quit()
@@ -308,7 +308,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
         title="newsvoice",
         subtitle="instalador guiado",
         rows=rows,
-        footer="↑/↓  mover    Enter  ejecutar    ?  ayuda    q  salir",
+        footer="↑/↓  mover    Enter  ejecutar    ?  ayuda    t  tema    q  salir",
         on_activate=activate,
     )
 
@@ -1183,6 +1183,7 @@ def final_screen(app: App, ctx: Context) -> Screen:
                 "↑/↓ mover · Enter editar/abrir · Esc atrás",
                 "Tab siguiente · a mostrar avanzados",
                 "g generar secreto · Ctrl+R valor por defecto",
+                "t / F2 cambiar tema",
             )
         elif row.action == "quit":
             app_.should_quit = True
@@ -1191,7 +1192,7 @@ def final_screen(app: App, ctx: Context) -> Screen:
         title="Listo",
         subtitle=ctx.profile.label,
         rows=rows,
-        footer="Enter  ejecutar opción    q  salir",
+        footer="Enter  ejecutar opción    t  tema    q  salir",
         on_activate=activate,
     )
 
