@@ -440,30 +440,57 @@ def test_advanced_rows_stay_hidden_until_toggled() -> None:
     assert [r.label for r in app.visible_rows()] == ["Base", "Avanzado"]
 
 
-def test_auto_theme_follows_the_terminal_background(monkeypatch: pytest.MonkeyPatch) -> None:
-    """COLORFGBG selects the light or dark palette for the auto theme."""
+def test_debian_theme_is_the_default() -> None:
+    """The installer uses the Debian palette unless mono is requested."""
     from setup_wizard import curses_ui
 
-    monkeypatch.setenv("COLORFGBG", "0;15")
-    assert curses_ui.resolve_theme("auto").key == "light"
-    monkeypatch.setenv("COLORFGBG", "15;0")
-    assert curses_ui.resolve_theme("auto").key == "dark"
+    assert curses_ui.resolve_theme("debian").key == "debian"
+    assert curses_ui.resolve_theme("auto").key == "debian"
+    assert curses_ui.resolve_theme("dark").key == "debian"
+    assert curses_ui.resolve_theme("mono").key == "mono"
 
 
-def test_theme_hotkey_cycles_every_palette() -> None:
-    """The t hotkey walks through all visually different themes."""
-    from setup_wizard.curses_ui import THEME_CYCLE, resolve_theme
-
+def test_theme_hotkey_no_longer_cycles_palettes() -> None:
+    """The removed t hotkey leaves the fixed Debian theme untouched."""
     app = _demo_app()
-    app.theme_key = "auto"
-    app._theme = resolve_theme("auto")
-    app._colors = 8
-    seen = {app._theme.key}
-    for _ in range(len(THEME_CYCLE) - 1):
-        app.handle(ord("t"))
-        seen.add(app._theme.key)
-    assert seen == {"dark", "light", "mono"}
-    assert app.message_level == "ok"
+    app.handle(ord("t"))
+    assert app.theme_key == "debian"
+    assert app._theme.key == "debian"
+
+
+def test_f1_opens_help_and_f10_asks_to_quit() -> None:
+    """Function keys follow the Debian installer convention."""
+    app = _demo_app()
+    app.handle(curses.KEY_F1)
+    assert app.modal is not None
+    app.modal = None
+    app.handle(curses.KEY_F10)
+    assert app.modal is not None
+
+
+def test_tab_commits_the_edit_and_moves_to_the_next_field() -> None:
+    """Tab is a navigation key, not an alternative Enter."""
+    app = _demo_app()
+    row = app.current.rows[1]
+    app.focus = 1
+    app.handle(10)
+    app.handle(ord("X"))
+    app.handle(9)
+
+    assert app.editing is None
+    assert row.value == "X"
+    assert app.current.rows[app.focus].label == "Clave"
+
+
+def test_focused_help_is_not_rendered_below_the_row() -> None:
+    """Contextual help lives in its own pane, so rows keep a stable height."""
+    app = _demo_app()
+    layout = app._build_layout(60)
+    nombre = next(
+        lines for index, _start, lines in layout if app.current.rows[index].label == "Nombre"
+    )
+    assert len(nombre) == 1
+    assert app._focused_help() == "ayuda"
 
 
 def test_wrap_text_breaks_long_messages_on_word_boundaries() -> None:
@@ -540,7 +567,8 @@ def test_all_screens_build_usable_rows(wizard_context: Context) -> None:
     app.push(apply_screen(app, wizard_context))
     assert any(row.action == "install" for row in app.current.rows if row.kind == "button")
     app.push(validate_screen(app, wizard_context, write_mode=True))
-    assert any("Validación" in row.label for row in app.current.rows)
+    assert app.current.title == "Paso 6 · validación"
+    assert any(row.kind == "button" for row in app.current.rows)
     app.push(final_screen(app, wizard_context))
     assert any(row.action == "quit" for row in app.current.rows if row.kind == "button")
 
@@ -679,9 +707,10 @@ def _report_with(*findings: Finding) -> Report:
 
 def test_missing_optional_tool_offers_its_install_command() -> None:
     """A missing tool is listed with the command that provides it."""
-    items = {item.key: item for item in prerequisites(_report_with(
-        Finding("uv", "warn", "no está en PATH (opcional)")
-    ))}
+    items = {
+        item.key: item
+        for item in prerequisites(_report_with(Finding("uv", "warn", "no está en PATH (opcional)")))
+    }
 
     assert items["uv"].missing is True
     assert items["uv"].required is False
@@ -692,9 +721,12 @@ def test_missing_optional_tool_offers_its_install_command() -> None:
 
 def test_missing_python_is_blocking_and_manual() -> None:
     """Python cannot be self-installed, so the wizard only explains it."""
-    items = {item.key: item for item in prerequisites(_report_with(
-        Finding("Python", "bad", "3.10 es demasiado viejo: hace falta 3.11+")
-    ))}
+    items = {
+        item.key: item
+        for item in prerequisites(
+            _report_with(Finding("Python", "bad", "3.10 es demasiado viejo: hace falta 3.11+"))
+        )
+    }
 
     assert items["python"].required is True
     assert items["python"].remedy == ()
@@ -704,9 +736,9 @@ def test_missing_python_is_blocking_and_manual() -> None:
 
 def test_prerequisite_steps_wrap_every_command_in_a_shell() -> None:
     """Remedies may contain pipes, so they run through ``bash -lc``."""
-    steps = deps.prereq_steps(prerequisites(_report_with(
-        Finding("ffmpeg", "bad", "ffmpeg no está en PATH")
-    )))
+    steps = deps.prereq_steps(
+        prerequisites(_report_with(Finding("ffmpeg", "bad", "ffmpeg no está en PATH")))
+    )
 
     assert steps, "ffmpeg tiene comando de instalación"
     assert all(step.command[:2] == ["bash", "-lc"] for step in steps)

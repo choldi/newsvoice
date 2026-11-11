@@ -84,14 +84,16 @@ Además del flujo guiado, desde la pantalla inicial también puedes:
   útil para replicar la instalación. Atención: el resultado incluye secretos en
   claro. El asistente se niega a exportar encima de los `.env` del proyecto.
 
-Teclas de la TUI: `↑/↓` mover · `Enter` editar/abrir · `Esc` atrás ·
+Teclas de la TUI: `↑/↓` o `Tab` mover · `Enter` seleccionar/editar ·
+`Esc` atrás · `Espacio` alternar sí/no · `←/→` cambiar opciones ·
 `g` generar secreto · `a` opciones avanzadas · `Ctrl+R` valor por defecto ·
-`t`/`F2` cambiar tema · `?` ayuda · `q` salir.
+`F1`/`?` ayuda · `F10`/`q` salir. Al editar, `Tab` guarda y pasa al siguiente
+campo, y `Shift+Tab` guarda y vuelve al anterior.
 
-El tema por defecto es `auto`: detecta fondo claro u oscuro con `COLORFGBG` y
-elige la paleta adecuada. `t`/`F2` rota entre `auto`, `oscuro`, `claro` y
-`monocromo` (alto contraste sin depender del color). También se puede fijar el
-tema inicial con `NEWSVOICE_TUI_THEME=dark|light|mono`.
+La TUI usa un único tema fijo inspirado en el instalador Debian: fondo azul,
+panel claro, texto de alto contraste y selección roja. Para terminales sin
+color o de alto contraste se puede usar `NEWSVOICE_TUI_THEME=mono`; cualquier
+otro valor cae en el tema Debian.
 
 La lógica vive en `scripts/setup_wizard/` (std-lib only) y está cubierta por
 `apps/news/tests/unit/test_setup_wizard.py`.

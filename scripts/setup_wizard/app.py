@@ -224,9 +224,9 @@ def _emit_factory(app: App):
 def welcome_screen(app: App, ctx: Context) -> Screen:
     """Build the landing screen with the detected environment."""
     rows: list[Row] = [
-        Row("heading", label="Bienvenido a newsvoice"),
         Row(
-            "note", label="Instalador guiado: prepara los tres .env y las dependencias.", result=""
+            "note",
+            label="Prepara los tres .env, las dependencias y la validación del despliegue.",
         ),
         Row("note", label=""),
     ]
@@ -296,19 +296,20 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
         elif row.action == "help":
             app_.info(
                 "Ayuda",
-                "↑/↓ mover · Enter editar/abrir · Esc atrás",
-                "Tab siguiente · a mostrar avanzados",
-                "g generar secreto · Ctrl+R valor por defecto",
-                "t / F2 cambiar tema · q salir del instalador",
+                "↑/↓ o Tab mover · Enter seleccionar/editar",
+                "Esc atrás · F10 o q salir",
+                "g generar secreto · a mostrar avanzados",
+                "Ctrl+R valor por defecto · Espacio sí/no",
             )
         elif row.action == "quit":
             app_.ask_quit()
 
     return Screen(
-        title="newsvoice",
-        subtitle="instalador guiado",
+        title="Instalador de newsvoice",
+        subtitle="Configuración guiada del entorno",
         rows=rows,
-        footer="↑/↓  mover    Enter  ejecutar    ?  ayuda    t  tema    q  salir",
+        footer="F1 Ayuda   Enter Seleccionar   ↑/↓ Mover   F10 Salir",
+        progress="Menú",
         on_activate=activate,
     )
 
@@ -329,7 +330,6 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
         automated = [item for item in items if item.automated]
         hard = any(item.status == "bad" for item in items)
         rows: list[Row] = [
-            Row("heading", label="Requisitos del sistema"),
             Row(
                 "note",
                 label=(
@@ -427,9 +427,10 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
 
     return Screen(
         title="Paso 0 · requisitos",
-        subtitle="qué falta y cómo instalarlo",
+        subtitle="Qué falta y cómo instalarlo",
         rows=build(),
-        footer="Enter ejecutar opción · Esc atrás",
+        footer="F1 Ayuda   Enter Ejecutar   Esc Atrás   F10 Salir",
+        progress="0/6",
         on_enter=on_enter,
         on_activate=activate,
     )
@@ -443,7 +444,6 @@ def profile_screen(app: App, ctx: Context) -> Screen:
 
     desc = Row("note", label=ctx.profile.description, result="ok")
     rows = [
-        Row("heading", label="Punto de partida"),
         Row("note", label="Define los valores por defecto; todo es editable después."),
         Row("note", label=""),
         Row(
@@ -481,9 +481,10 @@ def profile_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Paso 1 · perfil",
-        subtitle=ctx.profile.key,
+        subtitle="Punto de partida de la configuración",
         rows=rows,
-        footer="←/→ cambiar perfil    Enter continuar    Esc atrás",
+        footer="F1 Ayuda   ←/→ Cambiar   Enter Continuar   Esc Atrás   F10 Salir",
+        progress="1/6",
         on_change=on_change,
         on_activate=activate,
     )
@@ -498,7 +499,6 @@ def method_screen(app: App, ctx: Context) -> Screen:
 
     desc = Row("note", label=detail_by_label[current], result="ok")
     rows = [
-        Row("heading", label="Instalación de dependencias"),
         Row("note", label="Los comandos se muestran antes de ejecutarse."),
         Row("note", label=""),
         Row("choice", label="Método", value=current, options=options, help="←/→ para cambiar"),
@@ -526,9 +526,10 @@ def method_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Paso 2 · dependencias",
-        subtitle=ctx.method,
+        subtitle="Cómo instalar el entorno del proyecto",
         rows=rows,
-        footer="←/→ cambiar método    Enter continuar    Esc atrás",
+        footer="F1 Ayuda   ←/→ Cambiar   Enter Continuar   Esc Atrás   F10 Salir",
+        progress="2/6",
         on_change=on_change,
         on_activate=activate,
     )
@@ -549,7 +550,6 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
     env = ctx.envs[file_key]
     target = next(t for t in env_paths() if t.key == file_key)
     rows: list[Row] = [
-        Row("heading", label=f"{target.label}"),
         Row(
             "note",
             label=f"{target.key_path} — "
@@ -634,10 +634,11 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
                 app_.push(review_screen(app_, ctx))
 
     return Screen(
-        title=f"{'Editar' if edit_mode else 'Paso 3'} · {file_key}/.env",
-        subtitle=target.key_path,
+        title=f"{'Editar' if edit_mode else 'Paso 3'} · {file_key}",
+        subtitle=target.label,
         rows=rows,
-        footer="Enter editar · g generar secreto · a avanzados · Esc atrás",
+        footer="F1 Ayuda   Enter Editar   Tab Siguiente   Esc Atrás   F10 Salir",
+        progress="" if edit_mode else "3/6",
         on_change=on_change,
         on_activate=activate,
     )
@@ -659,7 +660,6 @@ def review_screen(app: App, ctx: Context) -> Screen:
 
     def build() -> list[Row]:
         rows = [
-            Row("heading", label="Revisa los cambios"),
             Row("note", label="Nada se escribe hasta que lo confirmes."),
             Row("note", label=""),
         ]
@@ -725,9 +725,10 @@ def review_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Paso 4 · revisión",
-        subtitle="diff de los tres archivos",
+        subtitle="Diff de los tres archivos",
         rows=build(),
-        footer="Enter escribir · Esc atrás",
+        footer="F1 Ayuda   Enter Escribir   Esc Atrás   F10 Salir",
+        progress="4/6",
         on_enter=on_enter,
         on_activate=activate,
     )
@@ -803,7 +804,6 @@ def edit_picker_screen(app: App, ctx: Context) -> Screen:
 
     def build() -> list[Row]:
         rows = [
-            Row("heading", label="Editar configuración"),
             Row("note", label="Abre un archivo, cambia valores y guarda en disco."),
             Row("note", label=""),
         ]
@@ -841,10 +841,10 @@ def edit_picker_screen(app: App, ctx: Context) -> Screen:
             app_.push(env_screen(app_, ctx, row.action, edit_mode=True))
 
     return Screen(
-        title="Editar · configure los valores",
-        subtitle="elige un archivo",
+        title="Editar configuración",
+        subtitle="Elige un archivo",
         rows=build(),
-        footer="Enter abrir archivo · Esc atrás",
+        footer="F1 Ayuda   Enter Abrir   Esc Atrás   F10 Salir",
         on_enter=on_enter,
         on_activate=activate,
     )
@@ -859,7 +859,6 @@ def import_screen(app: App, ctx: Context) -> Screen:
         help="Ruta absoluta o relativa al repo; solo importan claves ya existentes",
     )
     rows = [
-        Row("heading", label="Importar valores"),
         Row(
             "note",
             label="Sube los valores de otro .env a los tres archivos (claves conocidas).",
@@ -916,9 +915,9 @@ def import_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Importar · .env externo",
-        subtitle="claves ya presentes en los tres archivos",
+        subtitle="Claves ya presentes en los tres archivos",
         rows=rows,
-        footer="Enter editar ruta · Enter de nuevo en Importar · Esc atrás",
+        footer="F1 Ayuda   Enter Editar/Aceptar   Esc Atrás   F10 Salir",
         on_activate=activate,
     )
 
@@ -932,7 +931,6 @@ def export_screen(app: App, ctx: Context) -> Screen:
         help="Ahí se escribirán todos los valores activos (incluye secretos)",
     )
     rows = [
-        Row("heading", label="Exportar configuración"),
         Row("note", label="Escribe los valores activos de los tres .env, agrupados por archivo."),
         Row(
             "note",
@@ -974,9 +972,9 @@ def export_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Exportar · configuración actual",
-        subtitle="los tres .env en un solo archivo",
+        subtitle="Los tres .env en un solo archivo",
         rows=rows,
-        footer="Enter editar ruta · Enter de nuevo en Exportar · Esc atrás",
+        footer="F1 Ayuda   Enter Editar/Aceptar   Esc Atrás   F10 Salir",
         on_activate=activate,
     )
 
@@ -987,7 +985,6 @@ def apply_screen(app: App, ctx: Context) -> Screen:
     def build() -> list[Row]:
         steps = deps.plan(ctx.method)
         rows = [
-            Row("heading", label="Instalación"),
             Row("note", label=f"Método: {ctx.method}"),
             Row("note", label=""),
         ]
@@ -1064,9 +1061,10 @@ def apply_screen(app: App, ctx: Context) -> Screen:
 
     return Screen(
         title="Paso 5 · dependencias",
-        subtitle=ctx.method,
+        subtitle="Instalación del entorno del proyecto",
         rows=build(),
-        footer="Enter ejecutar · Esc atrás",
+        footer="F1 Ayuda   Enter Ejecutar   Esc Atrás   F10 Salir",
+        progress="5/6",
         on_enter=on_enter,
         on_activate=activate,
     )
@@ -1082,7 +1080,6 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
         bad = sum(1 for check in checks if check.status == "bad")
         warn = sum(1 for check in checks if check.status == "warn")
         rows = [
-            Row("heading", label="Validación"),
             Row(
                 "note",
                 label=f"{len(checks)} comprobaciones · {bad} errores · {warn} avisos",
@@ -1148,9 +1145,10 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
 
     return Screen(
         title="Paso 6 · validación",
-        subtitle="reglas compartidas por TUI y CLI",
+        subtitle="Reglas compartidas por la TUI y la CLI",
         rows=build(),
-        footer="Enter ejecutar opción · Esc atrás",
+        footer="F1 Ayuda   Enter Ejecutar   Esc Atrás   F10 Salir",
+        progress="6/6",
         on_enter=on_enter,
         on_activate=activate,
     )
@@ -1160,7 +1158,6 @@ def final_screen(app: App, ctx: Context) -> Screen:
     """Build the closing screen with the hand-off instructions."""
     written = ", ".join(ctx.written) or "los archivos ya existentes"
     rows = [
-        Row("heading", label="Configuración lista"),
         Row("note", label=f"Escrito: {written}", result="ok"),
         Row("note", label=f"Dependencias: {ctx.install_result or 'pendientes'}"),
         Row("note", label=""),
@@ -1180,19 +1177,20 @@ def final_screen(app: App, ctx: Context) -> Screen:
         elif row.action == "help":
             app_.info(
                 "Ayuda",
-                "↑/↓ mover · Enter editar/abrir · Esc atrás",
-                "Tab siguiente · a mostrar avanzados",
-                "g generar secreto · Ctrl+R valor por defecto",
-                "t / F2 cambiar tema",
+                "↑/↓ o Tab mover · Enter seleccionar/editar",
+                "Esc atrás · F10 o q salir",
+                "g generar secreto · a mostrar avanzados",
+                "Ctrl+R valor por defecto · Espacio sí/no",
             )
         elif row.action == "quit":
             app_.should_quit = True
 
     return Screen(
-        title="Listo",
+        title="Configuración lista",
         subtitle=ctx.profile.label,
         rows=rows,
-        footer="Enter  ejecutar opción    t  tema    q  salir",
+        footer="F1 Ayuda   Enter Ejecutar   F10 Salir",
+        progress="Fin",
         on_activate=activate,
     )
 
@@ -1207,6 +1205,6 @@ def build_app(ctx: Context | None = None) -> App:
         The configured :class:`App`.
     """
     ctx = ctx or load_context()
-    app = App(f"newsvoice · {REPO_ROOT.name}")
+    app = App("newsvoice setup")
     app.push(welcome_screen(app, ctx))
     return app

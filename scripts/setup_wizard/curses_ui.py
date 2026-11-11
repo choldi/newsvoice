@@ -28,17 +28,21 @@ CANCEL_KEYS = frozenset(
 )
 
 # Colour pairs, resolved at App start.
-C_HEADER = 1
-C_FOCUS = 2
-C_HELP = 3
-C_OK = 4
-C_WARN = 5
-C_BAD = 6
-C_DIM = 7
-C_VALUE = 8
+C_SCREEN = 1
+C_HEADER = 2
+C_PANEL = 3
+C_BORDER = 4
+C_TITLE = 5
+C_FOCUS = 6
+C_HELP = 7
+C_OK = 8
+C_WARN = 9
+C_BAD = 10
+C_DIM = 11
+C_VALUE = 12
 
-#: Themes offered by the TUI, in cycle order.
-THEME_CYCLE = ("auto", "dark", "light", "mono")
+#: Supported themes. The default imitates the Debian installer.
+THEME_CYCLE = ("debian", "mono")
 
 
 @dataclass(frozen=True)
@@ -46,11 +50,10 @@ class Theme:
     """Resolved colour palette for one TUI theme.
 
     Attributes:
-        key: Stable theme id (``dark``, ``light`` or ``mono``).
-        label: Name shown in the status line.
+        key: Stable theme id (``debian`` or ``mono``).
+        label: Human readable name.
         roles: ``color role -> (foreground, background, base attr)``.
-            ``-1`` means the terminal default, which keeps text readable on
-            both light and dark backgrounds.
+            ``-1`` means the terminal default.
     """
 
     key: str
@@ -63,75 +66,32 @@ class Theme:
         return {role: base for role, (_fg, _bg, base) in self.roles.items()}
 
 
-def _terminal_is_dark() -> bool:
-    """Best-effort guess of the terminal background from ``COLORFGBG``."""
-    spec = os.environ.get("COLORFGBG", "").strip()
-    if not spec:
-        return True
-    try:
-        background = int(spec.split(";")[-1])
-    except ValueError:
-        return True
-    if background == 8:
-        return True
-    return background < 7
-
-
-def _dark_theme(colors: int) -> Theme:
-    if colors >= 256:
-        roles = {
-            C_HEADER: (16, 51, 0),
-            C_FOCUS: (16, 255, 0),
-            C_HELP: (117, -1, 0),
-            C_OK: (120, -1, 0),
-            C_WARN: (222, -1, 0),
-            C_BAD: (210, -1, 0),
-            C_DIM: (245, -1, 0),
-            C_VALUE: (-1, -1, 0),
-        }
-    else:
-        roles = {
-            C_HEADER: (curses.COLOR_BLACK, curses.COLOR_CYAN, 0),
-            C_FOCUS: (curses.COLOR_BLACK, curses.COLOR_WHITE, 0),
-            C_HELP: (curses.COLOR_CYAN, -1, 0),
-            C_OK: (curses.COLOR_GREEN, -1, 0),
-            C_WARN: (curses.COLOR_YELLOW, -1, 0),
-            C_BAD: (curses.COLOR_RED, -1, 0),
-            C_DIM: (-1, -1, 0),
-            C_VALUE: (-1, -1, 0),
-        }
-    return Theme("dark", "oscuro", roles)
-
-
-def _light_theme(colors: int) -> Theme:
-    if colors >= 256:
-        roles = {
-            C_HEADER: (255, 25, 0),
-            C_FOCUS: (255, 25, 0),
-            C_HELP: (25, -1, 0),
-            C_OK: (28, -1, 0),
-            C_WARN: (130, -1, 0),
-            C_BAD: (124, -1, 0),
-            C_DIM: (240, -1, 0),
-            C_VALUE: (-1, -1, 0),
-        }
-    else:
-        roles = {
-            C_HEADER: (curses.COLOR_WHITE, curses.COLOR_BLUE, 0),
-            C_FOCUS: (curses.COLOR_WHITE, curses.COLOR_BLUE, 0),
-            C_HELP: (curses.COLOR_BLUE, -1, 0),
-            C_OK: (curses.COLOR_GREEN, -1, curses.A_BOLD),
-            C_WARN: (curses.COLOR_MAGENTA, -1, curses.A_BOLD),
-            C_BAD: (curses.COLOR_RED, -1, curses.A_BOLD),
-            C_DIM: (-1, -1, curses.A_DIM),
-            C_VALUE: (-1, -1, 0),
-        }
-    return Theme("light", "claro", roles)
+def _debian_theme(_colors: int) -> Theme:
+    """Return the classic installer palette: blue screen, grey panel, red focus."""
+    roles = {
+        C_SCREEN: (curses.COLOR_WHITE, curses.COLOR_BLUE, 0),
+        C_HEADER: (curses.COLOR_WHITE, curses.COLOR_BLUE, curses.A_BOLD),
+        C_PANEL: (curses.COLOR_BLACK, curses.COLOR_WHITE, 0),
+        C_BORDER: (curses.COLOR_BLUE, curses.COLOR_WHITE, curses.A_BOLD),
+        C_TITLE: (curses.COLOR_WHITE, curses.COLOR_BLUE, curses.A_BOLD),
+        C_FOCUS: (curses.COLOR_WHITE, curses.COLOR_RED, curses.A_BOLD),
+        C_HELP: (curses.COLOR_BLUE, curses.COLOR_WHITE, 0),
+        C_OK: (curses.COLOR_BLUE, curses.COLOR_WHITE, curses.A_BOLD),
+        C_WARN: (curses.COLOR_MAGENTA, curses.COLOR_WHITE, curses.A_BOLD),
+        C_BAD: (curses.COLOR_WHITE, curses.COLOR_RED, curses.A_BOLD),
+        C_DIM: (curses.COLOR_BLUE, curses.COLOR_WHITE, 0),
+        C_VALUE: (curses.COLOR_BLACK, curses.COLOR_WHITE, 0),
+    }
+    return Theme("debian", "Debian", roles)
 
 
 def _mono_theme(_colors: int) -> Theme:
     roles = {
+        C_SCREEN: (-1, -1, 0),
         C_HEADER: (-1, -1, curses.A_BOLD | curses.A_REVERSE),
+        C_PANEL: (-1, -1, 0),
+        C_BORDER: (-1, -1, curses.A_BOLD),
+        C_TITLE: (-1, -1, curses.A_BOLD | curses.A_REVERSE),
         C_FOCUS: (-1, -1, curses.A_BOLD | curses.A_REVERSE),
         C_HELP: (-1, -1, curses.A_DIM),
         C_OK: (-1, -1, curses.A_BOLD),
@@ -140,26 +100,25 @@ def _mono_theme(_colors: int) -> Theme:
         C_DIM: (-1, -1, curses.A_DIM),
         C_VALUE: (-1, -1, 0),
     }
-    return Theme("mono", "monocromo", roles)
+    return Theme("mono", "Monocromo", roles)
 
 
 def resolve_theme(key: str, colors: int = 8) -> Theme:
     """Return the concrete palette for ``key``.
 
+    Unknown and legacy theme names fall back to the Debian palette so an old
+    ``NEWSVOICE_TUI_THEME`` value cannot break the installer.
+
     Args:
-        key: Theme id, including the special ``auto`` value.
+        key: Theme id (``debian`` or ``mono``).
         colors: Number of colours the terminal supports.
 
     Returns:
         A fully resolved :class:`Theme`.
     """
-    if key == "auto":
-        key = "dark" if _terminal_is_dark() else "light"
-    if key == "light":
-        return _light_theme(colors)
     if key == "mono":
         return _mono_theme(colors)
-    return _dark_theme(colors)
+    return _debian_theme(colors)
 
 
 def _wrap_text(text: str, width: int) -> list[str]:
@@ -248,10 +207,11 @@ class Screen:
     """A wizard step: a title, rows and optional callbacks.
 
     Attributes:
-        title: Big heading rendered in the header.
-        subtitle: Progress/context line under the title.
+        title: Title rendered once in the panel border.
+        subtitle: Context line shown under the panel title.
         rows: Content rows, in order.
         footer: Key hints shown in the last line.
+        progress: Optional step label shown at the right of the top bar.
         on_enter: Called with ``(app)`` the first time the screen is shown.
         on_activate: Called with ``(app, row)`` when Enter is pressed on a
             non editing row (buttons, choices, passwords).
@@ -262,6 +222,7 @@ class Screen:
     subtitle: str = ""
     rows: list[Row] = field(default_factory=list)
     footer: str = ""
+    progress: str = ""
     on_enter: Callable[[App], None] | None = None
     on_activate: Callable[[App, Row], None] | None = None
     on_change: Callable[[App, Row], None] | None = None
@@ -386,13 +347,17 @@ class App:
         self.visited: set[int] = set()
         self.should_quit = False
         self.window: curses.window | None = None
-        requested = os.environ.get("NEWSVOICE_TUI_THEME", "auto").strip().lower()
-        self.theme_key = requested if requested in THEME_CYCLE else "auto"
+        requested = os.environ.get("NEWSVOICE_TUI_THEME", "debian").strip().lower()
+        self.theme_key = "mono" if requested == "mono" else "debian"
         self._theme = resolve_theme(self.theme_key)
         self._colors = 8
         self._colored = False
         self._base_attrs: dict[int, int] = {}
         self._visual_starts: dict[int, int] = {}
+        self._body_top = 0
+        self._body_left = 0
+        self._body_w = 0
+        self._body_h = 0
 
     # -- stack navigation ---------------------------------------------------
     def push(self, screen: Screen) -> None:
@@ -572,26 +537,6 @@ class App:
             except curses.error:
                 pass
 
-    def cycle_theme(self) -> None:
-        """Switch to the next visually different theme."""
-        try:
-            start = THEME_CYCLE.index(self.theme_key)
-        except ValueError:
-            start = 0
-        for step in range(1, len(THEME_CYCLE) + 1):
-            candidate = THEME_CYCLE[(start + step) % len(THEME_CYCLE)]
-            if resolve_theme(candidate, self._colors).key != self._theme.key:
-                self.theme_key = candidate
-                break
-        self._apply_theme()
-        self.say(f"Tema: {self.theme_status()}", "ok")
-
-    def theme_status(self) -> str:
-        """Return a human readable name for the active theme."""
-        if self.theme_key == "auto":
-            return f"auto · {self._theme.label}"
-        return self._theme.label
-
     def _attr(self, color: int, extra: int = 0) -> int:
         base = self._base_attrs.get(color, 0)
         if not self._colored:
@@ -620,49 +565,101 @@ class App:
         except curses.error:
             pass
 
+    def _panel_geometry(self, w: int, h: int) -> tuple[int, int, int, int]:
+        """Return ``(left, width, top, bottom)`` for the main panel."""
+        width = min(max(w - 4, 30), 100)
+        left = max((w - width) // 2, 1)
+        return left, width, 1, h - 2
+
+    def _draw_box(
+        self,
+        scr: curses.window,
+        top: int,
+        left: int,
+        width: int,
+        height: int,
+        title: str,
+    ) -> None:
+        """Paint a filled panel with a border and a centred title."""
+        panel_attr = self._attr(C_PANEL)
+        border_attr = self._attr(C_BORDER)
+        for y in range(top, top + height):
+            self._put(scr, y, left, " " * width, panel_attr, limit=width)
+        self._put(scr, top, left, "┌" + "─" * (width - 2) + "┐", border_attr, limit=width)
+        self._put(
+            scr,
+            top + height - 1,
+            left,
+            "└" + "─" * (width - 2) + "┘",
+            border_attr,
+            limit=width,
+        )
+        for y in range(top + 1, top + height - 1):
+            self._put(scr, y, left, "│", border_attr, limit=1)
+            self._put(scr, y, left + width - 1, "│", border_attr, limit=1)
+        label = f" {title} "
+        if len(label) > width - 4:
+            label = label[: width - 4]
+        self._put(
+            scr,
+            top,
+            left + max((width - len(label)) // 2, 2),
+            label,
+            self._attr(C_TITLE, curses.A_BOLD),
+            limit=width - 4,
+        )
+
     def draw(self, stdscr: curses.window) -> None:
-        """Paint the whole frame."""
+        """Paint the whole frame with the Debian-installer look."""
+        stdscr.bkgdset(" ", self._attr(C_SCREEN))
         stdscr.erase()
         h, w = stdscr.getmaxyx()
-        if h < 6 or w < 30:
-            self._put(stdscr, 0, 0, "Terminal demasiado pequeño (mínimo 30x6)", limit=w - 1)
+        if h < 10 or w < 40:
+            self._put(stdscr, 0, 0, "Terminal demasiado pequeño (mínimo 40x10)", limit=w - 1)
             stdscr.refresh()
             return
 
         screen = self.current
-        # Header
         bar = f" {self.title} "
-        self._put(
-            stdscr,
-            0,
-            0,
-            bar.ljust(w),
-            self._attr(C_HEADER, curses.A_BOLD),
-            limit=w - 1,
-        )
-        self._put(stdscr, 1, 0, screen.title, self._attr(C_FOCUS, curses.A_BOLD), limit=w - 1)
+        self._put(stdscr, 0, 0, bar.ljust(w), self._attr(C_HEADER), limit=w - 1)
+        if screen.progress:
+            progress = f" {screen.progress} "
+            self._put(
+                stdscr,
+                0,
+                max(w - len(progress) - 1, 1),
+                progress,
+                self._attr(C_HEADER),
+                limit=len(progress),
+            )
+
+        left, width, top, bottom = self._panel_geometry(w, h)
+        self._draw_box(stdscr, top, left, width, bottom - top + 1, screen.title)
+        inner_left = left + 2
+        inner_w = max(width - 4, 1)
+
+        body_top = top + 1
         if screen.subtitle:
             self._put(
                 stdscr,
-                1,
-                min(len(screen.title) + 2, w - 2),
+                body_top,
+                inner_left,
                 screen.subtitle,
-                limit=max(w - 3, 1),
+                self._attr(C_HELP),
+                limit=inner_w,
             )
+            body_top += 2
 
-        # Status (wrapped) + footer
-        level_color = {"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(self.message_level, C_DIM)
-        status_lines = _wrap_text(self.message, max(w - 1, 1)) if self.message else []
-        max_status = max(h - 7, 1)
-        if len(status_lines) > max_status:
-            status_lines = status_lines[:max_status]
-            status_lines[-1] = status_lines[-1][: max(w - 4, 1)] + "…"
-        reserved = max(len(status_lines), 1)
+        help_sep_y = bottom - 3
+        help_y = bottom - 2
+        status_y = bottom - 1
+        body_h = max(help_sep_y - body_top, 1)
+        self._body_top = body_top
+        self._body_left = inner_left
+        self._body_w = inner_w
+        self._body_h = body_h
 
-        # Body
-        body_top = 2
-        body_h = max(h - 3 - reserved, 1)
-        layout = self._build_layout(w)
+        layout = self._build_layout(inner_w)
         total_lines = layout[-1][1] + len(layout[-1][2]) if layout else 0
         focus_start = 0
         focus_end = 0
@@ -684,57 +681,98 @@ class App:
                     continue
                 y = body_top + (visual - self.offset)
                 for x, text, attr in segments:
-                    self._put(stdscr, y, x, text, attr)
+                    self._put(stdscr, y, inner_left + x, text, attr, limit=inner_w - x)
 
-        for i, line in enumerate(status_lines):
+        self._put(
+            stdscr,
+            help_sep_y,
+            left,
+            "├" + "─" * (width - 2) + "┤",
+            self._attr(C_BORDER),
+            limit=width,
+        )
+        help_text = self._focused_help()
+        if help_text:
             self._put(
                 stdscr,
-                h - 1 - reserved + i,
-                0,
-                line,
-                self._attr(level_color),
-                limit=w - 1,
+                help_y,
+                inner_left,
+                help_text,
+                self._attr(C_HELP),
+                limit=inner_w,
             )
+
+        if self.message:
+            level_color = {"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(self.message_level, C_DIM)
+            self._put(
+                stdscr,
+                status_y,
+                inner_left,
+                self.message,
+                self._attr(level_color),
+                limit=inner_w,
+            )
+
+        footer = screen.footer or "F1 Ayuda  Enter Seleccionar  Esc Atrás  F10 Salir"
         self._put(
             stdscr,
             h - 1,
             0,
-            screen.footer.ljust(w),
-            self._attr(C_HELP),
-            limit=w - 1,
+            " " + footer.ljust(max(w - 2, 1)),
+            self._attr(C_HEADER),
+            limit=w,
         )
 
         if self.modal is not None:
             self.modal.draw(self)
+            self._hide_cursor()
         elif self.editing is not None:
-            self._place_cursor(stdscr, h, w)
+            self._place_cursor(stdscr)
+        else:
+            self._hide_cursor()
         stdscr.refresh()
+
+    def _focused_help(self) -> str:
+        """Return the help line for the focused or edited row."""
+        row = self.editing or self._focused_row()
+        return row.help if row is not None else ""
+
+    @staticmethod
+    def _hide_cursor() -> None:
+        """Hide the hardware cursor when no field is being edited."""
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+
+    def _value_x(self, row: Row, w: int) -> int:
+        """Return the value column for a row inside ``w`` columns."""
+        prefix = "▸ " + row.label
+        return min(max(len(prefix) + 2, min(24, w // 2)), max(w - 4, len(prefix) + 2))
 
     def _row_visual_lines(
         self, row: Row, w: int, focused: bool
     ) -> list[list[tuple[int, str, int]]]:
         """Return the wrapped visual lines and segments for one row."""
         if row.kind == "heading":
-            attr = self._attr(C_FOCUS, curses.A_BOLD | curses.A_UNDERLINE)
-            return [[(1, line, attr)] for line in _wrap_text(row.label, max(w - 2, 1))]
+            attr = self._attr(C_HELP, curses.A_BOLD)
+            return [[(0, line, attr)] for line in _wrap_text(row.label, max(w - 1, 1))]
         if row.kind == "note":
-            color = {"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(row.result, C_DIM)
-            extra = curses.A_BOLD if row.result else curses.A_DIM
+            color = {"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(row.result, C_VALUE)
+            extra = curses.A_BOLD if row.result else 0
             attr = self._attr(color, extra)
-            return [[(2, line, attr)] for line in _wrap_text(row.label, max(w - 3, 1))]
+            return [[(0, line, attr)] for line in _wrap_text(row.label, max(w - 1, 1))]
 
-        marker = "▸ " if focused else "  "
-        if focused and self.editing is row:
-            marker = "▸ "
-        prefix = marker + row.label
-        value_x = max(len(prefix) + 2, 24)
-        label_attr = self._attr(C_FOCUS, curses.A_BOLD) if focused else self._attr(C_VALUE)
-        first: list[tuple[int, str, int]] = [(1, prefix.ljust(value_x - 1), label_attr)]
+        prefix = ("▸ " if focused else "  ") + row.label
+        value_x = self._value_x(row, w)
+        focus_attr = self._attr(C_FOCUS)
+        label_attr = focus_attr if focused else self._attr(C_VALUE)
+        first: list[tuple[int, str, int]] = [(0, prefix.ljust(value_x), label_attr)]
 
         value = row.display_value
         if focused and self.editing is row:
             value = row.value
-        max_val = max(w - value_x - 3, 4)
+        max_val = max(w - value_x - 1, 4)
         start = 0
         if focused and self.editing is row:
             if self.cursor > max_val - 1:
@@ -746,19 +784,20 @@ class App:
         suffix = ""
         if row.result:
             suffix = {"ok": " ✓", "warn": " ⚠", "bad": " ✗"}.get(row.result, "")
-        value_attr = self._attr({"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(row.result, C_VALUE))
+        value_attr = (
+            focus_attr
+            if focused
+            else self._attr({"ok": C_OK, "warn": C_WARN, "bad": C_BAD}.get(row.result, C_VALUE))
+        )
         first.append((value_x, value + suffix, value_attr))
 
         if focused and row.generate and not self.editing:
             hint = "[g genera]"
-            first.append((max(w - len(hint) - 1, 1), hint, self._attr(C_HELP)))
+            first.append((max(w - len(hint), 1), hint, focus_attr))
 
-        lines = [first]
-        if row.help and focused:
-            help_attr = self._attr(C_HELP, curses.A_DIM)
-            for line in _wrap_text(row.help, max(w - 5, 1)):
-                lines.append([(4, line, help_attr)])
-        return lines
+        if focused:
+            first.insert(0, (0, " " * max(w - 1, 1), focus_attr))
+        return [first]
 
     def _build_layout(self, w: int) -> list[tuple[int, int, list[list[tuple[int, str, int]]]]]:
         """Lay out the visible rows, accounting for wrapped lines."""
@@ -767,28 +806,33 @@ class App:
         for index, row in enumerate(self.current.rows):
             if row.advanced and not self.show_advanced:
                 continue
-            focused = index == self.focus and row.focusable and self.editing is None
+            focused = index == self.focus and row.focusable
             lines = self._row_visual_lines(row, w, focused)
             layout.append((index, visual, lines))
             visual += len(lines)
         return layout
 
-    def _place_cursor(self, stdscr: curses.window, h: int, w: int) -> None:
+    def _place_cursor(self, stdscr: curses.window) -> None:
+        """Place the visible cursor at the edit position."""
         row = self.editing
         if row is None:
             return
         index = self._row_index(row)
         visual = self._visual_starts.get(index, 0)
-        screen_top = 2
-        y = screen_top + (visual - self.offset)
-        if y < screen_top or y >= h - 3:
+        y = self._body_top + (visual - self.offset)
+        if y < self._body_top or y >= self._body_top + self._body_h:
+            self._hide_cursor()
             return
-        value_x = max(len("▸ " + row.label) + 2, 24)
-        max_val = max(w - value_x - 3, 4)
+        value_x = self._value_x(row, self._body_w)
+        max_val = max(self._body_w - value_x - 1, 4)
         start = self.cursor - max_val + 1 if self.cursor > max_val - 1 else 0
-        curses.curs_set(1)
-        stdscr.move(y, min(value_x + (self.cursor - start), w - 2))
-        curses.curs_set(0)
+        x = self._body_left + value_x + (self.cursor - start)
+        x = min(max(x, self._body_left), self._body_left + self._body_w - 1)
+        try:
+            curses.curs_set(1)
+            stdscr.move(y, x)
+        except curses.error:
+            pass
 
     def draw_modal(
         self,
@@ -823,7 +867,7 @@ class App:
                 display_lines.extend(_wrap_text(line, inner))
         buttons_h = 1 if buttons else 0
         height = min(max(len(display_lines) + 4 + buttons_h, 6), h - 2)
-        body_capacity = max(height - 2 - buttons_h, 1)
+        body_capacity = max(height - 2 - (2 if buttons else 0), 1)
         max_scroll = max(len(display_lines) - body_capacity, 0)
         scroll = 0 if highlight else getattr(self.modal, "offset", 0)
         if highlight and lines:
@@ -833,22 +877,10 @@ class App:
             self.modal.offset = scroll
         top = max((h - height) // 2, 0)
         left = max((w - width) // 2, 0)
-        for row in range(height):
-            self._put(scr, top + row, 0, " " * w, limit=w)
-        box = self._attr(C_FOCUS)
-        for row in range(height):
-            self._put(scr, top + row, left, " " * width, box, limit=width)
         title_line = f" {title} "
         if max_scroll > 0 and not highlight:
             title_line += "· PgUp/PgDn "
-        self._put(
-            scr,
-            top,
-            left + 2,
-            title_line,
-            self._attr(C_HEADER, curses.A_BOLD),
-            limit=width - 4,
-        )
+        self._draw_box(scr, top, left, width, height, title_line)
         for i in range(body_capacity):
             source = scroll + i
             if source >= len(display_lines):
@@ -862,11 +894,19 @@ class App:
                 limit=inner,
             )
         if buttons:
-            y = top + height - 1
+            self._put(
+                scr,
+                top + height - 3,
+                left,
+                "├" + "─" * (width - 2) + "┤",
+                self._attr(C_BORDER),
+                limit=width,
+            )
+            y = top + height - 2
             x = left + 2
             for i, label in enumerate(buttons):
-                text = f" {label} " if i != index else f"[ {label} ]"
-                attr = self._attr(C_FOCUS, curses.A_BOLD) if i == index else self._attr(C_VALUE)
+                text = f"[ {label} ]"
+                attr = self._attr(C_FOCUS) if i == index else self._attr(C_VALUE)
                 self._put(scr, y, x, text, attr, limit=width - 4)
                 x += len(text) + 1
         elif highlight and lines:
@@ -876,10 +916,18 @@ class App:
                 self._put(
                     scr,
                     y,
-                    left,
-                    lines[index].ljust(width),
-                    self._attr(C_FOCUS, curses.A_BOLD),
-                    limit=width,
+                    left + 1,
+                    " " * (width - 2),
+                    self._attr(C_FOCUS),
+                    limit=width - 2,
+                )
+                self._put(
+                    scr,
+                    y,
+                    left + 2,
+                    lines[index],
+                    self._attr(C_FOCUS),
+                    limit=inner,
                 )
         scr.refresh()
 
@@ -894,7 +942,7 @@ class App:
         return self._handle_nav(key)
 
     def _handle_nav(self, key: int) -> Action:
-        if key in (ord("q"), ord("Q")):
+        if key in (curses.KEY_F10, ord("q"), ord("Q")):
             self.ask_quit()
             return Action()
         if key in (27, curses.KEY_BACKSPACE) and len(self.screens) > 1:
@@ -924,16 +972,13 @@ class App:
                 else "Opciones avanzadas ocultas"
             )
             return Action()
-        if key in (curses.KEY_F2, ord("t"), ord("T")):
-            self.cycle_theme()
-            return Action()
-        if key == ord("?"):
+        if key in (curses.KEY_F1, ord("?")):
             self.info(
                 "Ayuda",
-                "↑/↓  mover · Enter  editar/abrir · Esc  atrás",
-                "Tab  siguiente campo · a  opciones avanzadas",
-                "g  generar secreto · Ctrl+R  valor por defecto",
-                "t / F2  cambiar tema · q  salir",
+                "↑/↓ o Tab  mover · Enter  seleccionar/editar",
+                "Esc  atrás · F10 o q  salir",
+                "g  generar secreto · a  opciones avanzadas",
+                "Ctrl+R  valor por defecto · Espacio  sí/no",
             )
             return Action()
 
@@ -980,11 +1025,16 @@ class App:
             self.editing = None
             self.say("Edición cancelada")
             return Action()
-        if key in CONFIRM_KEYS or key == 9:
-            self.editing = None
-            self.editing_original = ""
-            self.say(f"{row.label or row.action} guardado en memoria", "ok")
-            self._notify_change(row)
+        if key in CONFIRM_KEYS:
+            self._commit_edit(row)
+            return Action()
+        if key == 9:  # Tab commits and moves to the next field
+            self._commit_edit(row)
+            self._move(1)
+            return Action()
+        if key == curses.KEY_BTAB:  # Shift+Tab commits and moves back
+            self._commit_edit(row)
+            self._move(-1)
             return Action()
         if key in (curses.KEY_BACKSPACE, 127, 8):
             if self.cursor > 0:
@@ -1013,6 +1063,13 @@ class App:
         elif key == ord("\n"):
             pass
         return Action()
+
+    def _commit_edit(self, row: Row) -> None:
+        """Commit the active inline edit and notify the screen."""
+        self.editing = None
+        self.editing_original = ""
+        self.say(f"{row.label or row.action} guardado en memoria", "ok")
+        self._notify_change(row)
 
     def _focused_row(self) -> Row | None:
         rows = self.current.rows
@@ -1045,7 +1102,7 @@ class App:
         self.editing = row
         self.editing_original = row.value
         self.cursor = len(row.value)
-        self.say(f"Editando {row.label} · Enter confirma · Esc cancela")
+        self.say(f"Editando {row.label}")
 
     def _pick(self, app: App, value: str) -> None:
         row = self._focused_row()
