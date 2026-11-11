@@ -83,7 +83,8 @@ class CollectionIn(BaseModel):
     delivery_channels: list[str] = Field(
         default_factory=lambda: ["telegram"],
         description=(
-            "Delivery channels ('telegram', 'email', 'whatsapp'); empty defaults to telegram"
+            "Delivery channels ('telegram', 'email', 'whatsapp'); unset defaults"
+            " to telegram, an explicit empty list disables delivery"
         ),
     )
     logic_delivery: LogicDeliveryConfig | None = Field(

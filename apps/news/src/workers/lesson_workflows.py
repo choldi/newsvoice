@@ -157,7 +157,7 @@ class LessonWorkflow:
         """
         if not config.delivery_task_queue:
             return []
-        channels = config.delivery_channels or ["telegram"]
+        channels = config.delivery_channels
         attach = bool(rendered.get("attach_audio"))
         audio_path = str(rendered.get("audio_path") or "") or None
         audio_url = str(rendered.get("audio_url") or "")

@@ -649,7 +649,7 @@ def collection_delivery(collection_name: str) -> tuple[list[str], str | None, li
     if collection is None:
         return ["telegram"], None, []
     return (
-        list(collection.delivery_channels) or ["telegram"],
+        list(collection.delivery_channels),
         collection.chat_id,
         list(collection.email_recipients),
     )

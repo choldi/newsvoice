@@ -19,9 +19,10 @@
 #   must be in WHATSAPP_ALLOWLIST. `whatsapp_group_id` sends to a WhatsApp group
 #   (delivered as <id>@g.us); groups are always allowed.
 # - `delivery_channels` selects which channels deliver this digest: "telegram",
-#   "email", "whatsapp", or any combination. Defaults to ["telegram"] (email and
-#   whatsapp must be explicitly enabled in addition to configuring their
-#   recipients / group).
+#   "email", "whatsapp", or any combination. Defaults to ["telegram"] when the
+#   field is omitted (email and whatsapp must be explicitly enabled in addition
+#   to configuring their recipients / group). Set `delivery_channels = []` to
+#   generate and store the digest without delivering it to any channel.
 # - `deliver_audio = true` attaches the generated audio to Telegram AND to the
 #   email and WhatsApp deliveries (when those channels are active).
 # - `tts_backend` picks the engine that synthesizes this collection's audio
@@ -95,4 +96,18 @@ feed_urls = [
 prompt_template = "finance"
 # chat_id = "optional_per_collection_chat_id"
 # tts_backend = "omni_voice"   # this digest is spoken by the tts-api gateway
+enabled = false
+
+# Generates and stores the digest without sending it anywhere. Useful for
+# previewing a new source before wiring Telegram/email/WhatsApp delivery.
+[[collections]]
+name = "example_no_delivery"
+time = "12:00"
+feed_urls = [
+    "https://example.com/feed.xml",
+]
+delivery_channels = []
+tts_enabled = false
+deliver_audio = false
+narration_enabled = false
 enabled = false

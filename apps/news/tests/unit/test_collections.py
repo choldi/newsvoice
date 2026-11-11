@@ -138,12 +138,23 @@ def test_delivery_channels_parsed_and_normalized(tmp_path: Path) -> None:
     assert collection.delivery_channels == ["telegram", "email"]
 
 
-def test_empty_delivery_channels_falls_back_to_telegram(tmp_path: Path) -> None:
-    """An empty delivery_channels list defaults to telegram delivery."""
+def test_empty_delivery_channels_disables_delivery(tmp_path: Path) -> None:
+    """An explicit empty delivery_channels list disables delivery."""
     path = _write_collections(
         tmp_path,
         '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
         "delivery_channels = []\n",
+    )
+    collection = CollectionsLoader(str(path)).load()[0]
+    assert collection.delivery_channels == []
+
+
+def test_unknown_delivery_channels_fall_back_to_telegram(tmp_path: Path) -> None:
+    """A non-empty list with only unknown channels keeps legacy telegram delivery."""
+    path = _write_collections(
+        tmp_path,
+        '[[collections]]\nname = "tech"\nfeed_urls = ["https://x.com/rss"]\n'
+        'delivery_channels = ["sms"]\n',
     )
     collection = CollectionsLoader(str(path)).load()[0]
     assert collection.delivery_channels == ["telegram"]

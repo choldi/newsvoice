@@ -150,8 +150,8 @@ class CollectionConfig(BaseModel):
     delivery_channels: list[str] = Field(
         default_factory=lambda: ["telegram"],
         description=(
-            "Delivery channels ('telegram', 'email', 'whatsapp'); empty or unset"
-            " defaults to telegram"
+            "Delivery channels ('telegram', 'email', 'whatsapp'); unset defaults"
+            " to telegram, an explicit empty list disables delivery"
         ),
     )
     logic_delivery: LogicDeliveryConfig | None = Field(
@@ -355,14 +355,17 @@ class CollectionConfig(BaseModel):
     @field_validator("delivery_channels")
     @classmethod
     def _delivery_channels(cls, value: list[str]) -> list[str]:
-        """Keep only known channels, de-duplicated, falling back to telegram.
+        """Keep only known channels, preserving an explicit empty list.
 
         Args:
             value: Raw channel list from the config.
 
         Returns:
-            Ordered, de-duplicated channels; ['telegram'] when nothing valid.
+            Ordered, de-duplicated channels. An empty list disables delivery;
+            a non-empty list with no known channel falls back to telegram.
         """
+        if not value:
+            return []
         known = ("telegram", "email", "whatsapp")
         channels = [channel for channel in known if channel in value]
         return channels or ["telegram"]

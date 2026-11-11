@@ -1,0 +1,16 @@
+# =============================================================================
+# Overlay: point the main gateway at the OmniVoice sidecar
+# =============================================================================
+# Only applied by scripts/deploy.sh when OMNIVOICE=1 (or SIDECARS=1). Keeping it
+# out of the base compose file means the normal stack never tries to reach a
+# sidecar that is not running.
+#
+# Usage:
+#   GPU=1 OMNIVOICE=1 ./scripts/deploy.sh production
+#   SIDECARS=1 ./scripts/deploy.sh production
+# =============================================================================
+
+services:
+  gateway:
+    environment:
+      - OMNIVOICE_REMOTE_URL=${OMNIVOICE_REMOTE_URL:-http://gateway-omnivoice:8000}

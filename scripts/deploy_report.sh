@@ -36,6 +36,8 @@ OUT="${1:-deploy-report.md}"
 # Se traduce a /dev/stdout: un redirect a un fichero literal '-' crearía uno.
 [[ "$OUT" == "-" ]] && OUT="/dev/stdout"
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
+COMPOSE_PROJECT="$(docker compose -f "$COMPOSE_FILE" config 2>/dev/null \
+    | awk '/^name:/{print $2; exit}')"
 
 BODY="$(mktemp)"
 ANALYSIS="$(mktemp)"
@@ -180,6 +182,115 @@ hit() {
 valid_json() {
     python3 -c 'import json,sys; json.loads(sys.stdin.read())' <<<"$1" 2>/dev/null
 }
+
+env_has_key() {
+    local file="$1" key="$2"
+    [[ -f "$file" ]] && grep -qE "^${key}=" "$file"
+}
+
+# Usa docker ps (no compose ps) para ver también servicios con profile
+# inactivo que siguen corriendo (sidecars qwen3/omnivoice).
+service_container() {
+    local svc="$1" project="${COMPOSE_PROJECT:-}"
+    if [[ -n "$project" ]]; then
+        docker ps --filter "label=com.docker.compose.project=$project" \
+            --filter "label=com.docker.compose.service=$svc" \
+            --format '{{.Names}}' 2>/dev/null | head -1
+    else
+        docker ps --filter "label=com.docker.compose.service=$svc" \
+            --format '{{.Names}}' 2>/dev/null | head -1
+    fi
+}
+
+service_running() {
+    [[ -n "$(service_container "$1")" ]]
+}
+
+container_env() {
+    local svc="$1" key="$2" cid
+    cid="$(service_container "$svc")"
+    [[ -n "$cid" ]] || return 0
+    docker exec "$cid" printenv "$key" 2>/dev/null | tr -d '\r' || true
+}
+
+# Valor efectivo de una variable del gateway: primero el entorno del contenedor
+# (compose puede pisar apps/gateway/.env), luego deploy/.env y el .env del app.
+gateway_env() {
+    local key="$1" default="${2-}"
+    if service_running gateway; then
+        container_env gateway "$key"
+        return 0
+    fi
+    if env_has_key deploy/.env "$key"; then
+        read_env deploy/.env "$key" "$default"
+    elif env_has_key apps/gateway/.env "$key"; then
+        read_env apps/gateway/.env "$key" "$default"
+    else
+        printf '%s' "$default"
+    fi
+}
+
+# GET a una URL desde dentro de api/worker. Así se prueba la misma red que usa
+# la aplicación (host.docker.internal, DNS de compose) y no la del host.
+container_http_body() {
+    local url="$1" svc cid
+    for svc in api worker; do
+        cid="$(service_container "$svc")"
+        if [[ -n "$cid" ]]; then
+            docker exec -i "$cid" python - "$url" <<'PY' 2>/dev/null
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=8) as response:
+        sys.stdout.write(response.read().decode("utf-8", "replace"))
+except Exception:
+    sys.exit(1)
+PY
+            return $?
+        fi
+    done
+    return 1
+}
+
+# Señales agregadas de las colecciones habilitadas. Evita falsos positivos:
+# una colección deshabilitada no exige sidecars ni Telegram.
+collection_flags() {
+    python3 - <<'PY' 2>/dev/null || true
+import tomllib
+
+try:
+    with open("apps/news/collections.toml", "rb") as fh:
+        data = tomllib.load(fh)
+except Exception:
+    print("0 0 0 0")
+    raise SystemExit(0)
+
+telegram = qwen3 = omni = modal = 0
+for collection in data.get("collections", []):
+    if not collection.get("enabled", True):
+        continue
+    channels = collection.get("delivery_channels", ["telegram"])
+    if "telegram" in channels:
+        telegram = 1
+    spec = collection.get("narration_spec") or {}
+    backend = spec.get("tts_backend") or collection.get("tts_backend") or ""
+    if backend == "qwen3_tts":
+        qwen3 = 1
+    if backend == "omni_voice":
+        omni = 1
+    if spec.get("run_in_modal") is True:
+        modal = 1
+print(telegram, qwen3, omni, modal)
+PY
+}
+
+read -r COLLECTIONS_TELEGRAM COLLECTIONS_QWEN3 COLLECTIONS_OMNI COLLECTIONS_MODAL \
+    < <(collection_flags)
+COLLECTIONS_TELEGRAM="${COLLECTIONS_TELEGRAM:-0}"
+COLLECTIONS_QWEN3="${COLLECTIONS_QWEN3:-0}"
+COLLECTIONS_OMNI="${COLLECTIONS_OMNI:-0}"
+COLLECTIONS_MODAL="${COLLECTIONS_MODAL:-0}"
 
 # =============================================================================
 # Secciones del cuerpo (se escriben en $BODY; los hallazgos van a los arrays)
@@ -409,9 +520,13 @@ section_config() {
         local llm tg
         llm="$(read_env apps/news/.env LLM_API_BASE '')"
         [[ -z "$llm" ]] && miss "LLM_API_BASE sin definir"
-        tg="$(read_env apps/news/.env TELEGRAM_BOT_TOKEN '')"
-        if [[ -z "$tg" || "$tg" == your_* ]]; then
-            warn "apps/news/.env: \`TELEGRAM_BOT_TOKEN\` sin token real — la entrega Telegram fallará"
+        if [[ "$COLLECTIONS_TELEGRAM" -eq 1 ]]; then
+            tg="$(read_env apps/news/.env TELEGRAM_BOT_TOKEN '')"
+            if [[ -z "$tg" || "$tg" == your_* ]]; then
+                warn "apps/news/.env: \`TELEGRAM_BOT_TOKEN\` sin token real — la entrega Telegram fallará"
+            fi
+        else
+            emit "- Telegram no requerido: ninguna colección habilitada lo usa en \`delivery_channels\`."
         fi
     else
         emit "> archivo no encontrado"
@@ -523,7 +638,7 @@ section_services() {
     emit ""
     kv "Contenedores en marcha" "$running"
     if [[ ${#down[@]} -gt 0 ]]; then
-        miss "Servicios sin arrancar: ${down[*]} — ¿stack desplegado? (\`make up\` o \`GPU=1 ./scripts/deploy.sh production\`)"
+        miss "Servicios sin arrancar: ${down[*]} — ¿stack desplegado? (\`make up\` o \`SIDECARS=1 ./scripts/deploy.sh production\`)"
     fi
     if [[ -n "$active_profiles" ]]; then
         kv "Profiles definidos pero apagados" "$active_profiles (se activan con \`COMPOSE_PROFILES=..\` o los flags de deploy.sh)"
@@ -564,7 +679,16 @@ section_health() {
         emit "$(printf '%s' "$body" | python3 -m json.tool 2>/dev/null || printf '%s' "$body")"
         emit '```'
         emit ""
-        local rows
+        local rows extra route optional_qwen=0 required_degraded=0 optional_degraded=0
+        extra="$(gateway_env TTS_EXTRA_ENGINES "")"
+        route="$(gateway_env TTS_ENGINES "")"
+        # qwen3 en TTS_EXTRA_ENGINES es opcional; solo es requerido si una
+        # colección activa lo usa o si está en el routing de TTS_ENGINES.
+        if [[ "$COLLECTIONS_QWEN3" -eq 0 ]] \
+            && grep -q "qwen3" <<<"$extra$route" \
+            && ! grep -q '"qwen3_tts"' <<<"$route"; then
+            optional_qwen=1
+        fi
         rows="$(printf '%s' "$body" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -576,19 +700,40 @@ for k, v in (d.get("sub_engines") or {}).items():
         else
             emit "| Sub-engine | mode | model_loaded |"
             emit "|---|---|---|"
-            local r name mode loaded
+            local r name mode loaded required
             while IFS='|' read -r name mode loaded; do
                 [[ -z "$name" ]] && continue
                 emit "| \`$name\` | $mode | $loaded |"
+                required=1
+                if [[ "$name" == "qwen3_tts" && "$optional_qwen" -eq 1 ]]; then
+                    required=0
+                fi
+                if [[ "$name" == "fish_tts" || "$name" == "openai_tts" ]]; then
+                    required=0
+                fi
                 if [[ "$mode" == "NOT_AVAILABLE" || "$mode" == "MOCK" ]]; then
-                    warn "gateway: sub-engine \`$name\` en modo $mode (no renderiza)"
+                    if [[ "$required" -eq 1 ]]; then
+                        warn "gateway: sub-engine requerido \`$name\` en modo $mode (no renderiza)"
+                        required_degraded=1
+                    else
+                        emit "  (opcional; no degrada el estado global)"
+                        optional_degraded=1
+                    fi
                 fi
             done <<<"$rows"
         fi
         if [[ "$gstatus" == "ok" ]]; then
             okc
         elif [[ "$gstatus" == "degraded" ]]; then
-            warn "gateway \`degraded\` — algún sub-engine no disponible (ver tabla)"
+            if [[ "$required_degraded" -eq 1 ]]; then
+                warn "gateway \`degraded\` — algún sub-engine requerido no está disponible (ver tabla)"
+            elif [[ "$optional_degraded" -eq 1 ]]; then
+                emit "> gateway \`degraded\` por engines opcionales; no afecta a las colecciones activas."
+            elif [[ -n "$rows" ]]; then
+                warn "gateway \`degraded\` — revisa \`sub_engines\`"
+            else
+                emit "> gateway \`degraded\` sin \`sub_engines\`: no se puede atribuir a un engine requerido (no se marca aviso)."
+            fi
         else
             warn "gateway status='$gstatus'"
         fi
@@ -598,7 +743,10 @@ for k, v in (d.get("sub_engines") or {}).items():
     fi
     emit ""
 
-    emit "### Disponibilidad de engines (\`GET /api/v1/engines\`)"
+    emit "### Catálogo de engines configurados (\`GET /api/v1/engines\`)"
+    emit ""
+    emit "> Este endpoint lista el catálogo y si cada engine se puede instanciar;"
+    emit "> la disponibilidad en caliente está en \`sub_engines\` de \`/health\`."
     emit ""
     local gw_key=""
     gw_key="$(read_env deploy/.env GATEWAY_API_KEY "")"
@@ -621,7 +769,7 @@ for e in d.get("engines", []):
         while IFS='|' read -r en avail err; do
             [[ "$en" == "active" ]] && active_engine="$avail"
         done <<<"$erows"
-        kv "Engine activo" "${active_engine:-?}"
+        kv "TTS_ENGINE configurado" "${active_engine:-?}"
         emit ""
         emit "| Engine | available | error |"
         emit "|---|---|---|"
@@ -632,10 +780,10 @@ for e in d.get("engines", []):
         okc
     elif grep -qi 'authentication required' <<<"$body"; then
         emit "> ❌ 401: el gateway exige \`X-API-Key\` (hardening P3) y no se ha podido autenticar en este informe."
-        warn "GET /engines devuelve 401 — configura GATEWAY_API_KEY en deploy/.env (o API_KEY en apps/gateway/.env) para que el informe pueda leerlo"
+        warn "GET /api/v1/engines devuelve 401 — configura GATEWAY_API_KEY en deploy/.env (o API_KEY en apps/gateway/.env) para que el informe pueda leerlo"
     else
         emit "> endpoint no accesible (gateway caído o respuesta no-JSON)"
-        warn "GET /engines no accesible"
+        warn "GET /api/v1/engines no accesible"
     fi
     emit ""
 
@@ -643,12 +791,41 @@ for e in d.get("engines", []):
     emit ""
     # La UI actual (temporalio/ui) sirve el SPA con 200+HTML en rutas
     # desconocidas: la API real vive bajo /api/v1 (la vieja era /api).
-    local ns sched
+    local ns sched ns_req ns_list missing_ns=()
     ns="$(curl -s --connect-timeout 3 --max-time 8 -H 'Accept: application/json' \
         "http://localhost:8081/api/v1/namespaces" 2>/dev/null || true)"
     if [[ -n "$ns" ]] && valid_json "$ns"; then
         okc
         emit "- API \`/api/v1/namespaces\` accesible"
+        if service_running temporal; then
+            ns_list="$(docker compose -f "$COMPOSE_FILE" exec -T temporal \
+                temporal operator namespace list --address temporal:7233 2>/dev/null || true)"
+            if [[ -n "$ns_list" ]]; then
+                for ns_req in news-engine-voices news-engine-podcast-local news-engine-podcast-modal; do
+                    grep -qE "(^|[[:space:]])${ns_req}([[:space:]]|$)" <<<"$ns_list" \
+                        || missing_ns+=("$ns_req")
+                done
+                if [[ ${#missing_ns[@]} -eq 0 ]]; then
+                    emit "- Namespaces requeridos: ✅ todos presentes"
+                    okc
+                else
+                    emit "- Namespaces requeridos: ❌ faltan \`${missing_ns[*]}\`"
+                    deep bad "Faltan namespaces de Temporal: ${missing_ns[*]}" \
+                        "El servicio temporal está arriba, pero no existen los namespaces ${missing_ns[*]}." \
+                        "El stack se arrancó sin ejecutar scripts/create_namespaces.sh, o los namespaces se borraron." \
+                        "Los workers y workflows no pueden registrarse: los digests, podcasts y lecciones fallan al arrancar." \
+                        "Crear los namespaces de forma idempotente y reiniciar los workers." \
+                        "./scripts/create_namespaces.sh" \
+                        "SIDECARS=1 ./scripts/deploy.sh production"
+                fi
+            else
+                emit "> no se pudo listar namespaces desde el contenedor temporal"
+                warn "No se pudieron comprobar los namespaces de Temporal"
+            fi
+        else
+            emit "> contenedor \`temporal\` no está en marcha: no se pudieron comprobar namespaces"
+            warn "Temporal no está en marcha: no se pudieron comprobar los namespaces"
+        fi
         sched="$(curl -s --connect-timeout 3 --max-time 8 -H 'Accept: application/json' \
             "http://localhost:8081/api/v1/namespaces/default/schedules" 2>/dev/null || true)"
         if [[ -n "$sched" ]] && valid_json "$sched"; then
@@ -696,7 +873,7 @@ for s in items:
     emit "### Temporal workers"
     emit ""
     local w sigs state
-    for w in worker narration-worker; do
+    for w in worker narration-worker voice-catalog-worker; do
         state="$(docker compose -f "$COMPOSE_FILE" ps --format '{{.State}}' "$w" 2>/dev/null | tr -d '[:space:]')"
         # 'worker_running' se loguea UNA vez al arrancar: hay que mirar los
         # logs completos, no un tail reciente (un worker ocupado lo pierde).
@@ -785,18 +962,13 @@ section_gpu_qwen() {
     emit ""
 
     # --- 5.2 sidecars --------------------------------------------------------
-    local running="" qwen_url omni_url qwen_up omni_up
-    if have docker; then
-        running="$(docker compose -f "$COMPOSE_FILE" ps --status running \
-            --format '{{.Service}}' 2>/dev/null || true)"
-    fi
-    qwen_url="$(read_env deploy/.env QWEN3_TTS_REMOTE_URL "")"
-    [[ -z "$qwen_url" ]] && qwen_url="$(read_env apps/gateway/.env QWEN3_TTS_REMOTE_URL "")"
-    omni_url="$(read_env apps/gateway/.env OMNIVOICE_REMOTE_URL "")"
+    local qwen_url omni_url qwen_up omni_up
+    qwen_url="$(gateway_env QWEN3_TTS_REMOTE_URL "")"
+    omni_url="$(gateway_env OMNIVOICE_REMOTE_URL "")"
     qwen_up="⏸ parado / no creado"
-    grep -qx "gateway-qwen3" <<<"$running" && qwen_up="✅ running"
+    service_running gateway-qwen3 && qwen_up="✅ running"
     omni_up="⏸ parado / no creado"
-    grep -qx "gateway-omnivoice" <<<"$running" && omni_up="✅ running"
+    service_running gateway-omnivoice && omni_up="✅ running"
 
     emit "### Sidecars internos"
     emit ""
@@ -807,19 +979,25 @@ section_gpu_qwen() {
     emit ""
 
     local extra route
-    extra="$(read_env apps/gateway/.env TTS_EXTRA_ENGINES "")"
-    route="$(read_env apps/gateway/.env TTS_ENGINES "")"
+    extra="$(gateway_env TTS_EXTRA_ENGINES "")"
+    route="$(gateway_env TTS_ENGINES "")"
 
     if ! grep -q "qwen3" <<<"$extra$route"; then
         emit "- \`qwen3_tts\` no está en \`TTS_EXTRA_ENGINES\` ni en \`TTS_ENGINES\`: el sidecar no se usa"
         emit ""
     elif [[ -z "$qwen_url" ]]; then
-        emit "- ❌ \`qwen3_tts\` está habilitado pero \`QWEN3_TTS_REMOTE_URL\` está vacía:"
+        emit "- ❌ \`qwen3_tts\` está configurado pero \`QWEN3_TTS_REMOTE_URL\` está vacía:"
         emit "  el engine queda NOT_AVAILABLE y sus voces degradan a Edge."
         emit "- Solución: añadir \`QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1\`"
-        emit "  a \`deploy/.env\` y desplegar con \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`."
+        emit "  a \`deploy/.env\` y desplegar con \`SIDECARS=1 ./scripts/deploy.sh production\`"
+        emit "  (o \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`)."
         emit ""
-        miss "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)"
+        if [[ "$COLLECTIONS_QWEN3" -eq 1 ]]; then
+            miss "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)"
+        else
+            emit "  (opcional: ninguna colección activa usa qwen3_tts)"
+            warn "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)"
+        fi
     elif [[ "$qwen_up" == ✅* ]]; then
         emit "- ✅ sidecar \`gateway-qwen3\` arriba; el gateway le hace proxy (nombre público \`qwen3_tts\`)"
         okc
@@ -835,7 +1013,11 @@ section_gpu_qwen() {
             okc
         else
             emit "- \`/api/v1/health/live\` del sidecar: ❌ ($q_health)"
-            miss "gateway-qwen3 responde $q_health al healthcheck: revisa \`docker compose logs gateway-qwen3\`"
+            if [[ "$COLLECTIONS_QWEN3" -eq 1 ]]; then
+                miss "gateway-qwen3 responde $q_health al healthcheck: revisa \`docker compose logs gateway-qwen3\`"
+            else
+                warn "gateway-qwen3 responde $q_health al healthcheck (opcional: ninguna colección activa usa qwen3)"
+            fi
         fi
         q_torch="$(docker compose -f "$COMPOSE_FILE" exec -T gateway-qwen3 \
             /opt/qwen3-tts/venv/bin/python -c \
@@ -862,10 +1044,16 @@ section_gpu_qwen() {
     else
         emit "- ❌ \`QWEN3_TTS_REMOTE_URL\` apunta a \`gateway-qwen3\` pero el contenedor no corre:"
         emit "  el proxy fallará y las voces qwen3 degradan a Edge."
-        emit "- Solución: \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`"
-        emit "  (o \`docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml --profile qwen3 up -d\`)."
+        emit "- Solución: \`SIDECARS=1 ./scripts/deploy.sh production\`"
+        emit "  (o \`GPU=1 QWEN3=1 ./scripts/deploy.sh production\`,"
+        emit "  o \`docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml --profile qwen3 up -d\`)."
         emit ""
-        miss "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado"
+        if [[ "$COLLECTIONS_QWEN3" -eq 1 ]]; then
+            miss "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado"
+        else
+            emit "  (opcional: ninguna colección activa usa qwen3_tts)"
+            warn "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado"
+        fi
     fi
 
     emit ""
@@ -875,13 +1063,28 @@ section_gpu_qwen() {
     elif grep -q "omnivoice_remote" <<<"$extra$route"; then
         if [[ -z "$omni_url" ]]; then
             emit "- ❌ \`omnivoice_remote\` está en \`TTS_EXTRA_ENGINES\` pero \`OMNIVOICE_REMOTE_URL\` está vacía"
-            miss "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)"
+            if [[ "$COLLECTIONS_OMNI" -eq 1 ]]; then
+                miss "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)"
+            else
+                emit "  (opcional: ninguna colección activa usa omni_voice)"
+                warn "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)"
+            fi
         else
             emit "- ❌ \`OMNIVOICE_REMOTE_URL=$omni_url\` pero el contenedor no corre"
-            miss "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada (\`docker compose --profile omnivoice up -d gateway-omnivoice\`)"
+            if [[ "$COLLECTIONS_OMNI" -eq 1 ]]; then
+                miss "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada"
+            else
+                emit "  (opcional: ninguna colección activa usa omni_voice)"
+                warn "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada"
+            fi
+            emit "  Solución: \`SIDECARS=1 ./scripts/deploy.sh production\`"
+            emit "  (o \`GPU=1 OMNIVOICE=1 ./scripts/deploy.sh production\`)."
         fi
     else
         emit "- \`omnivoice_remote\` inactivo (sin URL o fuera de \`TTS_EXTRA_ENGINES\`)"
+        if [[ "$COLLECTIONS_OMNI" -eq 1 ]]; then
+            warn "Hay colecciones activas con tts_backend='omni_voice' pero omnivoice_remote no está en TTS_EXTRA_ENGINES/TTS_ENGINES"
+        fi
     fi
 
     # Reserva de GPU del contenedor gateway (overlay).
@@ -928,6 +1131,7 @@ with open("apps/news/collections.toml", "rb") as fh:
     data = tomllib.load(fh)
 for c in data.get("collections", []):
     spec = c.get("narration_spec") or {}
+    channels = c.get("delivery_channels", ["telegram"])
     print("|".join([
         str(c.get("name")),
         str(c.get("enabled")),
@@ -936,6 +1140,7 @@ for c in data.get("collections", []):
         str(spec.get("tts_backend", "-")),
         str(spec.get("run_in_modal", "-")),
         str(spec.get("voice_source", "-")),
+        ",".join(str(ch) for ch in channels) or "(ninguno)",
     ]))
 PY
 )"
@@ -945,16 +1150,15 @@ PY
         return
     fi
 
-    emit "| Colección | enabled | narration | hora | tts_backend | run_in_modal | voice_source |"
-    emit "|---|---|---|---|---|---|---|"
-    local cline name enab narr time backend modal vsrc need_omni=0 need_modal_worker=0 need_modal=0
-    while IFS='|' read -r name enab narr time backend modal vsrc; do
+    emit "| Colección | enabled | narration | hora | tts_backend | run_in_modal | voice_source | canales |"
+    emit "|---|---|---|---|---|---|---|---|"
+    local cline name enab narr time backend modal vsrc channels need_omni=0 need_modal=0
+    while IFS='|' read -r name enab narr time backend modal vsrc channels; do
         [[ -z "$name" ]] && continue
-        emit "| \`$name\` | $enab | $narr | $time | \`$backend\` | $modal | $vsrc |"
-        if [[ "$backend" == "omni_voice" ]]; then need_omni=1; fi
-        if [[ "$backend" == "qwen3_tts" ]]; then
-            need_modal_worker=1
-            [[ "$modal" == "True" ]] && need_modal=1
+        emit "| \`$name\` | $enab | $narr | $time | \`$backend\` | $modal | $vsrc | $channels |"
+        if [[ "$enab" == "True" ]]; then
+            if [[ "$backend" == "omni_voice" ]]; then need_omni=1; fi
+            if [[ "$backend" == "qwen3_tts" && "$modal" == "True" ]]; then need_modal=1; fi
         fi
         okc
     done <<<"$rows"
@@ -962,21 +1166,16 @@ PY
     emit ""
     local modal_enabled
     modal_enabled="$(read_env apps/news/.env MODAL_ENABLED false)"
-    local sidecar_state
-    sidecar_state="$(docker compose -f "$COMPOSE_FILE" ps --format '{{.State}}' gateway-omnivoice 2>/dev/null | tr -d '[:space:]')"
-    local modal_worker_state
-    modal_worker_state="$(docker compose -f "$COMPOSE_FILE" ps --format '{{.State}}' narration-modal-worker 2>/dev/null | tr -d '[:space:]')"
+    local sidecar_state=""
+    service_running gateway-omnivoice && sidecar_state="running"
 
     if [[ "$need_omni" -eq 1 ]]; then
         if [[ "$sidecar_state" == "running" ]]; then
             emit "- \`omni_voice\`: sidecar \`gateway-omnivoice\` ✅ en marcha"; okc
         else
             emit "- \`omni_voice\`: sidecar \`gateway-omnivoice\` ❌ no está en marcha"
-            miss "Hay colecciones con tts_backend='omni_voice' pero el sidecar OmniVoice no corre (activa el profile 'omnivoice' en compose) — esas narraciones fallarán"
+            miss "Hay colecciones activas con tts_backend='omni_voice' pero el sidecar OmniVoice no corre — esas narraciones fallarán (usa \`SIDECARS=1 ./scripts/deploy.sh production\`)"
         fi
-    fi
-    if [[ "$need_modal_worker" -eq 1 && "$modal_worker_state" != "running" ]]; then
-        warn "Hay colecciones con tts_backend='qwen3_tts' pero 'narration-modal-worker' (profile modal) no corre — Deploy.md exige ese worker aunque la síntesis sea local (deploy con MODAL=1)"
     fi
     if [[ "$need_modal" -eq 1 && "$modal_enabled" != "true" ]]; then
         warn "Colección con run_in_modal=true pero MODAL_ENABLED=false: se renderizará en el gateway local, no en Modal"
@@ -1001,9 +1200,9 @@ section_external() {
             */v1) models_url="${llm_api_base%/}/models" ;;
             *) models_url="${llm_api_base%/}/v1/models" ;;
         esac
-        body="$(hit "$models_url")"
+        body="$(container_http_body "$models_url" || true)"
         if [[ -n "$body" ]] && valid_json "$body"; then
-            emit "- \`GET $models_url\`: ✅"
+            emit "- \`GET $models_url\` desde el contenedor: ✅"
             emit "- modelo configurado: \`$(read_env apps/news/.env LLM_MODEL '<sin LLM_MODEL>')\`"
             emit "- modelos servidos: \`$(printf '%s' "$body" | python3 -c '
 import json, sys
@@ -1012,36 +1211,43 @@ ids = [m.get("id") for m in d.get("data", []) if m.get("id")]
 print(", ".join(ids[:8]) + (" …" if len(ids) > 8 else ""))
 ' 2>/dev/null || echo n/d)\`"
             okc
-        else
-            emit "- \`GET $models_url\`: ❌ sin respuesta"
-            deep bad "LLM inaccesible" \
-                "GET $models_url no devuelve JSON válido." \
-                "El servidor LLM (Ollama/llama.cpp) está parado, en otro puerto, o la ruta no es OpenAI-compatible en $models_url." \
+        elif service_running api || service_running worker; then
+            emit "- \`GET $models_url\` desde el contenedor: ❌ sin respuesta"
+            deep bad "LLM inaccesible desde el contenedor" \
+                "GET $models_url no devuelve JSON válido al ejecutarse dentro de api/worker." \
+                "El servidor LLM (Ollama/llama.cpp) está parado, en otro puerto, o no es alcanzable desde la red de compose (host.docker.internal / DNS)." \
                 "Ningún paso del digest (resumen, clustering, respelling, verificación) puede ejecutarse aunque el resto del stack esté sano." \
                 "Arrancar el servidor LLM y alinear LLM_API_BASE con la ruta real de /v1/models." \
-                "curl -sS $models_url   # debe responder JSON con \"data\": [...]" \
+                "docker compose -f $COMPOSE_FILE exec -T api python -c 'import urllib.request; print(urllib.request.urlopen(\"$models_url\", timeout=8).status)'" \
                 "# grep -E '^(LLM_API_BASE|LLM_MODEL)=' apps/news/.env"
+        else
+            emit "> no se pudo comprobar: api/worker no están en marcha"
+            warn "LLM no comprobado (api/worker parados)"
         fi
     fi
 
     emit ""
     emit "### Telegram"
     emit ""
-    local tg_token
-    tg_token="$(read_env apps/news/.env TELEGRAM_BOT_TOKEN "")"
-    if [[ -z "$tg_token" || "$tg_token" == your_* || "$tg_token" == test_bot_token* ]]; then
-        emit "- token: <vacío/placeholder> — comprobación omitida"
-    else
-        local tg
-        tg="$(hit "https://api.telegram.org/bot${tg_token}/getMe")"
-        if [[ "$tg" == *'"ok":true'* ]]; then
-            emit "- \`getMe\`: ✅ token válido"; okc
+    if [[ "$COLLECTIONS_TELEGRAM" -eq 1 ]]; then
+        local tg_token
+        tg_token="$(read_env apps/news/.env TELEGRAM_BOT_TOKEN "")"
+        if [[ -z "$tg_token" || "$tg_token" == your_* || "$tg_token" == test_bot_token* ]]; then
+            emit "- token: <vacío/placeholder> — comprobación omitida"
         else
-            emit "- \`getMe\`: ❌ token rechazado"
-            warn "Telegram rechaza el bot token (getMe falló)"
+            local tg
+            tg="$(hit "https://api.telegram.org/bot${tg_token}/getMe")"
+            if [[ "$tg" == *'"ok":true'* ]]; then
+                emit "- \`getMe\`: ✅ token válido"; okc
+            else
+                emit "- \`getMe\`: ❌ token rechazado"
+                warn "Telegram rechaza el bot token (getMe falló)"
+            fi
         fi
+        emit "- chat_id: \`$(fmt_val TELEGRAM_CHAT_ID "$(read_env apps/news/.env TELEGRAM_CHAT_ID "")")\`"
+    else
+        emit "- ninguna colección habilitada usa \`telegram\` en \`delivery_channels\`; comprobación omitida"
     fi
-    emit "- chat_id: \`$(fmt_val TELEGRAM_CHAT_ID "$(read_env apps/news/.env TELEGRAM_CHAT_ID "")")\`"
 }
 
 section_logs() {
@@ -1049,7 +1255,7 @@ section_logs() {
     sec "8. Errores recientes (logs, últimas 300 líneas por servicio)"
 
     local svc lines count sample state
-    for svc in api worker narration-worker gateway; do
+    for svc in api worker narration-worker voice-catalog-worker gateway; do
         state="$(docker compose -f "$COMPOSE_FILE" ps --format '{{.State}}' "$svc" 2>/dev/null | tr -d '[:space:]')"
         if [[ "$state" != "running" ]]; then
             emit "- \`$svc\`: no está en marcha (estado: ${state:-no creado}) — logs omitidos"
@@ -1131,10 +1337,10 @@ section_analysis() {
     local deploy_key gw_key news_key extra route fish_key oa_base
     local news_url gw_port llm llm_code cmds diffs
 
-    extra="$(read_env apps/gateway/.env TTS_EXTRA_ENGINES "")"
-    route="$(read_env apps/gateway/.env TTS_ENGINES "")"
-    fish_key="$(read_env apps/gateway/.env FISH_API_KEY "")"
-    oa_base="$(read_env apps/gateway/.env OPENAI_TTS_BASE_URL "")"
+    extra="$(gateway_env TTS_EXTRA_ENGINES "")"
+    route="$(gateway_env TTS_ENGINES "")"
+    fish_key="$(gateway_env FISH_API_KEY "")"
+    oa_base="$(gateway_env OPENAI_TTS_BASE_URL "")"
 
     # --- 1. una misma clave en tres archivos -------------------------------
     if [[ -f deploy/.env || -f apps/news/.env || -f apps/gateway/.env ]]; then
@@ -1265,14 +1471,16 @@ EOS
 
     # --- 3b. sidecars (títulos idénticos a la sección 5: solo aportan el
     # análisis, no repiten la línea del índice) ---------------------------
-    local qwen_url omni_url running_side=""
-    qwen_url="$(read_env deploy/.env QWEN3_TTS_REMOTE_URL "")"
-    [[ -z "$qwen_url" ]] && qwen_url="$(read_env apps/gateway/.env QWEN3_TTS_REMOTE_URL "")"
-    omni_url="$(read_env apps/gateway/.env OMNIVOICE_REMOTE_URL "")"
-    if have docker; then
-        running_side="$(docker compose -f "$COMPOSE_FILE" ps --status running --format '{{.Service}}' 2>/dev/null || true)"
+    local qwen_url omni_url qwen3_required=0 omni_required=0
+    qwen_url="$(gateway_env QWEN3_TTS_REMOTE_URL "")"
+    omni_url="$(gateway_env OMNIVOICE_REMOTE_URL "")"
+    if [[ "$COLLECTIONS_QWEN3" -eq 1 ]] || grep -q '"qwen3_tts"' <<<"$route"; then
+        qwen3_required=1
     fi
-    if grep -q "qwen3" <<<"$extra$route"; then
+    if [[ "$COLLECTIONS_OMNI" -eq 1 ]] || grep -q '"omnivoice_remote"' <<<"$route"; then
+        omni_required=1
+    fi
+    if [[ "$qwen3_required" -eq 1 ]]; then
         if [[ -z "$qwen_url" ]]; then
             deep bad "qwen3_tts habilitado en el gateway sin QWEN3_TTS_REMOTE_URL (engine NOT_AVAILABLE, voces → Edge)" \
                 "TTS_EXTRA_ENGINES/TTS_ENGINES mencionan qwen3_tts pero el gateway no tiene URL de sidecar." \
@@ -1280,35 +1488,37 @@ EOS
                 "qwen3_tts queda NOT_AVAILABLE en /engines: los pines engine=qwen3_tts fallan y TTS_FALLBACK_TO_EDGE reescribe la síntesis con Edge, perdiendo la voz del catálogo." \
                 "Publicar la URL del sidecar y arrancarlo con el perfil qwen3 y el overlay GPU." \
                 "echo 'QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1' >> deploy/.env" \
-                "GPU=1 QWEN3=1 ./scripts/deploy.sh production"
-        elif ! grep -qx "gateway-qwen3" <<<"$running_side"; then
+                "SIDECARS=1 ./scripts/deploy.sh production" \
+                "# o: GPU=1 QWEN3=1 ./scripts/deploy.sh production"
+        elif ! service_running gateway-qwen3; then
             deep bad "gateway-qwen3 configurado en QWEN3_TTS_REMOTE_URL pero el contenedor está parado" \
                 "QWEN3_TTS_REMOTE_URL=$qwen_url pero el servicio gateway-qwen3 no corre." \
                 "El perfil compose qwen3 no estaba activo en el último up (o el contenedor se cayó por un fallo de build/GPU)." \
                 "El proxy del gateway no alcanza el sidecar: /engines lo marca no disponible y las voces qwen3 degradan a Edge." \
                 "Arrancar el sidecar con su perfil y el overlay GPU." \
-                "GPU=1 QWEN3=1 ./scripts/deploy.sh production" \
-                "# docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml --profile qwen3 up -d"
+                "SIDECARS=1 ./scripts/deploy.sh production" \
+                "# o: GPU=1 QWEN3=1 ./scripts/deploy.sh production"
         else
             okc
         fi
     fi
-    if grep -q "omnivoice_remote" <<<"$extra$route"; then
+    if [[ "$omni_required" -eq 1 ]]; then
         if [[ -z "$omni_url" ]]; then
             deep bad "omnivoice_remote habilitado sin OMNIVOICE_REMOTE_URL (engine no disponible)" \
                 "omnivoice_remote está en TTS_EXTRA_ENGINES/TTS_ENGINES pero OMNIVOICE_REMOTE_URL está vacía." \
                 "Se añadió el engine sin apuntar al contenedor gateway-omnivoice (que es el que instala las dependencias reales de OmniVoice)." \
                 "El engine no se instancia: los clones con engine=omnivoice_remote no resuelven y la narración local falla." \
                 "Definir la URL interna del sidecar y arrancarlo con su perfil." \
-                "sed -i 's|^OMNIVOICE_REMOTE_URL=.*|OMNIVOICE_REMOTE_URL=http://gateway-omnivoice:8000|' apps/gateway/.env" \
-                "docker compose -f deploy/docker-compose.yml --profile omnivoice up -d gateway-omnivoice"
-        elif ! grep -qx "gateway-omnivoice" <<<"$running_side"; then
-            deep bad "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada (\`docker compose --profile omnivoice up -d gateway-omnivoice\`)" \
+                "SIDECARS=1 ./scripts/deploy.sh production" \
+                "# o: GPU=1 OMNIVOICE=1 ./scripts/deploy.sh production"
+        elif ! service_running gateway-omnivoice; then
+            deep bad "gateway-omnivoice parado con OMNIVOICE_REMOTE_URL configurada" \
                 "OMNIVOICE_REMOTE_URL=$omni_url pero el servicio gateway-omnivoice no corre." \
                 "El perfil compose omnivoice no estaba activo en el último up (o el contenedor se cayó)." \
                 "Todo pin engine=omnivoice_remote y toda narración local que dependa de él responde con engine no disponible." \
-                "Arrancar solo el sidecar (no levanta nada más)." \
-                "docker compose -f deploy/docker-compose.yml --profile omnivoice up -d gateway-omnivoice"
+                "Arrancar el sidecar con el overlay GPU." \
+                "SIDECARS=1 ./scripts/deploy.sh production" \
+                "# o: GPU=1 OMNIVOICE=1 ./scripts/deploy.sh production"
         else
             okc
         fi
@@ -1328,8 +1538,17 @@ EOS
     fi
 
     # --- 5. secretos sin rellenar ------------------------------------------
-    local stale="" k
-    for k in TELEGRAM_CHAT_ID DOC_TTS_LINK_SECRET ADMIN_PASSWORD_HASH; do
+    local stale="" k stale_impact stale_cmd
+    local -a stale_keys=(DOC_TTS_LINK_SECRET ADMIN_PASSWORD_HASH)
+    if [[ "$COLLECTIONS_TELEGRAM" -eq 1 ]]; then
+        stale_keys=(TELEGRAM_CHAT_ID "${stale_keys[@]}")
+        stale_impact="Telegram no entrega boletines (token/chat_id inválidos), los enlaces de audio responden 503 si DOC_TTS_LINK_SECRET es placeholder y el acceso admin puede quedar débil."
+        stale_cmd="grep -nE '^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|DOC_TTS_LINK_SECRET|ADMIN_PASSWORD_HASH)=' apps/news/.env"
+    else
+        stale_impact="Los enlaces de audio responden 503 si DOC_TTS_LINK_SECRET es placeholder y el acceso admin puede quedar débil."
+        stale_cmd="grep -nE '^(DOC_TTS_LINK_SECRET|ADMIN_PASSWORD_HASH)=' apps/news/.env"
+    fi
+    for k in "${stale_keys[@]}"; do
         local v
         v="$(read_env apps/news/.env "$k" "")"
         if [[ "$v" == your_* || "$v" == changeme* || "$v" == "<"* ]]; then
@@ -1340,9 +1559,9 @@ EOS
         deep warn "Secretos todavía en modo plantilla" \
             "Valores placeholder en apps/news/.env: $stale." \
             "Se copió .env.example sin sustituir los valores marcados como your_*/cambiar." \
-            "Telegram no entrega boletines (token inválido), los enlaces de audio responden 503 si DOC_TTS_LINK_SECRET es placeholder y el acceso admin puede quedar débil." \
+            "$stale_impact" \
             "Sustituir cada placeholder por un valor real (el asistente genera los secretos con «g»)." \
-            "grep -nE '^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID|DOC_TTS_LINK_SECRET)=' apps/news/.env"
+            "$stale_cmd"
     else
         [[ -f apps/news/.env ]] && okc
     fi
@@ -1357,7 +1576,7 @@ EOS
                 "Nunca se ejecutó el despliegue en este host, o se paró con docker compose down." \
                 "No hay panel, ni API, ni gateway TTS: nada responde en los puertos publicados." \
                 "Desplegar el stack completo (idempotente)." \
-                "GPU=1 ./scripts/deploy.sh production   # añade QWEN3=1 si usas qwen3_tts"
+                "SIDECARS=1 ./scripts/deploy.sh production   # o GPU=1 si no usas sidecars"
         else
             okc
         fi

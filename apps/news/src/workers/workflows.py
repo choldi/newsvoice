@@ -334,7 +334,7 @@ class DigestPipelineWorkflow:
                     non_retryable=True,
                 )
 
-        channels = config.delivery_channels or ["telegram"]
+        channels = config.delivery_channels
         use_telegram = "telegram" in channels
         use_email = "email" in channels
         use_whatsapp = bool(config.whatsapp_recipients or config.whatsapp_group_id) and (
@@ -756,7 +756,7 @@ class DigestPipelineWorkflow:
             digest_markdown: The digest text for captions.
             delivery_status: List to append delivery results to.
         """
-        channels = config.delivery_channels or ["telegram"]
+        channels = config.delivery_channels
         caption = f"{config.podcast_name or config.collection} — Narration".strip()
 
         if "telegram" in channels:
@@ -825,7 +825,7 @@ class DigestPipelineWorkflow:
             error: The error message from the narration failure.
             delivery_status: List to append delivery results to.
         """
-        channels = config.delivery_channels or ["telegram"]
+        channels = config.delivery_channels
         alert_text = f"⚠️ Narration failed for collection '{config.collection}':\n{error}"
 
         if "telegram" in channels:
@@ -1090,7 +1090,7 @@ class UrlSummarizeWorkflow:
         """
         if not config.deliver:
             return []
-        channels = config.delivery_channels or ["telegram"]
+        channels = config.delivery_channels
         delivery_status: list[dict[str, Any]] = []
         if "telegram" in channels:
             try:

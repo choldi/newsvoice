@@ -156,12 +156,13 @@ The TUI asks for these under **Motor de síntesis**, **GPU y sidecars** and
 
 ## 3. Starting Services
 
-The stack is defined in `deploy/docker-compose.yml` with two overlays:
+The stack is defined in `deploy/docker-compose.yml` with these overlays:
 
 | Overlay | File | Purpose |
 |---------|------|---------|
 | Base (Shape A) | `deploy/docker-compose.yml` | All 13 services on one host |
 | GPU reserve | `deploy/docker-compose.gpu.yml` | Adds NVIDIA GPU reservation to `gateway` |
+| OmniVoice | `deploy/docker-compose.omnivoice.yml` | Points `gateway` at `gateway-omnivoice` |
 | Split (Shape B) | `deploy/docker-compose.split.yml` | Assigns services to `news` or `gateway` profiles |
 
 ### Shape A — Single host (default)
@@ -174,6 +175,14 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 # With GPU (requires nvidia-container-toolkit)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
+```
+
+`scripts/deploy.sh` starts Temporal first and runs `create_namespaces.sh`
+before the workers, so a fresh database or restore does not leave them idle.
+For the GPU sidecars use:
+
+```bash
+SIDECARS=1 ./scripts/deploy.sh production   # GPU + qwen3 + omnivoice
 ```
 
 Services started (13):
@@ -196,7 +205,9 @@ Optional, opt-in with `--profile omnivoice` (never started by the `news` or
   to it through `OMNIVOICE_REMOTE_URL`; it is unused unless `omnivoice_remote`
   is added to `TTS_EXTRA_ENGINES`. It downloads
   `ModelsLab/omnivoice-singing` (~3.1 GB) once into the `gateway_hf_cache`
-  volume; there is no host install/path mount.
+  volume; there is no host install/path mount. Start it with
+  `GPU=1 OMNIVOICE=1 ./scripts/deploy.sh production`, or start both sidecars
+  with `SIDECARS=1 ./scripts/deploy.sh production`.
 
 Optional, opt-in with `--profile qwen3` plus the GPU overlay:
 - `gateway-qwen3` (Qwen3 sidecar, internal) — self-contained image with torch +
@@ -438,7 +449,8 @@ and `qwen-tts` in its own image and persists the three 1.7B checkpoints in the
 QWEN3_TTS_REMOTE_URL=http://gateway-qwen3:8000/api/v1
 
 # starts gateway-qwen3 and exports QWEN3_TTS_REMOTE_URL for this run
-GPU=1 QWEN3=1 ./scripts/deploy.sh production
+SIDECARS=1 ./scripts/deploy.sh production
+# or just this sidecar: GPU=1 QWEN3=1 ./scripts/deploy.sh production
 ```
 
 In `apps/gateway/.env` keep `TTS_EXTRA_ENGINES=qwen3_tts` (or route a language
@@ -498,7 +510,8 @@ previous audio.
 When a collection has `narration_enabled = true` and `narration_deliver_audio = true`
 (default), the generated narration M4A is **delivered** to the collection's
 `delivery_channels` (Telegram audio, email attachment, WhatsApp audio). This is
-in addition to the text digest and the optional TTS audio.
+in addition to the text digest and the optional TTS audio. With
+`delivery_channels = []` the narration is generated and stored but not sent.
 
 If the narration render fails, an **error notification** is sent to the same
 channels instead of silently substituting a stock Edge voice.
@@ -655,8 +668,10 @@ restarts. Re-pair at any time by repeating the tunnel+scan steps.
 
 Telegram delivery talks directly to the Telegram Bot API
 (`https://api.telegram.org/bot<token>/<method>`) from the worker. It is the
-**default channel**: every collection falls back to `["telegram"]` when
-`delivery_channels` is empty or invalid. No extra container is needed.
+**default channel when `delivery_channels` is omitted**; a non-empty list with
+only unknown channels also falls back to `["telegram"]`. An explicit empty list
+(`delivery_channels = []`) disables delivery for that collection. No extra
+container is needed.
 
 Enable it in `.env`:
 
@@ -671,6 +686,7 @@ global `TELEGRAM_CHAT_ID` per collection:
 ```toml
 chat_id = ""                              # empty -> global TELEGRAM_CHAT_ID
 delivery_channels = ["telegram"]          # add "email"/"whatsapp" to fan out
+# delivery_channels = []                  # generate/store only, no delivery
 ```
 
 **Getting the credentials:**
@@ -1711,7 +1727,7 @@ curl -OJ -H "X-Admin-Token: $ADMIN_API_TOKEN" \
   `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` (ver
   `apps/gateway/.env.example`); para Qwen3 hace falta además el sidecar
   `gateway-qwen3` de *On-prem qwen3_tts with cloned voices* (§8), arrancado con
-  `GPU=1 QWEN3=1 ./scripts/deploy.sh`.
+  `SIDECARS=1 ./scripts/deploy.sh` (o `GPU=1 QWEN3=1 ./scripts/deploy.sh`).
 - La clave de caché incluye título, autor, idioma, motor, voz, portada y
   `loudnorm`; cambiar cualquiera de ellos genera otro M4B.
 - Ajustes: `AUDIOBOOK_TASK_QUEUE` (cola del worker) y `AUDIOBOOK_DIR`

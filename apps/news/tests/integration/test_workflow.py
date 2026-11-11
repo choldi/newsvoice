@@ -991,6 +991,68 @@ async def test_email_channel_only_skips_telegram() -> None:
     assert seen["audio"] == COMPRESSED_AUDIO
 
 
+async def test_empty_delivery_channels_skips_all_deliveries() -> None:
+    """An explicit empty channel list disables every delivery activity."""
+    calls: list[str] = []
+
+    @activity.defn(name="deliver_telegram_message_activity")
+    async def message_recorder(text: str, chat_id: str | None = None) -> dict:
+        calls.append("telegram")
+        return DELIVERY
+
+    @activity.defn(name="deliver_telegram_audio_activity")
+    async def audio_recorder(
+        audio_path: str, caption: str | None = None, chat_id: str | None = None
+    ) -> dict:
+        calls.append("telegram_audio")
+        return DELIVERY
+
+    @activity.defn(name="deliver_email_activity")
+    async def email_recorder(
+        recipients: list[str],
+        markdown_text: str,
+        collection: str,
+        audio_path: str | None = None,
+    ) -> dict:
+        calls.append("email")
+        return {"status": "ok", "recipients": len(recipients)}
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="tq",
+            workflows=[DigestPipelineWorkflow],
+            activities=[
+                stub_fetch_rss,
+                stub_filter_new,
+                stub_cluster,
+                stub_generate_digest,
+                stub_generate_tts,
+                stub_compress_audio,
+                message_recorder,
+                audio_recorder,
+                email_recorder,
+                stub_record_run,
+            ],
+        ):
+            result = await env.client.execute_workflow(
+                DigestPipelineWorkflow.run,
+                PipelineConfig(
+                    feed_urls=["https://feed.example/rss"],
+                    tts_enabled=True,
+                    deliver_audio=True,
+                    collection="tech",
+                    email_recipients=["a@example.com"],
+                    delivery_channels=[],
+                ),
+                id="workflow-test-no-delivery",
+                task_queue="tq",
+            )
+
+    assert calls == []
+    assert result["delivery_status"] == []
+
+
 async def test_email_without_deliver_audio_has_no_attachment() -> None:
     """deliver_audio=False passes no audio path to the email activity."""
     seen: dict[str, object] = {}

@@ -24,7 +24,7 @@ prompt_template = 'default'
 custom_prompt = ''
 email_recipients = []
 whatsapp_recipients = ['+34609116369']
-delivery_channels = ['telegram']
+delivery_channels = []
 narration_enabled = true
 narration_spec = { title = 'Tech Brief', language = 'es', roles = [{ name = 'anchor', voice_id = 'es_fe_maria', language = 'es' }, { name = 'expert', voice_id = 'es_ma_juan', language = 'es' }], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'qwen3_tts', voice_source = 'recording', run_in_modal = false, ai_disclosure = false }
 narration_strategy = 'turns'
@@ -52,7 +52,7 @@ prompt_template = 'health'
 custom_prompt = ''
 email_recipients = []
 whatsapp_recipients = []
-delivery_channels = ['telegram']
+delivery_channels = []
 narration_enabled = false
 narration_strategy = 'turns'
 narration_deliver_audio = true
@@ -78,7 +78,7 @@ prompt_template = 'finance'
 custom_prompt = ''
 email_recipients = []
 whatsapp_recipients = []
-delivery_channels = ['telegram']
+delivery_channels = []
 narration_enabled = true
 narration_spec = { title = 'Finance Brief', language = 'es', roles = [{ name = 'anchor', voice_id = 'es-mx-male', language = 'es' }, { name = 'expert', voice_id = 'es-mx-female', language = 'es' }], pause_ms = 400, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'omni_voice', voice_source = 'qwen_design', ai_disclosure = false }
 narration_strategy = 'turns'
@@ -105,7 +105,7 @@ prompt_template = 'gaming'
 custom_prompt = ''
 email_recipients = []
 whatsapp_recipients = []
-delivery_channels = ['telegram']
+delivery_channels = []
 narration_enabled = true
 narration_spec = { title = 'Game Over', language = 'en', roles = [{ name = 'John', voice_id = '3e47fbcc-53a8-4551-be91-48f93d62a19f', language = 'en', speed = 1.2, emotion = 'excited' }, { name = 'Peter', voice_id = 'f0c280e3-0b2d-4f91-9ad6-ff0f86cf49f8', language = 'en', speed = 1.2, emotion = 'calm' }], pause_ms = 350, max_chars_per_request = 1500, speed = 1.0, tts_backend = 'omni_voice', voice_source = 'qwen_design', ai_disclosure = false }
 narration_strategy = 'turns'
