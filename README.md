@@ -88,7 +88,12 @@ Teclas de la TUI: `↑/↓` o `Tab` mover · `Enter` seleccionar/editar ·
 `Esc` atrás · `Espacio` alternar sí/no · `←/→` cambiar opciones ·
 `g` generar secreto · `a` opciones avanzadas · `Ctrl+R` valor por defecto ·
 `F1`/`?` ayuda · `F10`/`q` salir. Al editar, `Tab` guarda y pasa al siguiente
-campo, y `Shift+Tab` guarda y vuelve al anterior.
+campo, y `Shift+Tab` guarda y vuelve al anterior. En las pantallas de `.env`,
+`F1` abre la referencia detallada de cada campo (obligatorio/opcional, valor
+efectivo, opciones y valor por defecto). Cada campo muestra `[interno]` si lo
+resuelve el stack (puertos, TTS, voces, claves compartidas) o `[externo]` si
+requiere un proveedor/API externa (LLM, Telegram, SMTP, Fish, OpenAI, HF).
+«Guardar en disco y continuar» escribe el archivo antes de pasar al siguiente.
 
 La TUI usa un único tema fijo inspirado en el instalador Debian: fondo azul,
 panel claro, texto de alto contraste y selección roja. Para terminales sin

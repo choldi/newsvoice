@@ -17,8 +17,11 @@ from setup_wizard import deps
 from setup_wizard import validate as validation
 from setup_wizard.app import (
     Context,
+    _confirm_write,
+    _confirm_write_one,
     _shared_key_conflicts,
     _unify_shared_key,
+    _write_env,
     apply_screen,
     env_screen,
     final_screen,
@@ -601,6 +604,129 @@ def test_env_screen_stages_edits_into_the_file(wizard_context: Context) -> None:
 
     assert wizard_context.envs["deploy"].get("API_PORT") == "7777"
     assert ("API_PORT", "8000", "7777") in wizard_context.envs["deploy"].diff_against_disk()
+
+
+def test_f1_opens_the_detailed_field_reference(wizard_context: Context) -> None:
+    """The env screen replaces the generic help with per-field documentation."""
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "news"))
+
+    app.handle(curses.KEY_F1)
+
+    assert app.modal is not None
+    text = "\n".join(app.modal.lines)
+    assert "Endpoint OpenAI-compatible" in text
+    assert "LLM_API_BASE" in text
+    assert "obligatorio" in text
+    assert "externo · obligatorio" in text
+    assert "interno · opcional" in text
+    assert "actual:" in text
+    assert "── LLM ──" in text or "── LLM" in text
+
+
+def test_fields_mark_whether_they_are_internal_or_external() -> None:
+    """TTS, voices and service ports are internal; LLM and providers are external."""
+    news = {field_.key: field_ for field_ in fields_for("news")}
+    gateway = {field_.key: field_ for field_ in fields_for("gateway")}
+
+    assert news["LLM_API_BASE"].source == "externo"
+    assert news["TTS_VOICE"].source == "interno"
+    assert news["API_PORT"].source == "interno"
+    assert gateway["FISH_API_KEY"].source == "externo"
+    assert gateway["TTS_DEVICE"].source == "interno"
+
+
+def test_env_screen_rows_carry_the_internal_or_external_badge(
+    wizard_context: Context,
+) -> None:
+    """The data entry rows expose the source without changing their label."""
+    app = App("test")
+    screen = env_screen(app, wizard_context, "news")
+
+    llm = next(row for row in screen.rows if row.label == "Base LLM")
+    voice = next(row for row in screen.rows if row.label == "Voz TTS")
+
+    assert llm.source == "externo"
+    assert voice.source == "interno"
+    assert any("[interno] lo aporta el stack" in row.label for row in screen.rows)
+    rendered = "".join(text for _x, text, _attr in app._row_visual_lines(llm, 80, False)[0])
+    assert "[externo]" in rendered
+
+
+def test_save_dialogs_start_on_the_action_button(wizard_context: Context) -> None:
+    """Enter on a save confirmation writes instead of cancelling."""
+    wizard_context.envs["deploy"].set("API_PORT", "9100")
+
+    one = _confirm_write_one(App("test"), wizard_context, "deploy")
+    every = _confirm_write(App("test"), wizard_context)
+
+    assert one is not None and one.index == 1
+    assert every.index == 1
+
+
+def test_guardar_y_continuar_writes_the_file_before_advancing(
+    wizard_context: Context,
+) -> None:
+    """The wizard save button now persists the current file immediately."""
+    env = wizard_context.envs["deploy"]
+    env.set("API_PORT", "9200")
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "deploy"))
+
+    button = next(r for r in app.current.rows if r.label == "Guardar en disco y continuar")
+    app.focus = app.current.rows.index(button)
+    app.handle(10)
+
+    assert env.path.exists()
+    assert "API_PORT=9200" in env.path.read_text(encoding="utf-8")
+    assert env.changed_keys() == []
+    assert env.key_path in wizard_context.written
+    assert "news" in app.current.title
+
+
+def test_write_error_is_reported_without_leaving_the_tui(
+    wizard_context: Context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Permission errors become a modal instead of crashing into line mode."""
+    env = wizard_context.envs["deploy"]
+    env.set("API_PORT", "9300")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("permiso denegado")
+
+    monkeypatch.setattr(env, "write", fail)
+    app = App("test")
+
+    ok, backup, names = _write_env(app, env, reload=True)
+
+    assert not ok and backup is None and names == ["API_PORT"]
+    assert app.message_level == "bad"
+    assert app.modal is not None and app.modal.title == "Error al guardar"
+    assert "permiso denegado" in "\n".join(app.modal.lines)
+
+
+def test_tui_error_after_start_does_not_fall_back_to_line_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash after curses starts must not re-prompt values in plain mode."""
+    from setup_wizard import __main__ as cli
+    from setup_wizard import curses_ui, plain
+
+    class StartedApp:
+        started = True
+
+    def fail(_app):
+        raise RuntimeError("boom")
+
+    called: list[int] = []
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    monkeypatch.setattr(cli, "load_context", lambda: object())
+    monkeypatch.setattr(cli, "build_app", lambda _ctx: StartedApp())
+    monkeypatch.setattr(curses_ui, "run_tui", fail)
+    monkeypatch.setattr(plain, "run_plain", lambda *_a, **_k: called.append(1) or 0)
+
+    assert cli.main([]) == 1
+    assert called == []
 
 
 def test_profile_defaults_do_not_clobber_operator_values(wizard_context: Context) -> None:

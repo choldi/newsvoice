@@ -155,9 +155,17 @@ def main(argv: list[str] | None = None) -> int:
 
     from .curses_ui import run_tui
 
+    app = build_app(ctx)
     try:
-        return run_tui(build_app(ctx))
+        return run_tui(app)
     except Exception as exc:  # noqa: BLE001 - curses leaves the screen broken otherwise
+        if app.started:
+            print(
+                f"\nEl TUI se cerró por un error ({exc}). No se cambia al modo línea "
+                "para no volver a preguntar ni perder los cambios.",
+                file=sys.stderr,
+            )
+            return 1
         print(f"\nNo se pudo iniciar el TUI ({exc}); usando el modo línea.", file=sys.stderr)
         from .plain import run_plain
 

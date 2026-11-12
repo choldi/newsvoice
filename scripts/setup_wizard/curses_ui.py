@@ -171,6 +171,8 @@ class Row:
         secret: Mask the value with dots until revealed.
         result: Optional pre-computed status for review screens
             (``ok``, ``warn``, ``bad`` or empty).
+        source: ``interno`` when the stack provides the value, ``externo``
+            when it needs a third-party provider or API.
     """
 
     kind: str
@@ -184,6 +186,7 @@ class Row:
     advanced: bool = False
     secret: bool = False
     result: str = ""
+    source: str = ""
 
     @property
     def focusable(self) -> bool:
@@ -216,6 +219,7 @@ class Screen:
         on_activate: Called with ``(app, row)`` when Enter is pressed on a
             non editing row (buttons, choices, passwords).
         on_change: Called with ``(app, row)`` after a value is committed.
+        on_help: Called with ``(app)`` when F1 or ``?`` is pressed.
     """
 
     title: str
@@ -226,6 +230,7 @@ class Screen:
     on_enter: Callable[[App], None] | None = None
     on_activate: Callable[[App, Row], None] | None = None
     on_change: Callable[[App, Row], None] | None = None
+    on_help: Callable[[App], None] | None = None
 
 
 @dataclass
@@ -247,11 +252,12 @@ class Dialog:
         title: str,
         lines: list[str],
         buttons: list[tuple[str, Callable[[App], None]]] | None = None,
+        index: int = 0,
     ) -> None:
         self.title = title
         self.lines = lines
         self.buttons = buttons or [("Aceptar", lambda app: app.close_modal())]
-        self.index = 0
+        self.index = min(max(index, 0), len(self.buttons) - 1)
         self.offset = 0
 
     def handle(self, key: int, app: App) -> None:
@@ -260,6 +266,8 @@ class Dialog:
         if key in CONFIRM_KEYS:
             self.buttons[self.index][1](app)
         elif key in CANCEL_KEYS:
+            app.close_modal()
+        elif key in (curses.KEY_F1, curses.KEY_F10):
             app.close_modal()
         elif key in (curses.KEY_RIGHT, 9):  # right / tab
             self.index = (self.index + 1) % total
@@ -346,6 +354,7 @@ class App:
         self.message_level = ""
         self.visited: set[int] = set()
         self.should_quit = False
+        self.started = False
         self.window: curses.window | None = None
         requested = os.environ.get("NEWSVOICE_TUI_THEME", "debian").strip().lower()
         self.theme_key = "mono" if requested == "mono" else "debian"
@@ -500,6 +509,7 @@ class App:
             Process exit status (0 on a clean exit).
         """
         self.window = stdscr
+        self.started = True
         curses.curs_set(0)
         stdscr.keypad(True)
         stdscr.timeout(-1)
@@ -747,7 +757,8 @@ class App:
 
     def _value_x(self, row: Row, w: int) -> int:
         """Return the value column for a row inside ``w`` columns."""
-        prefix = "▸ " + row.label
+        badge = f" [{row.source}]" if row.source else ""
+        prefix = "▸ " + row.label + badge
         return min(max(len(prefix) + 2, min(24, w // 2)), max(w - 4, len(prefix) + 2))
 
     def _row_visual_lines(
@@ -763,7 +774,8 @@ class App:
             attr = self._attr(color, extra)
             return [[(0, line, attr)] for line in _wrap_text(row.label, max(w - 1, 1))]
 
-        prefix = ("▸ " if focused else "  ") + row.label
+        badge = f" [{row.source}]" if row.source else ""
+        prefix = ("▸ " if focused else "  ") + row.label + badge
         value_x = self._value_x(row, w)
         focus_attr = self._attr(C_FOCUS)
         label_attr = focus_attr if focused else self._attr(C_VALUE)
@@ -973,13 +985,16 @@ class App:
             )
             return Action()
         if key in (curses.KEY_F1, ord("?")):
-            self.info(
-                "Ayuda",
-                "↑/↓ o Tab  mover · Enter  seleccionar/editar",
-                "Esc  atrás · F10 o q  salir",
-                "g  generar secreto · a  opciones avanzadas",
-                "Ctrl+R  valor por defecto · Espacio  sí/no",
-            )
+            if self.current.on_help is not None:
+                self.current.on_help(self)
+            else:
+                self.info(
+                    "Ayuda",
+                    "↑/↓ o Tab  mover · Enter  seleccionar/editar",
+                    "Esc  atrás · F10 o q  salir",
+                    "g  generar secreto · a  opciones avanzadas",
+                    "Ctrl+R  valor por defecto · Espacio  sí/no",
+                )
             return Action()
 
         row = self._focused_row()

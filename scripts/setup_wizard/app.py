@@ -14,7 +14,7 @@ from . import validate as validation
 from .curses_ui import App, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
-from .settings import PROFILES, Field, Profile
+from .settings import PROFILES, Field, Profile, sections_for
 from .util import REPO_ROOT, env_paths
 
 __all__ = ["Context", "build_app", "load_context"]
@@ -535,6 +535,50 @@ def method_screen(app: App, ctx: Context) -> Screen:
     )
 
 
+def _field_status(field_: Field) -> str:
+    """Return the compact legend for one field."""
+    flags = [field_.source, "obligatorio" if field_.required else "opcional"]
+    if field_.advanced:
+        flags.append("avanzado")
+    if field_.kind == "choice":
+        flags.append("elección")
+    if field_.kind == "password":
+        flags.append("hash bcrypt")
+    if field_.generate:
+        flags.append("g genera")
+    return " · ".join(flags)
+
+
+def _show_env_help(app: App, ctx: Context, file_key: str) -> None:
+    """Show the detailed field reference for one env file."""
+    env = ctx.envs[file_key]
+    lines = [
+        f"Archivo: {env.key_path}",
+        "PgUp/PgDn desplazan · F1/Esc cierran",
+        "",
+        "Cada campo indica origen (interno/externo), obligatoriedad, valor efectivo y opciones.",
+        "",
+    ]
+    for section in sections_for(file_key):
+        lines.append(f"── {section.title} ──")
+        for field_ in section.fields:
+            current = env.get(field_.key).strip()
+            shown = (
+                _mask(current) if field_.kind in ("secret", "password") else (current or "(vacío)")
+            )
+            lines.append(f"{field_.label} ({field_.key})")
+            lines.append(f"  {field_.detail}")
+            if field_.detail != field_.help:
+                lines.append(f"  Resumen: {field_.help}")
+            lines.append(f"  {_field_status(field_)} · actual: {shown}")
+            if field_.default:
+                lines.append(f"  por defecto: {field_.default}")
+            if field_.options:
+                lines.append("  opciones: " + ", ".join(field_.options))
+            lines.append("")
+    app.info(f"Ayuda · {file_key}/.env", *lines)
+
+
 def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False) -> Screen:
     """Build the form for one env file, sections included.
 
@@ -557,6 +601,10 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             result="ok" if env.exists else "warn",
         ),
         Row("note", label=""),
+        Row(
+            "note",
+            label="[interno] lo aporta el stack · [externo] requiere proveedor o API externa",
+        ),
     ]
     for section in _sections(file_key):
         rows.append(Row("heading", label=section.title))
@@ -573,6 +621,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
                     generate=field_.generate,
                     advanced=field_.advanced,
                     secret=field_.kind in ("secret", "password"),
+                    source=field_.source,
                 )
             )
         rows.append(Row("note", label=""))
@@ -588,7 +637,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         rows.extend(
             [
                 Row("button", label="Ver cambios de este archivo", action="diff"),
-                Row("button", label="Guardar y continuar", action="next"),
+                Row("button", label="Guardar en disco y continuar", action="next"),
                 Row("button", label="Atrás", action="back"),
             ]
         )
@@ -627,6 +676,12 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             return
         if row.action == "next":
             _sync_shared_key(ctx)
+            if env.changed_keys():
+                ok, _backup, _names = _write_env(app_, env, reload=True)
+                if not ok:
+                    return
+                if env.key_path not in ctx.written:
+                    ctx.written.append(env.key_path)
             nxt = _ORDER[_ORDER.index(file_key) + 1] if file_key in _ORDER else None
             if nxt:
                 app_.push(env_screen(app_, ctx, nxt))
@@ -641,6 +696,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         progress="" if edit_mode else "3/6",
         on_change=on_change,
         on_activate=activate,
+        on_help=lambda app_: _show_env_help(app_, ctx, file_key),
     )
 
 
@@ -734,6 +790,25 @@ def review_screen(app: App, ctx: Context) -> Screen:
     )
 
 
+def _write_env(app: App, env: EnvFile, *, reload: bool) -> tuple[bool, Path | None, list[str]]:
+    """Write one env file, reporting permission/disk errors inside the TUI."""
+    names = env.changed_keys()
+    try:
+        backup = env.write()
+    except OSError as exc:
+        app.say(f"No se pudo escribir {env.key_path}: {exc}", "bad")
+        app.info(
+            "Error al guardar",
+            f"{env.key_path}: {exc}",
+            "El asistente sigue abierto. Revisa permisos y espacio libre, y reintenta.",
+        )
+        return False, None, names
+    if reload:
+        env.reload_from_disk()
+    app.say(f"Escrito {env.key_path}: {len(names)} valor(es)", "ok")
+    return True, backup, names
+
+
 def _confirm_write(app: App, ctx: Context):
     """Return the confirmation dialog that writes the env files."""
     from .curses_ui import Dialog
@@ -745,7 +820,10 @@ def _confirm_write(app: App, ctx: Context):
             env = ctx.envs[key]
             if not env.changed_keys() and env.exists:
                 continue
-            backup = env.write()
+            ok, backup, _names = _write_env(app_, env, reload=True)
+            if not ok:
+                ctx.written = written
+                return
             written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
         ctx.written = written
         if written:
@@ -762,6 +840,7 @@ def _confirm_write(app: App, ctx: Context):
             "Las copias previas guardan .bak-<fecha>.",
         ],
         [("Cancelar", lambda a: a.close_modal()), ("Escribir", do_write)],
+        index=1,
     )
 
 
@@ -773,13 +852,12 @@ def _confirm_write_one(app: App, ctx: Context, file_key: str):
 
     def do_save(app_: App) -> None:
         app_.close_modal()
-        names = env.changed_keys()
-        if not names:
+        if not env.changed_keys():
             app_.say("Sin cambios que escribir", "")
             return
-        backup = env.write()
-        env.reload_from_disk()
-        app_.say(f"Escrito {env.key_path}: {len(names)} valor(es)", "ok")
+        ok, backup, names = _write_env(app_, env, reload=True)
+        if not ok:
+            return
         app_.info(
             "Guardado",
             f"{env.key_path}: {len(names)} valor(es) escritos.",
@@ -796,6 +874,7 @@ def _confirm_write_one(app: App, ctx: Context, file_key: str):
             "Se guarda una copia previa .bak-<fecha>.",
         ],
         [("Cancelar", lambda a: a.close_modal()), ("Guardar", do_save)],
+        index=1,
     )
 
 
