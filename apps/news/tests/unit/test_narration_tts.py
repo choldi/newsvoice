@@ -946,9 +946,7 @@ async def test_synthesize_turn_fish_resolves_and_pins_fish_engine(
         assert voice == "marie_fr"
         return "uuid-fish"
 
-    monkeypatch.setattr(
-        "src.api.services.narration_tts.resolve_gateway_fish_voice", fake_resolve
-    )
+    monkeypatch.setattr("src.api.services.narration_tts.resolve_gateway_fish_voice", fake_resolve)
     service, _ = _service(tmp_path, handler)
     monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
 
@@ -976,9 +974,7 @@ async def test_synthesize_turn_openai_pins_openai_engine(
     service, _ = _service(tmp_path, handler)
     monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
 
-    await service.synthesize_turn(
-        "Hola", "es_openai", "es", speed=1.1, backend=TTSBackend.OPENAI
-    )
+    await service.synthesize_turn("Hola", "es_openai", "es", speed=1.1, backend=TTSBackend.OPENAI)
 
     assert calls[0]["engine"] == "openai_tts"
     assert calls[0]["voice_id"] == "es_openai"

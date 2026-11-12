@@ -229,6 +229,7 @@ module = [
     "msgpack",
     "edge_tts",
     "faster_whisper",
+    "kokoro",
     "pocket_tts",
     "piper",
     "piper.download",

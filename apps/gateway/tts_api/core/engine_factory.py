@@ -36,7 +36,7 @@ def _create_single_engine(name: str) -> TtsEngineBase:  # noqa: PLR0912
         if settings.QWEN3_TTS_REMOTE_URL.strip():
             from tts_api.core.engines.qwen3_remote_engine import Qwen3RemoteEngine
 
-            engine_class: type[TtsEngineBase] = Qwen3RemoteEngine
+            engine_class = Qwen3RemoteEngine
         else:
             from tts_api.core.engines.qwen3_tts_engine import Qwen3TTSEngine
 
@@ -123,8 +123,7 @@ def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngi
     optional_engines = {
         name
         for name in engine_names
-        if name in {"fish_tts", "openai_tts"}
-        or (name == "qwen3_tts" and name not in routed_names)
+        if name in {"fish_tts", "openai_tts"} or (name == "qwen3_tts" and name not in routed_names)
     }
 
     if not engine_names:

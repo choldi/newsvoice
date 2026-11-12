@@ -140,9 +140,7 @@ async def design_voice_activity(payload: dict[str, Any]) -> dict[str, Any]:
         elif settings.qwen_tts_design_via_gateway:
             from src.api.services.tts_backends import gateway_instruct
 
-            wav = await gateway_instruct(
-                " ".join(segments), instruct, language, engine="qwen3_tts"
-            )
+            wav = await gateway_instruct(" ".join(segments), instruct, language, engine="qwen3_tts")
             sample_rate = wav_format(wav).framerate
         else:
             from src.core.local_tts import design_voice

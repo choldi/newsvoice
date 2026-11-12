@@ -201,16 +201,22 @@ class TtsService:
 
         engine = await self._get_engine_client()
 
-        clone_kwargs = {
-            "text": text,
-            "reference_audio_path": reference_audio_path,
-            "ref_text": ref_text,
-            "speed": speed,
-            "language": voice_language,
-        }
         if engine_name:
-            clone_kwargs["engine_name"] = engine_name
-        return await engine.synthesize_clone(**clone_kwargs)
+            return await engine.synthesize_clone(
+                text=text,
+                reference_audio_path=reference_audio_path,
+                ref_text=ref_text,
+                speed=speed,
+                language=voice_language,
+                engine_name=engine_name,
+            )
+        return await engine.synthesize_clone(
+            text=text,
+            reference_audio_path=reference_audio_path,
+            ref_text=ref_text,
+            speed=speed,
+            language=voice_language,
+        )
 
     async def synthesize_clone_path(
         self,
@@ -230,16 +236,22 @@ class TtsService:
         """
         self._validate_language(language)
         engine = await self._get_engine_client()
-        clone_kwargs = {
-            "text": text,
-            "reference_audio_path": reference_audio_path,
-            "ref_text": ref_text,
-            "speed": speed,
-            "language": language,
-        }
         if engine_name:
-            clone_kwargs["engine_name"] = engine_name
-        return await engine.synthesize_clone(**clone_kwargs)
+            return await engine.synthesize_clone(
+                text=text,
+                reference_audio_path=reference_audio_path,
+                ref_text=ref_text,
+                speed=speed,
+                language=language,
+                engine_name=engine_name,
+            )
+        return await engine.synthesize_clone(
+            text=text,
+            reference_audio_path=reference_audio_path,
+            ref_text=ref_text,
+            speed=speed,
+            language=language,
+        )
 
     async def close(self) -> None:
         """Suelta la referencia al cliente sin descargar el engine.

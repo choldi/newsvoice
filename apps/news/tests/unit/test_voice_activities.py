@@ -247,9 +247,7 @@ async def test_design_voice_activity_can_use_the_gateway(
     def local_must_not_run(*args, **kwargs):
         raise AssertionError("the local qwen runtime must not load in container mode")
 
-    monkeypatch.setattr(
-        "src.api.services.tts_backends.gateway_instruct", fake_gateway_instruct
-    )
+    monkeypatch.setattr("src.api.services.tts_backends.gateway_instruct", fake_gateway_instruct)
     monkeypatch.setattr("src.core.local_tts.design_voice", local_must_not_run)
     monkeypatch.setattr("src.api.services.voice_staging.stage_from_design", _stage_ok)
     monkeypatch.setattr(settings, "qwen_tts_design_via_gateway", True)

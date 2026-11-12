@@ -41,9 +41,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
 
     def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
         settings = get_settings()
-        self._base_url = normalize_sidecar_base_url(
-            base_url or settings.OMNIVOICE_REMOTE_URL
-        )
+        self._base_url = normalize_sidecar_base_url(base_url or settings.OMNIVOICE_REMOTE_URL)
         self._timeout = timeout or settings.OMNIVOICE_REMOTE_TIMEOUT
         self._client: httpx.AsyncClient | None = None
         self._available = False
@@ -249,4 +247,4 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         status = payload.get("status")
         if status is None:
             return True
-        return status == "ok" and payload.get("mode", "REAL") != "MOCK"
+        return bool(status == "ok" and payload.get("mode", "REAL") != "MOCK")

@@ -365,9 +365,7 @@ async def test_voice_for_fish_resolves_catalog_profiles_to_clones(monkeypatch) -
         seen.update(voice=voice, language=language)
         return "fish-clone-uuid"
 
-    monkeypatch.setattr(
-        "src.api.services.gateway_voices.resolve_gateway_fish_voice", fake_fish
-    )
+    monkeypatch.setattr("src.api.services.gateway_voices.resolve_gateway_fish_voice", fake_fish)
 
     assert await voice_for(TTSBackend.FISH, "marie_fr", "fr") == "fish-clone-uuid"
     assert seen == {"voice": "marie_fr", "language": "fr"}
@@ -488,9 +486,7 @@ async def test_gateway_instruct_posts_the_design_payload() -> None:
         transport=httpx.MockTransport(handler),
         headers=gateway_headers(""),
     )
-    audio = await tts_backends.gateway_instruct(
-        "Hello", "warm baritone", "en", client=client
-    )
+    audio = await tts_backends.gateway_instruct("Hello", "warm baritone", "en", client=client)
     await client.aclose()
 
     assert audio == b"RIFF"

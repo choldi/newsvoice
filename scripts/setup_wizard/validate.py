@@ -133,8 +133,7 @@ def validate(
         if gateway is not None:
             consumers.append(("gateway.API_KEY", gateway.get("API_KEY").strip()))
         fix = (
-            " — unifica los tres valores (el asistente lo hace con "
-            "«Unificar la clave del gateway»)"
+            " — unifica los tres valores (el asistente lo hace con «Unificar la clave del gateway»)"
         )
         conflict = [name for name, value in consumers if shared and value != shared and value]
         absent = [name for name, value in consumers if not value]

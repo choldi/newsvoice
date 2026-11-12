@@ -276,8 +276,7 @@ def detect() -> Report:
     else:
         compose_status = "bad"
         compose_detail = (
-            "docker sin el plugin Compose v2 "
-            "(sudo apt-get install -y docker-compose-plugin)"
+            "docker sin el plugin Compose v2 (sudo apt-get install -y docker-compose-plugin)"
         )
     report.findings.append(Finding("compose", compose_status, compose_detail))
 
@@ -450,9 +449,7 @@ def prerequisites(report: Report) -> list[Prerequisite]:
             required=True,
             detail=detail,
             why="deploy/docker-compose.yml usa la sintaxis del plugin v2 (`docker compose`).",
-            remedy=("sudo apt-get install -y docker-compose-plugin",)
-            if status != "ok"
-            else (),
+            remedy=("sudo apt-get install -y docker-compose-plugin",) if status != "ok" else (),
         )
     )
 
@@ -465,9 +462,7 @@ def prerequisites(report: Report) -> list[Prerequisite]:
             required=False,
             detail=detail,
             why="Instala el workspace y ejecuta tests/lint (recomendado; Docker no lo necesita).",
-            remedy=("curl -LsSf https://astral.sh/uv/install.sh | sh",)
-            if status != "ok"
-            else (),
+            remedy=("curl -LsSf https://astral.sh/uv/install.sh | sh",) if status != "ok" else (),
         )
     )
 

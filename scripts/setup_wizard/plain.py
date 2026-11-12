@@ -138,8 +138,7 @@ def run_plain(
     if automated:
         if assume_yes:
             print(
-                "  (modo --yes: no se instalan paquetes del sistema; "
-                "ejecuta los comandos a mano)"
+                "  (modo --yes: no se instalan paquetes del sistema; ejecuta los comandos a mano)"
             )
         elif _confirm(
             f"¿Instalar ahora {len(automated)} requisito(s) con esos comandos? [s/N]:",
