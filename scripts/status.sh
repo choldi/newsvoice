@@ -106,7 +106,12 @@ else
         if [[ "$state" == "running" ]]; then
             ok "service ${svc} is running"
         elif [[ -z "$state" ]]; then
-            fail "service ${svc} not found (is the stack deployed?)"
+            case "$svc" in
+                narration-modal-worker)
+                    info "service ${svc} is not running (optional profile 'modal'; enable with MODAL=1)" ;;
+                *)
+                    fail "service ${svc} not found (is the stack deployed?)" ;;
+            esac
         else
             fail "service ${svc} is in state '$state'"
         fi
@@ -187,6 +192,29 @@ if [[ -n "$(hit "${TEMPORAL_UI_URL}/api/namespaces" 2>/dev/null)" ]]; then
     ok "Temporal namespaces API reachable (${TEMPORAL_UI_URL})"
 else
     fail "Temporal namespaces API not reachable (${TEMPORAL_UI_URL})"
+fi
+
+# ---------------------------------------------------------------------------
+# 4b. Temporal namespaces
+# ---------------------------------------------------------------------------
+section "4b. Temporal namespaces"
+TEMPORAL_STATE="$("${DC[@]}" ps --format '{{.State}}' temporal 2>/dev/null | tr -d '[:space:]')"
+if [[ "$TEMPORAL_STATE" != "running" ]]; then
+    warn "temporal is not running; skipping namespace check"
+else
+    NS_LIST="$("${DC[@]}" exec -T temporal \
+        temporal operator namespace list --address temporal:7233 2>/dev/null)"
+    if [[ -z "$NS_LIST" ]]; then
+        warn "could not list Temporal namespaces (temporal CLI failed)"
+    else
+        for ns in news-engine-voices news-engine-podcast-local news-engine-podcast-modal; do
+            if grep -qE "(^|[[:space:]])${ns}([[:space:]]|$)" <<<"$NS_LIST"; then
+                ok "namespace ${ns} exists"
+            else
+                fail "namespace ${ns} is missing (run: make namespaces)"
+            fi
+        done
+    fi
 fi
 
 # ---------------------------------------------------------------------------

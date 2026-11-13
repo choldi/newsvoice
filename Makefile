@@ -63,7 +63,7 @@ help: ## Show all make targets
 	@echo "                        incremental gate (only those tests run)"
 	@echo ""
 	@echo "Docker compose ($(COMPOSE_FILE))"
-	@echo "  make up               Build and start the whole stack"
+	@echo "  make up               Build and start the whole stack (creates namespaces)"
 	@echo "  make down             Stop the whole stack"
 	@echo "  make ps               Show service status"
 	@echo "  make health           Curl news API + TTS gateway health"
@@ -136,7 +136,11 @@ commit: ## Commit via scripts/auto_commit.sh
 	@test -n "$(MSG)" || (echo 'Usage: make commit MSG="type(scope): description"' && exit 1)
 	./scripts/auto_commit.sh "$(MSG)"
 
-up: ## Build and start the whole stack
+up: ## Build and start the whole stack (creates Temporal namespaces first)
+	@if $(DC) config --services 2>/dev/null | grep -qx temporal; then \
+		$(DC) up -d --wait temporal; \
+		COMPOSE_FILE=$(COMPOSE_FILE) ./scripts/create_namespaces.sh; \
+	fi
 	$(DC) up -d --build
 
 down: ## Stop the whole stack
@@ -176,7 +180,7 @@ deploy: ## Deploy via scripts/deploy.sh (ENV defaults to production)
 	./scripts/deploy.sh $(ENV)
 
 namespaces: ## Create the Temporal namespaces (idempotent)
-	./scripts/create_namespaces.sh
+	COMPOSE_FILE=$(COMPOSE_FILE) ./scripts/create_namespaces.sh
 
 schedule: ## Register the per-collection digest schedules
 	$(DC) exec -T worker python -m src.workers.schedule

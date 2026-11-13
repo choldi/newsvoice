@@ -179,6 +179,8 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up 
 
 `scripts/deploy.sh` starts Temporal first and runs `create_namespaces.sh`
 before the workers, so a fresh database or restore does not leave them idle.
+`make up` does the same when Temporal is part of the selected stack; on a
+split GPU-only host it skips the namespace step because Temporal is not there.
 For the GPU sidecars use:
 
 ```bash
