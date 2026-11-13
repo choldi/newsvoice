@@ -48,6 +48,25 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
         ),
     ),
     GuidePage(
+        "Motor TTS · GPU, CPU y cloud",
+        (
+            "Qué elige: TTS_ENGINE fija un motor; routed reparte por idioma con TTS_ENGINES.",
+            "CPU sin GPU: pocket_tts, piper y kokoro funcionan en local. Es la opción del "
+            "preset «CPU seguro», que no necesita NVIDIA.",
+            "GPU: omnivoice, omnivoice_remote, qwen3_tts y chatterbox exigen TTS_DEVICE=cuda:0 "
+            "y el overlay GPU. El wizard bloquea el dispositivo si detecta alguno.",
+            "Cloud: edgetts no necesita cuenta; fish_tts y openai_tts sí requieren clave. "
+            "Ninguno descarga pesos locales.",
+            "Clonado: pocket_tts, chatterbox, qwen3_tts, fish_tts y omnivoice pueden clonar; "
+            "edgetts, piper, kokoro y openai_tts usan voces del catálogo.",
+            "Idiomas: revisa el catálogo del wizard. Si un engine no soporta un idioma, "
+            "asigna otro en TTS_ENGINES o usa edgetts para catalán.",
+            "",
+            "Acción: abre «Asistente TTS guiado» en gateway, aplica un preset y ajusta el "
+            "mapa. TTS_MODEL_DOWNLOADS solo anota checkpoints para precargar.",
+        ),
+    ),
+    GuidePage(
         "Fish Audio · TTS cloud",
         (
             "Cuándo: solo si usas fish_tts o lo añades a TTS_EXTRA_ENGINES.",

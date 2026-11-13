@@ -250,7 +250,206 @@ def validate(
         elif url:
             checks.append(Check("gateway url", "ok", url))
 
-    # 8. Host prerequisites ------------------------------------------------
+    # 8. TTS engines, routing and device ----------------------------------
+    if gateway is not None:
+        from .settings import (
+            CLOUD_ENGINES,
+            ENGINE_INFO,
+            MODEL_OPTIONS,
+            config_requires_gpu,
+            configured_engines,
+            parse_engine_map,
+            split_multi,
+            valid_language_code,
+        )
+
+        engine = gateway.get("TTS_ENGINE").strip()
+        if engine and engine not in {*ENGINE_INFO, "routed"}:
+            checks.append(Check("tts engine", "bad", f"TTS_ENGINE desconocido: {engine}"))
+        elif engine:
+            checks.append(Check("tts engine", "ok", f"TTS_ENGINE={engine}"))
+
+        extra = split_multi(gateway.get("TTS_EXTRA_ENGINES"))
+        unknown_extra = [name for name in extra if name not in ENGINE_INFO]
+        if unknown_extra:
+            checks.append(
+                Check(
+                    "engines extra",
+                    "bad",
+                    "TTS_EXTRA_ENGINES contiene engines desconocidos: " + ", ".join(unknown_extra),
+                )
+            )
+        elif extra and engine != "routed":
+            checks.append(
+                Check(
+                    "engines extra",
+                    "warn",
+                    "TTS_EXTRA_ENGINES solo tiene efecto con TTS_ENGINE=routed",
+                )
+            )
+        elif extra:
+            checks.append(Check("engines extra", "ok", ", ".join(extra)))
+
+        routing: dict[str, str] | None = None
+        if engine == "routed":
+            routing = parse_engine_map(gateway.get("TTS_ENGINES"))
+            if routing is None:
+                checks.append(Check("routed", "bad", "TTS_ENGINES no es un objeto JSON válido"))
+            elif not routing:
+                checks.append(Check("routed", "bad", "TTS_ENGINES está vacío"))
+            else:
+                unknown = sorted({value for value in routing.values() if value not in ENGINE_INFO})
+                bad_languages = sorted(
+                    code for code in routing if code != "_default" and not valid_language_code(code)
+                )
+                if unknown:
+                    checks.append(
+                        Check(
+                            "routed",
+                            "bad",
+                            "TTS_ENGINES apunta a engines desconocidos: " + ", ".join(unknown),
+                        )
+                    )
+                elif bad_languages:
+                    checks.append(
+                        Check(
+                            "routed",
+                            "bad",
+                            "TTS_ENGINES usa claves de idioma inválidas: "
+                            + ", ".join(bad_languages),
+                        )
+                    )
+                else:
+                    missing_default = "_default" not in routing
+                    unsupported = [
+                        f"{code}→{name}"
+                        for code, name in routing.items()
+                        if code != "_default"
+                        and name in ENGINE_INFO
+                        and "*" not in ENGINE_INFO[name].languages
+                        and code not in ENGINE_INFO[name].languages
+                    ]
+                    detail = ", ".join(f"{code}→{name}" for code, name in routing.items())
+                    if unsupported:
+                        checks.append(
+                            Check(
+                                "routed",
+                                "warn",
+                                "posible idioma sin soporte: "
+                                + ", ".join(unsupported)
+                                + " · mapa: "
+                                + detail,
+                            )
+                        )
+                    elif missing_default:
+                        checks.append(
+                            Check(
+                                "routed",
+                                "warn",
+                                "TTS_ENGINES no define _default; los idiomas no listados fallarán",
+                            )
+                        )
+                    else:
+                        checks.append(Check("routed", "ok", detail))
+
+        selected = configured_engines(
+            engine,
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        )
+        if config_requires_gpu(
+            engine,
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        ):
+            device = gateway.get("TTS_DEVICE").strip() or "cuda:0"
+            gpu_engines = [name for name in selected if name not in CLOUD_ENGINES]
+            if not device.startswith("cuda"):
+                checks.append(
+                    Check(
+                        "tts device",
+                        "bad",
+                        f"TTS_DEVICE={device} con engines GPU ("
+                        + ", ".join(gpu_engines)
+                        + "); usa cuda:0",
+                    )
+                )
+            else:
+                checks.append(Check("tts device", "ok", f"{device} para " + ", ".join(gpu_engines)))
+            if report is not None:
+                gpu = next((item for item in report.findings if item.name == "GPU"), None)
+                if gpu is not None and gpu.status != "ok":
+                    checks.append(
+                        Check(
+                            "gpu host",
+                            "warn",
+                            "hay engines GPU pero el host no detecta NVIDIA: " + gpu.detail,
+                        )
+                    )
+        elif gateway.get("TTS_DEVICE").strip().startswith("cuda"):
+            checks.append(
+                Check(
+                    "tts device",
+                    "warn",
+                    "TTS_DEVICE usa cuda pero no hay engines GPU seleccionados",
+                )
+            )
+
+        if "fish_tts" in selected and not gateway.get("FISH_API_KEY").strip():
+            checks.append(Check("fish tts", "warn", "fish_tts seleccionado sin FISH_API_KEY"))
+        if "openai_tts" in selected and not gateway.get("OPENAI_TTS_BASE_URL").strip():
+            checks.append(
+                Check(
+                    "openai tts",
+                    "warn",
+                    "openai_tts seleccionado sin OPENAI_TTS_BASE_URL",
+                )
+            )
+        if "qwen3_tts" in selected:
+            deploy_url = deploy.get("QWEN3_TTS_REMOTE_URL").strip() if deploy else ""
+            if not (gateway.get("QWEN3_TTS_REMOTE_URL").strip() or deploy_url):
+                checks.append(
+                    Check(
+                        "qwen3 tts",
+                        "warn",
+                        "qwen3_tts seleccionado sin QWEN3_TTS_REMOTE_URL",
+                    )
+                )
+        if "omnivoice_remote" in selected and not gateway.get("OMNIVOICE_REMOTE_URL").strip():
+            checks.append(
+                Check(
+                    "omnivoice remoto",
+                    "warn",
+                    "omnivoice_remote seleccionado sin OMNIVOICE_REMOTE_URL",
+                )
+            )
+
+        downloads = split_multi(gateway.get("TTS_MODEL_DOWNLOADS"))
+        cloud_downloads = [name for name in downloads if name.split(":", 1)[0] in CLOUD_ENGINES]
+        unknown_downloads = [
+            name for name in downloads if name not in MODEL_OPTIONS and name not in cloud_downloads
+        ]
+        if cloud_downloads:
+            checks.append(
+                Check(
+                    "modelos",
+                    "warn",
+                    "los engines cloud no descargan pesos: " + ", ".join(cloud_downloads),
+                )
+            )
+        elif unknown_downloads:
+            checks.append(
+                Check(
+                    "modelos",
+                    "bad",
+                    "TTS_MODEL_DOWNLOADS contiene modelos desconocidos: "
+                    + ", ".join(unknown_downloads),
+                )
+            )
+        elif downloads:
+            checks.append(Check("modelos", "ok", f"{len(downloads)} checkpoint(s) para precargar"))
+
+    # 9. Host prerequisites ------------------------------------------------
     # The detail carries the very command that fixes it, so a red line in the
     # validation screen is always actionable.
     if report is not None:

@@ -13,10 +13,10 @@ import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-__all__ = ["Action", "App", "Dialog", "Picker", "Row", "Screen"]
+__all__ = ["Action", "App", "Dialog", "MultiPicker", "Picker", "Row", "Screen"]
 
 #: Entry kinds and whether they take focus.
-FOCUSABLE = frozenset({"text", "secret", "choice", "bool", "button", "password"})
+FOCUSABLE = frozenset({"text", "secret", "choice", "bool", "button", "multi", "password"})
 
 #: (key, symbol) pairs that confirm an edit or a dialog.
 CONFIRM_KEYS = frozenset({10, 13, curses.KEY_ENTER})
@@ -159,7 +159,7 @@ class Row:
 
     Attributes:
         kind: ``heading``, ``note``, ``text``, ``secret``, ``choice``,
-            ``bool``, ``button`` or ``password``.
+            ``bool``, ``button``, ``multi`` or ``password``.
         label: Field name shown on the left.
         value: Current value (also the button label for ``button``).
         help: One line explanation rendered dim under the value.
@@ -339,6 +339,67 @@ class Picker:
         app.draw_modal(self.title, lines, [], self.index, highlight=True)
 
 
+class MultiPicker:
+    """Modal multi choice list with checkboxes."""
+
+    def __init__(
+        self,
+        title: str,
+        options: list[str],
+        current: str,
+        on_done: Callable[[App, str], None],
+        help_text: str = "",
+    ) -> None:
+        self.title = title
+        self.options = list(options)
+        self.help = help_text
+        self.on_done = on_done
+        selected = {item.strip() for item in current.split(",") if item.strip()}
+        for item in selected:
+            if item not in self.options:
+                self.options.append(item)
+        self.selected = selected
+        self.index = next(
+            (index for index, option in enumerate(self.options) if option in selected), 0
+        )
+
+    def _lines(self) -> list[str]:
+        lines = [f"[{'x' if option in self.selected else ' '}] {option}" for option in self.options]
+        if self.help:
+            lines.append("")
+            lines.append(self.help)
+        return lines
+
+    def handle(self, key: int, app: App) -> None:
+        """Process one key press while the multi picker owns the keyboard."""
+        if key in CONFIRM_KEYS:
+            chosen = [option for option in self.options if option in self.selected]
+            self.on_done(app, ",".join(chosen))
+            return
+        if key in CANCEL_KEYS:
+            app.close_modal()
+            return
+        if key == ord(" "):
+            option = self.options[self.index]
+            if option in self.selected:
+                self.selected.remove(option)
+            else:
+                self.selected.add(option)
+            return
+        if key in (curses.KEY_UP, curses.KEY_PPAGE):
+            self.index = (self.index - 1) % len(self.options)
+        elif key in (curses.KEY_DOWN, curses.KEY_NPAGE):
+            self.index = (self.index + 1) % len(self.options)
+        elif key == curses.KEY_HOME:
+            self.index = 0
+        elif key == curses.KEY_END:
+            self.index = len(self.options) - 1
+
+    def draw(self, app: App) -> None:
+        """Render the multi picker on top of the current screen."""
+        app.draw_modal(self.title, self._lines(), [], self.index, highlight=True)
+
+
 class App:
     """Screen stack renderer and keyboard dispatcher."""
 
@@ -352,7 +413,7 @@ class App:
         self.cursor = 0
         self.revealed: set[int] = set()
         self.show_advanced = False
-        self.modal: Dialog | Picker | None = None
+        self.modal: Dialog | MultiPicker | Picker | None = None
         self.message = ""
         self.message_level = ""
         self.visited: set[int] = set()
@@ -1025,6 +1086,9 @@ class App:
             row.value = "true" if row.value != "true" else "false"
             self._notify_change(row)
             return Action()
+        if key == ord(" ") and row.kind == "multi":
+            self._activate(row)
+            return Action()
         if key in (curses.KEY_LEFT, curses.KEY_RIGHT) and row.kind == "choice" and row.options:
             step = 1 if key == curses.KEY_RIGHT else -1
             try:
@@ -1108,6 +1172,11 @@ class App:
                 row.label or "Selecciona", row.options, row.value, self._pick, row.help
             )
             return
+        if row.kind == "multi" and row.options:
+            self.modal = MultiPicker(
+                row.label or "Selecciona", row.options, row.value, self._pick_multi, row.help
+            )
+            return
         if row.kind == "bool":
             row.value = "true" if row.value != "true" else "false"
             self._notify_change(row)
@@ -1132,6 +1201,16 @@ class App:
         row.value = value
         self._notify_change(row)
         self.say(f"{row.label} = {value}", "ok")
+
+    def _pick_multi(self, app: App, value: str) -> None:
+        row = self._focused_row()
+        self.close_modal()
+        if row is None:
+            return
+        row.value = value
+        self._notify_change(row)
+        count = len([item for item in value.split(",") if item.strip()])
+        self.say(f"{row.label} = {count} seleccionado(s)", "ok")
 
     def _notify_change(self, row: Row) -> None:
         if self.current.on_change:

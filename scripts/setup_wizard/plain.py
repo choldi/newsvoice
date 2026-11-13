@@ -22,7 +22,7 @@ from .app import (
     load_context,
 )
 from .detect import detect, prerequisites
-from .settings import PROFILES, fields_for
+from .settings import PROFILES, Field, fields_for
 
 __all__ = ["run_plain"]
 
@@ -94,6 +94,38 @@ def _choose(title: str, options: list[str], current: int = 0) -> int:
         if 1 <= picked <= len(options):
             return picked - 1
         print(f"  Escribe un número entre 1 y {len(options)}.")
+
+
+def _multi_prompt(field: Field, current: str) -> str:
+    """Show a numbered checklist and return the selected values.
+
+    Args:
+        field: Multi-select field with its allowed options.
+        current: Current comma-separated value.
+
+    Returns:
+        The new comma-separated value, or ``q`` / ``s`` to end or skip.
+    """
+    chosen = {item.strip() for item in current.split(",") if item.strip()}
+    print("    opciones:")
+    for index, option in enumerate(field.options, start=1):
+        mark = "x" if option in chosen else " "
+        print(f"      [{mark}] {index}. {option}")
+    answer = _read(f"    [{current or 'vacío'}] números o valores separados por comas: ")
+    if answer.lower() in {"q", "s"}:
+        return answer.lower()
+    if not answer:
+        return current
+    picked: list[str] = []
+    for token in answer.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token.isdigit() and 1 <= int(token) <= len(field.options):
+            picked.append(field.options[int(token) - 1])
+        else:
+            picked.append(token)
+    return ",".join(dict.fromkeys(picked))
 
 
 def run_plain(
@@ -206,6 +238,14 @@ def run_plain(
             shown = _mask(current) if field_.kind in ("secret", "password") else current
             print(f"\n  {field_.label}  ({field_.key})")
             print(f"    {field_.help}")
+            if field_.kind == "multi":
+                answer = _multi_prompt(field_, current)
+                if answer == "q":
+                    return _finish(ctx, write=False, assume_yes=assume_yes)
+                if answer == "s":
+                    break
+                env.set(field_.key, answer)
+                continue
             answer = _read(f"    [{shown or 'vacío'}] ")
             if answer.lower() == "q":
                 return _finish(ctx, write=False, assume_yes=assume_yes)

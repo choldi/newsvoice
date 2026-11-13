@@ -11,11 +11,28 @@ from pathlib import Path
 
 from . import deps, transfer
 from . import validate as validation
-from .curses_ui import App, Row, Screen
+from .curses_ui import App, Picker, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
 from .guide import external_guide_screen
-from .settings import PROFILES, Field, Profile, sections_for
+from .settings import (
+    ENGINE_INFO,
+    EXTRA_ENGINE_OPTIONS,
+    GPU_ENGINES,
+    MODEL_OPTIONS,
+    PROFILES,
+    ROUTED_PRESETS,
+    Field,
+    Profile,
+    RoutedPreset,
+    config_requires_gpu,
+    configured_engines,
+    fields_for,
+    parse_engine_map,
+    render_engine_map,
+    sections_for,
+    valid_language_code,
+)
 from .util import REPO_ROOT, env_paths
 
 __all__ = ["Context", "build_app", "load_context"]
@@ -183,8 +200,6 @@ def _apply_profile(ctx: Context) -> None:
 
 
 def _fields(file_key: str) -> list[Field]:
-    from .settings import fields_for
-
     return fields_for(file_key)
 
 
@@ -597,6 +612,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
 
     env = ctx.envs[file_key]
     target = next(t for t in env_paths() if t.key == file_key)
+    gpu_warning = Row("note", label="", result="")
     rows: list[Row] = [
         Row(
             "note",
@@ -609,26 +625,38 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             "note",
             label="[interno] lo aporta el stack · [externo] requiere proveedor o API externa",
         ),
+        gpu_warning,
+        Row("note", label=""),
     ]
+    field_rows: dict[str, Row] = {}
     for section in _sections(file_key):
         rows.append(Row("heading", label=section.title))
         for field_ in section.fields:
             value = _value_for(ctx, field_)
-            rows.append(
-                Row(
-                    kind="password" if field_.kind == "password" else field_.kind,
-                    label=field_.label,
-                    value=value,
-                    help=field_.help,
-                    options=list(field_.options),
-                    default=field_.default,
-                    generate=field_.generate,
-                    advanced=field_.advanced,
-                    secret=field_.kind in ("secret", "password"),
-                    source=field_.source,
-                )
+            row = Row(
+                kind="password" if field_.kind == "password" else field_.kind,
+                label=field_.label,
+                value=value,
+                help=field_.help,
+                options=list(field_.options),
+                default=field_.default,
+                generate=field_.generate,
+                advanced=field_.advanced,
+                secret=field_.kind in ("secret", "password"),
+                source=field_.source,
+                action=field_.key,
             )
+            field_rows[field_.key] = row
+            rows.append(row)
         rows.append(Row("note", label=""))
+    if file_key == "gateway":
+        rows.append(
+            Row(
+                "button",
+                label="Asistente TTS guiado (engines, routed y modelos)",
+                action="tts",
+            )
+        )
     if edit_mode:
         rows.extend(
             [
@@ -645,6 +673,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
                 Row("button", label="Atrás", action="back"),
             ]
         )
+    if file_key == "gateway":
+        _apply_gpu_lock(app, ctx, field_rows, gpu_warning)
 
     def on_change(app_: App, row: Row) -> None:
         field_ = _find_field(file_key, row)
@@ -657,10 +687,15 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             row.value = value
             _propagate_shared_key(app_, ctx, value)
             app_.say("Clave del gateway sincronizada en los tres archivos", "ok")
+        if file_key == "gateway" and field_.key.startswith("TTS_"):
+            _apply_gpu_lock(app_, ctx, field_rows, gpu_warning)
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "tts":
+            app_.push(tts_screen(app_, ctx, edit_mode=edit_mode))
             return
         if row.action == "diff":
             pending = env.diff_against_disk()
@@ -710,6 +745,361 @@ def _find_field(file_key: str, row: Row) -> Field | None:
         if field_.label == row.label:
             return field_
     return None
+
+
+def _apply_gpu_lock(
+    app: App,
+    ctx: Context,
+    rows_by_key: dict[str, Row],
+    warning: Row,
+) -> None:
+    """Force ``cuda:0`` while the selection includes a GPU engine."""
+    gateway = ctx.envs.get("gateway")
+    if gateway is None:
+        return
+    required = config_requires_gpu(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
+    device = rows_by_key.get("TTS_DEVICE")
+    if device is not None:
+        if required:
+            device.options = ["cuda:0"]
+            device.help = "Bloqueado en cuda:0: la selección incluye engines GPU."
+            if device.value != "cuda:0":
+                device.value = "cuda:0"
+                gateway.set("TTS_DEVICE", "cuda:0")
+                app.say("GPU obligatoria: TTS_DEVICE corregido a cuda:0", "warn")
+        else:
+            if "cpu" not in device.options:
+                device.options = ["cuda:0", "cpu"]
+            device.help = "cuda:0 exige el overlay GPU; cpu funciona sin gráfica."
+    if required:
+        gpu = [
+            name
+            for name in configured_engines(
+                gateway.get("TTS_ENGINE"),
+                gateway.get("TTS_ENGINES"),
+                gateway.get("TTS_EXTRA_ENGINES"),
+            )
+            if name in GPU_ENGINES
+        ]
+        warning.label = (
+            "⚠ La selección incluye engines GPU ("
+            + ", ".join(gpu)
+            + "): TTS_DEVICE queda fijado en cuda:0."
+        )
+        warning.result = "warn"
+    else:
+        warning.label = ""
+        warning.result = ""
+
+
+def _apply_routed_preset(ctx: Context, preset: RoutedPreset) -> None:
+    gateway = ctx.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", preset.engines)
+    gateway.set("TTS_EXTRA_ENGINES", preset.extra_engines)
+    gateway.set("TTS_DEVICE", preset.device)
+    gateway.set("TTS_MODEL_DOWNLOADS", preset.model_downloads)
+
+
+def _open_tts_presets(app: App, ctx: Context, *, edit_mode: bool) -> None:
+    by_label = {preset.label: preset for preset in ROUTED_PRESETS}
+    labels = list(by_label)
+
+    def pick(app_: App, label: str) -> None:
+        preset = by_label[label]
+        app_.close_modal()
+        _apply_routed_preset(ctx, preset)
+        app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode))
+        app_.say(f"Preset aplicado: {preset.label}", "ok")
+
+    app.modal = Picker(
+        "Presets de routed",
+        labels,
+        labels[0],
+        pick,
+        "Enter aplica el preset · Esc cancela",
+    )
+
+
+def _back_to_gateway(app: App, ctx: Context, *, edit_mode: bool) -> None:
+    app.pop()
+    app.replace(env_screen(app, ctx, "gateway", edit_mode=edit_mode))
+
+
+def _back_to_tts(app: App, ctx: Context, *, edit_mode: bool) -> None:
+    app.pop()
+    app.replace(tts_screen(app, ctx, edit_mode=edit_mode))
+
+
+def _tts_catalog_lines() -> list[str]:
+    lines: list[str] = []
+    for info in ENGINE_INFO.values():
+        cloning = "clonado sí" if info.cloning else "sin clonado"
+        languages = "todos" if info.languages == ("*",) else ", ".join(info.languages)
+        lines.append(f"{info.key}: {info.device} · {cloning} · idiomas: {languages}")
+        lines.append(f"  {info.description}")
+    return lines
+
+
+def _tts_help_lines() -> list[str]:
+    return [
+        "TTS_ENGINE fija un engine para todo; routed reparte por idioma.",
+        "TTS_ENGINES es el mapa idioma→engine; _default es el fallback.",
+        "TTS_EXTRA_ENGINES carga engines para pins explícitos, sin rutear idioma.",
+        "Los engines GPU (omnivoice, omnivoice_remote, qwen3_tts, chatterbox) "
+        "obligan a TTS_DEVICE=cuda:0.",
+        "edgetts, fish_tts y openai_tts son cloud: no descargan pesos locales.",
+        "El preset CPU seguro usa pocket_tts/piper/kokoro y no requiere GPU.",
+        "TTS_MODEL_DOWNLOADS solo anota checkpoints locales para precargarlos.",
+        "Los presets y el editor de mapa modifican el gateway/.env en memoria; "
+        "guarda desde la pantalla de gateway.",
+    ]
+
+
+def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
+    """Build the guided TTS engine, routing and model screen."""
+    gateway = ctx.envs["gateway"]
+    warning = Row("note", label="", result="")
+    engine = gateway.get("TTS_ENGINE").strip() or "routed"
+    engine_row = Row(
+        "choice",
+        label="Engine principal",
+        value=engine,
+        options=list(ENGINE_INFO) + ["routed"],
+        help="routed reparte por idioma; un engine fijo se usa para todo.",
+        action="TTS_ENGINE",
+    )
+    device_row = Row(
+        "choice",
+        label="Dispositivo",
+        value=gateway.get("TTS_DEVICE").strip() or "cuda:0",
+        options=["cuda:0", "cpu"],
+        help="cuda:0 exige el overlay GPU; cpu funciona sin gráfica.",
+        action="TTS_DEVICE",
+    )
+    extra_row = Row(
+        "multi",
+        label="Engines extra",
+        value=gateway.get("TTS_EXTRA_ENGINES").strip(),
+        options=list(EXTRA_ENGINE_OPTIONS),
+        help="Solo tienen efecto con routed; marca varios con Espacio.",
+        action="TTS_EXTRA_ENGINES",
+    )
+    map_row = Row(
+        "text",
+        label="Mapa idioma→engine",
+        value=gateway.get("TTS_ENGINES").strip(),
+        help="JSON editable; el editor valida idiomas y engines.",
+        action="TTS_ENGINES",
+    )
+    models_row = Row(
+        "multi",
+        label="Modelos a descargar",
+        value=gateway.get("TTS_MODEL_DOWNLOADS").strip(),
+        options=list(MODEL_OPTIONS),
+        help="Marca varios checkpoints locales; los cloud no descargan pesos.",
+        action="TTS_MODEL_DOWNLOADS",
+    )
+    rows: list[Row] = [
+        Row("note", label="Catálogo de engines (dispositivo · clonado · idiomas):"),
+        *[Row("note", label=line) for line in _tts_catalog_lines()],
+        Row("note", label=""),
+        Row("heading", label="Selección"),
+        engine_row,
+        device_row,
+        warning,
+        extra_row,
+        Row("note", label=""),
+        Row("heading", label="Routed"),
+        map_row,
+        Row("button", label="Aplicar preset routed…", action="presets"),
+        Row("button", label="Editar mapa idioma→engine…", action="map"),
+        Row("note", label=""),
+        Row("heading", label="Modelos locales"),
+        models_row,
+        Row("note", label=""),
+        Row("heading", label="Seguridad"),
+        Row("button", label="Aplicar configuración segura (CPU)", action="safe"),
+        Row("button", label="Explicación de la configuración TTS", action="explain"),
+        Row("button", label="Volver a gateway", action="back"),
+    ]
+    rows_by_key = {
+        "TTS_ENGINE": engine_row,
+        "TTS_DEVICE": device_row,
+        "TTS_EXTRA_ENGINES": extra_row,
+        "TTS_ENGINES": map_row,
+        "TTS_MODEL_DOWNLOADS": models_row,
+    }
+    _apply_gpu_lock(app, ctx, rows_by_key, warning)
+
+    def on_change(app_: App, row: Row) -> None:
+        key = row.action
+        if not key.startswith("TTS_"):
+            return
+        value = (
+            row.value.strip()
+            if key in {"TTS_ENGINES", "TTS_EXTRA_ENGINES", "TTS_MODEL_DOWNLOADS"}
+            else row.value
+        )
+        gateway.set(key, value)
+        if key in {"TTS_ENGINE", "TTS_DEVICE", "TTS_ENGINES", "TTS_EXTRA_ENGINES"}:
+            _apply_gpu_lock(app_, ctx, rows_by_key, warning)
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "presets":
+            _open_tts_presets(app_, ctx, edit_mode=edit_mode)
+            return
+        if row.action == "map":
+            app_.push(tts_map_screen(app_, ctx, edit_mode=edit_mode))
+            return
+        if row.action == "safe":
+            _apply_routed_preset(ctx, ROUTED_PRESETS[0])
+            app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode))
+            app_.say(f"Configuración segura aplicada: {ROUTED_PRESETS[0].label}", "ok")
+            return
+        if row.action == "explain":
+            app_.info("Configuración TTS", *_tts_help_lines())
+            return
+        if row.action == "back":
+            _back_to_gateway(app_, ctx, edit_mode=edit_mode)
+
+    return Screen(
+        title="Asistente TTS",
+        subtitle="Engines, GPU/cloud, clonado, idiomas, routed y modelos",
+        rows=rows,
+        footer="F1 Ayuda   Enter Editar   Espacio Marcar   Esc Atrás   F10 Salir",
+        on_change=on_change,
+        on_activate=activate,
+        on_help=lambda app_: app_.info("Configuración TTS", *_tts_help_lines()),
+    )
+
+
+def tts_map_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
+    """Edit the language→engine map without hand-writing JSON."""
+    gateway = ctx.envs["gateway"]
+    parsed = parse_engine_map(gateway.get("TTS_ENGINES"))
+    routing = parsed or {}
+    state = {"new": "", "invalid": parsed is None}
+    engine_options = list(ENGINE_INFO)
+
+    def default_engine() -> str:
+        current = gateway.get("TTS_ENGINE").strip()
+        if current in ENGINE_INFO:
+            return current
+        fallback = routing.get("_default") or next(iter(routing.values()), "")
+        return fallback if fallback in ENGINE_INFO else "pocket_tts"
+
+    def build() -> list[Row]:
+        rows: list[Row] = [
+            Row(
+                "note",
+                label="Asigna un engine a cada idioma ISO. _default cubre los no listados.",
+            ),
+            Row("note", label=f"Mapa actual: {render_engine_map(routing)}"),
+        ]
+        if state["invalid"]:
+            rows.append(
+                Row(
+                    "note",
+                    label="⚠ El TTS_ENGINES actual no es JSON válido; guardar lo reemplazará.",
+                    result="warn",
+                )
+            )
+        rows.append(Row("note", label=""))
+        for code, selected in routing.items():
+            rows.append(
+                Row(
+                    "choice",
+                    label=f"Idioma {code}",
+                    value=selected,
+                    options=engine_options,
+                    help=f"Engine para «{code}»; Enter abre la lista.",
+                    action=f"lang:{code}",
+                )
+            )
+        if not routing:
+            rows.append(Row("note", label="El mapa está vacío.", result="warn"))
+        rows.extend(
+            [
+                Row(
+                    "text",
+                    label="Nuevo idioma (ISO)",
+                    value=state["new"],
+                    help="Código de dos o tres letras; Enter edita y luego «Añadir idioma».",
+                    action="new",
+                ),
+                Row("button", label="Añadir idioma", action="add"),
+                Row("button", label="Quitar idioma…", action="remove"),
+                Row("button", label="Guardar mapa", action="save"),
+                Row("button", label="Volver sin guardar", action="back"),
+            ]
+        )
+        return rows
+
+    def on_change(app_: App, row: Row) -> None:
+        if row.action == "new":
+            state["new"] = row.value
+        elif row.action.startswith("lang:"):
+            routing[row.action.split(":", 1)[1]] = row.value
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "add":
+            code = state["new"].strip().lower()
+            if not valid_language_code(code):
+                app_.say("Idioma inválido: usa un código ISO de 2-3 letras", "bad")
+                return
+            if code in routing:
+                app_.say(f"El idioma {code} ya está en el mapa", "warn")
+                return
+            routing[code] = default_engine()
+            state["new"] = ""
+            state["invalid"] = False
+            app_.current.rows = build()
+            app_.refocus()
+            app_.say(f"Añadido {code} → {routing[code]}", "ok")
+            return
+        if row.action == "remove":
+            if not routing:
+                app_.say("No hay idiomas que quitar", "warn")
+                return
+
+            def remove(app2: App, code: str) -> None:
+                app2.close_modal()
+                routing.pop(code, None)
+                state["invalid"] = False
+                app2.current.rows = build()
+                app2.refocus()
+                app2.say(f"Idioma {code} eliminado", "ok")
+
+            app_.modal = Picker(
+                "Quitar idioma",
+                list(routing),
+                "",
+                remove,
+                "Enter elimina el idioma seleccionado",
+            )
+            return
+        if row.action == "save":
+            gateway.set("TTS_ENGINES", render_engine_map(routing))
+            _back_to_tts(app_, ctx, edit_mode=edit_mode)
+            app_.say("Mapa idioma→engine guardado en memoria", "ok")
+            return
+        if row.action == "back":
+            _back_to_tts(app_, ctx, edit_mode=edit_mode)
+
+    return Screen(
+        title="Mapa idioma→engine",
+        subtitle="Editor de TTS_ENGINES",
+        rows=build(),
+        footer="F1 Ayuda   Enter Editar   Esc Atrás   F10 Salir",
+        on_change=on_change,
+        on_activate=activate,
+        on_help=lambda app_: app_.info("Mapa idioma→engine", *_tts_help_lines()),
+    )
 
 
 def _shown(key: str, value: str) -> str:

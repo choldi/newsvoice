@@ -17,6 +17,7 @@ from setup_wizard import deps
 from setup_wizard import validate as validation
 from setup_wizard.app import (
     Context,
+    _apply_routed_preset,
     _confirm_write,
     _confirm_write_one,
     _shared_key_conflicts,
@@ -31,15 +32,32 @@ from setup_wizard.app import (
     prereq_screen,
     profile_screen,
     review_screen,
+    tts_map_screen,
+    tts_screen,
     validate_screen,
     welcome_screen,
 )
-from setup_wizard.curses_ui import App, Row, Screen
+from setup_wizard.curses_ui import App, MultiPicker, Row, Screen
 from setup_wizard.detect import Finding, Report, prerequisites
 from setup_wizard.envfile import EnvFile
 from setup_wizard.guide import GUIDE_PAGES
 from setup_wizard.plain import run_plain
-from setup_wizard.settings import PROFILES, fields_for, hash_password, sections_for
+from setup_wizard.settings import (
+    ENGINE_INFO,
+    GPU_ENGINES,
+    MODEL_OPTIONS,
+    PROFILES,
+    ROUTED_PRESETS,
+    config_requires_gpu,
+    fields_for,
+    hash_password,
+    join_multi,
+    parse_engine_map,
+    render_engine_map,
+    sections_for,
+    split_multi,
+    valid_language_code,
+)
 
 DEPLOY_EXAMPLE = (
     "# plantilla compose\n"
@@ -151,7 +169,7 @@ def test_env_file_keeps_pristine_values_and_backs_up(tmp_path: Path) -> None:
 def test_every_field_is_well_formed_and_unique() -> None:
     """Fields point at a real file and no label repeats inside one file."""
     allowed_files = {"deploy", "news", "gateway"}
-    allowed_kinds = {"text", "secret", "choice", "bool", "password"}
+    allowed_kinds = {"text", "secret", "choice", "bool", "multi", "password"}
     for file_key in allowed_files:
         labels: set[str] = set()
         for field in fields_for(file_key):
@@ -160,7 +178,7 @@ def test_every_field_is_well_formed_and_unique() -> None:
             assert field.kind in allowed_kinds
             assert field.label not in labels, f"etiqueta repetida: {field.label}"
             labels.add(field.label)
-            if field.kind == "choice":
+            if field.kind in {"choice", "multi"}:
                 assert field.options, f"{field.key} es una elección sin opciones"
             if field.generate:
                 assert field.kind == "secret", f"{field.key} genera un secreto no secreto"
@@ -186,6 +204,54 @@ def test_tts_fields_expose_cloud_engines_and_sidecars() -> None:
     assert gateway["OPENAI_TTS_BASE_URL"].advanced
     assert gateway["QWEN3_TTS_REMOTE_URL"].advanced
     assert gateway["QWEN3_TTS_REMOTE_TIMEOUT"].default == "300"
+
+
+def test_tts_catalog_and_helpers_agree() -> None:
+    """The catalog feeds the field options, presets and GPU guard."""
+    assert {"piper", "chatterbox", "fish_tts", "openai_tts"} <= set(ENGINE_INFO)
+    assert "omnivoice" in GPU_ENGINES
+    assert "omnivoice_remote" in GPU_ENGINES
+    assert "piper" not in GPU_ENGINES
+    assert "omnivoice:ModelsLab/omnivoice-singing" in MODEL_OPTIONS
+    assert split_multi("kokoro, piper,kokoro") == ["kokoro", "piper"]
+    assert join_multi(["kokoro", "piper", "kokoro"]) == "kokoro,piper"
+    assert render_engine_map({"es": "piper"}) == '{"es":"piper"}'
+    assert parse_engine_map('{"es":"piper"}') == {"es": "piper"}
+    assert parse_engine_map("no-json") is None
+    assert parse_engine_map('["es"]') is None
+    assert valid_language_code("ca")
+    assert not valid_language_code("catalan")
+    assert config_requires_gpu("routed", '{"es":"omnivoice"}', "")
+    assert not config_requires_gpu("routed", '{"es":"piper"}', "")
+
+
+def test_routed_presets_include_a_safe_cpu_configuration() -> None:
+    """The safe preset never needs GPU and pins Catalan to Piper."""
+    safe = next(preset for preset in ROUTED_PRESETS if preset.key == "safe_cpu")
+    routing = parse_engine_map(safe.engines)
+
+    assert routing is not None
+    assert routing["ca"] == "piper"
+    assert safe.device == "cpu"
+    assert not config_requires_gpu("routed", safe.engines, safe.extra_engines)
+    assert "pocket_tts:es" in safe.model_downloads
+
+    gpu = next(preset for preset in ROUTED_PRESETS if preset.key == "gpu_omni")
+    assert config_requires_gpu("routed", gpu.engines, gpu.extra_engines)
+
+
+def test_applying_a_routed_preset_updates_the_gateway(wizard_context: Context) -> None:
+    """Preset selection writes engine, routing, device and downloads together."""
+    safe = next(preset for preset in ROUTED_PRESETS if preset.key == "safe_cpu")
+    gateway = wizard_context.envs["gateway"]
+
+    _apply_routed_preset(wizard_context, safe)
+
+    assert gateway.get("TTS_ENGINE") == "routed"
+    assert gateway.get("TTS_DEVICE") == "cpu"
+    assert gateway.get("TTS_EXTRA_ENGINES") == safe.extra_engines
+    assert gateway.get("TTS_MODEL_DOWNLOADS") == safe.model_downloads
+    assert parse_engine_map(gateway.get("TTS_ENGINES")) == parse_engine_map(safe.engines)
 
 
 def test_profiles_only_touch_keys_that_exist() -> None:
@@ -279,6 +345,56 @@ def test_validate_accepts_a_consistent_configuration(tmp_path: Path) -> None:
     assert not [check for check in checks if check.status == "bad"], checks
     assert by_name["clave compartida"].status == "ok"
     assert by_name["acceso al panel"].status == "ok"
+
+
+def test_validate_flags_unknown_tts_engines(tmp_path: Path) -> None:
+    """Unknown primary and extra engines are blocking configuration errors."""
+    envs = _write_env_files(tmp_path)
+    envs["gateway"].set("TTS_ENGINE", "nope")
+    envs["gateway"].set("TTS_EXTRA_ENGINES", "piper,nope")
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["tts engine"].status == "bad"
+    assert by_name["engines extra"].status == "bad"
+    assert "nope" in by_name["engines extra"].detail
+
+
+def test_validate_requires_cuda_for_gpu_routing(tmp_path: Path) -> None:
+    """A routed GPU engine with TTS_DEVICE=cpu is a blocking error."""
+    envs = _write_env_files(tmp_path)
+    gateway = envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"omnivoice","_default":"omnivoice"}')
+    gateway.set("TTS_DEVICE", "cpu")
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["routed"].status == "ok"
+    assert by_name["tts device"].status == "bad"
+    assert "cuda:0" in by_name["tts device"].detail
+
+
+def test_validate_warns_routed_without_default_and_cloud_downloads(
+    tmp_path: Path,
+) -> None:
+    """A missing fallback and cloud checkpoints are warnings, not blockers."""
+    envs = _write_env_files(tmp_path)
+    gateway = envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"pocket_tts"}')
+    gateway.set("TTS_DEVICE", "cpu")
+    gateway.set("TTS_MODEL_DOWNLOADS", "fish_tts:s2.1-pro-free")
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["routed"].status == "warn"
+    assert "_default" in by_name["routed"].detail
+    assert by_name["modelos"].status == "warn"
+    assert "cloud" in by_name["modelos"].detail
 
 
 def test_validate_missing_files_are_bad_only_when_they_will_not_be_written(
@@ -539,6 +655,129 @@ def test_dialog_page_keys_scroll_long_messages() -> None:
     assert dialog.offset == 10**9
 
 
+def test_multi_picker_toggles_checkboxes_and_returns_ordered_values() -> None:
+    """Space toggles one option; Enter returns the selected values in order."""
+    app = App("test")
+    app.push(
+        Screen(
+            title="x",
+            rows=[
+                Row(
+                    "multi",
+                    label="Engines",
+                    value="kokoro",
+                    options=["kokoro", "piper", "fish_tts"],
+                )
+            ],
+        )
+    )
+    picked: list[str] = []
+    app.modal = MultiPicker(
+        "Engines",
+        ["kokoro", "piper", "fish_tts"],
+        "kokoro",
+        lambda _app, value: picked.append(value),
+        "Espacio marca",
+    )
+
+    app.handle(ord(" "))
+    app.handle(curses.KEY_DOWN)
+    app.handle(ord(" "))
+    app.handle(10)
+
+    assert picked == ["piper"]
+
+
+def test_tts_screen_locks_cuda_when_a_gpu_engine_is_selected(
+    wizard_context: Context,
+) -> None:
+    """A GPU engine in the route forces TTS_DEVICE back to cuda:0."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"omnivoice","_default":"omnivoice"}')
+    gateway.set("TTS_DEVICE", "cpu")
+    app = App("test")
+
+    screen = tts_screen(app, wizard_context)
+    device = next(row for row in screen.rows if row.action == "TTS_DEVICE")
+    warning = next(row for row in screen.rows if row.result == "warn" and "GPU" in row.label)
+
+    assert device.options == ["cuda:0"]
+    assert gateway.get("TTS_DEVICE") == "cuda:0"
+    assert "omnivoice" in warning.label
+
+
+def test_env_screen_on_change_relocks_the_device(wizard_context: Context) -> None:
+    """Changing TTS_ENGINE from the gateway form re-applies the GPU lock."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"pocket_tts","_default":"pocket_tts"}')
+    gateway.set("TTS_DEVICE", "cpu")
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "gateway"))
+
+    engine = next(row for row in app.current.rows if row.action == "TTS_ENGINE")
+    engine.value = "omnivoice"
+    assert app.current.on_change is not None
+    app.current.on_change(app, engine)
+
+    device = next(row for row in app.current.rows if row.action == "TTS_DEVICE")
+    assert device.value == "cuda:0"
+    assert device.options == ["cuda:0"]
+    assert gateway.get("TTS_DEVICE") == "cuda:0"
+
+
+def test_tts_screen_allows_cpu_for_safe_engines(wizard_context: Context) -> None:
+    """Without GPU engines the device picker keeps both choices."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"pocket_tts","_default":"pocket_tts"}')
+    gateway.set("TTS_EXTRA_ENGINES", "")
+    app = App("test")
+
+    screen = tts_screen(app, wizard_context)
+    device = next(row for row in screen.rows if row.action == "TTS_DEVICE")
+
+    assert device.options == ["cuda:0", "cpu"]
+    assert not any(row.result == "warn" and "GPU" in row.label for row in screen.rows)
+
+
+def test_tts_map_screen_adds_a_language_and_saves(wizard_context: Context) -> None:
+    """The map editor validates the code and persists the JSON on save."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"pocket_tts","_default":"pocket_tts"}')
+    app = App("test")
+    app.push(tts_map_screen(app, wizard_context))
+
+    new = next(row for row in app.current.rows if row.action == "new")
+    app.focus = app.current.rows.index(new)
+    app.handle(10)
+    for _ in range(len(new.value)):
+        app.handle(curses.KEY_BACKSPACE)
+    for char in "ca":
+        app.handle(ord(char))
+    app.handle(10)
+
+    add = next(row for row in app.current.rows if row.action == "add")
+    app.focus = app.current.rows.index(add)
+    app.handle(10)
+
+    assert any(row.action == "lang:ca" for row in app.current.rows)
+    assert parse_engine_map(gateway.get("TTS_ENGINES")) == {
+        "es": "pocket_tts",
+        "_default": "pocket_tts",
+    }
+
+    save = next(row for row in app.current.rows if row.action == "save")
+    app.focus = app.current.rows.index(save)
+    app.handle(10)
+
+    saved = parse_engine_map(gateway.get("TTS_ENGINES"))
+    assert saved is not None
+    assert saved["ca"] == "pocket_tts"
+
+
 # -- screen flow ------------------------------------------------------------
 
 
@@ -553,7 +792,7 @@ def test_tui_starts_with_the_external_values_guide(wizard_context: Context) -> N
     app = build_app(wizard_context)
 
     assert app.current.title == "Guía de valores externos"
-    assert app.current.progress == "1/8"
+    assert app.current.progress == "1/9"
     assert any("Fish Audio" in row.label for row in app.current.rows)
 
 
@@ -564,14 +803,19 @@ def test_external_guide_paginates_and_can_skip_to_the_menu(
     app = build_app(wizard_context)
 
     app.handle(curses.KEY_NPAGE)
+    assert "Motor TTS" in app.current.subtitle
+    assert app.current.progress == "2/9"
+    app.handle(curses.KEY_NPAGE)
     assert "Fish Audio" in app.current.subtitle
-    assert app.current.progress == "2/8"
+    assert app.current.progress == "3/9"
+    app.handle(curses.KEY_PPAGE)
+    assert "Motor TTS" in app.current.subtitle
     app.handle(curses.KEY_PPAGE)
     assert "Antes de empezar" in app.current.subtitle
     app.handle(curses.KEY_END)
-    assert app.current.progress == "8/8"
+    assert app.current.progress == "9/9"
     app.handle(curses.KEY_HOME)
-    assert app.current.progress == "1/8"
+    assert app.current.progress == "1/9"
 
     skip = next(row for row in app.current.rows if row.label == "Saltar al menú")
     app.focus = app.current.rows.index(skip)
@@ -609,6 +853,8 @@ def test_all_screens_build_usable_rows(wizard_context: Context) -> None:
         env_screen(app, wizard_context, "deploy"),
         env_screen(app, wizard_context, "news"),
         env_screen(app, wizard_context, "gateway"),
+        tts_screen(app, wizard_context),
+        tts_map_screen(app, wizard_context),
     ]
     for screen in screens:
         focusable = [row for row in screen.rows if row.focusable]

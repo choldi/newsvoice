@@ -6,17 +6,33 @@ curses renderer and the non interactive fallback share one source of truth.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 
 __all__ = [
+    "EngineInfo",
+    "ENGINE_INFO",
+    "GPU_ENGINES",
+    "MODEL_OPTIONS",
+    "ROUTED_PRESETS",
+    "RoutedPreset",
     "Field",
     "Profile",
     "PROFILES",
     "SECTIONS",
+    "configured_engines",
+    "config_requires_gpu",
+    "engine_info",
     "fields_for",
     "hash_password",
+    "join_multi",
+    "parse_engine_map",
     "profiles",
+    "render_engine_map",
     "sections_for",
+    "split_multi",
+    "valid_language_code",
 ]
 
 # -- password helpers -------------------------------------------------------
@@ -50,7 +66,8 @@ class Field:
         key: Variable name.
         label: Prompt shown in the UI.
         help: One line explanation.
-        kind: ``text``, ``secret``, ``choice``, ``bool`` or ``password``.
+        kind: ``text``, ``secret``, ``choice``, ``bool``, ``multi`` or
+            ``password``.
         default: Template fallback value.
         options: Allowed values for ``choice``.
         generate: ``hex32`` when a random secret can be minted for it.
@@ -112,6 +129,52 @@ class Profile:
     defaults: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class EngineInfo:
+    """Runtime capabilities shown by the TTS setup screen.
+
+    Attributes:
+        key: Engine id used by ``TTS_ENGINE`` and ``TTS_ENGINES``.
+        label: Human readable name.
+        device: ``GPU``, ``CPU``, ``Cloud`` or ``Proxy``.
+        cloning: Whether the engine can clone voices.
+        languages: ISO 639-1 languages known to the engine.
+        description: Short explanation of the engine and its limits.
+        downloads: Local checkpoints the wizard can record for prefetch.
+    """
+
+    key: str
+    label: str
+    device: str
+    cloning: bool
+    languages: tuple[str, ...]
+    description: str
+    downloads: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RoutedPreset:
+    """A ready-made language routing configuration.
+
+    Attributes:
+        key: Stable preset id.
+        label: Menu entry text.
+        description: What the preset configures.
+        engines: ``TTS_ENGINES`` JSON.
+        extra_engines: ``TTS_EXTRA_ENGINES`` value.
+        device: ``TTS_DEVICE`` value.
+        model_downloads: Optional ``TTS_MODEL_DOWNLOADS`` value.
+    """
+
+    key: str
+    label: str
+    description: str
+    engines: str
+    extra_engines: str
+    device: str
+    model_downloads: str = ""
+
+
 # -- fields -----------------------------------------------------------------
 
 DEPLOY = "deploy"
@@ -121,6 +184,252 @@ GATEWAY = "gateway"
 _TTS_ENGINES = (
     '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}'
 )
+
+ENGINE_INFO: dict[str, EngineInfo] = {
+    "pocket_tts": EngineInfo(
+        "pocket_tts",
+        "Pocket TTS",
+        "CPU",
+        True,
+        ("en", "es", "fr", "de", "it", "pt"),
+        "Clonado local en CPU; no cubre catalán.",
+        ("pocket_tts:es", "pocket_tts:en", "pocket_tts:fr"),
+    ),
+    "piper": EngineInfo(
+        "piper",
+        "Piper",
+        "CPU",
+        False,
+        ("ca", "es", "en", "fr"),
+        "Voces ONNX ligeras en CPU; incluye catalán, sin clonado.",
+        (
+            "piper:ca_ES-upc_ona-medium",
+            "piper:es_ES-davefx-medium",
+            "piper:en_US-lessac-medium",
+            "piper:fr_FR-siwis-medium",
+        ),
+    ),
+    "kokoro": EngineInfo(
+        "kokoro",
+        "Kokoro",
+        "CPU",
+        False,
+        ("en", "es", "fr", "hi", "it", "pt"),
+        "Voces stock 82M en CPU; sin catalán ni clonado.",
+        ("kokoro:hexgrad/Kokoro-82M",),
+    ),
+    "edgetts": EngineInfo(
+        "edgetts",
+        "Edge TTS",
+        "Cloud",
+        False,
+        ("es", "en", "fr", "de", "it", "pt", "ca"),
+        "400+ voces cloud, incluido catalán; sin clonado.",
+    ),
+    "chatterbox": EngineInfo(
+        "chatterbox",
+        "Chatterbox",
+        "GPU",
+        True,
+        (
+            "ar",
+            "da",
+            "de",
+            "el",
+            "en",
+            "es",
+            "fi",
+            "fr",
+            "he",
+            "hi",
+            "it",
+            "ja",
+            "ko",
+            "ms",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "ru",
+            "sv",
+            "sw",
+            "tr",
+            "zh",
+        ),
+        "Clonado zero-shot y 23 idiomas; no cubre catalán.",
+        ("chatterbox:ResembleAI/chatterbox",),
+    ),
+    "qwen3_tts": EngineInfo(
+        "qwen3_tts",
+        "Qwen3-TTS",
+        "GPU",
+        True,
+        ("en", "es", "fr", "ca", "pt", "de", "it", "ja", "ko", "ru", "zh"),
+        "Sidecar GPU con voces stock, diseño y clonado; cubre catalán.",
+        (
+            "qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            "qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            "qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        ),
+    ),
+    "omnivoice": EngineInfo(
+        "omnivoice",
+        "OmniVoice",
+        "GPU",
+        True,
+        ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
+        "Engine GPU completo: stock, clonado, instruct y emociones.",
+        ("omnivoice:ModelsLab/omnivoice-singing",),
+    ),
+    "omnivoice_remote": EngineInfo(
+        "omnivoice_remote",
+        "OmniVoice remoto",
+        "Proxy",
+        True,
+        ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
+        "Proxy HTTP al sidecar OmniVoice; el sidecar necesita GPU.",
+    ),
+    "fish_tts": EngineInfo(
+        "fish_tts",
+        "Fish Audio",
+        "Cloud",
+        True,
+        ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
+        "Cloud con referencias stock y clones inline; requiere FISH_API_KEY.",
+    ),
+    "openai_tts": EngineInfo(
+        "openai_tts",
+        "OpenAI-compatible TTS",
+        "Cloud",
+        False,
+        ("es", "en"),
+        "Endpoint cloud /audio/speech; requiere OPENAI_TTS_BASE_URL.",
+    ),
+    "mock": EngineInfo(
+        "mock",
+        "Mock",
+        "CPU",
+        False,
+        ("*",),
+        "Tonos de prueba para desarrollo; no sintetiza voces reales.",
+    ),
+}
+
+GPU_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device in ("GPU", "Proxy"))
+CLOUD_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device == "Cloud")
+ENGINE_OPTIONS = ("routed", *ENGINE_INFO)
+EXTRA_ENGINE_OPTIONS = tuple(ENGINE_INFO)
+MODEL_OPTIONS = tuple(download for info in ENGINE_INFO.values() for download in info.downloads)
+
+_SAFE_TTS_ENGINES = (
+    '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"piper","_default":"pocket_tts"}'
+)
+_SAFE_MODELS = ",".join(
+    (
+        "pocket_tts:es",
+        "pocket_tts:en",
+        "pocket_tts:fr",
+        "piper:ca_ES-upc_ona-medium",
+        "kokoro:hexgrad/Kokoro-82M",
+    )
+)
+
+ROUTED_PRESETS: tuple[RoutedPreset, ...] = (
+    RoutedPreset(
+        "safe_cpu",
+        "CPU seguro · Pocket + Piper catalán",
+        "Todo local: es/en/fr con pocket_tts, ca con piper, extras kokoro/piper.",
+        _SAFE_TTS_ENGINES,
+        "kokoro,piper",
+        "cpu",
+        _SAFE_MODELS,
+    ),
+    RoutedPreset(
+        "cpu_edge",
+        "CPU + Edge catalán · Pocket + Edge",
+        "es/en/fr con pocket_tts y ca con Edge TTS; extras kokoro.",
+        '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts",'
+        '"ca":"edgetts","_default":"pocket_tts"}',
+        "kokoro",
+        "cpu",
+        "pocket_tts:es,pocket_tts:en,pocket_tts:fr,kokoro:hexgrad/Kokoro-82M",
+    ),
+    RoutedPreset(
+        "gpu_omni",
+        "GPU OmniVoice · Edge catalán",
+        "es/en/fr con omnivoice, ca con edgetts; extras qwen3/omnivoice_remote.",
+        '{"es":"omnivoice","en":"omnivoice","fr":"omnivoice",'
+        '"ca":"edgetts","_default":"omnivoice"}',
+        "qwen3_tts,omnivoice_remote",
+        "cuda:0",
+        "omnivoice:ModelsLab/omnivoice-singing,qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    ),
+    RoutedPreset(
+        "gpu_mixed",
+        "GPU mixto · OmniVoice + Qwen3",
+        "es/fr con omnivoice, en con qwen3_tts, ca con edgetts; extras kokoro.",
+        '{"es":"omnivoice","en":"qwen3_tts","fr":"omnivoice",'
+        '"ca":"edgetts","_default":"omnivoice"}',
+        "kokoro,omnivoice_remote",
+        "cuda:0",
+        "omnivoice:ModelsLab/omnivoice-singing,qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    ),
+)
+
+
+def split_multi(value: str) -> list[str]:
+    """Split a comma-separated multi-select value into unique tokens."""
+    return list(dict.fromkeys(token.strip() for token in value.split(",") if token.strip()))
+
+
+def join_multi(values: list[str]) -> str:
+    """Join selected values in their original order, without duplicates."""
+    return ",".join(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
+def engine_info(key: str) -> EngineInfo | None:
+    """Return the catalog entry for ``key``, or ``None`` when unknown."""
+    return ENGINE_INFO.get(key)
+
+
+def parse_engine_map(value: str) -> dict[str, str] | None:
+    """Parse ``TTS_ENGINES`` and return a string map, or ``None`` if invalid."""
+    try:
+        data = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {str(key): str(engine) for key, engine in data.items()}
+
+
+def render_engine_map(routing: dict[str, str]) -> str:
+    """Render a routing map as compact JSON."""
+    return json.dumps(routing, ensure_ascii=False, separators=(",", ":"))
+
+
+def configured_engines(engine: str, engine_map: str, extra: str) -> list[str]:
+    """Return every engine involved in the current selection."""
+    names: list[str] = []
+    if engine and engine != "routed":
+        names.append(engine)
+    if engine == "routed":
+        routing = parse_engine_map(engine_map)
+        if routing:
+            names.extend(routing.values())
+        names.extend(split_multi(extra))
+    return list(dict.fromkeys(names))
+
+
+def config_requires_gpu(engine: str, engine_map: str, extra: str) -> bool:
+    """Report whether the selection instantiates an engine that needs GPU."""
+    return any(name in GPU_ENGINES for name in configured_engines(engine, engine_map, extra))
+
+
+def valid_language_code(value: str) -> bool:
+    """Return True for ISO 639-1/639-2 style language keys."""
+    return bool(re.fullmatch(r"[a-z]{2,3}", value))
+
 
 _FIELD_DETAILS: dict[tuple[str, str], str] = {
     (DEPLOY, "API_PORT"): (
@@ -218,7 +527,12 @@ _FIELD_DETAILS: dict[tuple[str, str], str] = {
         "fallback para idiomas no listados."
     ),
     (GATEWAY, "TTS_EXTRA_ENGINES"): (
-        "Engines extra disponibles para pins explícitos. Solo se cargan con TTS_ENGINE=routed."
+        "Engines extra disponibles para pins explícitos. Solo se cargan con TTS_ENGINE=routed. "
+        "Puedes marcar varios; los engines GPU obligan a TTS_DEVICE=cuda:0."
+    ),
+    (GATEWAY, "TTS_MODEL_DOWNLOADS"): (
+        "Lista de checkpoints locales que el instalador debe precargar (pocket_tts, piper, "
+        "kokoro, qwen3_tts, omnivoice o chatterbox). Los engines cloud no descargan pesos."
     ),
     (GATEWAY, "TTS_DEVICE"): (
         "Dispositivo de inferencia. cuda:0 exige el overlay GPU; cpu funciona sin tarjeta gráfica."
@@ -532,36 +846,36 @@ _SECTIONS: list[Section] = [
                 "su sidecar o credenciales.",
                 kind="choice",
                 default="routed",
-                options=(
-                    "routed",
-                    "pocket_tts",
-                    "edgetts",
-                    "piper",
-                    "chatterbox",
-                    "kokoro",
-                    "qwen3_tts",
-                    "omnivoice",
-                    "omnivoice_remote",
-                    "fish_tts",
-                    "openai_tts",
-                    "mock",
-                ),
+                options=ENGINE_OPTIONS,
                 required=True,
             ),
             Field(
                 file=GATEWAY,
                 key="TTS_ENGINES",
                 label="Mapa idioma→engine",
-                help="Ruta por idioma cuando TTS_ENGINE=routed (JSON).",
+                help="Ruta por idioma cuando TTS_ENGINE=routed (JSON). "
+                "El asistente TTS ofrece presets y un editor.",
                 default=_TTS_ENGINES,
             ),
             Field(
                 file=GATEWAY,
                 key="TTS_EXTRA_ENGINES",
                 label="Engines extra",
-                help="Pins explícitos sin rutear idioma; añade "
-                "fish_tts/openai_tts solo con credenciales.",
+                help="Pins explícitos sin rutear idioma; marca varios. "
+                "Añade fish_tts/openai_tts solo con credenciales.",
+                kind="multi",
                 default="kokoro,qwen3_tts,omnivoice_remote",
+                options=EXTRA_ENGINE_OPTIONS,
+            ),
+            Field(
+                file=GATEWAY,
+                key="TTS_MODEL_DOWNLOADS",
+                label="Modelos a descargar",
+                help="Checkpoints locales que quieres precargar; marca varios. "
+                "No incluye engines cloud.",
+                kind="multi",
+                default="",
+                options=MODEL_OPTIONS,
             ),
         ),
     ),
