@@ -23,6 +23,7 @@ from setup_wizard.app import (
     _unify_shared_key,
     _write_env,
     apply_screen,
+    build_app,
     env_screen,
     final_screen,
     load_context,
@@ -36,6 +37,7 @@ from setup_wizard.app import (
 from setup_wizard.curses_ui import App, Row, Screen
 from setup_wizard.detect import Finding, Report, prerequisites
 from setup_wizard.envfile import EnvFile
+from setup_wizard.guide import GUIDE_PAGES
 from setup_wizard.plain import run_plain
 from setup_wizard.settings import PROFILES, fields_for, hash_password, sections_for
 
@@ -546,6 +548,56 @@ def wizard_context(tmp_path: Path) -> Context:
     return _context(_write_env_files(tmp_path))
 
 
+def test_tui_starts_with_the_external_values_guide(wizard_context: Context) -> None:
+    """The first screen explains what must be obtained outside the repository."""
+    app = build_app(wizard_context)
+
+    assert app.current.title == "Guía de valores externos"
+    assert app.current.progress == "1/8"
+    assert any("Fish Audio" in row.label for row in app.current.rows)
+
+
+def test_external_guide_paginates_and_can_skip_to_the_menu(
+    wizard_context: Context,
+) -> None:
+    """PgUp/PgDn, arrows and Home/End move between guide pages."""
+    app = build_app(wizard_context)
+
+    app.handle(curses.KEY_NPAGE)
+    assert "Fish Audio" in app.current.subtitle
+    assert app.current.progress == "2/8"
+    app.handle(curses.KEY_PPAGE)
+    assert "Antes de empezar" in app.current.subtitle
+    app.handle(curses.KEY_END)
+    assert app.current.progress == "8/8"
+    app.handle(curses.KEY_HOME)
+    assert app.current.progress == "1/8"
+
+    skip = next(row for row in app.current.rows if row.label == "Saltar al menú")
+    app.focus = app.current.rows.index(skip)
+    app.handle(10)
+    assert app.current.title == "Instalador de newsvoice"
+
+
+def test_external_guide_covers_providers_urls_and_approvals() -> None:
+    """The guide names the credentials, URLs and approvals an operator needs."""
+    text = "\n".join(line for page in GUIDE_PAGES for line in page.lines)
+
+    for expected in (
+        "FISH_API_KEY",
+        "HF_TOKEN",
+        "TELEGRAM_BOT_TOKEN",
+        "SMTP_PASSWORD",
+        "OPENAI_TTS_BASE_URL",
+        "https://fish.audio/",
+        "https://huggingface.co/kyutai/pocket-tts",
+        "Agree and access repository",
+        "https://t.me/BotFather",
+        "https://myaccount.google.com/apppasswords",
+    ):
+        assert expected in text
+
+
 def test_all_screens_build_usable_rows(wizard_context: Context) -> None:
     """Every screen the wizard can reach exposes focusable rows and buttons."""
     app = App("test")
@@ -651,6 +703,35 @@ def test_env_screen_rows_carry_the_internal_or_external_badge(
     assert any("[interno] lo aporta el stack" in row.label for row in screen.rows)
     rendered = "".join(text for _x, text, _attr in app._row_visual_lines(llm, 80, False)[0])
     assert "[externo]" in rendered
+
+
+def test_gateway_screen_shows_fish_fields_without_advanced_toggle(
+    wizard_context: Context,
+) -> None:
+    """Fish credentials are common enough to be visible in the default view."""
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "gateway"))
+
+    labels = [row.label for row in app.visible_rows()]
+    assert "Fish API key" in labels
+    assert "Modelo Fish" in labels
+
+
+def test_saving_the_last_env_file_opens_the_review_screen(
+    wizard_context: Context,
+) -> None:
+    """Saving gateway, the last file, must not index past ``_ORDER``."""
+    env = wizard_context.envs["gateway"]
+    env.set("FISH_API_KEY", "fish-test")
+    app = App("test")
+    app.push(env_screen(app, wizard_context, "gateway"))
+
+    button = next(r for r in app.current.rows if r.label == "Guardar en disco y continuar")
+    app.focus = app.current.rows.index(button)
+    app.handle(10)
+
+    assert "Paso 4" in app.current.title
+    assert "FISH_API_KEY=fish-test" in env.path.read_text(encoding="utf-8")
 
 
 def test_save_dialogs_start_on_the_action_button(wizard_context: Context) -> None:

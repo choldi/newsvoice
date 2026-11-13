@@ -616,7 +616,6 @@ _SECTIONS: list[Section] = [
                 "TTS_EXTRA_ENGINES=fish_tts o un pin engine=fish_tts.",
                 kind="secret",
                 default="",
-                advanced=True,
             ),
             Field(
                 file=GATEWAY,
@@ -624,7 +623,6 @@ _SECTIONS: list[Section] = [
                 label="Modelo Fish",
                 help="Modelo de síntesis de Fish Audio.",
                 default="s2.1-pro-free",
-                advanced=True,
             ),
             Field(
                 file=GATEWAY,

@@ -220,6 +220,8 @@ class Screen:
             non editing row (buttons, choices, passwords).
         on_change: Called with ``(app, row)`` after a value is committed.
         on_help: Called with ``(app)`` when F1 or ``?`` is pressed.
+        on_key: Called with ``(app, key)`` before default navigation; return
+            True when the screen consumed the key.
     """
 
     title: str
@@ -231,6 +233,7 @@ class Screen:
     on_activate: Callable[[App, Row], None] | None = None
     on_change: Callable[[App, Row], None] | None = None
     on_help: Callable[[App], None] | None = None
+    on_key: Callable[[App, int], bool] | None = None
 
 
 @dataclass
@@ -951,6 +954,8 @@ class App:
             return Action()
         if self.editing is not None:
             return self._handle_edit(key)
+        if self.current.on_key is not None and self.current.on_key(self, key):
+            return Action()
         return self._handle_nav(key)
 
     def _handle_nav(self, key: int) -> Action:

@@ -14,6 +14,7 @@ from . import validate as validation
 from .curses_ui import App, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
+from .guide import external_guide_screen
 from .settings import PROFILES, Field, Profile, sections_for
 from .util import REPO_ROOT, env_paths
 
@@ -255,6 +256,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
     rows.append(Row("note", label=""))
     rows.extend(
         [
+            Row("button", label="Guía de valores externos (Fish, HF, Telegram…)", action="guide"),
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
             Row("button", label="Requisitos del sistema", action="prereqs"),
             Row("button", label="Editar los .env ya configurados", action="edit"),
@@ -268,7 +270,9 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
     )
 
     def activate(app_: App, row: Row) -> None:
-        if row.action == "wizard":
+        if row.action == "guide":
+            app_.push(external_guide_screen(app_))
+        elif row.action == "wizard":
             missing = [item for item in prerequisites(ctx.report) if item.missing]
             if missing:
                 app_.say(
@@ -682,7 +686,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
                     return
                 if env.key_path not in ctx.written:
                     ctx.written.append(env.key_path)
-            nxt = _ORDER[_ORDER.index(file_key) + 1] if file_key in _ORDER else None
+            position = _ORDER.index(file_key) if file_key in _ORDER else -1
+            nxt = _ORDER[position + 1] if 0 <= position < len(_ORDER) - 1 else None
             if nxt:
                 app_.push(env_screen(app_, ctx, nxt))
             else:
@@ -692,7 +697,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         title=f"{'Editar' if edit_mode else 'Paso 3'} · {file_key}",
         subtitle=target.label,
         rows=rows,
-        footer="F1 Ayuda   Enter Editar   Tab Siguiente   Esc Atrás   F10 Salir",
+        footer="F1 Ayuda   Enter Editar   Tab Siguiente   a Avanzados   Esc Atrás   F10 Salir",
         progress="" if edit_mode else "3/6",
         on_change=on_change,
         on_activate=activate,
@@ -1286,4 +1291,5 @@ def build_app(ctx: Context | None = None) -> App:
     ctx = ctx or load_context()
     app = App("newsvoice setup")
     app.push(welcome_screen(app, ctx))
+    app.push(external_guide_screen(app))
     return app

@@ -84,6 +84,13 @@ Además del flujo guiado, desde la pantalla inicial también puedes:
   útil para replicar la instalación. Atención: el resultado incluye secretos en
   claro. El asistente se niega a exportar encima de los `.env` del proyecto.
 
+Al arrancar, la TUI abre una **guía paginada de valores externos** (`←/→` o
+`PgUp/PgDn` para cambiar de página) con qué credenciales necesita cada proveedor,
+las URLs para obtenerlas y las acciones concretas: Fish Audio, HuggingFace
+(términos del repo gated y token), Telegram, SMTP/Gmail, LLM y TTS
+OpenAI-compatible. Se puede saltar al menú con `Esc` o desde el botón
+correspondiente, y reabrir desde **«Guía de valores externos»**.
+
 Teclas de la TUI: `↑/↓` o `Tab` mover · `Enter` seleccionar/editar ·
 `Esc` atrás · `Espacio` alternar sí/no · `←/→` cambiar opciones ·
 `g` generar secreto · `a` opciones avanzadas · `Ctrl+R` valor por defecto ·
