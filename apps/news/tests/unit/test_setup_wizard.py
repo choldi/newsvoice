@@ -20,6 +20,7 @@ from setup_wizard.app import (
     _apply_routed_preset,
     _confirm_write,
     _confirm_write_one,
+    _run_steps_with_progress,
     _shared_key_conflicts,
     _unify_shared_key,
     _write_env,
@@ -48,12 +49,16 @@ from setup_wizard.settings import (
     MODEL_OPTIONS,
     PROFILES,
     ROUTED_PRESETS,
+    backend_language_options,
+    backend_voice_options,
     config_requires_gpu,
+    engine_option_label,
     fields_for,
     hash_password,
     join_multi,
     parse_engine_map,
     render_engine_map,
+    required_model_downloads,
     sections_for,
     split_multi,
     valid_language_code,
@@ -223,6 +228,36 @@ def test_tts_catalog_and_helpers_agree() -> None:
     assert not valid_language_code("catalan")
     assert config_requires_gpu("routed", '{"es":"omnivoice"}', "")
     assert not config_requires_gpu("routed", '{"es":"piper"}', "")
+
+
+def test_engine_option_labels_show_gpu_cloning_and_base_languages() -> None:
+    """Extra-engine labels answer GPU, cloning and ca/es/fr/en coverage."""
+    assert engine_option_label("qwen3_tts") == "qwen3_tts · GPU · clonado · ca✓ es✓ fr✓ en✓"
+    assert engine_option_label("pocket_tts") == "pocket_tts · CPU · clonado · ca✗ es✓ fr✓ en✓"
+    assert engine_option_label("piper") == "piper · CPU · sin clonado · ca✓ es✓ fr✓ en✓"
+    assert "GPU (proxy)" in engine_option_label("omnivoice_remote")
+    assert "Cloud" in engine_option_label("openai_tts")
+    assert "ca✗" in engine_option_label("openai_tts")
+    assert engine_option_label("desconocido") == "desconocido"
+
+
+def test_backend_voice_helpers_follow_engine_vocabulary() -> None:
+    """News uses native Edge names but gateway ids for every other backend."""
+    assert "es-MX-JorgeNeural" in backend_voice_options("edge")
+    assert "es-mx-male" not in backend_voice_options("edge")
+    assert "es-mx-male" in backend_voice_options("kokoro")
+    assert backend_voice_options("qwen3_tts") == []
+    assert "ca" in backend_language_options("edge")
+    assert "ca" not in backend_language_options("kokoro")
+    assert required_model_downloads("kokoro") == ["kokoro:hexgrad/Kokoro-82M"]
+    assert required_model_downloads(
+        "routed", '{"es":"pocket_tts","_default":"pocket_tts"}', "kokoro"
+    ) == [
+        "pocket_tts:es",
+        "pocket_tts:en",
+        "pocket_tts:fr",
+        "kokoro:hexgrad/Kokoro-82M",
+    ]
 
 
 def test_routed_presets_include_a_safe_cpu_configuration() -> None:
@@ -448,6 +483,72 @@ def test_execute_runs_steps_and_reports_progress(tmp_path: Path) -> None:
     assert deps.execute([good, bad], lambda *args: events.append(args)) is False
     assert [status for status, _title, _detail in events] == ["run", "ok", "run", "bad"]
     assert events[1][1] == "ok" and events[3][1] == "bad"
+
+
+def test_run_steps_with_progress_lists_actions_and_live_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The install modal shows every action and updates while commands run."""
+    app = App("test")
+    app.push(Screen(title="Demo", rows=[Row("note", label="fondo")]))
+    steps = [
+        deps.Step(title="preparar", command=["python3", "-c", "print('ok')"]),
+        deps.Step(
+            title="fallar",
+            command=["python3", "-c", "raise SystemExit(3)"],
+            required=True,
+        ),
+    ]
+    followup = [deps.Step(title="verificar", command=["python3", "-c", "pass"])]
+    running_lines: list[list[str]] = []
+
+    def fake_execute(items: list[deps.Step], emit) -> bool:
+        for step in items:
+            emit("run", step.title, " ".join(step.command))
+            running_lines.append(list(app.modal.lines))
+            emit("bad" if step.title == "fallar" else "ok", step.title, "detalle")
+        return all(step.title != "fallar" for step in items)
+
+    monkeypatch.setattr(deps, "execute", fake_execute)
+    ok = _run_steps_with_progress(
+        app,
+        steps,
+        title="Instalando dependencias",
+        subtitle="Método: test",
+        followup=followup,
+    )
+
+    assert not ok
+    assert any("[▸] preparar" in line for line in running_lines[0])
+    lines = app.modal.lines
+    assert any("[✓] preparar" in line for line in lines)
+    assert any("[✗] fallar" in line for line in lines)
+    assert any("[–] verificar" in line for line in lines)
+    assert any("Progreso: 2/3" in line for line in lines)
+    assert "con fallos" in app.modal.title
+
+
+def test_run_steps_with_progress_runs_followup_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verification commands run only after the installation phase succeeds."""
+    app = App("test")
+    app.push(Screen(title="Demo", rows=[Row("note", label="fondo")]))
+    steps = [deps.Step(title="instalar", command=["true"])]
+    followup = [deps.Step(title="verificar", command=["true"])]
+    calls: list[list[str]] = []
+
+    def fake_execute(items: list[deps.Step], emit) -> bool:
+        calls.append([step.title for step in items])
+        for step in items:
+            emit("ok", step.title, "correcto")
+        return True
+
+    monkeypatch.setattr(deps, "execute", fake_execute)
+    assert _run_steps_with_progress(app, steps, title="Instalando dependencias", followup=followup)
+    assert calls == [["instalar"], ["verificar"]]
+    assert "correcto" in app.modal.title
+    assert any("[✓] verificar" in line for line in app.modal.lines)
 
 
 # -- curses toolkit ---------------------------------------------------------
@@ -688,6 +789,27 @@ def test_multi_picker_toggles_checkboxes_and_returns_ordered_values() -> None:
     assert picked == ["piper"]
 
 
+def test_multi_picker_shows_labels_without_changing_selected_values() -> None:
+    """Capability labels are display-only; Enter still returns engine ids."""
+    picked: list[str] = []
+    picker = MultiPicker(
+        "Engines",
+        ["qwen3_tts", "piper"],
+        "piper",
+        lambda _app, value: picked.append(value),
+        labels={
+            "qwen3_tts": "qwen3_tts · GPU · clonado · ca✓ es✓ fr✓ en✓",
+            "piper": "piper · CPU · sin clonado · ca✓ es✓ fr✓ en✓",
+        },
+    )
+
+    lines = picker._lines()
+    assert any("[x] piper · CPU · sin clonado" in line for line in lines)
+    assert any("[ ] qwen3_tts · GPU · clonado" in line for line in lines)
+    picker.handle(10, App("test"))
+    assert picked == ["piper"]
+
+
 def test_tts_screen_locks_cuda_when_a_gpu_engine_is_selected(
     wizard_context: Context,
 ) -> None:
@@ -740,6 +862,121 @@ def test_tts_screen_allows_cpu_for_safe_engines(wizard_context: Context) -> None
 
     assert device.options == ["cuda:0", "cpu"]
     assert not any(row.result == "warn" and "GPU" in row.label for row in screen.rows)
+
+
+def test_tts_screen_annotates_extra_engine_picker(wizard_context: Context) -> None:
+    """The real TUI extra-engine picker shows GPU, cloning and base languages."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_EXTRA_ENGINES", "")
+    app = App("test")
+    app.push(tts_screen(app, wizard_context))
+
+    extra = next(row for row in app.current.rows if row.action == "TTS_EXTRA_ENGINES")
+    assert "GPU" in extra.option_labels["qwen3_tts"]
+    assert "clonado" in extra.option_labels["qwen3_tts"]
+    assert "ca✓" in extra.option_labels["piper"]
+    assert "ca✗" in extra.option_labels["pocket_tts"]
+    assert "GPU = necesita gráfica" in extra.help
+
+    app.focus = app.current.rows.index(extra)
+    app.handle(10)
+    lines = app.modal._lines()
+    assert any("[ ] qwen3_tts · GPU · clonado" in line for line in lines)
+    assert any("ca/es/fr/en" in line for line in lines)
+
+
+def test_news_tts_options_follow_the_selected_backend(wizard_context: Context) -> None:
+    """Changing the news backend refreshes language and voice choices."""
+    app = App("test")
+    screen = env_screen(app, wizard_context, "news")
+    app.push(screen)
+    backend = next(row for row in screen.rows if row.action == "TTS_DEFAULT_BACKEND")
+    language = next(row for row in screen.rows if row.action == "TTS_LANGUAGE")
+    voice = next(row for row in screen.rows if row.action == "TTS_VOICE")
+
+    assert language.kind == "choice"
+    assert "ca" in language.options
+    assert voice.kind == "choice"
+    assert "es-MX-JorgeNeural" in voice.options
+
+    backend.value = "kokoro"
+    assert screen.on_change is not None
+    screen.on_change(app, backend)
+
+    assert "ca" not in language.options
+    assert "es-mx-male" in voice.options
+    assert wizard_context.envs["news"].get("TTS_VOICE") == "es-mx-male"
+
+    backend.value = "qwen3_tts"
+    screen.on_change(app, backend)
+
+    assert voice.kind == "text"
+    assert voice.options == []
+    assert "clona" in voice.help
+    assert any(row.result == "warn" and "Qwen3-TTS" in row.label for row in screen.rows)
+
+
+def test_tts_screen_requires_models_for_the_selected_engine(
+    wizard_context: Context,
+) -> None:
+    """The model picker adds and locks checkpoints for the current engine."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "kokoro")
+    gateway.set("TTS_ENGINES", "")
+    gateway.set("TTS_EXTRA_ENGINES", "")
+    gateway.set("TTS_MODEL_DOWNLOADS", "")
+    app = App("test")
+    screen = tts_screen(app, wizard_context)
+    models = next(row for row in screen.rows if row.action == "TTS_MODEL_DOWNLOADS")
+
+    assert models.required_options == ["kokoro:hexgrad/Kokoro-82M"]
+    assert split_multi(models.value) == ["kokoro:hexgrad/Kokoro-82M"]
+    assert "Obligatorios" in models.help
+
+    engine = next(row for row in screen.rows if row.action == "TTS_ENGINE")
+    engine.value = "qwen3_tts"
+    assert screen.on_change is not None
+    screen.on_change(app, engine)
+
+    required = list(ENGINE_INFO["qwen3_tts"].downloads)
+    assert models.required_options == required
+    assert set(required) <= set(split_multi(models.value))
+    assert gateway.get("TTS_MODEL_DOWNLOADS") == models.value
+
+    app.push(screen)
+    app.focus = screen.rows.index(models)
+    app.handle(10)
+    assert isinstance(app.modal, MultiPicker)
+    assert app.modal.locked == set(required)
+    assert any("obligatorio" in line for line in app.modal._lines())
+    app.modal.index = app.modal.options.index(required[0])
+    app.handle(ord(" "))
+    assert set(required) <= app.modal.selected
+    assert "obligatorio" in app.message
+
+
+def test_gateway_env_screen_requires_engine_models(wizard_context: Context) -> None:
+    """The plain gateway form applies the same mandatory-model rule."""
+    gateway = wizard_context.envs["gateway"]
+    gateway.set("TTS_ENGINE", "kokoro")
+    gateway.set("TTS_ENGINES", "")
+    gateway.set("TTS_EXTRA_ENGINES", "")
+    gateway.set("TTS_MODEL_DOWNLOADS", "")
+    app = App("test")
+    screen = env_screen(app, wizard_context, "gateway")
+    app.push(screen)
+    models = next(row for row in screen.rows if row.action == "TTS_MODEL_DOWNLOADS")
+
+    assert models.required_options == ["kokoro:hexgrad/Kokoro-82M"]
+    assert split_multi(models.value) == ["kokoro:hexgrad/Kokoro-82M"]
+
+    engine = next(row for row in screen.rows if row.action == "TTS_ENGINE")
+    engine.value = "qwen3_tts"
+    assert screen.on_change is not None
+    screen.on_change(app, engine)
+
+    assert models.required_options == list(ENGINE_INFO["qwen3_tts"].downloads)
+    assert set(ENGINE_INFO["qwen3_tts"].downloads) <= set(split_multi(models.value))
 
 
 def test_tts_map_screen_adds_a_language_and_saves(wizard_context: Context) -> None:

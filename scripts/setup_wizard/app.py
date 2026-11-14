@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import deps, transfer
 from . import validate as validation
-from .curses_ui import App, Picker, Row, Screen
+from .curses_ui import App, Dialog, Picker, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
 from .guide import external_guide_screen
@@ -25,12 +25,19 @@ from .settings import (
     Field,
     Profile,
     RoutedPreset,
+    backend_language_options,
+    backend_voice_help,
+    backend_voice_options,
     config_requires_gpu,
     configured_engines,
+    engine_option_label,
     fields_for,
+    join_multi,
     parse_engine_map,
     render_engine_map,
+    required_model_downloads,
     sections_for,
+    split_multi,
     valid_language_code,
 )
 from .util import REPO_ROOT, env_paths
@@ -222,16 +229,79 @@ def _changes(ctx: Context) -> dict[str, list[tuple[str, str, str]]]:
     return {key: ctx.envs[key].diff_against_disk() for key in _ORDER}
 
 
-def _emit_factory(app: App):
-    """Build the progress callback used while commands run."""
+def _progress_bar(done: int, total: int, width: int = 18) -> str:
+    """Render a compact text progress bar."""
+    filled = min(width, round(width * done / total)) if total else 0
+    return "[" + "█" * filled + "░" * (width - filled) + "]"
 
-    def emit(status: str, title: str, detail: str) -> None:
-        symbol = {"run": "▸", "ok": "✓", "bad": "✗"}.get(status, "·")
-        level = {"ok": "ok", "bad": "bad"}.get(status, "")
-        app.say(f"{symbol} {title}: {detail}"[:200], level)
+
+def _run_steps_with_progress(
+    app: App,
+    steps: list[deps.Step],
+    *,
+    title: str,
+    subtitle: str = "",
+    followup: list[deps.Step] | None = None,
+) -> bool:
+    """Run ``steps`` in a modal that lists every action and its status.
+
+    ``followup`` is shown from the start but only runs when the first phase
+    succeeds, mirroring the old "install, then verify" sequence.
+    """
+    followup = followup or []
+    actions = [*steps, *followup]
+    statuses = {step.title: "pending" for step in actions}
+    details = {step.title: step.detail for step in actions}
+    symbols = {"pending": " ", "run": "▸", "ok": "✓", "bad": "✗", "skipped": "–"}
+    modal = Dialog(title, [], [("Cerrar", lambda app_: app_.close_modal())])
+    app.modal = modal
+
+    def render(final_ok: bool | None = None) -> None:
+        done = sum(1 for status in statuses.values() if status in {"ok", "bad"})
+        total = len(actions)
+        percent = round(done * 100 / total) if total else 0
+        lines: list[str] = []
+        if subtitle:
+            lines.append(subtitle)
+        lines.append(f"Progreso: {done}/{total} ({percent}%) {_progress_bar(done, total)}")
+        lines.append("")
+        lines.append("Acciones:")
+        for step in actions:
+            status = statuses[step.title]
+            lines.append(f"[{symbols.get(status, ' ')}] {step.title}")
+            if status == "run":
+                command = " ".join(str(part) for part in step.command)
+                lines.append(f"    $ {command}")
+            elif status == "bad":
+                lines.append(f"    {details[step.title]}")
+            elif status == "skipped":
+                lines.append("    omitido: la fase anterior falló")
+        if final_ok is not None:
+            lines.append("")
+            lines.append("Instalación correcta." if final_ok else "Instalación con fallos.")
+        modal.lines = lines
         app.redraw()
 
-    return emit
+    def emit(status: str, step_title: str, detail: str) -> None:
+        if step_title in statuses:
+            statuses[step_title] = status
+        if status == "bad":
+            details[step_title] = detail
+        symbol = symbols.get(status, "·")
+        level = {"ok": "ok", "bad": "bad"}.get(status, "")
+        app.say(f"{symbol} {step_title}: {detail}"[:200], level)
+        render()
+
+    render()
+    ok = deps.execute(steps, emit)
+    if ok and followup:
+        ok = deps.execute(followup, emit)
+    elif followup:
+        for step in followup:
+            statuses[step.title] = "skipped"
+    modal.title = f"{title} · {'correcto' if ok else 'con fallos'}"
+    render(final_ok=ok)
+    return ok
 
 
 # -- screens ----------------------------------------------------------------
@@ -432,10 +502,12 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
         if not steps:
             app_.say("Nada se puede instalar automáticamente desde aquí")
             return
-        emit = _emit_factory(app_)
-        app_.say("Instalando requisitos…")
-        app_.redraw()
-        ok = deps.execute(steps, emit)
+        ok = _run_steps_with_progress(
+            app_,
+            steps,
+            title="Instalando requisitos",
+            subtitle=f"Se ejecutarán {len(steps)} acción(es).",
+        )
         ctx.report = detect()
         app_.say(
             "Requisitos instalados" if ok else "Algunos comandos han fallado: cópialos a mano",
@@ -613,6 +685,7 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
     env = ctx.envs[file_key]
     target = next(t for t in env_paths() if t.key == file_key)
     gpu_warning = Row("note", label="", result="")
+    tts_hint = Row("note", label="", result="")
     rows: list[Row] = [
         Row(
             "note",
@@ -648,6 +721,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             )
             field_rows[field_.key] = row
             rows.append(row)
+        if file_key == "news" and section.title == "TTS y gateway":
+            rows.append(tts_hint)
         rows.append(Row("note", label=""))
     if file_key == "gateway":
         rows.append(
@@ -675,6 +750,9 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         )
     if file_key == "gateway":
         _apply_gpu_lock(app, ctx, field_rows, gpu_warning)
+        _sync_required_models(ctx, field_rows)
+    if file_key == "news":
+        _sync_news_tts_options(ctx, field_rows, tts_hint)
 
     def on_change(app_: App, row: Row) -> None:
         field_ = _find_field(file_key, row)
@@ -689,6 +767,9 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             app_.say("Clave del gateway sincronizada en los tres archivos", "ok")
         if file_key == "gateway" and field_.key.startswith("TTS_"):
             _apply_gpu_lock(app_, ctx, field_rows, gpu_warning)
+            _sync_required_models(ctx, field_rows)
+        if file_key == "news" and field_.key == "TTS_DEFAULT_BACKEND":
+            _sync_news_tts_options(ctx, field_rows, tts_hint)
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
@@ -745,6 +826,111 @@ def _find_field(file_key: str, row: Row) -> Field | None:
         if field_.label == row.label:
             return field_
     return None
+
+
+def _gateway_selection(ctx: Context) -> tuple[str, str, str]:
+    """Return the gateway engine selection used to derive voices and models."""
+    gateway = ctx.envs.get("gateway")
+    if gateway is None:
+        return "", "", ""
+    return (
+        gateway.get("TTS_ENGINE").strip(),
+        gateway.get("TTS_ENGINES").strip(),
+        gateway.get("TTS_EXTRA_ENGINES").strip(),
+    )
+
+
+def _sync_news_tts_options(
+    ctx: Context,
+    rows_by_key: dict[str, Row],
+    hint: Row,
+) -> None:
+    """Update news language and voice choices from the selected backend.
+
+    The news app sends Edge ShortNames directly to Edge but gateway stock ids
+    for every other backend. Engines without stock voices switch the voice row
+    back to text and the hint explains how to provide a clone or provider id.
+    """
+    news = ctx.envs.get("news")
+    if news is None:
+        return
+    backend_row = rows_by_key.get("TTS_DEFAULT_BACKEND")
+    language_row = rows_by_key.get("TTS_LANGUAGE")
+    voice_row = rows_by_key.get("TTS_VOICE")
+    if backend_row is None or language_row is None or voice_row is None:
+        return
+    backend = backend_row.value.strip() or "edge"
+    gateway_engine, engine_map, extra = _gateway_selection(ctx)
+    languages = backend_language_options(backend, gateway_engine, engine_map, extra)
+    voices = backend_voice_options(backend, gateway_engine, engine_map, extra)
+
+    if languages:
+        language_row.kind = "choice"
+        language_row.options = languages
+        language_row.help = (
+            f"Idiomas de {backend}; también fija el idioma del digest. "
+            "Cambiar de engine actualiza esta lista."
+        )
+        preferred = "es" if "es" in languages else languages[0]
+        language_row.default = preferred
+        if language_row.value not in languages:
+            language_row.value = preferred
+            news.set("TTS_LANGUAGE", preferred)
+    else:
+        language_row.kind = "text"
+        language_row.options = []
+        language_row.default = ""
+        language_row.help = "El engine no declara idiomas por defecto; escribe un código ISO 639-1."
+
+    voice_help = backend_voice_help(backend, gateway_engine, engine_map, extra)
+    if voices:
+        voice_row.kind = "choice"
+        voice_row.options = voices
+        voice_row.help = voice_help
+        voice_row.default = voices[0]
+        if voice_row.value not in voices:
+            voice_row.value = voices[0]
+            news.set("TTS_VOICE", voices[0])
+    else:
+        voice_row.kind = "text"
+        voice_row.options = []
+        voice_row.default = ""
+        voice_row.help = voice_help
+
+    if voices:
+        hint.label = f"{backend}: {len(languages)} idioma(s) · {len(voices)} voces stock."
+        hint.result = "ok"
+    else:
+        hint.label = voice_help
+        hint.result = "warn"
+
+
+def _sync_required_models(ctx: Context, rows_by_key: dict[str, Row]) -> None:
+    """Add and lock the checkpoints required by the selected gateway engines."""
+    gateway = ctx.envs.get("gateway")
+    models_row = rows_by_key.get("TTS_MODEL_DOWNLOADS")
+    if gateway is None or models_row is None:
+        return
+    gateway_engine, engine_map, extra = _gateway_selection(ctx)
+    required = required_model_downloads(gateway_engine, engine_map, extra)
+    models_row.required_options = required
+    current = split_multi(models_row.value)
+    missing = [model for model in required if model not in current]
+    if missing:
+        current.extend(missing)
+        value = join_multi(current)
+        models_row.value = value
+        gateway.set("TTS_MODEL_DOWNLOADS", value)
+    if required:
+        models_row.help = (
+            "Obligatorios para el engine seleccionado: "
+            + ", ".join(required)
+            + ". Marca otros para precargar; los cloud no descargan pesos."
+        )
+    else:
+        models_row.help = (
+            "El engine seleccionado no usa pesos locales; puedes precargar otros checkpoints."
+        )
 
 
 def _apply_gpu_lock(
@@ -840,7 +1026,8 @@ def _tts_catalog_lines() -> list[str]:
     for info in ENGINE_INFO.values():
         cloning = "clonado sí" if info.cloning else "sin clonado"
         languages = "todos" if info.languages == ("*",) else ", ".join(info.languages)
-        lines.append(f"{info.key}: {info.device} · {cloning} · idiomas: {languages}")
+        voices = f"{len(info.voices)} voces stock" if info.voices else "sin voces stock"
+        lines.append(f"{info.key}: {info.device} · {cloning} · idiomas: {languages} · {voices}")
         lines.append(f"  {info.description}")
     return lines
 
@@ -854,7 +1041,9 @@ def _tts_help_lines() -> list[str]:
         "obligan a TTS_DEVICE=cuda:0.",
         "edgetts, fish_tts y openai_tts son cloud: no descargan pesos locales.",
         "El preset CPU seguro usa pocket_tts/piper/kokoro y no requiere GPU.",
-        "TTS_MODEL_DOWNLOADS solo anota checkpoints locales para precargarlos.",
+        "TTS_MODEL_DOWNLOADS precarga los checkpoints del engine elegido; "
+        "el asistente los marca y bloquea.",
+        "Los engines sin voces stock necesitan una voz clonada o un proveedor.",
         "Los presets y el editor de mapa modifican el gateway/.env en memoria; "
         "guarda desde la pantalla de gateway.",
     ]
@@ -886,7 +1075,11 @@ def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
         label="Engines extra",
         value=gateway.get("TTS_EXTRA_ENGINES").strip(),
         options=list(EXTRA_ENGINE_OPTIONS),
-        help="Solo tienen efecto con routed; marca varios con Espacio.",
+        option_labels={key: engine_option_label(key) for key in EXTRA_ENGINE_OPTIONS},
+        help=(
+            "Solo tienen efecto con routed. Espacio marca; GPU = necesita gráfica; "
+            "ca/es/fr/en ✓/✗ = idioma base soportado."
+        ),
         action="TTS_EXTRA_ENGINES",
     )
     map_row = Row(
@@ -935,6 +1128,7 @@ def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
         "TTS_MODEL_DOWNLOADS": models_row,
     }
     _apply_gpu_lock(app, ctx, rows_by_key, warning)
+    _sync_required_models(ctx, rows_by_key)
 
     def on_change(app_: App, row: Row) -> None:
         key = row.action
@@ -948,6 +1142,7 @@ def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
         gateway.set(key, value)
         if key in {"TTS_ENGINE", "TTS_DEVICE", "TTS_ENGINES", "TTS_EXTRA_ENGINES"}:
             _apply_gpu_lock(app_, ctx, rows_by_key, warning)
+            _sync_required_models(ctx, rows_by_key)
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "presets":
@@ -1518,12 +1713,14 @@ def apply_screen(app: App, ctx: Context) -> Screen:
         if not steps:
             app_.say("Nada que instalar con este método")
             return
-        emit = _emit_factory(app_)
-        app_.say("Instalando…")
-        app_.redraw()
-        ok = deps.execute(steps, emit)
-        if ok and deps.verify(ctx.method):
-            ok = deps.execute(deps.verify(ctx.method), emit)
+        verify_steps = deps.verify(ctx.method)
+        ok = _run_steps_with_progress(
+            app_,
+            steps,
+            title="Instalando dependencias",
+            subtitle=(f"Método: {ctx.method} · {len(steps) + len(verify_steps)} acción(es)"),
+            followup=verify_steps,
+        )
         ctx.install_result = (
             "Instalación correcta" if ok else "Instalación con fallos (revisa el mensaje)"
         )

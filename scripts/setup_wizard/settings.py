@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 __all__ = [
+    "BASIC_LANGUAGES",
     "EngineInfo",
     "ENGINE_INFO",
     "GPU_ENGINES",
@@ -21,15 +22,22 @@ __all__ = [
     "Profile",
     "PROFILES",
     "SECTIONS",
+    "backend_language_options",
+    "backend_voice_help",
+    "backend_voice_options",
     "configured_engines",
     "config_requires_gpu",
     "engine_info",
+    "engine_option_label",
+    "engine_voice_help",
     "fields_for",
     "hash_password",
     "join_multi",
+    "news_backend_engines",
     "parse_engine_map",
     "profiles",
     "render_engine_map",
+    "required_model_downloads",
     "sections_for",
     "split_multi",
     "valid_language_code",
@@ -141,6 +149,7 @@ class EngineInfo:
         languages: ISO 639-1 languages known to the engine.
         description: Short explanation of the engine and its limits.
         downloads: Local checkpoints the wizard can record for prefetch.
+        voices: Stock voice ids accepted by the engine, when it has any.
     """
 
     key: str
@@ -150,6 +159,7 @@ class EngineInfo:
     languages: tuple[str, ...]
     description: str
     downloads: tuple[str, ...] = ()
+    voices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +195,129 @@ _TTS_ENGINES = (
     '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}'
 )
 
+_POCKET_VOICES = (
+    "es-mx-male",
+    "es-mx-female",
+    "es-es-male",
+    "es-es-female",
+    "en-us-male",
+    "en-us-female",
+    "en-gb-male",
+    "en-gb-female",
+    "fr-fr-male",
+    "fr-fr-female",
+)
+_PIPER_VOICES = (
+    "ca-female",
+    "ca-male",
+    "es-es-female",
+    "es-es-male",
+    "es-mx-female",
+    "es-mx-male",
+    "en-us-female",
+    "en-us-male",
+    "en-gb-female",
+    "en-gb-male",
+    "fr-fr-female",
+    "fr-fr-male",
+)
+_KOKORO_VOICES = (
+    "es-mx-male",
+    "es-mx-female",
+    "es-es-male",
+    "es-es-female",
+    "en-us-male",
+    "en-us-female",
+    "en-gb-male",
+    "en-gb-female",
+    "fr-fr-female",
+    "it-it-male",
+    "it-it-female",
+    "pt-br-male",
+    "pt-br-female",
+    "hi-in-male",
+    "hi-in-female",
+)
+_EDGETTS_VOICES = (
+    "es-mx-male",
+    "es-mx-female",
+    "es-es-male",
+    "es-es-female",
+    "ca-male",
+    "ca-female",
+    "en-us-male",
+    "en-us-female",
+    "en-gb-male",
+    "en-gb-female",
+    "fr-fr-male",
+    "fr-fr-female",
+    "de-de-male",
+    "de-de-female",
+    "it-it-male",
+    "it-it-female",
+    "pt-br-male",
+    "pt-br-female",
+)
+_EDGETTS_NATIVE_VOICES = (
+    "es-MX-JorgeNeural",
+    "es-MX-DaliaNeural",
+    "es-ES-AlvaroNeural",
+    "es-ES-ElviraNeural",
+    "ca-ES-EnricNeural",
+    "ca-ES-JoanaNeural",
+    "en-US-GuyNeural",
+    "en-US-JennyNeural",
+    "en-GB-RyanNeural",
+    "en-GB-SoniaNeural",
+    "fr-FR-HenriNeural",
+    "fr-FR-DeniseNeural",
+    "de-DE-ConradNeural",
+    "de-DE-KatjaNeural",
+    "it-IT-DiegoNeural",
+    "it-IT-ElsaNeural",
+    "pt-BR-AntonioNeural",
+    "pt-BR-FranciscaNeural",
+)
+_CHATTERBOX_VOICES = ("chatterbox-default",)
+_OMNIVOICE_VOICES = (
+    "es-mx-male",
+    "es-mx-female",
+    "es-es-male",
+    "es-es-female",
+    "en-us-male",
+    "en-us-female",
+    "en-gb-male",
+    "en-gb-female",
+    "fr-fr-male",
+    "fr-fr-female",
+    "de-de-male",
+    "de-de-female",
+    "it-it-male",
+    "it-it-female",
+    "pt-br-male",
+    "pt-br-female",
+    "zh-cn-male",
+    "zh-cn-female",
+    "ja-jp-male",
+    "ja-jp-female",
+    "ko-kr-male",
+    "ko-kr-female",
+)
+_MOCK_VOICES = (
+    "es-mx-male",
+    "es-mx-female",
+    "es-es-male",
+    "es-es-female",
+    "ca-male",
+    "ca-female",
+    "en-us-male",
+    "en-us-female",
+    "en-gb-male",
+    "en-gb-female",
+    "fr-fr-male",
+    "fr-fr-female",
+)
+
 ENGINE_INFO: dict[str, EngineInfo] = {
     "pocket_tts": EngineInfo(
         "pocket_tts",
@@ -194,6 +327,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         ("en", "es", "fr", "de", "it", "pt"),
         "Clonado local en CPU; no cubre catalán.",
         ("pocket_tts:es", "pocket_tts:en", "pocket_tts:fr"),
+        _POCKET_VOICES,
     ),
     "piper": EngineInfo(
         "piper",
@@ -208,6 +342,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
             "piper:en_US-lessac-medium",
             "piper:fr_FR-siwis-medium",
         ),
+        _PIPER_VOICES,
     ),
     "kokoro": EngineInfo(
         "kokoro",
@@ -217,6 +352,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         ("en", "es", "fr", "hi", "it", "pt"),
         "Voces stock 82M en CPU; sin catalán ni clonado.",
         ("kokoro:hexgrad/Kokoro-82M",),
+        _KOKORO_VOICES,
     ),
     "edgetts": EngineInfo(
         "edgetts",
@@ -225,6 +361,8 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         False,
         ("es", "en", "fr", "de", "it", "pt", "ca"),
         "400+ voces cloud, incluido catalán; sin clonado.",
+        (),
+        _EDGETTS_VOICES,
     ),
     "chatterbox": EngineInfo(
         "chatterbox",
@@ -258,6 +396,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         ),
         "Clonado zero-shot y 23 idiomas; no cubre catalán.",
         ("chatterbox:ResembleAI/chatterbox",),
+        _CHATTERBOX_VOICES,
     ),
     "qwen3_tts": EngineInfo(
         "qwen3_tts",
@@ -280,6 +419,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
         "Engine GPU completo: stock, clonado, instruct y emociones.",
         ("omnivoice:ModelsLab/omnivoice-singing",),
+        _OMNIVOICE_VOICES,
     ),
     "omnivoice_remote": EngineInfo(
         "omnivoice_remote",
@@ -288,6 +428,8 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         True,
         ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
         "Proxy HTTP al sidecar OmniVoice; el sidecar necesita GPU.",
+        (),
+        _OMNIVOICE_VOICES,
     ),
     "fish_tts": EngineInfo(
         "fish_tts",
@@ -312,11 +454,14 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         False,
         ("*",),
         "Tonos de prueba para desarrollo; no sintetiza voces reales.",
+        (),
+        _MOCK_VOICES,
     ),
 }
 
 GPU_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device in ("GPU", "Proxy"))
 CLOUD_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device == "Cloud")
+BASIC_LANGUAGES = ("ca", "es", "fr", "en")
 ENGINE_OPTIONS = ("routed", *ENGINE_INFO)
 EXTRA_ENGINE_OPTIONS = tuple(ENGINE_INFO)
 MODEL_OPTIONS = tuple(download for info in ENGINE_INFO.values() for download in info.downloads)
@@ -392,6 +537,30 @@ def engine_info(key: str) -> EngineInfo | None:
     return ENGINE_INFO.get(key)
 
 
+def engine_option_label(key: str) -> str:
+    """Render the compact capability label used by the extra engine picker.
+
+    The label answers the three questions an operator has before selecting an
+    optional engine: does it need a GPU, can it clone voices, and does it cover
+    the four base languages used by the product (ca, es, fr and en).
+    """
+    info = ENGINE_INFO.get(key)
+    if info is None:
+        return key
+    if info.device == "Proxy":
+        device = "GPU (proxy)"
+    elif key in GPU_ENGINES:
+        device = "GPU"
+    else:
+        device = info.device
+    cloning = "clonado" if info.cloning else "sin clonado"
+    languages = " ".join(
+        f"{language}{'✓' if info.languages == ('*',) or language in info.languages else '✗'}"
+        for language in BASIC_LANGUAGES
+    )
+    return f"{key} · {device} · {cloning} · {languages}"
+
+
 def parse_engine_map(value: str) -> dict[str, str] | None:
     """Parse ``TTS_ENGINES`` and return a string map, or ``None`` if invalid."""
     try:
@@ -424,6 +593,156 @@ def configured_engines(engine: str, engine_map: str, extra: str) -> list[str]:
 def config_requires_gpu(engine: str, engine_map: str, extra: str) -> bool:
     """Report whether the selection instantiates an engine that needs GPU."""
     return any(name in GPU_ENGINES for name in configured_engines(engine, engine_map, extra))
+
+
+_NEWS_BACKEND_ENGINES = {
+    "edge": "edgetts",
+    "qwen3_tts": "qwen3_tts",
+    "zonos2": "qwen3_tts",
+    "voxcpm2": "qwen3_tts",
+    "kokoro": "kokoro",
+    "fish_tts": "fish_tts",
+    "openai_tts": "openai_tts",
+}
+
+
+def news_backend_engines(
+    backend: str,
+    gateway_engine: str = "",
+    engine_map: str = "",
+    extra: str = "",
+) -> list[str]:
+    """Return the gateway engines behind a news ``TTS_DEFAULT_BACKEND`` value.
+
+    ``edge`` and the direct tts-api engines map one-to-one. ``omni_voice`` is
+    the news name for the gateway's routed selection, so it expands to every
+    engine configured in ``TTS_ENGINE``/``TTS_ENGINES``/``TTS_EXTRA_ENGINES``.
+    """
+    if backend == "omni_voice":
+        return configured_engines(gateway_engine, engine_map, extra)
+    engine = _NEWS_BACKEND_ENGINES.get(backend)
+    return [engine] if engine else []
+
+
+def _ordered_languages(languages: list[str]) -> list[str]:
+    """Put the four product languages first, preserving the rest."""
+    unique = list(dict.fromkeys(languages))
+    basic = [code for code in BASIC_LANGUAGES if code in unique]
+    rest = [code for code in unique if code not in BASIC_LANGUAGES]
+    return [*basic, *rest]
+
+
+def backend_language_options(
+    backend: str,
+    gateway_engine: str = "",
+    engine_map: str = "",
+    extra: str = "",
+) -> list[str]:
+    """Return the language codes accepted by a news TTS backend."""
+    if backend == "edge":
+        return _ordered_languages(list(ENGINE_INFO["edgetts"].languages))
+    languages: list[str] = []
+    for name in news_backend_engines(backend, gateway_engine, engine_map, extra):
+        info = ENGINE_INFO.get(name)
+        if info is None:
+            continue
+        if info.languages == ("*",):
+            languages.extend(BASIC_LANGUAGES)
+        else:
+            languages.extend(info.languages)
+    return _ordered_languages(languages)
+
+
+def backend_voice_options(
+    backend: str,
+    gateway_engine: str = "",
+    engine_map: str = "",
+    extra: str = "",
+) -> list[str]:
+    """Return stock voice ids accepted by a news TTS backend.
+
+    News sends Edge ShortNames directly to Edge, but every other backend goes
+    through the gateway and therefore uses the tts-api stock ids. Engines
+    without stock voices (qwen3_tts, fish_tts, openai_tts) return an empty list
+    so the wizard can ask for a clone or provider voice instead.
+    """
+    if backend == "edge":
+        return list(_EDGETTS_NATIVE_VOICES)
+    voices: list[str] = []
+    for name in news_backend_engines(backend, gateway_engine, engine_map, extra):
+        info = ENGINE_INFO.get(name)
+        if info is not None:
+            voices.extend(info.voices)
+    return list(dict.fromkeys(voices))
+
+
+def engine_voice_help(key: str) -> str:
+    """Explain which voices an engine offers and how to get others."""
+    info = ENGINE_INFO.get(key)
+    if info is None:
+        return "Engine desconocido: configura el proveedor o usa una voz clonada."
+    if info.voices:
+        return (
+            f"{info.label} trae {len(info.voices)} voces stock; elige una "
+            "o usa una voz clonada del catálogo."
+        )
+    if key == "qwen3_tts":
+        return (
+            "Qwen3-TTS no trae voces stock en el gateway: clona una voz en "
+            "Voces o elige un perfil del catálogo Modal."
+        )
+    if key == "fish_tts":
+        return "Fish Audio no trae voces stock: define FISH_VOICES o clona una voz con referencia."
+    if key == "openai_tts":
+        return (
+            "OpenAI-compatible no trae voces stock: define OPENAI_TTS_VOICES "
+            "o usa la voz del proveedor."
+        )
+    return "Este engine no trae voces stock: configura el proveedor o clona una voz."
+
+
+def backend_voice_help(
+    backend: str,
+    gateway_engine: str = "",
+    engine_map: str = "",
+    extra: str = "",
+) -> str:
+    """Explain the voice source for a news TTS backend."""
+    if backend == "edge":
+        return "Edge TTS trae voces neurales; elige un ShortName (por ejemplo es-MX-JorgeNeural)."
+    modal_labels = {"qwen3_tts": "Qwen3-TTS", "zonos2": "Zonos2", "voxcpm2": "VoxCPM2"}
+    if backend in modal_labels:
+        return (
+            f"{modal_labels[backend]} no trae voces stock en el gateway: clona una "
+            "voz en Voces o elige un perfil del catálogo Modal."
+        )
+    engines = news_backend_engines(backend, gateway_engine, engine_map, extra)
+    if not engines:
+        return (
+            "Este backend no declara voces por defecto: configura el gateway "
+            "o usa una voz clonada del catálogo."
+        )
+    if len(engines) == 1:
+        return engine_voice_help(engines[0])
+    if any(ENGINE_INFO.get(name) and ENGINE_INFO[name].voices for name in engines):
+        return (
+            "Voces stock de los engines configurados en el gateway; también "
+            "puedes usar una voz clonada."
+        )
+    return (
+        "Los engines configurados no traen voces stock: clona una voz en el "
+        "catálogo o configura el proveedor."
+    )
+
+
+def required_model_downloads(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
+    """Return the model checkpoints mandatory for the selected gateway engines."""
+    downloads: list[str] = []
+    for name in configured_engines(engine, engine_map, extra):
+        info = ENGINE_INFO.get(name)
+        if info is not None:
+            downloads.extend(info.downloads)
+    return list(dict.fromkeys(downloads))
 
 
 def valid_language_code(value: str) -> bool:
@@ -505,10 +824,11 @@ _FIELD_DETAILS: dict[tuple[str, str], str] = {
     ),
     (NEWS, "TTS_LANGUAGE"): (
         "Idioma ISO 639-1 por defecto. También instruye al LLM para escribir el "
-        "digest en ese idioma."
+        "digest en ese idioma; la lista se actualiza con el motor elegido."
     ),
     (NEWS, "TTS_VOICE"): (
-        "Voz Edge neural por defecto (ShortName). Cada colección puede sobrescribirla."
+        "Voz por defecto del motor. Edge usa ShortNames nativos; el resto usa "
+        "ids stock del gateway o una voz clonada. Cada colección puede sobrescribirla."
     ),
     (NEWS, "DOC_TTS_LINK_SECRET"): (
         "Clave HMAC de los enlaces de audio firmados. Sin ella, el subido de "
@@ -531,8 +851,9 @@ _FIELD_DETAILS: dict[tuple[str, str], str] = {
         "Puedes marcar varios; los engines GPU obligan a TTS_DEVICE=cuda:0."
     ),
     (GATEWAY, "TTS_MODEL_DOWNLOADS"): (
-        "Lista de checkpoints locales que el instalador debe precargar (pocket_tts, piper, "
-        "kokoro, qwen3_tts, omnivoice o chatterbox). Los engines cloud no descargan pesos."
+        "Lista de checkpoints locales que el instalador debe precargar. El asistente "
+        "marca y bloquea los obligatorios del engine seleccionado; los cloud no "
+        "descargan pesos."
     ),
     (GATEWAY, "TTS_DEVICE"): (
         "Dispositivo de inferencia. cuda:0 exige el overlay GPU; cpu funciona sin tarjeta gráfica."
@@ -800,14 +1121,16 @@ _SECTIONS: list[Section] = [
                 file=NEWS,
                 key="TTS_LANGUAGE",
                 label="Idioma TTS",
-                help="Idioma por defecto de la síntesis y de los prompts.",
+                help="Idioma por defecto de la síntesis y de los prompts; "
+                "las opciones siguen al motor elegido.",
                 default="es",
             ),
             Field(
                 file=NEWS,
                 key="TTS_VOICE",
                 label="Voz TTS",
-                help="Cualquier ShortName de Edge neural (p. ej. es-MX-JorgeNeural).",
+                help="Voz por defecto del motor; las opciones siguen al motor "
+                "elegido. Edge usa ShortNames y el gateway ids stock.",
                 default="es-MX-JorgeNeural",
             ),
         ),
@@ -872,7 +1195,7 @@ _SECTIONS: list[Section] = [
                 key="TTS_MODEL_DOWNLOADS",
                 label="Modelos a descargar",
                 help="Checkpoints locales que quieres precargar; marca varios. "
-                "No incluye engines cloud.",
+                "El asistente bloquea los obligatorios del engine seleccionado.",
                 kind="multi",
                 default="",
                 options=MODEL_OPTIONS,

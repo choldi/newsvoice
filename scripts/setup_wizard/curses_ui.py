@@ -164,6 +164,8 @@ class Row:
         value: Current value (also the button label for ``button``).
         help: One line explanation rendered dim under the value.
         options: Allowed values for a ``choice`` row.
+        option_labels: Optional display text keyed by option value.
+        required_options: Multi values that cannot be deselected.
         action: Stable id handed back to the activate callback for buttons.
         default: Value used by the reset shortcut.
         generate: ``hex32`` when Ctrl+G can mint a secret for this row.
@@ -180,6 +182,8 @@ class Row:
     value: str = ""
     help: str = ""
     options: list[str] = field(default_factory=list)
+    option_labels: dict[str, str] = field(default_factory=dict)
+    required_options: list[str] = field(default_factory=list)
     action: str = ""
     default: str = ""
     generate: str = ""
@@ -349,12 +353,17 @@ class MultiPicker:
         current: str,
         on_done: Callable[[App, str], None],
         help_text: str = "",
+        labels: dict[str, str] | None = None,
+        locked: list[str] | None = None,
     ) -> None:
         self.title = title
         self.options = list(options)
         self.help = help_text
+        self.labels = dict(labels or {})
+        self.locked = set(locked or ())
         self.on_done = on_done
         selected = {item.strip() for item in current.split(",") if item.strip()}
+        selected.update(self.locked)
         for item in selected:
             if item not in self.options:
                 self.options.append(item)
@@ -364,7 +373,12 @@ class MultiPicker:
         )
 
     def _lines(self) -> list[str]:
-        lines = [f"[{'x' if option in self.selected else ' '}] {option}" for option in self.options]
+        lines = []
+        for option in self.options:
+            label = self.labels.get(option, option)
+            if option in self.locked:
+                label = f"{label} · obligatorio"
+            lines.append(f"[{'x' if option in self.selected else ' '}] {label}")
         if self.help:
             lines.append("")
             lines.append(self.help)
@@ -381,6 +395,9 @@ class MultiPicker:
             return
         if key == ord(" "):
             option = self.options[self.index]
+            if option in self.locked:
+                app.say(f"{option} es obligatorio para el engine seleccionado", "warn")
+                return
             if option in self.selected:
                 self.selected.remove(option)
             else:
@@ -1174,7 +1191,13 @@ class App:
             return
         if row.kind == "multi" and row.options:
             self.modal = MultiPicker(
-                row.label or "Selecciona", row.options, row.value, self._pick_multi, row.help
+                row.label or "Selecciona",
+                row.options,
+                row.value,
+                self._pick_multi,
+                row.help,
+                row.option_labels,
+                row.required_options,
             )
             return
         if row.kind == "bool":
