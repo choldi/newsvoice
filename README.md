@@ -49,12 +49,18 @@ Pasos del asistente:
    uv, virtualenvs…) aparece el paso **0 · requisitos**: qué se rompe sin él y
    el comando exacto para instalarlo, con un botón que lo ejecuta por ti
    (los pasos con `sudo` se te dejan copiados por si prefieren correrlos a mano).
-3. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
+3. **Elige básica o personalizada** — la **básica** (recomendada) aplica un
+   Docker Shape A con `TTS_DEVICE=cpu`, todos los engines TTS locales
+   (pocket_tts, piper, kokoro y edgetts), genera las claves internas y solo
+   pide la **clave API del LLM** (opcional: puede quedar vacía; el endpoint y
+   el modelo externos no se tocan). La **personalizada** te lleva al flujo
+   completo de perfil, método y archivos.
+4. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
    solo revisión; cada uno precarga sus valores por defecto sin pisar lo que
    ya hayas escrito a mano.
-4. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
+5. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
    por app con pip (`make venv`) o más tarde.
-5. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
+6. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
    `apps/gateway/.env` a partir de sus `.env.example`, sección por sección y
    con la explicación de cada variable. Los secretos se generan con `g`, la
    clave compartida del gateway se copia sola a `TTS_API_KEY` y `API_KEY`, y el
@@ -63,13 +69,18 @@ Pasos del asistente:
    credenciales cloud tienen su propia sección; `a` muestra las opciones
    avanzadas. La clave del gateway es **un mismo valor en los tres archivos**:
    escribirla en cualquiera las sincroniza en las otras dos.
-6. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
+7. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
    copia `.bak-<fecha>`. Si las tres claves del gateway no coinciden, la
    revisión y la validación lo marcan como error y ofrecen
    **«Unificar la clave del gateway»** (evita los 401 en tiempo de ejecución).
-7. **Valida** — valores obligatorios, claves coherentes entre archivos,
+8. **Valida** — valores obligatorios, claves coherentes entre archivos,
    plantillas sin rellenar, puertos, URL del gateway, requisitos del host y
    dependencias; cada línea roja incluye el comando que la arregla.
+9. **Genera un informe sin secretos** — al guardar escribe
+   `reports/setup-report.md` con host, método, validación, configuración no
+   sensible, motores/voces/modelos TTS y colecciones (destinatarios
+   redactados). Para adjuntarlo a un issue:
+   `./scripts/upload_setup_report.sh` (o `--issue N` para comentar).
 
 Además del flujo guiado, desde la pantalla inicial también puedes:
 

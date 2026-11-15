@@ -99,8 +99,8 @@ cp .env.example .env
 ```env
 TTS_ENGINE=routed
 TTS_ENGINES={"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
-# Opcional: engines GPU/cloud que no rutean ningún idioma
-TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote
+# Opcional: engines GPU/cloud que no rutean ningún idioma (vacío por defecto)
+TTS_EXTRA_ENGINES=
 ```
 
 Los engines cloud son opt-in: `fish_tts` necesita `FISH_API_KEY` y

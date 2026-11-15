@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 
 __all__ = [
     "BASIC_LANGUAGES",
+    "BASIC_TTS_ENGINE_MAP",
+    "BASIC_TTS_ENGINES",
+    "BASIC_TTS_EXTRA_ENGINES",
+    "BASIC_TTS_MODEL_DOWNLOADS",
     "EngineInfo",
     "ENGINE_INFO",
     "GPU_ENGINES",
@@ -25,12 +29,14 @@ __all__ = [
     "backend_language_options",
     "backend_voice_help",
     "backend_voice_options",
+    "basic_defaults",
     "configured_engines",
     "config_requires_gpu",
     "engine_info",
     "engine_option_label",
     "engine_voice_help",
     "fields_for",
+    "gateway_pip_extras",
     "hash_password",
     "join_multi",
     "news_backend_engines",
@@ -745,6 +751,34 @@ def required_model_downloads(engine: str, engine_map: str = "", extra: str = "")
     return list(dict.fromkeys(downloads))
 
 
+BASIC_TTS_ENGINE_MAP = _SAFE_TTS_ENGINES
+BASIC_TTS_EXTRA_ENGINES = "edgetts,kokoro,piper"
+BASIC_TTS_ENGINES = ("pocket_tts", "edgetts", "kokoro", "piper")
+BASIC_TTS_MODEL_DOWNLOADS = ",".join(
+    required_model_downloads("routed", BASIC_TTS_ENGINE_MAP, BASIC_TTS_EXTRA_ENGINES)
+)
+
+
+_GATEWAY_PIP_EXTRAS = {
+    "omnivoice": "omnivoice",
+    "pocket_tts": "pocket_tts",
+    "edgetts": "edgetts",
+    "kokoro": "kokoro",
+    "piper": "piper",
+    "zono2": "zono2",
+}
+
+
+def gateway_pip_extras(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
+    """Return the gateway pip extras required by the selected engines."""
+    extras = [
+        _GATEWAY_PIP_EXTRAS[name]
+        for name in configured_engines(engine, engine_map, extra)
+        if name in _GATEWAY_PIP_EXTRAS
+    ]
+    return list(dict.fromkeys(extras))
+
+
 def valid_language_code(value: str) -> bool:
     """Return True for ISO 639-1/639-2 style language keys."""
     return bool(re.fullmatch(r"[a-z]{2,3}", value))
@@ -791,6 +825,10 @@ _FIELD_DETAILS: dict[tuple[str, str], str] = {
     (NEWS, "LLM_MODEL"): (
         "Nombre exacto del modelo que sirve LLM_API_BASE. Debe coincidir con el "
         "id publicado por /v1/models."
+    ),
+    (NEWS, "LLM_API_KEY"): (
+        "Clave del proveedor LLM externo. Puede quedar vacía con llama.cpp local; "
+        "rellénala solo si LLM_API_BASE exige autenticación."
     ),
     (NEWS, "TELEGRAM_CHAT_ID"): (
         "Chat o canal de Telegram donde se entregan los boletines. Sin bot token no se envía nada."
@@ -893,6 +931,7 @@ _EXTERNAL_KEYS: frozenset[tuple[str, str]] = frozenset(
     {
         (NEWS, "LLM_API_BASE"),
         (NEWS, "LLM_MODEL"),
+        (NEWS, "LLM_API_KEY"),
         (NEWS, "TELEGRAM_CHAT_ID"),
         (NEWS, "TELEGRAM_BOT_TOKEN"),
         (NEWS, "SMTP_HOST"),
@@ -1022,6 +1061,13 @@ _SECTIONS: list[Section] = [
                 label="Modelo LLM",
                 help="Modelo servido por ese endpoint.",
                 default="openai/local-model",
+            ),
+            Field(
+                file=NEWS,
+                key="LLM_API_KEY",
+                label="Clave API LLM",
+                help="Opcional; vacía con llama.cpp local.",
+                kind="secret",
             ),
         ),
     ),
@@ -1187,7 +1233,7 @@ _SECTIONS: list[Section] = [
                 help="Pins explícitos sin rutear idioma; marca varios. "
                 "Añade fish_tts/openai_tts solo con credenciales.",
                 kind="multi",
-                default="kokoro,qwen3_tts,omnivoice_remote",
+                default="",
                 options=EXTRA_ENGINE_OPTIONS,
             ),
             Field(
@@ -1212,7 +1258,7 @@ _SECTIONS: list[Section] = [
                 label="Dispositivo",
                 help="cuda:0 exige el overlay GPU; cpu funciona sin gráfica.",
                 kind="choice",
-                default="cuda:0",
+                default="cpu",
                 options=("cuda:0", "cpu"),
             ),
             Field(
@@ -1220,7 +1266,7 @@ _SECTIONS: list[Section] = [
                 key="OMNIVOICE_REMOTE_URL",
                 label="URL sidecar",
                 help="Sidecar OmniVoice; vacío mantiene el proxy arrancado pero inactivo.",
-                default="http://gateway-omnivoice:8000",
+                default="",
                 advanced=True,
             ),
             Field(
@@ -1395,3 +1441,40 @@ PROFILES: tuple[Profile, ...] = (
 def profiles() -> list[Profile]:
     """Return the selectable starting profiles."""
     return list(PROFILES)
+
+
+def basic_defaults(profile_key: str = "docker") -> dict[tuple[str, str], str]:
+    """Return the non-LLM values applied by the basic setup mode.
+
+    The basic mode keeps every TTS engine that runs on CPU, routes each base
+    language to a local engine, and leaves the external LLM endpoint/model
+    untouched. The optional ``LLM_API_KEY`` is collected by the screen.
+    """
+    profile = next((item for item in PROFILES if item.key == profile_key), PROFILES[0])
+    values = {
+        target: value
+        for target, value in profile.defaults.items()
+        if not target[1].startswith("LLM_")
+    }
+    tts_url = _URL_GW_HOST if profile.key in ("local", "split") else _URL_GW_CONTAINER
+    values.update(
+        {
+            (DEPLOY, "API_PORT"): "8000",
+            (DEPLOY, "GATEWAY_PORT"): "8001",
+            (DEPLOY, "COMPOSE_PROFILES"): "news,gateway",
+            (DEPLOY, "QWEN3_TTS_REMOTE_URL"): "",
+            (NEWS, "API_PORT"): "8000",
+            (NEWS, "TTS_API_BASE_URL"): tts_url,
+            (NEWS, "TTS_DEFAULT_BACKEND"): "omni_voice",
+            (NEWS, "TTS_LANGUAGE"): "es",
+            (NEWS, "TTS_VOICE"): "es-mx-male",
+            (GATEWAY, "TTS_ENGINE"): "routed",
+            (GATEWAY, "TTS_ENGINES"): BASIC_TTS_ENGINE_MAP,
+            (GATEWAY, "TTS_EXTRA_ENGINES"): BASIC_TTS_EXTRA_ENGINES,
+            (GATEWAY, "TTS_DEVICE"): "cpu",
+            (GATEWAY, "TTS_MODEL_DOWNLOADS"): BASIC_TTS_MODEL_DOWNLOADS,
+            (GATEWAY, "OMNIVOICE_REMOTE_URL"): "",
+            (GATEWAY, "QWEN3_TTS_REMOTE_URL"): "",
+        }
+    )
+    return values

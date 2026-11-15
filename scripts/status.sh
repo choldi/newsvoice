@@ -72,6 +72,11 @@ hit() {
     curl -sf --connect-timeout 5 --max-time 10 "$@" "$url" 2>/dev/null
 }
 
+probe() {
+    local url="$1"
+    curl -sS --connect-timeout 5 --max-time 10 -w $'\n%{http_code}' "$url" 2>/dev/null
+}
+
 valid_json() {
     python3 -c 'import json,sys; json.loads(sys.stdin.read())' <<<"$1" 2>/dev/null
 }
@@ -135,18 +140,21 @@ fi
 # ---------------------------------------------------------------------------
 section "3. TTS gateway health"
 GW_HEALTH_URL="http://localhost:${GATEWAY_PORT}/api/v1/health"
-GW_BODY="$(hit "$GW_HEALTH_URL"; echo "__rc=$?")"
-GW_PAYLOAD="${GW_BODY%__rc=*}"
-if [[ -z "$GW_PAYLOAD" ]]; then
-    fail "GET ${GW_HEALTH_URL} unreachable"
+GW_RAW="$(probe "$GW_HEALTH_URL")"
+GW_HTTP="${GW_RAW##*$'\n'}"
+GW_PAYLOAD="${GW_RAW%$'\n'*}"
+if [[ -z "$GW_RAW" || "$GW_HTTP" == "000" || -z "$GW_PAYLOAD" ]]; then
+    fail "GET ${GW_HEALTH_URL} unreachable (connection refused or no HTTP response)"
 elif ! valid_json "$GW_PAYLOAD"; then
-    fail "GET ${GW_HEALTH_URL} returned non-JSON ('${GW_PAYLOAD:0:60}')"
+    fail "GET ${GW_HEALTH_URL} returned non-JSON (HTTP ${GW_HTTP}: '${GW_PAYLOAD:0:60}')"
 elif [[ "$GW_PAYLOAD" == *'"status":"ok"'* ]]; then
     ok "GET ${GW_HEALTH_URL} -> ${GW_PAYLOAD}"
 elif [[ "$GW_PAYLOAD" == *'"status":"degraded"'* ]]; then
     warn "gateway is up but degraded (mock engine or model not loaded): ${GW_PAYLOAD}"
+elif [[ "$GW_PAYLOAD" == *'"status":"not_initialized"'* ]]; then
+    fail "GET ${GW_HEALTH_URL} -> HTTP ${GW_HTTP} not_initialized (gateway still starting or engine failed)"
 else
-    fail "GET ${GW_HEALTH_URL} reported a non-ok status: ${GW_PAYLOAD}"
+    fail "GET ${GW_HEALTH_URL} reported a non-ok status (HTTP ${GW_HTTP}): ${GW_PAYLOAD}"
 fi
 
 # ---------------------------------------------------------------------------

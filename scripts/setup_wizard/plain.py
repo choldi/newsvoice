@@ -14,6 +14,7 @@ from . import validate as validation
 from .app import (
     Context,
     _apply_profile,
+    _dependency_plan,
     _mask,
     _shared_key_conflicts,
     _shown,
@@ -21,8 +22,11 @@ from .app import (
     _unify_shared_key,
     load_context,
 )
+from .collections import ensure_example_collection
+from .config_report import write_config_report
 from .detect import detect, prerequisites
 from .settings import PROFILES, Field, fields_for
+from .util import REPO_ROOT
 
 __all__ = ["run_plain"]
 
@@ -282,16 +286,27 @@ def run_plain(
         total += len(changes)
     if total == 0:
         print("  No hay nada que escribir.")
+    saved = False
     if _confirm("¿Escribir los archivos .env? [s/N]:", assume_yes=assume_yes):
+        saved = True
         for file_key in _ORDER:
             env = ctx.envs[file_key]
             if not env.changed_keys() and env.exists:
                 continue
             backup = env.write()
             ctx.written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
+        news = ctx.envs.get("news")
+        if news is not None:
+            created = ensure_example_collection(
+                backend=news.get("TTS_DEFAULT_BACKEND"),
+                language=news.get("TTS_LANGUAGE"),
+                voice=news.get("TTS_VOICE"),
+            )
+            if created is not None:
+                print(f"  Colección de ejemplo: {created.relative_to(REPO_ROOT)}")
         print(f"  Escrito: {', '.join(ctx.written) or 'nada'}")
 
-    return _finish(ctx, write=True, assume_yes=assume_yes)
+    return _finish(ctx, write=saved, assume_yes=assume_yes)
 
 
 def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
@@ -299,14 +314,14 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
 
     Args:
         ctx: Current wizard state.
-        write: Whether the env files were written already.
+        write: Whether the env files were written and the report should be generated.
         assume_yes: Answer every confirmation with yes.
 
     Returns:
         0 when validation found no errors, 1 otherwise.
     """
     _title("Paso 5 · dependencias")
-    steps = deps.plan(ctx.method)
+    steps = _dependency_plan(ctx)
     if steps:
         for step in steps:
             print(f"  ▸ {step.title}: {' '.join(map(str, step.command))}")
@@ -329,6 +344,21 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
         print(f"  {symbols.get(check.status, '·')} {check.name}: {check.detail}")
     errors = sum(1 for check in checks if check.status == "bad")
     print(f"\n  {len(checks)} comprobaciones · {errors} error(es)")
+    if write:
+        try:
+            report_path = write_config_report(
+                ctx.envs,
+                ctx.report,
+                profile=ctx.profile,
+                method=ctx.method,
+                checks=checks,
+                written=ctx.written,
+            )
+        except OSError as exc:
+            print(f"  ⚠ No se pudo escribir el informe de setup: {exc}")
+        else:
+            ctx.report_path = str(report_path)
+            print(f"  Informe sin secretos: {report_path.relative_to(REPO_ROOT)}")
     if ctx.written:
         print("  Siguientes pasos:  make up · make status · make urls")
     return 1 if errors else 0

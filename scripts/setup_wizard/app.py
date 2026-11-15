@@ -11,6 +11,8 @@ from pathlib import Path
 
 from . import deps, transfer
 from . import validate as validation
+from .collections import ensure_example_collection
+from .config_report import write_config_report
 from .curses_ui import App, Dialog, Picker, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
@@ -28,10 +30,12 @@ from .settings import (
     backend_language_options,
     backend_voice_help,
     backend_voice_options,
+    basic_defaults,
     config_requires_gpu,
     configured_engines,
     engine_option_label,
     fields_for,
+    gateway_pip_extras,
     join_multi,
     parse_engine_map,
     render_engine_map,
@@ -40,7 +44,7 @@ from .settings import (
     split_multi,
     valid_language_code,
 )
-from .util import REPO_ROOT, env_paths
+from .util import REPO_ROOT, env_paths, generate_secret
 
 __all__ = ["Context", "build_app", "load_context"]
 
@@ -58,6 +62,7 @@ class Context:
         method: Dependency installation method id.
         written: Env paths written during this session.
         install_result: Outcome of the last installation attempt.
+        report_path: Secret-free setup report written to disk, when available.
     """
 
     report: Report
@@ -66,6 +71,7 @@ class Context:
     method: str = "uv"
     written: list[str] = field(default_factory=list)
     install_result: str = ""
+    report_path: str = ""
 
 
 def load_context(report: Report | None = None) -> Context:
@@ -105,6 +111,7 @@ _SECRET_KEYS = frozenset(
         "TELEGRAM_BOT_TOKEN",
         "SMTP_PASSWORD",
         "HF_TOKEN",
+        "LLM_API_KEY",
     }
 )
 
@@ -208,6 +215,33 @@ def _apply_profile(ctx: Context) -> None:
 
 def _fields(file_key: str) -> list[Field]:
     return fields_for(file_key)
+
+
+def _apply_basic_config(ctx: Context) -> None:
+    """Stage the basic profile: CPU engines, internal secrets, external LLM.
+
+    The endpoint/model of the external LLM are left as they are on disk; only
+    an optional API key entered on the basic screen is written. Missing
+    internal secrets are minted here so the gateway and admin panel are not
+    left open.
+    """
+    docker = next((profile for profile in PROFILES if profile.key == "docker"), PROFILES[0])
+    ctx.profile = docker
+    if not deps.method_available(ctx.method)[0]:
+        ctx.method = "uv" if deps.method_available("uv")[0] else "venv"
+    for (file_key, key), value in basic_defaults(docker.key).items():
+        env = ctx.envs.get(file_key)
+        if env is not None:
+            env.set(key, value)
+    for file_key, key in (
+        ("deploy", "GATEWAY_API_KEY"),
+        ("news", "ADMIN_API_TOKEN"),
+        ("news", "DOC_TTS_LINK_SECRET"),
+    ):
+        env = ctx.envs.get(file_key)
+        if env is not None and not env.get(key).strip():
+            env.set(key, generate_secret())
+    _sync_shared_key(ctx)
 
 
 def _sync_shared_key(ctx: Context) -> None:
@@ -364,10 +398,10 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
                     f"Faltan {len(missing)} requisito(s): revísalos antes de continuar",
                     "warn",
                 )
-                app_.push(prereq_screen(app_, ctx, return_to="profile"))
+                app_.push(prereq_screen(app_, ctx, return_to="mode"))
             else:
-                app_.say("Elige el punto de partida")
-                app_.push(profile_screen(app_, ctx))
+                app_.say("Básica o personalizada")
+                app_.push(mode_screen(app_, ctx))
         elif row.action == "prereqs":
             app_.push(prereq_screen(app_, ctx, return_to="welcome"))
         elif row.action == "edit":
@@ -409,8 +443,9 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
     Args:
         app: Running application.
         ctx: Shared wizard state.
-        return_to: ``profile`` keeps the guided flow going, ``welcome`` goes
-            back to the menu (the entry point of a standalone inspection).
+        return_to: ``mode`` keeps the guided flow going (basic/custom picker),
+            ``profile`` jumps straight to the deployment shape, ``welcome``
+            goes back to the menu (the entry point of a standalone inspection).
     """
 
     def build() -> list[Row]:
@@ -464,7 +499,11 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
         rows.append(
             Row(
                 "button",
-                label="Ir al perfil" if return_to == "profile" else "Volver al menú",
+                label=(
+                    "Continuar"
+                    if return_to == "mode"
+                    else ("Ir al perfil" if return_to == "profile" else "Volver al menú")
+                ),
                 action="next",
             )
         )
@@ -491,7 +530,9 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
             app_.info("Instalación de requisitos", *lines)
             return
         if row.action == "next":
-            if return_to == "profile":
+            if return_to == "mode":
+                app_.push(mode_screen(app_, ctx))
+            elif return_to == "profile":
                 app_.push(profile_screen(app_, ctx))
             else:
                 app_.pop()
@@ -523,6 +564,100 @@ def prereq_screen(app: App, ctx: Context, *, return_to: str = "welcome") -> Scre
         footer="F1 Ayuda   Enter Ejecutar   Esc Atrás   F10 Salir",
         progress="0/6",
         on_enter=on_enter,
+        on_activate=activate,
+    )
+
+
+def mode_screen(app: App, ctx: Context) -> Screen:
+    """Build the basic vs. custom configuration picker."""
+    rows = [
+        Row("note", label="Elige el nivel de configuración del asistente."),
+        Row("note", label=""),
+        Row(
+            "button",
+            label="Básica (recomendada) · CPU, todos los engines TTS locales, LLM externo",
+            action="basic",
+        ),
+        Row(
+            "button",
+            label="Personalizada · perfil, método, engines, puertos y credenciales",
+            action="custom",
+        ),
+        Row("note", label=""),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "basic":
+            app_.say("Configuración básica: solo se añade la clave del LLM si la necesitas")
+            app_.push(basic_screen(app_, ctx))
+            return
+        if row.action == "custom":
+            app_.say("Elige el punto de partida")
+            app_.push(profile_screen(app_, ctx))
+
+    return Screen(
+        title="Paso 1 · tipo de configuración",
+        subtitle="Básica o personalizada",
+        rows=rows,
+        footer="F1 Ayuda   Enter Seleccionar   ↑/↓ Mover   Esc Atrás   F10 Salir",
+        progress="1/6",
+        on_activate=activate,
+    )
+
+
+def basic_screen(app: App, ctx: Context) -> Screen:
+    """Build the basic setup summary plus the optional LLM API key."""
+    news = ctx.envs["news"]
+    llm_key = Row(
+        "secret",
+        label="Clave API LLM (opcional)",
+        value=news.get("LLM_API_KEY"),
+        help="Vacía con llama.cpp local; rellénala si tu proveedor exige autenticación.",
+        action="llm_key",
+    )
+    rows = [
+        Row(
+            "note",
+            label="Básica: Docker Shape A · CPU · todos los engines TTS locales.",
+            result="ok",
+        ),
+        Row("note", label="Engines: pocket_tts (es/en/fr), piper (ca), kokoro y edgetts extra."),
+        Row("note", label="TTS_DEVICE=cpu · sin sidecars GPU · se generan las claves internas."),
+        Row(
+            "note",
+            label="LLM externo: no se tocan endpoint ni modelo; la clave es opcional.",
+        ),
+        Row("note", label=""),
+        llm_key,
+        Row("note", label=""),
+        Row("button", label="Aplicar configuración básica", action="apply"),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def on_change(app_: App, row: Row) -> None:
+        if row.action == "llm_key":
+            news.set("LLM_API_KEY", row.value.strip())
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "apply":
+            _apply_basic_config(ctx)
+            app_.say("Configuración básica aplicada: revisa el diff", "ok")
+            app_.push(review_screen(app_, ctx))
+
+    return Screen(
+        title="Paso 2 · configuración básica",
+        subtitle="Resumen de valores y clave LLM opcional",
+        rows=rows,
+        footer="F1 Ayuda   Enter Aplicar   Esc Atrás   F10 Salir",
+        progress="2/6",
+        on_change=on_change,
         on_activate=activate,
     )
 
@@ -1399,6 +1534,39 @@ def _write_env(app: App, env: EnvFile, *, reload: bool) -> tuple[bool, Path | No
     return True, backup, names
 
 
+def _write_setup_artifacts(app: App, ctx: Context, *, written: list[str]) -> None:
+    """Create the example collection and the secret-free review report."""
+    news = ctx.envs.get("news")
+    if news is not None:
+        created = ensure_example_collection(
+            backend=news.get("TTS_DEFAULT_BACKEND"),
+            language=news.get("TTS_LANGUAGE"),
+            voice=news.get("TTS_VOICE"),
+        )
+        if created is not None:
+            app.say(f"Creada colección de ejemplo: {created.relative_to(REPO_ROOT)}", "ok")
+    try:
+        checks = validation.validate(
+            ctx.envs,
+            ctx.report,
+            will_write=False,
+            profile=ctx.profile.key,
+        )
+        path = write_config_report(
+            ctx.envs,
+            ctx.report,
+            profile=ctx.profile,
+            method=ctx.method,
+            checks=checks,
+            written=written,
+        )
+    except OSError as exc:
+        app.say(f"No se pudo escribir el informe de setup: {exc}", "bad")
+        return
+    ctx.report_path = str(path)
+    app.say(f"Informe sin secretos: {path.relative_to(REPO_ROOT)}", "ok")
+
+
 def _confirm_write(app: App, ctx: Context):
     """Return the confirmation dialog that writes the env files."""
     from .curses_ui import Dialog
@@ -1420,6 +1588,7 @@ def _confirm_write(app: App, ctx: Context):
             app_.say(f"Escrito: {', '.join(written)}", "ok")
         else:
             app_.say("No había nada que escribir", "ok")
+        _write_setup_artifacts(app_, ctx, written=written)
         app_.push(apply_screen(app_, ctx))
 
     changes = sum(len(ctx.envs[key].diff_against_disk()) for key in _ORDER)
@@ -1453,6 +1622,9 @@ def _confirm_write_one(app: App, ctx: Context, file_key: str):
             f"{env.key_path}: {len(names)} valor(es) escritos.",
             f"Copia previa: {backup.name}" if backup else "Sin copia previa (archivo nuevo).",
         )
+        written = env.key_path + (f" (copia: {backup.name})" if backup else "")
+        ctx.written.append(written)
+        _write_setup_artifacts(app_, ctx, written=list(ctx.written))
 
     if not env.changed_keys():
         return None
@@ -1648,11 +1820,20 @@ def export_screen(app: App, ctx: Context) -> Screen:
     )
 
 
+def _dependency_plan(ctx: Context) -> list[deps.Step]:
+    """Return the install plan with the extras required by the selected engines."""
+    engine, engine_map, extra = _gateway_selection(ctx)
+    return deps.plan(
+        ctx.method,
+        gateway_extras=gateway_pip_extras(engine, engine_map, extra),
+    )
+
+
 def apply_screen(app: App, ctx: Context) -> Screen:
     """Build the dependency installation step."""
 
     def build() -> list[Row]:
-        steps = deps.plan(ctx.method)
+        steps = _dependency_plan(ctx)
         rows = [
             Row("note", label=f"Método: {ctx.method}"),
             Row("note", label=""),
@@ -1709,7 +1890,7 @@ def apply_screen(app: App, ctx: Context) -> Screen:
         if not available:
             app_.say(reason, "bad")
             return
-        steps = deps.plan(ctx.method)
+        steps = _dependency_plan(ctx)
         if not steps:
             app_.say("Nada que instalar con este método")
             return
@@ -1831,16 +2012,26 @@ def final_screen(app: App, ctx: Context) -> Screen:
     rows = [
         Row("note", label=f"Escrito: {written}", result="ok"),
         Row("note", label=f"Dependencias: {ctx.install_result or 'pendientes'}"),
-        Row("note", label=""),
-        Row("note", label="Siguientes comandos:", result="ok"),
-        Row("note", label="  make up        · arrancar las 13 imágenes"),
-        Row("note", label="  make status    · comprobar salud"),
-        Row("note", label="  make urls      · panel, Temporal y gateway"),
-        Row("note", label=""),
-        Row("button", label="Validar una última vez", action="validate"),
-        Row("button", label="Ver ayuda de teclado", action="help"),
-        Row("button", label="Salir", action="quit"),
     ]
+    if ctx.report_path:
+        try:
+            report_label = Path(ctx.report_path).relative_to(REPO_ROOT)
+        except ValueError:
+            report_label = Path(ctx.report_path)
+        rows.append(Row("note", label=f"Informe sin secretos: {report_label}", result="ok"))
+    rows.extend(
+        [
+            Row("note", label=""),
+            Row("note", label="Siguientes comandos:", result="ok"),
+            Row("note", label="  make up        · arrancar las 13 imágenes"),
+            Row("note", label="  make status    · comprobar salud"),
+            Row("note", label="  make urls      · panel, Temporal y gateway"),
+            Row("note", label=""),
+            Row("button", label="Validar una última vez", action="validate"),
+            Row("button", label="Ver ayuda de teclado", action="help"),
+            Row("button", label="Salir", action="quit"),
+        ]
+    )
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "validate":

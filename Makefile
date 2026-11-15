@@ -18,7 +18,7 @@
 
 .PHONY: help setup venv install lint format format-check test test-news \
         test-gateway coverage check commit up down ps health logs logs-api \
-        logs-gateway logs-worker logs-temporal status report deploy clean urls \
+        logs-gateway logs-worker logs-temporal status report upload-report deploy clean urls \
         schedule trigger namespaces security-venv security-scan
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -74,6 +74,7 @@ help: ## Show all make targets
 	@echo "  make logs-temporal    Tail temporal logs"
 	@echo "  make status           Unified health check (scripts/status.sh)"
 	@echo "  make report           Markdown deploy report for AI review (scripts/deploy_report.sh)"
+	@echo "  make upload-report    Upload reports/setup-report.md to a GitHub issue (ARGS=\"--issue N\")"
 	@echo "                        REPORT=path.md to override, REPORT=- for stdout"
 	@echo "  make deploy [ENV=..]  Deploy via scripts/deploy.sh (default production)"
 	@echo "  make namespaces       Create the Temporal namespaces (idempotent)"
@@ -175,6 +176,9 @@ status: ## Unified health check (scripts/status.sh)
 
 report: ## Markdown deploy report (deps, config, services, health, GPU) for AI review
 	@./scripts/deploy_report.sh $(REPORT)
+
+upload-report: ## Upload the secret-free setup report to a GitHub issue
+	@./scripts/upload_setup_report.sh $(ARGS)
 
 deploy: ## Deploy via scripts/deploy.sh (ENV defaults to production)
 	./scripts/deploy.sh $(ENV)

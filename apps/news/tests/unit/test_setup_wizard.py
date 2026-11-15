@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import curses
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
-from setup_wizard import deps
+from setup_wizard import config_report, deps
 from setup_wizard import validate as validation
 from setup_wizard.app import (
     Context,
+    _apply_basic_config,
     _apply_routed_preset,
     _confirm_write,
     _confirm_write_one,
@@ -25,11 +27,13 @@ from setup_wizard.app import (
     _unify_shared_key,
     _write_env,
     apply_screen,
+    basic_screen,
     build_app,
     env_screen,
     final_screen,
     load_context,
     method_screen,
+    mode_screen,
     prereq_screen,
     profile_screen,
     review_screen,
@@ -38,6 +42,7 @@ from setup_wizard.app import (
     validate_screen,
     welcome_screen,
 )
+from setup_wizard.collections import ensure_example_collection
 from setup_wizard.curses_ui import App, MultiPicker, Row, Screen
 from setup_wizard.detect import Finding, Report, prerequisites
 from setup_wizard.envfile import EnvFile
@@ -51,9 +56,12 @@ from setup_wizard.settings import (
     ROUTED_PRESETS,
     backend_language_options,
     backend_voice_options,
+    basic_defaults,
     config_requires_gpu,
+    configured_engines,
     engine_option_label,
     fields_for,
+    gateway_pip_extras,
     hash_password,
     join_multi,
     parse_engine_map,
@@ -307,6 +315,43 @@ def map_field_keys(file_key: str) -> list[str]:
     return [field.key for field in fields_for(file_key)]
 
 
+def test_basic_defaults_cover_cpu_engines_and_leave_the_llm_alone() -> None:
+    """The basic profile seeds every non-LLM option with CPU-only engines."""
+    from setup_wizard.settings import BASIC_TTS_EXTRA_ENGINES, GATEWAY, NEWS
+
+    values = basic_defaults("docker")
+
+    known = {
+        (file_key, key)
+        for file_key in ("deploy", "news", "gateway")
+        for key in map_field_keys(file_key)
+    }
+    assert set(values) <= known
+    assert not any(key.startswith("LLM_") for _file_key, key in values)
+
+    assert values[(GATEWAY, "TTS_ENGINE")] == "routed"
+    assert values[(GATEWAY, "TTS_DEVICE")] == "cpu"
+    assert values[(GATEWAY, "TTS_EXTRA_ENGINES")] == BASIC_TTS_EXTRA_ENGINES
+    extras = set(BASIC_TTS_EXTRA_ENGINES.split(","))
+    assert {"edgetts", "kokoro", "piper"} <= extras
+    selected = set(
+        configured_engines(
+            values[(GATEWAY, "TTS_ENGINE")],
+            values[(GATEWAY, "TTS_ENGINES")],
+            values[(GATEWAY, "TTS_EXTRA_ENGINES")],
+        )
+    )
+    assert not selected & GPU_ENGINES
+    assert "pocket_tts" in selected and "piper" in selected
+
+    assert values[(NEWS, "TTS_DEFAULT_BACKEND")] == "omni_voice"
+    assert values[(NEWS, "TTS_LANGUAGE")] == "es"
+    assert values[(NEWS, "TTS_VOICE")] == "es-mx-male"
+    assert values[(NEWS, "TTS_API_BASE_URL")] == "http://gateway:8000/api/v1"
+    models = values[(GATEWAY, "TTS_MODEL_DOWNLOADS")]
+    assert "pocket_tts:es" in models and "kokoro:hexgrad/Kokoro-82M" in models
+
+
 def test_hash_password_round_trip() -> None:
     """The admin password dialog produces a bcrypt hash."""
     digest = hash_password("secreta-123")
@@ -445,6 +490,102 @@ def test_validate_missing_files_are_bad_only_when_they_will_not_be_written(
     assert {c.status for c in wizard if c.name.endswith("/.env")} == {"warn"}
 
 
+# -- collections and setup report -------------------------------------------
+
+
+def test_example_collection_uses_selected_engine_and_voice(tmp_path: Path) -> None:
+    """A fresh setup writes one disabled example with the chosen TTS values."""
+    path = tmp_path / "collections.toml"
+    created = ensure_example_collection(
+        backend="omni_voice",
+        language="ca",
+        voice="ca-female",
+        path=path,
+    )
+
+    assert created == path
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    collection = data["collections"][0]
+    assert collection["name"] == "example"
+    assert collection["tts_backend"] == "omni_voice"
+    assert collection["language"] == "ca"
+    assert collection["voice"] == "ca-female"
+    assert collection["delivery_channels"] == []
+    assert collection["enabled"] is False
+
+    path.write_text("# keep my collections\n", encoding="utf-8")
+    assert ensure_example_collection(path=path) is None
+    assert path.read_text(encoding="utf-8") == "# keep my collections\n"
+
+
+def test_config_report_masks_secrets_and_collection_recipients(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The review file keeps useful TTS data but never prints secrets or PII."""
+    envs = _write_env_files(tmp_path)
+    news = envs["news"]
+    gateway = envs["gateway"]
+    news.set("TTS_DEFAULT_BACKEND", "edge")
+    news.set("TTS_LANGUAGE", "es")
+    news.set("TTS_VOICE", "es-MX-JorgeNeural")
+    news.set("TELEGRAM_BOT_TOKEN", "123:super-secret")
+    news.set("TTS_API_BASE_URL", "http://user:pass@gateway:8000/api/v1")
+    gateway.set("TTS_EXTRA_ENGINES", "piper")
+    gateway.set("API_KEY", "gateway-secret")
+    gateway.set("OMNIVOICE_REMOTE_URL", "http://voice:secret@omnivoice:8000")
+
+    collections = tmp_path / "collections.toml"
+    collections.write_text(
+        "[collection_defaults]\n"
+        'language = "es"\n'
+        "[[collections]]\n"
+        'name = "tech"\n'
+        'time = "08:00"\n'
+        'voice = "es-mx-male"\n'
+        'whatsapp_recipients = ["+34609116369"]\n'
+        'email_recipients = ["person@example.com"]\n'
+        'chat_id = "123456789"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_report, "COLLECTIONS_PATH", collections)
+
+    report = Report(python="3.12.0")
+    checks = validation.validate(envs, report, will_write=False, profile=PROFILES[0].key)
+    text = config_report.build_config_report(
+        envs,
+        report,
+        profile=PROFILES[0],
+        method="venv",
+        checks=checks,
+        written=["apps/news/.env"],
+    )
+
+    assert "super-secret" not in text
+    assert "gateway-secret" not in text
+    assert "person@example.com" not in text
+    assert "+34609116369" not in text
+    assert "user:pass" not in text
+    assert "voice:secret" not in text
+    assert "es-MX-JorgeNeural" in text
+    assert "es-mx-male" in text
+    assert "piper" in text
+    assert "## Collections" in text
+    assert '"name": "tech"' in text
+    assert "<redacted" in text
+
+    report_path = config_report.write_config_report(
+        envs,
+        report,
+        profile=PROFILES[0],
+        method="venv",
+        checks=checks,
+        written=["apps/news/.env"],
+        path=tmp_path / "setup-report.md",
+    )
+    assert report_path.read_text(encoding="utf-8") == text
+
+
 # -- dependency plan --------------------------------------------------------
 
 
@@ -461,6 +602,22 @@ def test_plan_covers_every_documented_method() -> None:
     assert all(".venv" in " ".join(map(str, step.command)) for step in venv_steps)
     assert venv_steps[1].cwd.name == "news"
     assert venv_steps[3].cwd.name == "gateway"
+
+
+def test_plan_installs_gateway_extras_for_selected_engines() -> None:
+    """Piper and other optional engines land in the gateway pip spec."""
+    steps = deps.plan("venv", gateway_extras=["piper", "kokoro", "piper"])
+    gateway_install = steps[3]
+    assert gateway_install.command[-1] == ".[dev,piper,kokoro]"
+    assert gateway_pip_extras("routed", '{"ca":"piper"}', "kokoro") == ["piper", "kokoro"]
+
+
+def test_gateway_defaults_are_opt_in() -> None:
+    """A fresh setup does not enable optional engines, sidecars or CUDA."""
+    fields = {field.key: field for field in fields_for("gateway")}
+    assert fields["TTS_EXTRA_ENGINES"].default == ""
+    assert fields["OMNIVOICE_REMOTE_URL"].default == ""
+    assert fields["TTS_DEVICE"].default == "cpu"
 
 
 def test_method_available_reports_a_reason() -> None:
@@ -1304,6 +1461,103 @@ def test_profile_defaults_do_not_clobber_operator_values(wizard_context: Context
 
     assert wizard_context.envs["news"].get("LLM_API_BASE") == "http://10.0.0.5:9000/v1"
     assert wizard_context.envs["news"].get("TTS_API_BASE_URL") == "http://localhost:8001/api/v1"
+
+
+def test_mode_screen_offers_basic_and_custom(wizard_context: Context) -> None:
+    """The guided flow starts with a basic vs. custom configuration menu."""
+    app = build_app(wizard_context)
+    app.push(mode_screen(app, wizard_context))
+
+    actions = {row.action for row in app.current.rows if row.kind == "button"}
+    assert {"basic", "custom", "back"} <= actions
+
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "basic")
+    app.handle(10)
+    assert app.current.title == "Paso 2 · configuración básica"
+    assert any(row.action == "llm_key" for row in app.current.rows)
+    assert any(row.action == "apply" for row in app.current.rows)
+
+    app.pop()
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "custom")
+    app.handle(10)
+    assert app.current.title == "Paso 1 · perfil"
+
+
+def test_basic_config_applies_cpu_engines_and_generates_secrets(
+    wizard_context: Context,
+) -> None:
+    """The basic mode stages CPU-only TTS, internal secrets and no LLM edits."""
+    _apply_basic_config(wizard_context)
+    gateway = wizard_context.envs["gateway"]
+    news = wizard_context.envs["news"]
+    deploy = wizard_context.envs["deploy"]
+
+    assert wizard_context.profile.key == "docker"
+    assert gateway.get("TTS_DEVICE") == "cpu"
+    assert gateway.get("TTS_ENGINE") == "routed"
+    assert set(gateway.get("TTS_EXTRA_ENGINES").split(",")) == {"edgetts", "kokoro", "piper"}
+    selected = set(
+        configured_engines(
+            gateway.get("TTS_ENGINE"),
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        )
+    )
+    assert not selected & GPU_ENGINES
+    assert news.get("TTS_DEFAULT_BACKEND") == "omni_voice"
+    assert news.get("TTS_VOICE") == "es-mx-male"
+
+    # The external LLM endpoint/model stay as they are on disk.
+    assert news.get("LLM_API_BASE") == "http://host.docker.internal:8080/v1"
+    assert news.get("LLM_API_KEY") == ""
+
+    # Internal secrets are minted and shared across the three files.
+    assert len(deploy.get("GATEWAY_API_KEY")) == 64
+    assert news.get("TTS_API_KEY") == deploy.get("GATEWAY_API_KEY")
+    assert gateway.get("API_KEY") == deploy.get("GATEWAY_API_KEY")
+    assert news.get("ADMIN_API_TOKEN")
+    assert news.get("DOC_TTS_LINK_SECRET")
+
+    app = build_app(wizard_context)
+    app.push(review_screen(app, wizard_context))
+    body = " ".join(row.label for row in app.current.rows)
+    assert deploy.get("GATEWAY_API_KEY") not in body
+    assert news.get("DOC_TTS_LINK_SECRET") not in body
+
+    checks = validation.validate(
+        wizard_context.envs,
+        wizard_context.report,
+        will_write=True,
+        profile="docker",
+    )
+    assert not any(check.status == "bad" for check in checks)
+
+
+def test_basic_screen_accepts_an_empty_llm_key(wizard_context: Context) -> None:
+    """The optional LLM API key may stay empty and is masked in the diff."""
+    app = build_app(wizard_context)
+    app.push(basic_screen(app, wizard_context))
+    screen = app.current
+    key_row = next(row for row in screen.rows if row.action == "llm_key")
+
+    key_row.value = ""
+    screen.on_change(app, key_row)
+    assert wizard_context.envs["news"].get("LLM_API_KEY") == ""
+    assert not any(
+        name == "LLM_API_KEY"
+        for name, _old, _new in wizard_context.envs["news"].diff_against_disk()
+    )
+
+    key_row.value = "sk-llm-provider"
+    screen.on_change(app, key_row)
+    assert wizard_context.envs["news"].get("LLM_API_KEY") == "sk-llm-provider"
+
+    app.focus = next(i for i, row in enumerate(screen.rows) if row.action == "apply")
+    app.handle(10)
+    assert app.current.title == "Paso 4 · revisión"
+    body = " ".join(row.label for row in app.current.rows)
+    assert "sk-llm-provider" not in body
+    assert "LLM_API_KEY" in body
 
 
 def test_shared_gateway_key_is_propagated(wizard_context: Context) -> None:

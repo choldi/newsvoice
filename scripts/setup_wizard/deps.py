@@ -56,11 +56,16 @@ class Step:
     env: dict[str, str] = field(default_factory=dict)
 
 
-def plan(method: str) -> list[Step]:
+def plan(
+    method: str,
+    *,
+    gateway_extras: tuple[str, ...] | list[str] = (),
+) -> list[Step]:
     """Build the ordered command list for one installation method.
 
     Args:
         method: One of the ids in :data:`METHODS`.
+        gateway_extras: Optional pip extras required by the selected engines.
 
     Returns:
         Steps to run in order; empty when the method installs nothing.
@@ -68,6 +73,8 @@ def plan(method: str) -> list[Step]:
     if method == "skip":
         return []
     if method == "venv":
+        extras = list(dict.fromkeys(["dev", *(extra for extra in gateway_extras if extra)]))
+        gateway_spec = f".[{','.join(extras)}]"
         return [
             Step(
                 title="virtualenv news-engine",
@@ -89,9 +96,9 @@ def plan(method: str) -> list[Step]:
             ),
             Step(
                 title="instalar tts-api",
-                command=[".venv/bin/python", "-m", "pip", "install", "-e", ".[dev]"],
+                command=[".venv/bin/python", "-m", "pip", "install", "-e", gateway_spec],
                 cwd=REPO_ROOT / "apps" / "gateway",
-                detail="Dependencias + pytest/ruff/mypy",
+                detail=f"Dependencias + pytest/ruff/mypy ({gateway_spec})",
             ),
         ]
     if method == "uv":
