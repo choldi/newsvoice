@@ -32,6 +32,9 @@ python3 scripts/setup.py           # TUI (terminal interactiva)
 python3 scripts/setup.py --plain   # modo línea (sin TUI o salida redirigida)
 python3 scripts/setup.py --check   # solo detectar y validar, no escribe nada
 make setup                         # lo mismo desde make
+
+make engines                       # solo motores TTS: contenedores, GPU, API y términos
+python3 scripts/setup.py --engines --plain  # misma ruta en modo línea
 ```
 
 Uso sin interacción (para scripts o CI):
@@ -51,10 +54,10 @@ Pasos del asistente:
    (los pasos con `sudo` se te dejan copiados por si prefieren correrlos a mano).
 3. **Elige básica o personalizada** — la **básica** (recomendada) aplica un
    Docker Shape A con `TTS_DEVICE=cpu`, todos los engines TTS locales
-   (pocket_tts, piper, kokoro y edgetts), genera las claves internas y solo
-   pide la **clave API del LLM** (opcional: puede quedar vacía; el endpoint y
-   el modelo externos no se tocan). La **personalizada** te lleva al flujo
-   completo de perfil, método y archivos.
+   (pocket_tts, piper, kokoro y edgetts), genera las claves internas y pide la
+   **URL y el modelo del LLM** externo, además de la **clave API** (opcional:
+   puede quedar vacía con llama.cpp local). La **personalizada** te lleva al
+   flujo completo de perfil, método y archivos.
 4. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
    solo revisión; cada uno precarga sus valores por defecto sin pisar lo que
    ya hayas escrito a mano.
@@ -67,8 +70,14 @@ Pasos del asistente:
    hash bcrypt del administrador se crea desde su propio diálogo. El motor TTS
    (`routed`, `qwen3_tts`, `fish_tts`, `openai_tts`…), los sidecars y las
    credenciales cloud tienen su propia sección; `a` muestra las opciones
-   avanzadas. La clave del gateway es **un mismo valor en los tres archivos**:
-   escribirla en cualquiera las sincroniza en las otras dos.
+   avanzadas. Al cambiar los engines, el asistente recalcula
+   `GATEWAY_UV_EXTRAS` para que la imagen Docker instale sus extras pip y
+   sincroniza la infraestructura: añade `qwen3`/`omnivoice` a
+   `COMPOSE_PROFILES`, escribe las URLs de los sidecars y pone `GATEWAY_GPU=1`
+   cuando la selección necesita GPU. `make up` y `scripts/deploy.sh` añaden el
+   overlay GPU solos; ejecuta `make up` para reconstruir la imagen. La clave del
+   gateway es **un mismo valor en los tres archivos**: escribirla en cualquiera
+   la sincroniza en las otras dos.
 7. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
    copia `.bak-<fecha>`. Si las tres claves del gateway no coinciden, la
    revisión y la validación lo marcan como error y ofrecen
@@ -81,6 +90,14 @@ Pasos del asistente:
    sensible, motores/voces/modelos TTS y colecciones (destinatarios
    redactados). Para adjuntarlo a un issue:
    `./scripts/upload_setup_report.sh` (o `--issue N` para comentar).
+
+`make engines` abre directamente la parte de motores TTS y guarda **solo**
+`deploy/.env` y `apps/gateway/.env` (no toca `news/.env` ni instala
+dependencias). Revisa contenedores y GPU, pide las credenciales obligatorias
+(Fish, OpenAI-compatible, HuggingFace cuando aplica) y confirma los términos de
+cada modelo. La aceptación queda registrada en `ENGINE_TERMS_ACCEPTED`, pero los
+repos gated de HuggingFace siguen necesitando el botón **Agree and access
+repository** en la web antes de que `HF_TOKEN` funcione.
 
 Además del flujo guiado, desde la pantalla inicial también puedes:
 

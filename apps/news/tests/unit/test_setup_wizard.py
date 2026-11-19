@@ -24,11 +24,13 @@ from setup_wizard.app import (
     _confirm_write_one,
     _run_steps_with_progress,
     _shared_key_conflicts,
+    _sync_engine_requirements,
     _unify_shared_key,
     _write_env,
     apply_screen,
     basic_screen,
     build_app,
+    build_engines_app,
     env_screen,
     final_screen,
     load_context,
@@ -47,7 +49,7 @@ from setup_wizard.curses_ui import App, MultiPicker, Row, Screen
 from setup_wizard.detect import Finding, Report, prerequisites
 from setup_wizard.envfile import EnvFile
 from setup_wizard.guide import GUIDE_PAGES
-from setup_wizard.plain import run_plain
+from setup_wizard.plain import run_engines, run_plain
 from setup_wizard.settings import (
     ENGINE_INFO,
     GPU_ENGINES,
@@ -60,14 +62,19 @@ from setup_wizard.settings import (
     config_requires_gpu,
     configured_engines,
     engine_option_label,
+    engine_remote_urls,
+    engine_terms,
     fields_for,
+    gateway_docker_extras,
     gateway_pip_extras,
     hash_password,
     join_multi,
     parse_engine_map,
     render_engine_map,
+    required_engine_keys,
     required_model_downloads,
     sections_for,
+    selected_engine_infos,
     split_multi,
     valid_language_code,
 )
@@ -287,6 +294,7 @@ def test_applying_a_routed_preset_updates_the_gateway(wizard_context: Context) -
     """Preset selection writes engine, routing, device and downloads together."""
     safe = next(preset for preset in ROUTED_PRESETS if preset.key == "safe_cpu")
     gateway = wizard_context.envs["gateway"]
+    deploy = wizard_context.envs["deploy"]
 
     _apply_routed_preset(wizard_context, safe)
 
@@ -295,6 +303,165 @@ def test_applying_a_routed_preset_updates_the_gateway(wizard_context: Context) -
     assert gateway.get("TTS_EXTRA_ENGINES") == safe.extra_engines
     assert gateway.get("TTS_MODEL_DOWNLOADS") == safe.model_downloads
     assert parse_engine_map(gateway.get("TTS_ENGINES")) == parse_engine_map(safe.engines)
+    assert deploy.get("GATEWAY_UV_EXTRAS") == gateway_docker_extras(
+        "routed", safe.engines, safe.extra_engines
+    )
+
+
+def test_engine_requirements_sync_profiles_gpu_and_sidecar_urls(
+    wizard_context: Context,
+) -> None:
+    """Selecting a sidecar engine enables its profile, GPU overlay and URL."""
+    gateway = wizard_context.envs["gateway"]
+    deploy = wizard_context.envs["deploy"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"qwen3_tts"}')
+    gateway.set("TTS_EXTRA_ENGINES", "")
+
+    _sync_engine_requirements(wizard_context)
+
+    assert "qwen3" in split_multi(deploy.get("COMPOSE_PROFILES"))
+    assert "news" in split_multi(deploy.get("COMPOSE_PROFILES"))
+    assert deploy.get("GATEWAY_GPU") == "1"
+    assert (
+        deploy.get("QWEN3_TTS_REMOTE_URL")
+        == engine_remote_urls("qwen3_tts")[("deploy", "QWEN3_TTS_REMOTE_URL")]
+    )
+    assert gateway.get("QWEN3_TTS_REMOTE_URL") == deploy.get("QWEN3_TTS_REMOTE_URL")
+
+    gateway.set("TTS_ENGINE", "pocket_tts")
+    gateway.set("TTS_ENGINES", "")
+    _sync_engine_requirements(wizard_context)
+
+    assert "qwen3" not in split_multi(deploy.get("COMPOSE_PROFILES"))
+    assert deploy.get("GATEWAY_GPU") == "0"
+    assert gateway.get("QWEN3_TTS_REMOTE_URL") == ""
+    assert deploy.get("QWEN3_TTS_REMOTE_URL") == ""
+
+
+def test_engine_requirements_preserve_custom_sidecar_urls(
+    wizard_context: Context,
+) -> None:
+    """The wizard never overwrites an operator-provided sidecar URL."""
+    gateway = wizard_context.envs["gateway"]
+    deploy = wizard_context.envs["deploy"]
+    custom = "http://voice.internal:9000/api/v1"
+    deploy.set("QWEN3_TTS_REMOTE_URL", custom)
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"qwen3_tts"}')
+
+    _sync_engine_requirements(wizard_context)
+    assert deploy.get("QWEN3_TTS_REMOTE_URL") == custom
+    assert gateway.get("QWEN3_TTS_REMOTE_URL").startswith("http://gateway-qwen3")
+
+    gateway.set("TTS_ENGINE", "pocket_tts")
+    gateway.set("TTS_ENGINES", "")
+    _sync_engine_requirements(wizard_context)
+
+    assert deploy.get("QWEN3_TTS_REMOTE_URL") == custom
+    assert gateway.get("QWEN3_TTS_REMOTE_URL") == ""
+
+
+def test_engine_catalog_exposes_credentials_terms_and_containers() -> None:
+    """The catalog drives credentials, acceptance and helper summaries."""
+    fish = ENGINE_INFO["fish_tts"]
+    qwen = ENGINE_INFO["qwen3_tts"]
+    chatterbox = ENGINE_INFO["chatterbox"]
+
+    assert required_engine_keys("fish_tts") == ["FISH_API_KEY"]
+    assert required_engine_keys("openai_tts") == ["OPENAI_TTS_BASE_URL"]
+    assert [info.key for info in engine_terms("qwen3_tts")] == ["qwen3_tts"]
+    assert qwen.services == ("gateway-qwen3",)
+    assert qwen.profiles == ("qwen3",)
+    assert fish.signup_url == "https://fish.audio/"
+    assert chatterbox.docker_supported is False
+    assert "pip install" in chatterbox.manual_install
+    assert [info.key for info in selected_engine_infos("routed", '{"es":"piper"}')] == ["piper"]
+
+
+def test_engines_app_opens_the_standalone_tts_screen(wizard_context: Context) -> None:
+    """``make engines`` starts on TTS with save/quit instead of the full wizard."""
+    app = build_engines_app(wizard_context)
+
+    assert app.current.title == "Engines TTS"
+    actions = {row.action for row in app.current.rows if row.kind == "button"}
+    assert "save_engines" in actions
+    assert "quit" in actions
+    assert "back" not in actions
+
+
+def test_plain_engines_writes_deploy_and_gateway_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The engines-only line flow leaves news alone and does not install deps."""
+    ctx = _context(_write_env_files(tmp_path))
+    ctx.envs["gateway"].set("TTS_ENGINE", "fish_tts")
+    answers = iter(["", "", "", "fish-key", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    monkeypatch.setattr(
+        "setup_wizard.plain.write_config_report",
+        lambda *_args, **_kwargs: tmp_path / "setup-report.md",
+    )
+
+    status = run_engines(ctx, assume_yes=True)
+
+    assert status == 0, capsys.readouterr().out
+    assert ctx.envs["deploy"].exists
+    assert ctx.envs["gateway"].exists
+    assert not ctx.envs["news"].exists
+    assert ctx.envs["news"].changed_keys() == []
+    assert ctx.envs["gateway"].get("FISH_API_KEY") == "fish-key"
+    assert "Paso" not in capsys.readouterr().out
+
+
+def test_plain_engines_never_auto_accepts_terms(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--yes`` confirms writes but not model licenses on the operator's behalf."""
+    ctx = _context(_write_env_files(tmp_path))
+    ctx.envs["gateway"].set("TTS_ENGINE", "chatterbox")
+    answers = iter(["", "", "", "n"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    monkeypatch.setattr(
+        "setup_wizard.plain.write_config_report",
+        lambda *_args, **_kwargs: tmp_path / "setup-report.md",
+    )
+
+    run_engines(ctx, assume_yes=True)
+
+    assert "chatterbox" not in split_multi(ctx.envs["deploy"].get("ENGINE_TERMS_ACCEPTED"))
+    assert ctx.envs["deploy"].exists
+    assert capsys.readouterr().out
+
+
+def test_validate_flags_engine_infrastructure_and_terms(tmp_path: Path) -> None:
+    """Stale profiles, missing GPU/URLs and unaccepted terms are reported."""
+    envs = _write_env_files(tmp_path)
+    gateway = envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"es":"qwen3_tts"}')
+    gateway.set("TTS_EXTRA_ENGINES", "")
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=False, profile="docker")
+    names = {check.name: check.status for check in checks}
+
+    assert names["perfiles engines"] == "warn"
+    assert names["gpu overlay"] == "warn"
+    assert names["qwen3 tts"] == "warn"
+    assert names["términos engines"] == "warn"
+
+    envs["deploy"].set("COMPOSE_PROFILES", "news,gateway,qwen3,omnivoice")
+    envs["deploy"].set("GATEWAY_GPU", "1")
+    gateway.set("TTS_ENGINE", "pocket_tts")
+    gateway.set("TTS_ENGINES", "")
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=False, profile="docker")
+    names = {check.name: check.status for check in checks}
+    assert names["perfiles engines"] == "warn"
+    assert names["gpu overlay"] == "warn"
 
 
 def test_profiles_only_touch_keys_that_exist() -> None:
@@ -425,6 +592,32 @@ def test_validate_accepts_a_consistent_configuration(tmp_path: Path) -> None:
     assert not [check for check in checks if check.status == "bad"], checks
     assert by_name["clave compartida"].status == "ok"
     assert by_name["acceso al panel"].status == "ok"
+
+
+def test_validate_reports_stale_gateway_docker_extras(tmp_path: Path) -> None:
+    """A Docker image that misses selected engines is flagged before rebuild."""
+    envs = _write_env_files(tmp_path)
+    gateway = envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"ca":"piper","_default":"pocket_tts"}')
+    gateway.set("TTS_EXTRA_ENGINES", "kokoro")
+    expected = gateway_docker_extras(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
+    envs["deploy"].set("GATEWAY_UV_EXTRAS", expected)
+
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+    assert by_name["docker extras"].status == "ok"
+    assert "piper" in by_name["docker extras"].detail
+
+    envs["deploy"].set("GATEWAY_UV_EXTRAS", "--extra piper")
+    checks = validation.validate(envs, Report(python="3.12.0"), will_write=True)
+    by_name = {check.name: check for check in checks}
+    assert by_name["docker extras"].status == "warn"
+    assert "make up" in by_name["docker extras"].detail
 
 
 def test_validate_flags_unknown_tts_engines(tmp_path: Path) -> None:
@@ -570,6 +763,11 @@ def test_config_report_masks_secrets_and_collection_recipients(
     assert "es-MX-JorgeNeural" in text
     assert "es-mx-male" in text
     assert "piper" in text
+    assert "Gateway Docker extras" in text
+    assert "--extra piper" in text
+    assert "GPU scope" in text
+    assert "Credentials" in text
+    assert "Terms" in text
     assert "## Collections" in text
     assert '"name": "tech"' in text
     assert "<redacted" in text
@@ -610,6 +808,27 @@ def test_plan_installs_gateway_extras_for_selected_engines() -> None:
     gateway_install = steps[3]
     assert gateway_install.command[-1] == ".[dev,piper,kokoro]"
     assert gateway_pip_extras("routed", '{"ca":"piper"}', "kokoro") == ["piper", "kokoro"]
+
+
+def test_gateway_docker_extras_keep_the_base_and_add_selected_engines() -> None:
+    """The Docker build keeps Piper and the old engines, then adds new ones."""
+    extras = gateway_docker_extras("routed", '{"ca":"piper"}', "kokoro,zono2")
+
+    assert extras.split() == [
+        "--extra",
+        "pocket_tts",
+        "--extra",
+        "edgetts",
+        "--extra",
+        "omnivoice",
+        "--extra",
+        "kokoro",
+        "--extra",
+        "piper",
+        "--extra",
+        "zono2",
+    ]
+    assert extras.count("--extra piper") == 1
 
 
 def test_gateway_defaults_are_opt_in() -> None:
@@ -1474,7 +1693,7 @@ def test_mode_screen_offers_basic_and_custom(wizard_context: Context) -> None:
     app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "basic")
     app.handle(10)
     assert app.current.title == "Paso 2 · configuración básica"
-    assert any(row.action == "llm_key" for row in app.current.rows)
+    assert {"llm_base", "llm_model", "llm_key"} <= {row.action for row in app.current.rows}
     assert any(row.action == "apply" for row in app.current.rows)
 
     app.pop()
@@ -1507,14 +1726,20 @@ def test_basic_config_applies_cpu_engines_and_generates_secrets(
     assert news.get("TTS_DEFAULT_BACKEND") == "omni_voice"
     assert news.get("TTS_VOICE") == "es-mx-male"
 
-    # The external LLM endpoint/model stay as they are on disk.
+    # The helper itself leaves the external LLM endpoint/model as they are on disk.
     assert news.get("LLM_API_BASE") == "http://host.docker.internal:8080/v1"
+    assert news.get("LLM_MODEL") == "openai/local-model"
     assert news.get("LLM_API_KEY") == ""
 
     # Internal secrets are minted and shared across the three files.
     assert len(deploy.get("GATEWAY_API_KEY")) == 64
     assert news.get("TTS_API_KEY") == deploy.get("GATEWAY_API_KEY")
     assert gateway.get("API_KEY") == deploy.get("GATEWAY_API_KEY")
+    assert deploy.get("GATEWAY_UV_EXTRAS") == gateway_docker_extras(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
     assert news.get("ADMIN_API_TOKEN")
     assert news.get("DOC_TTS_LINK_SECRET")
 
@@ -1531,6 +1756,31 @@ def test_basic_config_applies_cpu_engines_and_generates_secrets(
         profile="docker",
     )
     assert not any(check.status == "bad" for check in checks)
+
+
+def test_basic_screen_edits_llm_url_and_model(wizard_context: Context) -> None:
+    """The basic flow collects the external LLM URL and model, not just the key."""
+    app = build_app(wizard_context)
+    app.push(basic_screen(app, wizard_context))
+    screen = app.current
+    base_row = next(row for row in screen.rows if row.action == "llm_base")
+    model_row = next(row for row in screen.rows if row.action == "llm_model")
+
+    assert base_row.value == "http://host.docker.internal:8080/v1"
+    assert model_row.value == "openai/local-model"
+
+    base_row.value = "http://10.0.0.5:9000/v1"
+    screen.on_change(app, base_row)
+    model_row.value = "openai/my-model"
+    screen.on_change(app, model_row)
+    assert wizard_context.envs["news"].get("LLM_API_BASE") == "http://10.0.0.5:9000/v1"
+    assert wizard_context.envs["news"].get("LLM_MODEL") == "openai/my-model"
+
+    app.focus = next(i for i, row in enumerate(screen.rows) if row.action == "apply")
+    app.handle(10)
+    assert app.current.title == "Paso 4 · revisión"
+    changed = {name for name, _old, _new in wizard_context.envs["news"].diff_against_disk()}
+    assert {"LLM_API_BASE", "LLM_MODEL"} <= changed
 
 
 def test_basic_screen_accepts_an_empty_llm_key(wizard_context: Context) -> None:
@@ -1589,8 +1839,14 @@ def test_plain_mode_writes_the_three_files(tmp_path: Path, capsys: pytest.Captur
     news_env = ctx.envs["news"]
     assert news_env.exists
     assert news_env.get("TTS_API_BASE_URL") == "http://gateway:8000/api/v1"
+    gateway_env = ctx.envs["gateway"]
     assert ctx.envs["deploy"].exists
-    assert ctx.envs["gateway"].exists
+    assert gateway_env.exists
+    assert ctx.envs["deploy"].get("GATEWAY_UV_EXTRAS") == gateway_docker_extras(
+        gateway_env.get("TTS_ENGINE"),
+        gateway_env.get("TTS_ENGINES"),
+        gateway_env.get("TTS_EXTRA_ENGINES"),
+    )
     assert ctx.written
     out = capsys.readouterr().out
     assert "Paso 6 · validación" in out
@@ -1623,6 +1879,15 @@ def test_real_repository_templates_parse(tmp_path: Path) -> None:
         env = EnvFile.load(target, source)
         for field in fields_for(file_key):
             assert env.has(field.key), f"{rel} no menciona {field.key}"
+
+
+def test_deploy_template_documents_gateway_image_extras() -> None:
+    """The compose template carries the Docker extras used by the gateway build."""
+    repo = Path(__file__).resolve().parents[4]
+    source = repo / "deploy/.env.example"
+    env = EnvFile.load(source, source)
+
+    assert env.get("GATEWAY_UV_EXTRAS") == gateway_docker_extras("routed", "", "")
 
 
 def test_load_context_reads_the_repository() -> None:

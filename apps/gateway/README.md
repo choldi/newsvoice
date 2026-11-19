@@ -108,6 +108,13 @@ Los engines cloud son opt-in: `fish_tts` necesita `FISH_API_KEY` y
 proveedor lo exige). También puedes fijarlos por voz con
 `TTS_ENGINE=fish_tts` / `openai_tts`, o añadirlos a `TTS_EXTRA_ENGINES`.
 
+La imagen Docker instala los extras pip según `GATEWAY_UV_EXTRAS` (derivado por
+`make setup` desde los engines seleccionados). Si cambias `TTS_ENGINE`,
+`TTS_ENGINES` o `TTS_EXTRA_ENGINES` a mano, ejecuta `make up` para reconstruir
+el gateway con los paquetes necesarios. Los engines extra no ruteados son
+opcionales: si su paquete falta, el gateway arranca y los marca como no
+disponibles; los engines ruteados por idioma siguen siendo obligatorios.
+
 ## Endpoints principales
 
 ### Health

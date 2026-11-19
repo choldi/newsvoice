@@ -13,6 +13,7 @@ set -euo pipefail
 # Environment switches:
 #   GPU=1   add the deploy/docker-compose.gpu.yml overlay (gateway reserves the
 #           host GPU; requires nvidia-container-toolkit). Shape A on a GPU host.
+#           When GPU is unset, deploy/.env GATEWAY_GPU=1 enables it automatically.
 #   MODAL=1 run with --profile modal so the Modal narration worker starts too
 #           (parity with the pre-merge production stack).
 #   QWEN3=1 start the self-contained qwen3 sidecar (profile qwen3) and point the
@@ -47,6 +48,8 @@ if [[ "${SIDECARS:-0}" == "1" ]]; then
     OMNIVOICE=1
     echo "==> SIDECARS=1: enabling qwen3 + omnivoice sidecars and the GPU overlay"
 fi
+
+GPU="${GPU:-$(_read_env deploy/.env GATEWAY_GPU 0)}"
 
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
 export COMPOSE_FILE

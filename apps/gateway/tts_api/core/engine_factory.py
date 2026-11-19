@@ -119,12 +119,11 @@ def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngi
         engine_names.add("openai_tts")
     if settings.QWEN3_TTS_REMOTE_URL.strip():
         engine_names.add("qwen3_tts")
+    # Engines loaded only through TTS_EXTRA_ENGINES (or cloud/sidecar opt-ins)
+    # must not gate routed health. An engine explicitly routed to a language
+    # stays required, so a missing package is reported for the failed language.
     routed_names = set(routing.values())
-    optional_engines = {
-        name
-        for name in engine_names
-        if name in {"fish_tts", "openai_tts"} or (name == "qwen3_tts" and name not in routed_names)
-    }
+    optional_engines = engine_names - routed_names
 
     if not engine_names:
         raise ValueError("TTS_ENGINES no contiene ningún engine válido")

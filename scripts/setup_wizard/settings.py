@@ -19,6 +19,8 @@ __all__ = [
     "EngineInfo",
     "ENGINE_INFO",
     "GPU_ENGINES",
+    "GATEWAY_BASE_PIP_EXTRAS",
+    "GATEWAY_DEFAULT_UV_EXTRAS",
     "MODEL_OPTIONS",
     "ROUTED_PRESETS",
     "RoutedPreset",
@@ -34,8 +36,17 @@ __all__ = [
     "config_requires_gpu",
     "engine_info",
     "engine_option_label",
+    "engine_remote_urls",
+    "engine_requires_gpu",
+    "engine_services",
+    "engine_terms",
     "engine_voice_help",
+    "managed_compose_profiles",
+    "managed_remote_urls",
+    "required_engine_keys",
+    "selected_engine_infos",
     "fields_for",
+    "gateway_docker_extras",
     "gateway_pip_extras",
     "hash_password",
     "join_multi",
@@ -156,6 +167,20 @@ class EngineInfo:
         description: Short explanation of the engine and its limits.
         downloads: Local checkpoints the wizard can record for prefetch.
         voices: Stock voice ids accepted by the engine, when it has any.
+        profiles: Compose profiles that must be enabled for the engine.
+        services: Containers that implement the engine.
+        gpu_scope: ``gateway`` for inline GPU use, ``sidecar`` for a remote
+            GPU container, or empty when no GPU is involved.
+        deploy_url_key: Compose-level variable holding the sidecar URL.
+        gateway_url_key: Gateway-level variable holding the same URL.
+        remote_url: Managed internal URL used when the sidecar is selected.
+        required_keys: Credentials that must be present to use the engine.
+        optional_keys: Related credentials the requirements screen exposes.
+        terms_url: License or terms page shown before accepting the engine.
+        terms_required: Whether the operator must accept the terms in setup.
+        signup_url: Page where an API key or account can be obtained.
+        manual_install: Extra installation note when Docker cannot provide it.
+        docker_supported: Whether the gateway image can run the engine as-is.
     """
 
     key: str
@@ -166,6 +191,19 @@ class EngineInfo:
     description: str
     downloads: tuple[str, ...] = ()
     voices: tuple[str, ...] = ()
+    profiles: tuple[str, ...] = ()
+    services: tuple[str, ...] = ()
+    gpu_scope: str = ""
+    deploy_url_key: str = ""
+    gateway_url_key: str = ""
+    remote_url: str = ""
+    required_keys: tuple[str, ...] = ()
+    optional_keys: tuple[str, ...] = ()
+    terms_url: str = ""
+    terms_required: bool = False
+    signup_url: str = ""
+    manual_install: str = ""
+    docker_supported: bool = True
 
 
 @dataclass(frozen=True)
@@ -334,6 +372,10 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "Clonado local en CPU; no cubre catalán.",
         ("pocket_tts:es", "pocket_tts:en", "pocket_tts:fr"),
         _POCKET_VOICES,
+        optional_keys=("HF_TOKEN",),
+        terms_url="https://huggingface.co/kyutai/pocket-tts",
+        terms_required=True,
+        signup_url="https://huggingface.co/settings/tokens",
     ),
     "piper": EngineInfo(
         "piper",
@@ -349,6 +391,8 @@ ENGINE_INFO: dict[str, EngineInfo] = {
             "piper:fr_FR-siwis-medium",
         ),
         _PIPER_VOICES,
+        terms_url="https://huggingface.co/rhasspy/piper-voices",
+        terms_required=True,
     ),
     "kokoro": EngineInfo(
         "kokoro",
@@ -359,6 +403,8 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "Voces stock 82M en CPU; sin catalán ni clonado.",
         ("kokoro:hexgrad/Kokoro-82M",),
         _KOKORO_VOICES,
+        terms_url="https://huggingface.co/hexgrad/Kokoro-82M",
+        terms_required=True,
     ),
     "edgetts": EngineInfo(
         "edgetts",
@@ -403,6 +449,11 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "Clonado zero-shot y 23 idiomas; no cubre catalán.",
         ("chatterbox:ResembleAI/chatterbox",),
         _CHATTERBOX_VOICES,
+        gpu_scope="gateway",
+        terms_url="https://huggingface.co/ResembleAI/chatterbox",
+        terms_required=True,
+        manual_install="pip install chatterbox-tts en un host local",
+        docker_supported=False,
     ),
     "qwen3_tts": EngineInfo(
         "qwen3_tts",
@@ -416,6 +467,14 @@ ENGINE_INFO: dict[str, EngineInfo] = {
             "qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
             "qwen3_tts:Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         ),
+        profiles=("qwen3",),
+        services=("gateway-qwen3",),
+        gpu_scope="sidecar",
+        deploy_url_key="QWEN3_TTS_REMOTE_URL",
+        gateway_url_key="QWEN3_TTS_REMOTE_URL",
+        remote_url="http://gateway-qwen3:8000/api/v1",
+        terms_url="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        terms_required=True,
     ),
     "omnivoice": EngineInfo(
         "omnivoice",
@@ -426,6 +485,10 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "Engine GPU completo: stock, clonado, instruct y emociones.",
         ("omnivoice:ModelsLab/omnivoice-singing",),
         _OMNIVOICE_VOICES,
+        services=("gateway",),
+        gpu_scope="gateway",
+        terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
+        terms_required=True,
     ),
     "omnivoice_remote": EngineInfo(
         "omnivoice_remote",
@@ -436,6 +499,14 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "Proxy HTTP al sidecar OmniVoice; el sidecar necesita GPU.",
         (),
         _OMNIVOICE_VOICES,
+        profiles=("omnivoice",),
+        services=("gateway-omnivoice",),
+        gpu_scope="sidecar",
+        deploy_url_key="OMNIVOICE_REMOTE_URL",
+        gateway_url_key="OMNIVOICE_REMOTE_URL",
+        remote_url="http://gateway-omnivoice:8000",
+        terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
+        terms_required=True,
     ),
     "fish_tts": EngineInfo(
         "fish_tts",
@@ -444,6 +515,9 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         True,
         ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
         "Cloud con referencias stock y clones inline; requiere FISH_API_KEY.",
+        required_keys=("FISH_API_KEY",),
+        optional_keys=("FISH_MODEL", "FISH_API_BASE_URL"),
+        signup_url="https://fish.audio/",
     ),
     "openai_tts": EngineInfo(
         "openai_tts",
@@ -452,6 +526,9 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         False,
         ("es", "en"),
         "Endpoint cloud /audio/speech; requiere OPENAI_TTS_BASE_URL.",
+        required_keys=("OPENAI_TTS_BASE_URL",),
+        optional_keys=("OPENAI_TTS_API_KEY", "OPENAI_TTS_MODEL"),
+        signup_url="https://platform.openai.com/api-keys",
     ),
     "mock": EngineInfo(
         "mock",
@@ -599,6 +676,87 @@ def configured_engines(engine: str, engine_map: str, extra: str) -> list[str]:
 def config_requires_gpu(engine: str, engine_map: str, extra: str) -> bool:
     """Report whether the selection instantiates an engine that needs GPU."""
     return any(name in GPU_ENGINES for name in configured_engines(engine, engine_map, extra))
+
+
+# Profiles owned by the engine catalog. Shape tokens (news/gateway/modal) are
+# preserved when the wizard recomputes COMPOSE_PROFILES.
+MANAGED_SIDECAR_PROFILES = ("qwen3", "omnivoice")
+
+
+def selected_engine_infos(engine: str, engine_map: str = "", extra: str = "") -> list[EngineInfo]:
+    """Return catalog entries for every engine in the current selection."""
+    return [
+        ENGINE_INFO[name]
+        for name in configured_engines(engine, engine_map, extra)
+        if name in ENGINE_INFO
+    ]
+
+
+def engine_requires_gpu(engine: str, engine_map: str = "", extra: str = "") -> bool:
+    """Alias with an engine-centric name used by the requirements screen."""
+    return config_requires_gpu(engine, engine_map, extra)
+
+
+def engine_services(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
+    """Return the containers that implement the selected engines."""
+    services: list[str] = []
+    for info in selected_engine_infos(engine, engine_map, extra):
+        services.extend(info.services)
+    return list(dict.fromkeys(services))
+
+
+def required_engine_keys(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
+    """Return mandatory credentials for the selected engines."""
+    keys: list[str] = []
+    for info in selected_engine_infos(engine, engine_map, extra):
+        keys.extend(info.required_keys)
+    return list(dict.fromkeys(keys))
+
+
+def engine_terms(engine: str, engine_map: str = "", extra: str = "") -> list[EngineInfo]:
+    """Return selected engines whose terms must be accepted in setup."""
+    return [
+        info for info in selected_engine_infos(engine, engine_map, extra) if info.terms_required
+    ]
+
+
+def engine_remote_urls(
+    engine: str, engine_map: str = "", extra: str = ""
+) -> dict[tuple[str, str], str]:
+    """Return the managed sidecar URLs required by the selection."""
+    urls: dict[tuple[str, str], str] = {}
+    for info in selected_engine_infos(engine, engine_map, extra):
+        if not info.remote_url:
+            continue
+        if info.deploy_url_key:
+            urls[(DEPLOY, info.deploy_url_key)] = info.remote_url
+        if info.gateway_url_key:
+            urls[(GATEWAY, info.gateway_url_key)] = info.remote_url
+    return urls
+
+
+def managed_remote_urls() -> dict[tuple[str, str], str]:
+    """Return every sidecar URL the wizard is allowed to clear."""
+    urls: dict[tuple[str, str], str] = {}
+    for info in ENGINE_INFO.values():
+        if not info.remote_url:
+            continue
+        if info.deploy_url_key:
+            urls[(DEPLOY, info.deploy_url_key)] = info.remote_url
+        if info.gateway_url_key:
+            urls[(GATEWAY, info.gateway_url_key)] = info.remote_url
+    return urls
+
+
+def managed_compose_profiles(
+    current: str, engine: str, engine_map: str = "", extra: str = ""
+) -> str:
+    """Recompute sidecar profiles without disturbing shape tokens."""
+    kept = [token for token in split_multi(current) if token not in MANAGED_SIDECAR_PROFILES]
+    required: list[str] = []
+    for info in selected_engine_infos(engine, engine_map, extra):
+        required.extend(info.profiles)
+    return join_multi([*kept, *required])
 
 
 _NEWS_BACKEND_ENGINES = {
@@ -779,6 +937,23 @@ def gateway_pip_extras(engine: str, engine_map: str = "", extra: str = "") -> li
     return list(dict.fromkeys(extras))
 
 
+GATEWAY_BASE_PIP_EXTRAS = ("pocket_tts", "edgetts", "omnivoice", "kokoro", "piper")
+GATEWAY_DEFAULT_UV_EXTRAS = " ".join(f"--extra {name}" for name in GATEWAY_BASE_PIP_EXTRAS)
+
+
+def gateway_docker_extras(engine: str, engine_map: str = "", extra: str = "") -> str:
+    """Return the ``uv sync`` flags baked into the gateway Docker image.
+
+    The base engines stay available for existing deployments, while every
+    local engine selected in the wizard is added on top. Sidecars and cloud
+    engines do not map to gateway pip extras and are therefore ignored here.
+    """
+    names = list(
+        dict.fromkeys((*GATEWAY_BASE_PIP_EXTRAS, *gateway_pip_extras(engine, engine_map, extra)))
+    )
+    return " ".join(f"--extra {name}" for name in names)
+
+
 def valid_language_code(value: str) -> bool:
     """Return True for ISO 639-1/639-2 style language keys."""
     return bool(re.fullmatch(r"[a-z]{2,3}", value))
@@ -799,11 +974,20 @@ _FIELD_DETAILS: dict[tuple[str, str], str] = {
     ),
     (DEPLOY, "COMPOSE_PROFILES"): (
         "Servicios que levanta `make up`. Shape A (un host) usa news,gateway; "
-        "Shape B separa la app y el host GPU."
+        "Shape B separa la app y el host GPU. El asistente añade qwen3 y "
+        "omnivoice según los engines seleccionados."
+    ),
+    (DEPLOY, "GATEWAY_GPU"): (
+        "1 añade deploy/docker-compose.gpu.yml a make up y deploy.sh. El asistente "
+        "lo deriva de la selección TTS: cualquier engine GPU o sidecar lo activa."
+    ),
+    (DEPLOY, "ENGINE_TERMS_ACCEPTED"): (
+        "Engines cuyas licencias/términos confirmó el operador. Es bookkeeping del "
+        "setup: los repos gated de HuggingFace se aceptan además en la web."
     ),
     (DEPLOY, "QWEN3_TTS_REMOTE_URL"): (
         "Activa el sidecar qwen3. En Docker usa http://gateway-qwen3:8000/api/v1; "
-        "requiere GPU=1 y QWEN3=1 al desplegar."
+        "el asistente añade el perfil qwen3 y el overlay GPU automáticamente."
     ),
     (NEWS, "ADMIN_USERNAME"): (
         "Usuario del panel admin. Si lo defines, define también "
@@ -996,10 +1180,30 @@ _SECTIONS: list[Section] = [
                 file=DEPLOY,
                 key="COMPOSE_PROFILES",
                 label="Perfiles compose",
-                help="Shape A (un host) = news,gateway · Shape B = news (app) o gateway (GPU).",
-                kind="choice",
+                help="Shape A = news,gateway · Shape B = news o gateway. "
+                "El asistente añade qwen3/omnivoice si hacen falta.",
+                kind="multi",
                 default="news,gateway",
-                options=("news,gateway", "news", "gateway"),
+                options=("news", "gateway", "modal", "qwen3", "omnivoice"),
+            ),
+            Field(
+                file=DEPLOY,
+                key="GATEWAY_GPU",
+                label="Overlay GPU",
+                help="1 añade el overlay GPU al arrancar; se deriva de los engines.",
+                kind="choice",
+                default="0",
+                options=("0", "1"),
+            ),
+            Field(
+                file=DEPLOY,
+                key="ENGINE_TERMS_ACCEPTED",
+                label="Términos aceptados",
+                help="Engines cuyas licencias confirmaste; solo bookkeeping del setup.",
+                kind="multi",
+                default="",
+                options=tuple(ENGINE_INFO),
+                advanced=True,
             ),
             Field(
                 file=DEPLOY,
@@ -1446,9 +1650,9 @@ def profiles() -> list[Profile]:
 def basic_defaults(profile_key: str = "docker") -> dict[tuple[str, str], str]:
     """Return the non-LLM values applied by the basic setup mode.
 
-    The basic mode keeps every TTS engine that runs on CPU, routes each base
-    language to a local engine, and leaves the external LLM endpoint/model
-    untouched. The optional ``LLM_API_KEY`` is collected by the screen.
+    The basic mode keeps every TTS engine that runs on CPU and routes each base
+    language to a local engine. The external LLM URL, model and optional API
+    key are collected by the basic screen, so they stay out of these defaults.
     """
     profile = next((item for item in PROFILES if item.key == profile_key), PROFILES[0])
     values = {

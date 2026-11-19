@@ -22,6 +22,7 @@ from .settings import (
     config_requires_gpu,
     configured_engines,
     fields_for,
+    gateway_docker_extras,
     gateway_pip_extras,
     parse_engine_map,
     required_model_downloads,
@@ -163,19 +164,28 @@ def _env_table(key: str, env: EnvFile) -> list[str]:
 
 
 def _engine_table(engines: list[str]) -> list[str]:
-    """Render the capabilities of every configured gateway engine."""
+    """Render the capabilities and infrastructure needs of configured engines."""
     lines = [
-        "| Engine | Device | Cloning | Languages | Stock voices | Required models |",
-        "|---|---|---|---|---|---|",
+        "| Engine | Device | GPU scope | Profiles | Containers | Credentials | Terms | "
+        "Cloning | Languages | Stock voices | Required models |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for name in engines:
         info = ENGINE_INFO.get(name)
         if info is None:
-            lines.append(f"| `{name}` | `unknown` | `unknown` | `unknown` | `0` | `0` |")
+            lines.append(
+                f"| `{name}` | `unknown` | `unknown` | `unknown` | `unknown` | "
+                "`unknown` | `unknown` | `unknown` | `unknown` | `0` | `0` |"
+            )
             continue
         languages = "all" if info.languages == ("*",) else ",".join(info.languages)
+        profiles = ",".join(info.profiles) or "-"
+        services = ",".join(info.services) or "-"
+        keys = ",".join(info.required_keys) or "-"
+        terms = "yes" if info.terms_required else "-"
         lines.append(
-            f"| `{name}` | `{info.device}` | `{str(info.cloning).lower()}` | "
+            f"| `{name}` | `{info.device}` | `{info.gpu_scope or '-'}` | `{profiles}` | "
+            f"`{services}` | `{keys}` | `{terms}` | `{str(info.cloning).lower()}` | "
             f"`{languages}` | `{len(info.voices)}` | `{len(info.downloads)}` |"
         )
     return lines
@@ -293,6 +303,8 @@ def _tts_lines(envs: dict[str, EnvFile]) -> list[str]:
         f"`{', '.join(required_model_downloads(engine, engine_map, extra)) or '<none>'}`",
         "- Gateway pip extras: "
         f"`{', '.join(gateway_pip_extras(engine, engine_map, extra)) or '<none>'}`",
+        "- Gateway Docker extras: "
+        f"`{gateway_docker_extras(engine, engine_map, extra) or '<none>'}`",
     ]
     if routing:
         lines.append(

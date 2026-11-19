@@ -255,10 +255,15 @@ def validate(
         from .settings import (
             CLOUD_ENGINES,
             ENGINE_INFO,
+            MANAGED_SIDECAR_PROFILES,
             MODEL_OPTIONS,
             config_requires_gpu,
             configured_engines,
+            engine_terms,
+            gateway_docker_extras,
             parse_engine_map,
+            required_engine_keys,
+            selected_engine_infos,
             split_multi,
             valid_language_code,
         )
@@ -357,6 +362,33 @@ def validate(
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
         )
+        docker_extras = deploy.get("GATEWAY_UV_EXTRAS").strip() if deploy else ""
+        expected_extras = gateway_docker_extras(
+            engine,
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        )
+        if not docker_extras:
+            checks.append(
+                Check(
+                    "docker extras",
+                    "warn",
+                    "GATEWAY_UV_EXTRAS vacío: la imagen no incluirá los engines "
+                    "seleccionados; guarda el setup y ejecuta make up",
+                )
+            )
+        elif docker_extras != expected_extras:
+            checks.append(
+                Check(
+                    "docker extras",
+                    "warn",
+                    "GATEWAY_UV_EXTRAS no coincide con la selección TTS; "
+                    "vuelve a guardar el setup y ejecuta make up",
+                )
+            )
+        else:
+            checks.append(Check("docker extras", "ok", expected_extras))
+
         if config_requires_gpu(
             engine,
             gateway.get("TTS_ENGINES"),
@@ -395,34 +427,154 @@ def validate(
                 )
             )
 
-        if "fish_tts" in selected and not gateway.get("FISH_API_KEY").strip():
-            checks.append(Check("fish tts", "warn", "fish_tts seleccionado sin FISH_API_KEY"))
-        if "openai_tts" in selected and not gateway.get("OPENAI_TTS_BASE_URL").strip():
+        selected_infos = selected_engine_infos(
+            engine,
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        )
+        expected_profiles: list[str] = []
+        for info in selected_infos:
+            expected_profiles.extend(info.profiles)
+        expected_profiles = list(dict.fromkeys(expected_profiles))
+        profiles = split_multi(deploy.get("COMPOSE_PROFILES")) if deploy else []
+        missing_profiles = [name for name in expected_profiles if name not in profiles]
+        stale_profiles = [
+            name
+            for name in profiles
+            if name in MANAGED_SIDECAR_PROFILES and name not in expected_profiles
+        ]
+        if missing_profiles:
             checks.append(
                 Check(
-                    "openai tts",
+                    "perfiles engines",
                     "warn",
-                    "openai_tts seleccionado sin OPENAI_TTS_BASE_URL",
+                    "faltan perfiles Compose para los sidecars: "
+                    + ", ".join(missing_profiles)
+                    + "; ejecuta make engines y make up",
                 )
             )
-        if "qwen3_tts" in selected:
-            deploy_url = deploy.get("QWEN3_TTS_REMOTE_URL").strip() if deploy else ""
-            if not (gateway.get("QWEN3_TTS_REMOTE_URL").strip() or deploy_url):
+        elif stale_profiles:
+            checks.append(
+                Check(
+                    "perfiles engines",
+                    "warn",
+                    "perfiles de sidecar sin engine seleccionado: "
+                    + ", ".join(stale_profiles)
+                    + "; make engines los limpia",
+                )
+            )
+        elif expected_profiles:
+            checks.append(Check("perfiles engines", "ok", ", ".join(expected_profiles)))
+
+        if deploy is not None:
+            gpu_flag = deploy.get("GATEWAY_GPU").strip() or "0"
+            if config_requires_gpu(
+                engine,
+                gateway.get("TTS_ENGINES"),
+                gateway.get("TTS_EXTRA_ENGINES"),
+            ):
+                if gpu_flag != "1":
+                    checks.append(
+                        Check(
+                            "gpu overlay",
+                            "warn",
+                            "la selección necesita GPU pero GATEWAY_GPU != 1; "
+                            "make up no añadirá el overlay",
+                        )
+                    )
+                else:
+                    checks.append(Check("gpu overlay", "ok", "GATEWAY_GPU=1"))
+            elif gpu_flag == "1":
                 checks.append(
                     Check(
-                        "qwen3 tts",
+                        "gpu overlay",
                         "warn",
-                        "qwen3_tts seleccionado sin QWEN3_TTS_REMOTE_URL",
+                        "GATEWAY_GPU=1 sin engines GPU seleccionados",
                     )
                 )
-        if "omnivoice_remote" in selected and not gateway.get("OMNIVOICE_REMOTE_URL").strip():
-            checks.append(
-                Check(
-                    "omnivoice remoto",
-                    "warn",
-                    "omnivoice_remote seleccionado sin OMNIVOICE_REMOTE_URL",
+
+        for info in selected_infos:
+            if not info.docker_supported:
+                checks.append(
+                    Check(
+                        f"{info.key} docker",
+                        "warn",
+                        f"{info.key} no está en la imagen Docker; {info.manual_install}",
+                    )
                 )
+            if not info.remote_url:
+                continue
+            deploy_url = (
+                deploy.get(info.deploy_url_key).strip()
+                if deploy is not None and info.deploy_url_key
+                else ""
             )
+            gateway_url = gateway.get(info.gateway_url_key).strip() if info.gateway_url_key else ""
+            if info.key == "qwen3_tts":
+                if not (gateway_url or deploy_url):
+                    checks.append(
+                        Check(
+                            "qwen3 tts",
+                            "warn",
+                            "qwen3_tts seleccionado sin QWEN3_TTS_REMOTE_URL",
+                        )
+                    )
+                elif not deploy_url:
+                    checks.append(
+                        Check(
+                            "qwen3 tts",
+                            "warn",
+                            "falta deploy/QWEN3_TTS_REMOTE_URL: Docker no puede "
+                            "inyectar la URL del sidecar",
+                        )
+                    )
+                else:
+                    checks.append(Check("qwen3 tts", "ok", deploy_url))
+            elif info.key == "omnivoice_remote" and not gateway_url:
+                checks.append(
+                    Check(
+                        "omnivoice remoto",
+                        "warn",
+                        "omnivoice_remote seleccionado sin OMNIVOICE_REMOTE_URL",
+                    )
+                )
+
+        for key in required_engine_keys(
+            engine,
+            gateway.get("TTS_ENGINES"),
+            gateway.get("TTS_EXTRA_ENGINES"),
+        ):
+            if key == "FISH_API_KEY" and not gateway.get(key).strip():
+                checks.append(Check("fish tts", "warn", "fish_tts seleccionado sin FISH_API_KEY"))
+            elif key == "OPENAI_TTS_BASE_URL" and not gateway.get(key).strip():
+                checks.append(
+                    Check(
+                        "openai tts",
+                        "warn",
+                        "openai_tts seleccionado sin OPENAI_TTS_BASE_URL",
+                    )
+                )
+
+        if deploy is not None:
+            accepted = split_multi(deploy.get("ENGINE_TERMS_ACCEPTED"))
+            terms = engine_terms(
+                engine,
+                gateway.get("TTS_ENGINES"),
+                gateway.get("TTS_EXTRA_ENGINES"),
+            )
+            missing_terms = [info.label for info in terms if info.key not in accepted]
+            if missing_terms:
+                checks.append(
+                    Check(
+                        "términos engines",
+                        "warn",
+                        "faltan términos por aceptar: " + ", ".join(missing_terms),
+                    )
+                )
+            elif terms:
+                checks.append(
+                    Check("términos engines", "ok", ", ".join(info.label for info in terms))
+                )
 
         downloads = split_multi(gateway.get("TTS_MODEL_DOWNLOADS"))
         cloud_downloads = [name for name in downloads if name.split(":", 1)[0] in CLOUD_ENGINES]

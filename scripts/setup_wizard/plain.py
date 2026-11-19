@@ -18,6 +18,8 @@ from .app import (
     _mask,
     _shared_key_conflicts,
     _shown,
+    _sync_engine_requirements,
+    _sync_gateway_docker_extras,
     _sync_shared_key,
     _unify_shared_key,
     load_context,
@@ -25,10 +27,22 @@ from .app import (
 from .collections import ensure_example_collection
 from .config_report import write_config_report
 from .detect import detect, prerequisites
-from .settings import PROFILES, Field, fields_for
+from .settings import (
+    ENGINE_INFO,
+    PROFILES,
+    Field,
+    config_requires_gpu,
+    engine_terms,
+    fields_for,
+    join_multi,
+    required_engine_keys,
+    required_model_downloads,
+    selected_engine_infos,
+    split_multi,
+)
 from .util import REPO_ROOT
 
-__all__ = ["run_plain"]
+__all__ = ["run_engines", "run_plain"]
 
 _ORDER = ("deploy", "news", "gateway")
 _LINE = "-" * 68
@@ -264,6 +278,7 @@ def run_plain(
             env.set(field_.key, answer)
 
     _sync_shared_key(ctx)
+    _sync_gateway_docker_extras(ctx)
 
     # 4. review -------------------------------------------------------------
     _title("Paso 4 · revisión de cambios")
@@ -307,6 +322,191 @@ def run_plain(
         print(f"  Escrito: {', '.join(ctx.written) or 'nada'}")
 
     return _finish(ctx, write=saved, assume_yes=assume_yes)
+
+
+def _engine_field(key: str) -> Field | None:
+    """Return one gateway field used by the engines-only line flow."""
+    return next((field_ for field_ in fields_for("gateway") if field_.key == key), None)
+
+
+def _set_required_models(ctx: Context) -> None:
+    """Keep the mandatory model checkpoints in TTS_MODEL_DOWNLOADS."""
+    gateway = ctx.envs["gateway"]
+    engine = gateway.get("TTS_ENGINE")
+    engine_map = gateway.get("TTS_ENGINES")
+    extra = gateway.get("TTS_EXTRA_ENGINES")
+    required = required_model_downloads(engine, engine_map, extra)
+    current = split_multi(gateway.get("TTS_MODEL_DOWNLOADS"))
+    for model in required:
+        if model not in current:
+            current.append(model)
+    gateway.set("TTS_MODEL_DOWNLOADS", join_multi(current))
+
+
+def run_engines(ctx: Context | None = None, *, assume_yes: bool = False) -> int:
+    """Configure engines, containers, credentials and terms without the TUI."""
+    ctx = ctx or load_context()
+    gateway = ctx.envs["gateway"]
+    deploy = ctx.envs["deploy"]
+    _sync_engine_requirements(ctx)
+
+    _title("newsvoice · configuración de engines (modo sin TUI)")
+    print("  El asistente actualizará deploy/.env y gateway/.env; no toca news/.env.")
+
+    engine_options = [*ENGINE_INFO, "routed"]
+    current = gateway.get("TTS_ENGINE").strip() or "routed"
+    index = (
+        engine_options.index(current)
+        if current in engine_options
+        else engine_options.index("routed")
+    )
+    index = _choose("Engine principal", engine_options, index)
+    gateway.set("TTS_ENGINE", engine_options[index])
+
+    engine_field = _engine_field("TTS_ENGINES")
+    if engine_field is not None:
+        current = gateway.get(engine_field.key).strip() or engine_field.default
+        answer = _read(f"  Mapa idioma→engine [{current}]: ")
+        if answer:
+            gateway.set(engine_field.key, answer)
+
+    extra_field = _engine_field("TTS_EXTRA_ENGINES")
+    if extra_field is not None:
+        answer = _multi_prompt(extra_field, gateway.get(extra_field.key))
+        if answer not in ("q", "s"):
+            gateway.set(extra_field.key, answer)
+
+    _set_required_models(ctx)
+    if config_requires_gpu(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    ):
+        gateway.set("TTS_DEVICE", "cuda:0")
+    _sync_gateway_docker_extras(ctx)
+    _sync_engine_requirements(ctx)
+
+    infos = selected_engine_infos(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
+    _title("Requisitos de la selección")
+    if not infos:
+        print("  Sin engines seleccionados.")
+    for info in infos:
+        needs = {"gateway": "gateway principal", "sidecar": "sidecar GPU"}.get(
+            info.gpu_scope, "sin GPU"
+        )
+        services = ", ".join(info.services) or "sin contenedor"
+        profiles = ", ".join(info.profiles) or "sin perfil"
+        print(f"  {info.label}: {info.device} · {needs} · {services} · {profiles}")
+        if not info.docker_supported:
+            print(f"    ⚠ Docker no incluye este engine: {info.manual_install}")
+    print(
+        f"  GATEWAY_GPU={deploy.get('GATEWAY_GPU') or '0'} · COMPOSE_PROFILES="
+        f"{deploy.get('COMPOSE_PROFILES') or '(vacío)'}"
+    )
+
+    keys: list[str] = []
+    for info in infos:
+        keys.extend(info.required_keys)
+        keys.extend(info.optional_keys)
+    required_keys = required_engine_keys(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
+    if keys:
+        _title("Credenciales y API")
+        for key in list(dict.fromkeys(keys)):
+            field_ = _engine_field(key)
+            if field_ is None:
+                continue
+            current = gateway.get(key).strip() or field_.default
+            shown = _mask(current) if field_.kind in ("secret", "password") else current
+            label = field_.label + (" (obligatoria)" if key in required_keys else " (opcional)")
+            print(f"\n  {label}  ({field_.key})")
+            print(f"    {field_.help}")
+            answer = _read(f"    [{shown or 'vacío'}] ")
+            if answer:
+                gateway.set(key, answer)
+
+    accepted = split_multi(deploy.get("ENGINE_TERMS_ACCEPTED"))
+    terms = engine_terms(
+        gateway.get("TTS_ENGINE"),
+        gateway.get("TTS_ENGINES"),
+        gateway.get("TTS_EXTRA_ENGINES"),
+    )
+    if terms:
+        _title("Términos y licencias")
+        for info in terms:
+            print(f"  {info.label}: {info.terms_url or 'sin URL declarada'}")
+            if info.key in accepted:
+                print("    ya aceptado")
+                continue
+            if _confirm(
+                f"¿Confirmas que aceptas los términos de {info.label}? [s/N]:",
+                assume_yes=False,
+            ):
+                accepted.append(info.key)
+    deploy.set("ENGINE_TERMS_ACCEPTED", join_multi(accepted))
+
+    _sync_gateway_docker_extras(ctx)
+    _sync_engine_requirements(ctx)
+    _title("Cambios en deploy/.env y apps/gateway/.env")
+    total = 0
+    for key in ("deploy", "gateway"):
+        changes = ctx.envs[key].diff_against_disk()
+        if not changes:
+            print(f"  {ctx.envs[key].key_path}: sin cambios")
+            continue
+        print(f"  {ctx.envs[key].key_path}:")
+        for name, old, new in changes:
+            print(f"    {name}: {_shown(name, old)} → {_shown(name, new)}")
+        total += len(changes)
+    if total == 0:
+        print("  No hay nada que escribir.")
+
+    saved = False
+    if _confirm("¿Escribir deploy/.env y apps/gateway/.env? [s/N]:", assume_yes=assume_yes):
+        saved = True
+        for key in ("deploy", "gateway"):
+            env = ctx.envs[key]
+            if not env.changed_keys() and env.exists:
+                continue
+            backup = env.write()
+            ctx.written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
+        print(f"  Escrito: {', '.join(ctx.written) or 'nada'}")
+
+    _title("Validación")
+    checks = validation.validate(ctx.envs, ctx.report, will_write=saved, profile=ctx.profile.key)
+    symbols = {"ok": "✓", "warn": "⚠", "bad": "✗"}
+    for check in checks:
+        print(f"  {symbols.get(check.status, '·')} {check.name}: {check.detail}")
+    errors = sum(1 for check in checks if check.status == "bad")
+    print(f"\n  {len(checks)} comprobaciones · {errors} error(es)")
+    if saved:
+        try:
+            report_path = write_config_report(
+                ctx.envs,
+                ctx.report,
+                profile=ctx.profile,
+                method=ctx.method,
+                checks=checks,
+                written=ctx.written,
+            )
+        except OSError as exc:
+            print(f"  ⚠ No se pudo escribir el informe de setup: {exc}")
+        else:
+            ctx.report_path = str(report_path)
+            try:
+                report_label = report_path.relative_to(REPO_ROOT)
+            except ValueError:
+                report_label = report_path
+            print(f"  Informe sin secretos: {report_label}")
+    print("  Siguientes pasos:  make up · make health · make engines")
+    return 1 if errors else 0
 
 
 def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
@@ -358,7 +558,11 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
             print(f"  ⚠ No se pudo escribir el informe de setup: {exc}")
         else:
             ctx.report_path = str(report_path)
-            print(f"  Informe sin secretos: {report_path.relative_to(REPO_ROOT)}")
+            try:
+                report_label = report_path.relative_to(REPO_ROOT)
+            except ValueError:
+                report_label = report_path
+            print(f"  Informe sin secretos: {report_label}")
     if ctx.written:
         print("  Siguientes pasos:  make up · make status · make urls")
     return 1 if errors else 0

@@ -158,6 +158,31 @@ def test_create_routed_engine_with_extra_engines():
     )
     assert engine.name.startswith("routed(")
     assert set(engine._engines) == {"mock", "omnivoice_remote"}
+    assert engine._optional_engines == {"omnivoice_remote"}
+
+
+def test_routed_extra_piper_is_optional(monkeypatch):
+    """Pipers listed only as extra engines cannot break routed health."""
+    monkeypatch.setenv("FISH_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "")
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "")
+
+    engine = _create_routed_engine('{"es":"mock","_default":"mock"}', extra_engines="piper")
+
+    assert "piper" in engine._engines
+    assert engine._optional_engines == {"piper"}
+
+
+def test_routed_keeps_piper_required_when_routed(monkeypatch):
+    """A language routed to Piper makes it mandatory for that language."""
+    monkeypatch.setenv("FISH_API_KEY", "")
+    monkeypatch.setenv("OPENAI_TTS_BASE_URL", "")
+    monkeypatch.setenv("QWEN3_TTS_REMOTE_URL", "")
+
+    engine = _create_routed_engine('{"ca":"piper","_default":"mock"}', extra_engines="")
+
+    assert "piper" in engine._engines
+    assert "piper" not in engine._optional_engines
 
 
 def test_routed_adds_configured_cloud_engines(monkeypatch):

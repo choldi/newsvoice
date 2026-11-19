@@ -34,19 +34,27 @@ from .settings import (
     config_requires_gpu,
     configured_engines,
     engine_option_label,
+    engine_remote_urls,
+    engine_services,
+    engine_terms,
     fields_for,
+    gateway_docker_extras,
     gateway_pip_extras,
     join_multi,
+    managed_compose_profiles,
+    managed_remote_urls,
     parse_engine_map,
     render_engine_map,
+    required_engine_keys,
     required_model_downloads,
     sections_for,
+    selected_engine_infos,
     split_multi,
     valid_language_code,
 )
 from .util import REPO_ROOT, env_paths, generate_secret
 
-__all__ = ["Context", "build_app", "load_context"]
+__all__ = ["Context", "build_app", "build_engines_app", "load_context"]
 
 _ORDER = ("deploy", "news", "gateway")
 
@@ -220,10 +228,9 @@ def _fields(file_key: str) -> list[Field]:
 def _apply_basic_config(ctx: Context) -> None:
     """Stage the basic profile: CPU engines, internal secrets, external LLM.
 
-    The endpoint/model of the external LLM are left as they are on disk; only
-    an optional API key entered on the basic screen is written. Missing
-    internal secrets are minted here so the gateway and admin panel are not
-    left open.
+    The endpoint, model and optional API key are collected by the basic screen
+    and staged before this helper runs. Missing internal secrets are minted
+    here so the gateway and admin panel are not left open.
     """
     docker = next((profile for profile in PROFILES if profile.key == "docker"), PROFILES[0])
     ctx.profile = docker
@@ -242,6 +249,8 @@ def _apply_basic_config(ctx: Context) -> None:
         if env is not None and not env.get(key).strip():
             env.set(key, generate_secret())
     _sync_shared_key(ctx)
+    _sync_gateway_docker_extras(ctx)
+    _sync_engine_requirements(ctx)
 
 
 def _sync_shared_key(ctx: Context) -> None:
@@ -256,6 +265,47 @@ def _sync_shared_key(ctx: Context) -> None:
         if env.original(key) and env.original(key) != shared:
             continue  # operator wrote a different value on purpose
         env.set(key, shared)
+
+
+def _sync_gateway_docker_extras(ctx: Context) -> None:
+    """Keep the gateway image extras aligned with the selected engines."""
+    deploy = ctx.envs.get("deploy")
+    if deploy is None:
+        return
+    engine, engine_map, extra = _gateway_selection(ctx)
+    extras = gateway_docker_extras(engine, engine_map, extra)
+    if deploy.get("GATEWAY_UV_EXTRAS").strip() != extras:
+        deploy.set("GATEWAY_UV_EXTRAS", extras)
+
+
+def _sync_engine_requirements(ctx: Context) -> None:
+    """Keep Compose profiles, GPU overlay and sidecar URLs aligned with TTS."""
+    deploy = ctx.envs.get("deploy")
+    if deploy is None:
+        return
+    engine, engine_map, extra = _gateway_selection(ctx)
+
+    profiles = managed_compose_profiles(deploy.get("COMPOSE_PROFILES"), engine, engine_map, extra)
+    if deploy.get("COMPOSE_PROFILES").strip() != profiles:
+        deploy.set("COMPOSE_PROFILES", profiles)
+
+    gpu = "1" if config_requires_gpu(engine, engine_map, extra) else "0"
+    if deploy.get("GATEWAY_GPU").strip() != gpu:
+        deploy.set("GATEWAY_GPU", gpu)
+
+    required = engine_remote_urls(engine, engine_map, extra)
+    for (file_key, key), default in managed_remote_urls().items():
+        env = ctx.envs.get(file_key)
+        if env is None:
+            continue
+        current = env.get(key).strip()
+        target = required.get((file_key, key), "")
+        if target:
+            if not current or current == default:
+                if current != target:
+                    env.set(key, target)
+        elif current == default:
+            env.set(key, "")
 
 
 def _changes(ctx: Context) -> dict[str, list[tuple[str, str, str]]]:
@@ -592,7 +642,7 @@ def mode_screen(app: App, ctx: Context) -> Screen:
             app_.pop()
             return
         if row.action == "basic":
-            app_.say("Configuración básica: solo se añade la clave del LLM si la necesitas")
+            app_.say("Configuración básica: revisa URL, modelo y clave del LLM")
             app_.push(basic_screen(app_, ctx))
             return
         if row.action == "custom":
@@ -610,8 +660,23 @@ def mode_screen(app: App, ctx: Context) -> Screen:
 
 
 def basic_screen(app: App, ctx: Context) -> Screen:
-    """Build the basic setup summary plus the optional LLM API key."""
+    """Build the basic setup summary plus the external LLM connection."""
     news = ctx.envs["news"]
+    llm_fields = {field.key: field for field in _fields("news")}
+    llm_base = Row(
+        "text",
+        label="URL LLM",
+        value=_value_for(ctx, llm_fields["LLM_API_BASE"]),
+        help="Endpoint OpenAI-compatible. En Docker usa host.docker.internal, no localhost.",
+        action="llm_base",
+    )
+    llm_model = Row(
+        "text",
+        label="Modelo LLM",
+        value=_value_for(ctx, llm_fields["LLM_MODEL"]),
+        help="Id exacto del modelo servido por la URL anterior (/v1/models).",
+        action="llm_model",
+    )
     llm_key = Row(
         "secret",
         label="Clave API LLM (opcional)",
@@ -627,10 +692,10 @@ def basic_screen(app: App, ctx: Context) -> Screen:
         ),
         Row("note", label="Engines: pocket_tts (es/en/fr), piper (ca), kokoro y edgetts extra."),
         Row("note", label="TTS_DEVICE=cpu · sin sidecars GPU · se generan las claves internas."),
-        Row(
-            "note",
-            label="LLM externo: no se tocan endpoint ni modelo; la clave es opcional.",
-        ),
+        Row("note", label="LLM externo: configura la URL y el modelo; la clave es opcional."),
+        Row("note", label=""),
+        llm_base,
+        llm_model,
         Row("note", label=""),
         llm_key,
         Row("note", label=""),
@@ -639,23 +704,32 @@ def basic_screen(app: App, ctx: Context) -> Screen:
     ]
 
     def on_change(app_: App, row: Row) -> None:
-        if row.action == "llm_key":
-            news.set("LLM_API_KEY", row.value.strip())
+        keys = {
+            "llm_base": "LLM_API_BASE",
+            "llm_model": "LLM_MODEL",
+            "llm_key": "LLM_API_KEY",
+        }
+        key = keys.get(row.action)
+        if key is not None:
+            news.set(key, row.value.strip())
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
             return
         if row.action == "apply":
+            news.set("LLM_API_BASE", llm_base.value.strip())
+            news.set("LLM_MODEL", llm_model.value.strip())
+            news.set("LLM_API_KEY", llm_key.value.strip())
             _apply_basic_config(ctx)
             app_.say("Configuración básica aplicada: revisa el diff", "ok")
             app_.push(review_screen(app_, ctx))
 
     return Screen(
         title="Paso 2 · configuración básica",
-        subtitle="Resumen de valores y clave LLM opcional",
+        subtitle="Valores CPU y conexión del LLM externo",
         rows=rows,
-        footer="F1 Ayuda   Enter Aplicar   Esc Atrás   F10 Salir",
+        footer="F1 Ayuda   Enter Editar   Esc Atrás   F10 Salir",
         progress="2/6",
         on_change=on_change,
         on_activate=activate,
@@ -903,6 +977,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
         if file_key == "gateway" and field_.key.startswith("TTS_"):
             _apply_gpu_lock(app_, ctx, field_rows, gpu_warning)
             _sync_required_models(ctx, field_rows)
+            _sync_gateway_docker_extras(ctx)
+            _sync_engine_requirements(ctx)
         if file_key == "news" and field_.key == "TTS_DEFAULT_BACKEND":
             _sync_news_tts_options(ctx, field_rows, tts_hint)
 
@@ -924,6 +1000,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
                 app_.info(f"{target.key_path} · {len(pending)} cambio(s)", *lines)
             return
         if row.action == "save":
+            _sync_gateway_docker_extras(ctx)
+            _sync_engine_requirements(ctx)
             if not env.changed_keys():
                 app_.say("Sin cambios que escribir en este archivo", "")
                 return
@@ -931,6 +1009,8 @@ def env_screen(app: App, ctx: Context, file_key: str, *, edit_mode: bool = False
             return
         if row.action == "next":
             _sync_shared_key(ctx)
+            _sync_gateway_docker_extras(ctx)
+            _sync_engine_requirements(ctx)
             if env.changed_keys():
                 ok, _backup, _names = _write_env(app_, env, reload=True)
                 if not ok:
@@ -1124,9 +1204,11 @@ def _apply_routed_preset(ctx: Context, preset: RoutedPreset) -> None:
     gateway.set("TTS_EXTRA_ENGINES", preset.extra_engines)
     gateway.set("TTS_DEVICE", preset.device)
     gateway.set("TTS_MODEL_DOWNLOADS", preset.model_downloads)
+    _sync_gateway_docker_extras(ctx)
+    _sync_engine_requirements(ctx)
 
 
-def _open_tts_presets(app: App, ctx: Context, *, edit_mode: bool) -> None:
+def _open_tts_presets(app: App, ctx: Context, *, edit_mode: bool, standalone: bool = False) -> None:
     by_label = {preset.label: preset for preset in ROUTED_PRESETS}
     labels = list(by_label)
 
@@ -1134,7 +1216,7 @@ def _open_tts_presets(app: App, ctx: Context, *, edit_mode: bool) -> None:
         preset = by_label[label]
         app_.close_modal()
         _apply_routed_preset(ctx, preset)
-        app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode))
+        app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode, standalone=standalone))
         app_.say(f"Preset aplicado: {preset.label}", "ok")
 
     app.modal = Picker(
@@ -1151,9 +1233,9 @@ def _back_to_gateway(app: App, ctx: Context, *, edit_mode: bool) -> None:
     app.replace(env_screen(app, ctx, "gateway", edit_mode=edit_mode))
 
 
-def _back_to_tts(app: App, ctx: Context, *, edit_mode: bool) -> None:
+def _back_to_tts(app: App, ctx: Context, *, edit_mode: bool, standalone: bool = False) -> None:
     app.pop()
-    app.replace(tts_screen(app, ctx, edit_mode=edit_mode))
+    app.replace(tts_screen(app, ctx, edit_mode=edit_mode, standalone=standalone))
 
 
 def _tts_catalog_lines() -> list[str]:
@@ -1178,16 +1260,231 @@ def _tts_help_lines() -> list[str]:
         "El preset CPU seguro usa pocket_tts/piper/kokoro y no requiere GPU.",
         "TTS_MODEL_DOWNLOADS precarga los checkpoints del engine elegido; "
         "el asistente los marca y bloquea.",
+        "GATEWAY_UV_EXTRAS se deriva de los engines y añade sus extras pip a la "
+        "imagen Docker; reconstruye con make up.",
         "Los engines sin voces stock necesitan una voz clonada o un proveedor.",
         "Los presets y el editor de mapa modifican el gateway/.env en memoria; "
         "guarda desde la pantalla de gateway.",
     ]
 
 
-def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
+def _selected_engine_requirements(ctx: Context) -> tuple[list[str], list[str], bool]:
+    """Return profiles, services and whether the selection needs a GPU."""
+    engine, engine_map, extra = _gateway_selection(ctx)
+    profiles: list[str] = []
+    for info in selected_engine_infos(engine, engine_map, extra):
+        profiles.extend(info.profiles)
+    services = engine_services(engine, engine_map, extra)
+    return list(dict.fromkeys(profiles)), services, config_requires_gpu(engine, engine_map, extra)
+
+
+def _requirement_summary(ctx: Context) -> str:
+    """Render the one-line engine infrastructure summary used by the TTS screen."""
+    profiles, services, gpu = _selected_engine_requirements(ctx)
+    parts = [f"GPU {'sí' if gpu else 'no'}"]
+    if services:
+        parts.append("contenedores: " + ", ".join(services))
+    if profiles:
+        parts.append("perfiles: " + ", ".join(profiles))
+    if not services:
+        parts.append("sin sidecars")
+    return " · ".join(parts)
+
+
+def _accepted_terms(ctx: Context) -> list[str]:
+    """Return the engine terms explicitly accepted by the operator."""
+    deploy = ctx.envs.get("deploy")
+    return split_multi(deploy.get("ENGINE_TERMS_ACCEPTED")) if deploy else []
+
+
+def _store_accepted_terms(ctx: Context, accepted: list[str]) -> None:
+    """Persist the accepted terms list in deploy/.env."""
+    deploy = ctx.envs.get("deploy")
+    if deploy is not None:
+        deploy.set("ENGINE_TERMS_ACCEPTED", join_multi(accepted))
+
+
+def _gateway_field(key: str) -> Field | None:
+    """Return the gateway field definition for ``key`` when it exists."""
+    return next((field_ for field_ in fields_for("gateway") if field_.key == key), None)
+
+
+def _engine_credential_rows(ctx: Context) -> list[Row]:
+    """Build rows for the credentials relevant to the selected engines."""
+    gateway = ctx.envs["gateway"]
+    engine, engine_map, extra = _gateway_selection(ctx)
+    keys: list[str] = []
+    for info in selected_engine_infos(engine, engine_map, extra):
+        keys.extend(info.required_keys)
+        keys.extend(info.optional_keys)
+    rows: list[Row] = []
+    for key in list(dict.fromkeys(keys)):
+        field_ = _gateway_field(key)
+        if field_ is None:
+            continue
+        required = key in required_engine_keys(engine, engine_map, extra)
+        value = _value_for(ctx, field_)
+        present = bool(gateway.get(key).strip())
+        status = "obligatoria y pendiente" if required and not present else ""
+        rows.append(
+            Row(
+                kind="password" if field_.kind == "password" else field_.kind,
+                label=field_.label + (" (obligatoria)" if required else " (opcional)"),
+                value=value,
+                help=field_.help,
+                options=list(field_.options),
+                default=field_.default,
+                generate=field_.generate,
+                secret=field_.kind in ("secret", "password"),
+                source=field_.source,
+                action=f"env:{key}",
+                result="warn" if status else ("ok" if present else ""),
+            )
+        )
+        if status:
+            rows.append(Row("note", label=f"  {field_.key}: {status}", result="warn"))
+    if not rows:
+        rows.append(Row("note", label="La selección actual no necesita credenciales de proveedor."))
+    return rows
+
+
+def engine_requirements_screen(
+    app: App,
+    ctx: Context,
+    *,
+    edit_mode: bool = False,
+    standalone: bool = False,
+) -> Screen:
+    """Show containers, GPU, credentials and terms for the selected engines."""
+    gateway = ctx.envs["gateway"]
+    deploy = ctx.envs["deploy"]
+
+    def build() -> list[Row]:
+        engine, engine_map, extra = _gateway_selection(ctx)
+        infos = selected_engine_infos(engine, engine_map, extra)
+        profiles, services, gpu = _selected_engine_requirements(ctx)
+        accepted = _accepted_terms(ctx)
+        rows: list[Row] = [
+            Row("note", label="Requisitos derivados de la selección actual:"),
+            Row("note", label=f"  GPU: {'sí' if gpu else 'no'} · " + _requirement_summary(ctx)),
+        ]
+        if not infos:
+            rows.append(Row("note", label="No hay engines seleccionados.", result="warn"))
+        for info in infos:
+            scope = {"gateway": "gateway principal", "sidecar": "sidecar GPU"}.get(
+                info.gpu_scope, "sin GPU"
+            )
+            rows.append(
+                Row(
+                    "note",
+                    label=f"  {info.label}: {info.device} · {scope}"
+                    + (f" · perfiles: {', '.join(info.profiles)}" if info.profiles else "")
+                    + (f" · servicios: {', '.join(info.services)}" if info.services else ""),
+                )
+            )
+            if not info.docker_supported:
+                rows.append(
+                    Row(
+                        "note",
+                        label="    Docker no incluye este engine; " + info.manual_install,
+                        result="warn",
+                    )
+                )
+        rows.append(Row("note", label=""))
+        rows.append(Row("heading", label="Credenciales y API"))
+        rows.extend(_engine_credential_rows(ctx))
+        rows.append(Row("note", label=""))
+        rows.append(Row("heading", label="Términos y licencias"))
+        terms = engine_terms(engine, engine_map, extra)
+        if not terms:
+            rows.append(Row("note", label="La selección no exige aceptación explícita."))
+        for info in terms:
+            rows.append(
+                Row(
+                    "bool",
+                    label=f"Acepto los términos de {info.label}",
+                    value="true" if info.key in accepted else "false",
+                    help=info.terms_url or "Sin URL de términos declarada.",
+                    action=f"terms:{info.key}",
+                )
+            )
+            if info.terms_url:
+                rows.append(Row("note", label=f"  {info.terms_url}"))
+            if info.signup_url:
+                rows.append(Row("note", label=f"  Cuenta/clave: {info.signup_url}"))
+        for info in infos:
+            if info.signup_url and info not in terms:
+                rows.append(
+                    Row("note", label=f"  {info.label}: obtén la clave en {info.signup_url}")
+                )
+        rows.append(Row("note", label=""))
+        profiles = deploy.get("COMPOSE_PROFILES") or "(vacío)"
+        rows.append(Row("note", label=f"Perfiles que se escribirán: {profiles}"))
+        if standalone:
+            rows.append(Row("button", label="Guardar engines", action="save_engines"))
+        rows.append(Row("button", label="Volver a engines", action="back"))
+        return rows
+
+    def on_change(app_: App, row: Row) -> None:
+        if row.action.startswith("env:"):
+            key = row.action.split(":", 1)[1]
+            value = row.value.strip() if row.secret else row.value
+            gateway.set(key, value)
+            app_.say(f"{key} guardado en memoria")
+            return
+        if row.action.startswith("terms:"):
+            key = row.action.split(":", 1)[1]
+            accepted = _accepted_terms(ctx)
+            if row.value.strip().lower() in ("true", "1", "yes"):
+                accepted.append(key)
+            else:
+                accepted = [name for name in accepted if name != key]
+            _store_accepted_terms(ctx, accepted)
+            app_.say(
+                f"Términos de {key} {'aceptados' if key in accepted else 'retirados'} en memoria",
+                "ok" if key in accepted else "warn",
+            )
+
+    def on_enter(app_: App) -> None:
+        app_.current.rows = build()
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "save_engines":
+            app_.modal = _confirm_engine_write(app_, ctx)
+
+    return Screen(
+        title="Requisitos de engines",
+        subtitle="Contenedores, GPU, credenciales y términos",
+        rows=build(),
+        footer="F1 Ayuda   Enter Editar   a Avanzados   Esc Atrás   F10 Salir",
+        on_change=on_change,
+        on_enter=on_enter,
+        on_activate=activate,
+        on_help=lambda app_: app_.info(
+            "Requisitos de engines",
+            "El asistente añade perfiles Compose y URLs de sidecar automáticamente.",
+            "GATEWAY_GPU=1 añade el overlay GPU al arrancar.",
+            "Las claves pendientes avisan pero no bloquean el guardado.",
+            "Los términos gated de HuggingFace se aceptan también en la web.",
+        ),
+    )
+
+
+def tts_screen(
+    app: App,
+    ctx: Context,
+    *,
+    edit_mode: bool = False,
+    standalone: bool = False,
+) -> Screen:
     """Build the guided TTS engine, routing and model screen."""
     gateway = ctx.envs["gateway"]
+    _sync_engine_requirements(ctx)
     warning = Row("note", label="", result="")
+    requirement_row = Row("note", label="Requisitos: " + _requirement_summary(ctx), result="ok")
     engine = gateway.get("TTS_ENGINE").strip() or "routed"
     engine_row = Row(
         "choice",
@@ -1250,11 +1547,23 @@ def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
         Row("heading", label="Modelos locales"),
         models_row,
         Row("note", label=""),
+        Row("heading", label="Requisitos de infraestructura"),
+        requirement_row,
+        Row("button", label="Revisar contenedores, API y términos…", action="requirements"),
+        Row("note", label=""),
         Row("heading", label="Seguridad"),
         Row("button", label="Aplicar configuración segura (CPU)", action="safe"),
         Row("button", label="Explicación de la configuración TTS", action="explain"),
-        Row("button", label="Volver a gateway", action="back"),
     ]
+    if standalone:
+        rows.extend(
+            [
+                Row("button", label="Guardar engines", action="save_engines"),
+                Row("button", label="Salir sin guardar", action="quit"),
+            ]
+        )
+    else:
+        rows.append(Row("button", label="Volver a gateway", action="back"))
     rows_by_key = {
         "TTS_ENGINE": engine_row,
         "TTS_DEVICE": device_row,
@@ -1278,37 +1587,57 @@ def tts_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
         if key in {"TTS_ENGINE", "TTS_DEVICE", "TTS_ENGINES", "TTS_EXTRA_ENGINES"}:
             _apply_gpu_lock(app_, ctx, rows_by_key, warning)
             _sync_required_models(ctx, rows_by_key)
+            _sync_gateway_docker_extras(ctx)
+            _sync_engine_requirements(ctx)
+            requirement_row.label = "Requisitos: " + _requirement_summary(ctx)
 
     def activate(app_: App, row: Row) -> None:
         if row.action == "presets":
-            _open_tts_presets(app_, ctx, edit_mode=edit_mode)
+            _open_tts_presets(app_, ctx, edit_mode=edit_mode, standalone=standalone)
             return
         if row.action == "map":
-            app_.push(tts_map_screen(app_, ctx, edit_mode=edit_mode))
+            app_.push(tts_map_screen(app_, ctx, edit_mode=edit_mode, standalone=standalone))
+            return
+        if row.action == "requirements":
+            app_.push(
+                engine_requirements_screen(app_, ctx, edit_mode=edit_mode, standalone=standalone)
+            )
             return
         if row.action == "safe":
             _apply_routed_preset(ctx, ROUTED_PRESETS[0])
-            app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode))
+            app_.replace(tts_screen(app_, ctx, edit_mode=edit_mode, standalone=standalone))
             app_.say(f"Configuración segura aplicada: {ROUTED_PRESETS[0].label}", "ok")
             return
         if row.action == "explain":
             app_.info("Configuración TTS", *_tts_help_lines())
             return
+        if row.action == "save_engines":
+            app_.modal = _confirm_engine_write(app_, ctx)
+            return
+        if row.action == "quit":
+            app_.should_quit = True
+            return
         if row.action == "back":
             _back_to_gateway(app_, ctx, edit_mode=edit_mode)
 
     return Screen(
-        title="Asistente TTS",
-        subtitle="Engines, GPU/cloud, clonado, idiomas, routed y modelos",
+        title="Engines TTS" if standalone else "Asistente TTS",
+        subtitle=(
+            "Contenedores, GPU, API, términos, routed y modelos"
+            if standalone
+            else "Engines, GPU/cloud, clonado, idiomas, routed y modelos"
+        ),
         rows=rows,
-        footer="F1 Ayuda   Enter Editar   Espacio Marcar   Esc Atrás   F10 Salir",
+        footer="F1 Ayuda   Enter Editar   Espacio Marcar   Esc Salir   F10 Salir",
         on_change=on_change,
         on_activate=activate,
         on_help=lambda app_: app_.info("Configuración TTS", *_tts_help_lines()),
     )
 
 
-def tts_map_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen:
+def tts_map_screen(
+    app: App, ctx: Context, *, edit_mode: bool = False, standalone: bool = False
+) -> Screen:
     """Edit the language→engine map without hand-writing JSON."""
     gateway = ctx.envs["gateway"]
     parsed = parse_engine_map(gateway.get("TTS_ENGINES"))
@@ -1415,11 +1744,13 @@ def tts_map_screen(app: App, ctx: Context, *, edit_mode: bool = False) -> Screen
             return
         if row.action == "save":
             gateway.set("TTS_ENGINES", render_engine_map(routing))
-            _back_to_tts(app_, ctx, edit_mode=edit_mode)
+            _sync_gateway_docker_extras(ctx)
+            _sync_engine_requirements(ctx)
+            _back_to_tts(app_, ctx, edit_mode=edit_mode, standalone=standalone)
             app_.say("Mapa idioma→engine guardado en memoria", "ok")
             return
         if row.action == "back":
-            _back_to_tts(app_, ctx, edit_mode=edit_mode)
+            _back_to_tts(app_, ctx, edit_mode=edit_mode, standalone=standalone)
 
     return Screen(
         title="Mapa idioma→engine",
@@ -1440,6 +1771,8 @@ def review_screen(app: App, ctx: Context) -> Screen:
     """Build the pending diff summary. Rebuilt every time it is entered."""
 
     def build() -> list[Row]:
+        _sync_gateway_docker_extras(ctx)
+        _sync_engine_requirements(ctx)
         rows = [
             Row("note", label="Nada se escribe hasta que lo confirmes."),
             Row("note", label=""),
@@ -1567,12 +1900,114 @@ def _write_setup_artifacts(app: App, ctx: Context, *, written: list[str]) -> Non
     app.say(f"Informe sin secretos: {path.relative_to(REPO_ROOT)}", "ok")
 
 
+def _write_engine_report(app: App, ctx: Context) -> None:
+    """Write the secret-free report after an engines-only save."""
+    try:
+        checks = validation.validate(
+            ctx.envs, ctx.report, will_write=False, profile=ctx.profile.key
+        )
+        path = write_config_report(
+            ctx.envs,
+            ctx.report,
+            profile=ctx.profile,
+            method=ctx.method,
+            checks=checks,
+            written=ctx.written,
+        )
+    except OSError as exc:
+        app.say(f"No se pudo escribir el informe de setup: {exc}", "bad")
+        return
+    ctx.report_path = str(path)
+
+
+def _confirm_engine_write(app: App, ctx: Context):
+    """Return the confirmation dialog used by the engines-only flow."""
+
+    def do_write(app_: App) -> None:
+        app_.close_modal()
+        _sync_gateway_docker_extras(ctx)
+        _sync_engine_requirements(ctx)
+        written: list[str] = []
+        for key in ("deploy", "gateway"):
+            env = ctx.envs[key]
+            if not env.changed_keys() and env.exists:
+                continue
+            ok, backup, _names = _write_env(app_, env, reload=True)
+            if not ok:
+                ctx.written = written
+                return
+            written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
+        ctx.written = written
+        if written:
+            app_.say(f"Escrito: {', '.join(written)}", "ok")
+        else:
+            app_.say("No había nada que escribir", "ok")
+        _write_engine_report(app_, ctx)
+        app_.push(engine_done_screen(app_, ctx))
+
+    changes = sum(len(ctx.envs[key].diff_against_disk()) for key in ("deploy", "gateway"))
+    return Dialog(
+        "Guardar engines",
+        [
+            f"Se escribirán hasta {changes} valor(es) en deploy/.env y gateway/.env.",
+            "No se modifica news/.env ni se instalan dependencias.",
+            "Las copias previas guardan .bak-<fecha>.",
+        ],
+        [("Cancelar", lambda a: a.close_modal()), ("Guardar", do_write)],
+        index=1,
+    )
+
+
+def engine_done_screen(app: App, ctx: Context) -> Screen:
+    """Closing screen for ``make engines`` with the next deployment commands."""
+    written = ", ".join(ctx.written) or "sin cambios"
+    rows = [
+        Row("note", label=f"Guardado: {written}", result="ok"),
+        Row("note", label="Requisitos: " + _requirement_summary(ctx)),
+        Row("note", label=""),
+        Row("note", label="Siguientes comandos:", result="ok"),
+        Row("note", label="  make up        · reconstruye y arranca el stack"),
+        Row("note", label="  make health    · comprueba API y gateway"),
+        Row("note", label="  make engines   · vuelve a esta configuración"),
+    ]
+    if ctx.report_path:
+        try:
+            report_label = Path(ctx.report_path).relative_to(REPO_ROOT)
+        except ValueError:
+            report_label = Path(ctx.report_path)
+        rows.append(Row("note", label=f"Informe sin secretos: {report_label}", result="ok"))
+    rows.extend(
+        [
+            Row("note", label=""),
+            Row("button", label="Validar configuración", action="validate"),
+            Row("button", label="Salir", action="quit"),
+        ]
+    )
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "validate":
+            app_.push(validate_screen(app_, ctx, write_mode=bool(ctx.written)))
+            return
+        if row.action == "quit":
+            app_.should_quit = True
+
+    return Screen(
+        title="Engines guardados",
+        subtitle="Configuración de contenedores, GPU y credenciales",
+        rows=rows,
+        footer="F1 Ayuda   Enter Ejecutar   F10 Salir",
+        on_activate=activate,
+    )
+
+
 def _confirm_write(app: App, ctx: Context):
     """Return the confirmation dialog that writes the env files."""
     from .curses_ui import Dialog
 
     def do_write(app_: App) -> None:
         app_.close_modal()
+        _sync_gateway_docker_extras(ctx)
+        _sync_engine_requirements(ctx)
         written: list[str] = []
         for key in _ORDER:
             env = ctx.envs[key]
@@ -1611,6 +2046,8 @@ def _confirm_write_one(app: App, ctx: Context, file_key: str):
 
     def do_save(app_: App) -> None:
         app_.close_modal()
+        _sync_gateway_docker_extras(ctx)
+        _sync_engine_requirements(ctx)
         if not env.changed_keys():
             app_.say("Sin cambios que escribir", "")
             return
@@ -2070,4 +2507,12 @@ def build_app(ctx: Context | None = None) -> App:
     app = App("newsvoice setup")
     app.push(welcome_screen(app, ctx))
     app.push(external_guide_screen(app))
+    return app
+
+
+def build_engines_app(ctx: Context | None = None) -> App:
+    """Create an app that opens directly on the engines assistant."""
+    ctx = ctx or load_context()
+    app = App("newsvoice engines")
+    app.push(tts_screen(app, ctx, standalone=True))
     return app

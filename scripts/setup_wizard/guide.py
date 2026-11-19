@@ -152,8 +152,8 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
             "",
             "Acción: arranca tu servidor OpenAI-compatible y pega la URL y el modelo. "
             "Comprueba con «curl <LLM_API_BASE>/models» que el modelo aparece en la lista.",
-            "Si tu endpoint pide autenticación, ponlo detrás de un proxy: el asistente no "
-            "guarda una clave LLM.",
+            "Si tu endpoint pide autenticación, pega la clave en el paso de configuración "
+            "básica: se guarda como LLM_API_KEY y puede quedar vacía con llama.cpp local.",
             "En Docker, host.docker.internal apunta al host; en Linux puede requerir extra_hosts.",
         ),
     ),

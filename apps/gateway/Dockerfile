@@ -11,16 +11,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Workspace metadata + the shared tts_contract lib, so `uv sync --package
-# tts-api` resolves `tts-contract` from the monorepo root lock. The three
-# runtime engines are baked in so the image can switch between them by config
-# alone (TTS_ENGINE / TTS_ENGINES): pocket_tts and edgetts cover the default
-# routing, omnivoice is installed but stays unloaded unless a job pins it (and
+# tts-api` resolves `tts-contract` from the monorepo root lock. The base local
+# engines are baked in so the image can switch between them by config alone
+# (TTS_ENGINE / TTS_ENGINES): pocket_tts and edgetts cover the default routing,
+# piper covers Catalan, and omnivoice stays unloaded unless a job pins it (and
 # the host has a GPU; otherwise it stays disabled and only Modal is used for
-# those backends).
+# those backends). `make setup` extends UV_EXTRAS with the engines selected for
+# the current deployment.
 COPY pyproject.toml uv.lock ./
 COPY libs/tts_contract ./libs/tts_contract
 COPY apps/gateway/pyproject.toml apps/gateway/README.md ./apps/gateway/
-ARG UV_EXTRAS="--extra pocket_tts --extra edgetts --extra omnivoice --extra kokoro"
+ARG UV_EXTRAS="--extra pocket_tts --extra edgetts --extra omnivoice --extra kokoro --extra piper"
 RUN pip install --no-cache-dir uv && \
     uv sync --frozen --no-dev --no-install-project --package tts-api ${UV_EXTRAS} && \
     uv cache clean

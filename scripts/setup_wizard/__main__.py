@@ -38,6 +38,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Solo detecta el entorno y valida los .env, sin escribir nada",
     )
     parser.add_argument(
+        "--engines",
+        action="store_true",
+        help="Abre directamente el asistente de engines TTS (contenedores, GPU, API y términos)",
+    )
+    parser.add_argument(
         "--profile",
         choices=[profile.key for profile in PROFILES],
         default="",
@@ -140,6 +145,36 @@ def main(argv: list[str] | None = None) -> int:
         ctx.profile = next((p for p in PROFILES if p.key == args.profile), ctx.profile)
     if args.install:
         ctx.method = args.install
+
+    if args.engines and (args.plain or not _interactive()):
+        from .plain import run_engines
+
+        if not sys.stdin.isatty():
+            print("(modo línea: no hay terminal interactiva)", file=sys.stderr)
+        return run_engines(ctx, assume_yes=args.yes)
+
+    if args.engines:
+        from .app import build_engines_app
+        from .curses_ui import run_tui
+
+        app = build_engines_app(ctx)
+        try:
+            return run_tui(app)
+        except Exception as exc:  # noqa: BLE001 - curses leaves the screen broken otherwise
+            if app.started:
+                print(
+                    f"\nEl TUI se cerró por un error ({exc}). No se cambia al modo línea "
+                    "para no volver a preguntar ni perder los cambios.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                f"\nNo se pudo iniciar el TUI ({exc}); usando el modo línea.",
+                file=sys.stderr,
+            )
+            from .plain import run_engines
+
+            return run_engines(ctx, assume_yes=args.yes)
 
     if args.plain or not _interactive():
         from .plain import run_plain

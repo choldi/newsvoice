@@ -16,7 +16,7 @@
 #   make check NEWS_PY=/path/to/python GW_PY=/path/to/python
 # =============================================================================
 
-.PHONY: help setup venv install lint format format-check test test-news \
+.PHONY: help setup engines venv install lint format format-check test test-news \
         test-gateway coverage check commit up down ps health logs logs-api \
         logs-gateway logs-worker logs-temporal status report upload-report deploy clean urls \
         schedule trigger namespaces security-venv security-scan
@@ -40,7 +40,9 @@ GW_RUF     ?= $(or $(wildcard $(GW_DIR)/.venv/bin/ruff),$(wildcard $(VENV_BIN)/r
 API_PORT     ?= 8000
 GATEWAY_PORT ?= 8001
 COMPOSE_FILE ?= deploy/docker-compose.yml
-DC            = docker compose -f $(COMPOSE_FILE)
+GATEWAY_GPU  ?= $(shell sed -n 's/^GATEWAY_GPU=//p' deploy/.env 2>/dev/null | tail -n1)
+GPU_COMPOSE   = $(if $(filter 1,$(GATEWAY_GPU)),-f deploy/docker-compose.gpu.yml)
+DC            = docker compose -f $(COMPOSE_FILE) $(GPU_COMPOSE)
 
 help: ## Show all make targets
 	@echo "newsvoice unified make targets"
@@ -48,6 +50,8 @@ help: ## Show all make targets
 	@echo "Setup / quality"
 	@echo "  make setup            Guided TUI for .env files and dependencies"
 	@echo "                        (python3 scripts/setup.py [--plain|--check])"
+	@echo "  make engines          Guided TTS engines: containers, GPU, API and terms"
+	@echo "                        (writes deploy/.env + gateway/.env only)"
 	@echo "  make venv             Create news + gateway .venv with dev extras"
 	@echo "  make install          Alias for venv"
 	@echo "  make lint             ruff check across news, gateway, tts_contract, scripts"
@@ -64,6 +68,7 @@ help: ## Show all make targets
 	@echo ""
 	@echo "Docker compose ($(COMPOSE_FILE))"
 	@echo "  make up               Build and start the whole stack (creates namespaces)"
+	@echo "                        GATEWAY_GPU=1 in deploy/.env adds the GPU overlay"
 	@echo "  make down             Stop the whole stack"
 	@echo "  make ps               Show service status"
 	@echo "  make health           Curl news API + TTS gateway health"
@@ -98,6 +103,9 @@ install: venv ## Alias for venv
 
 setup: ## Guided TUI for .env + dependencies (ARGS="--plain", ARGS="--check")
 	python3 scripts/setup.py $(ARGS)
+
+engines: ## Guided TTS engine requirements (ARGS="--plain", ARGS="--yes")
+	python3 scripts/setup.py --engines $(ARGS)
 
 lint: ## ruff check across news, gateway, tts_contract, scripts
 	$(NEWS_RUF) check $(NEWS_DIR)

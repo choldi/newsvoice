@@ -266,6 +266,8 @@ services:
     build:
       context: ..
       dockerfile: apps/gateway/Dockerfile
+      args:
+        UV_EXTRAS: "${GATEWAY_UV_EXTRAS:---extra pocket_tts --extra edgetts --extra omnivoice --extra kokoro --extra piper}"
     container_name: news_engine_gateway
     ports:
       - "${GATEWAY_PORT:-8001}:8000"
