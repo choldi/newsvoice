@@ -38,7 +38,7 @@ API REST para síntesis de voz (TTS) multilingüe con **múltiples engines**:
   downgradea `numpy` y rompe `torch 2.5.1` + `pocket-tts` (ver
   `docs/CONVENTIONS.md`, secciones 1 y 11).
 - **GPU NVIDIA con CUDA** — necesario para `omnivoice`, `qwen3_tts` y `chatterbox`; los sidecars `gateway-omnivoice` / `gateway-qwen3` aíslan sus dependencias
-- **Internet** — `edgetts`, Fish Audio y OpenAI-compatible; también la primera descarga de modelos locales
+- **Internet** — `edgetts`, Fish Audio y OpenAI-compatible; también la primera descarga de modelos locales (Pocket TTS, Kokoro y voces Piper)
 
 ## Instalación rápida
 
@@ -49,6 +49,7 @@ cd ov_api
 
 # Instalar con un engine específico
 make install ENGINE=pocket_tts    # CPU, clonado de voz (recomendado)
+make install ENGINE=piper         # CPU, voces ONNX locales
 make install ENGINE=edgetts       # Cloud, sin GPU
 make install ENGINE=omnivoice     # GPU, full features
 make install ENGINE=all           # Todos los engines
@@ -89,6 +90,10 @@ cp .env.example .env
 | `KOKORO_REPO_ID` | Repo Hugging Face del modelo Kokoro | `hexgrad/Kokoro-82M` |
 | `KOKORO_DEFAULT_LANGUAGE` | Idioma por defecto de Kokoro (sin catalán) | `es` |
 | `KOKORO_VOICES` | JSON voz_id del gateway -> voz nativa de Kokoro | `""` |
+| `PIPER_VOICE` | Modelo Piper cargado por defecto (incluye catalán) | `ca_ES-upc_ona-medium` |
+| `PIPER_VOICES_DIR` | Directorio de modelos `.onnx` | `storage/piper_voices` |
+| `PIPER_AUTO_DOWNLOAD` | Descargar la voz si falta en `PIPER_VOICES_DIR` | `true` |
+| `PIPER_USE_CUDA` | Usar CUDA en lugar de CPU | `false` |
 | `AUTO_TRANSCRIBE` | Auto-transcribir audio de referencia | `false` |
 | `DATABASE_URL` | URL de SQLite | `sqlite:///storage/omnivoice.db` |
 | `API_KEY` | API Key opcional | `""` |
@@ -101,6 +106,21 @@ TTS_ENGINE=routed
 TTS_ENGINES={"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
 # Opcional: engines GPU/cloud que no rutean ningún idioma (vacío por defecto)
 TTS_EXTRA_ENGINES=
+```
+
+### Piper · voces ONNX locales
+
+Con `PIPER_AUTO_DOWNLOAD=true`, el gateway descarga la voz a
+`PIPER_VOICES_DIR` la primera vez que la necesita. Prueba primero
+`piper.download_voices.download_voice` (piper-tts reciente) y, si el paquete no
+lo expone, cae a `piper.download.ensure_voice_exists`. La descarga solo se
+considera correcta si aparece el `.onnx`; si no, el engine devuelve
+`EngineUnavailableError` en lugar de seguir con una voz inexistente.
+
+Para descargarla a mano, o con `PIPER_AUTO_DOWNLOAD=false`:
+
+```bash
+python -m piper.download_voices ca_ES-upc_ona-medium
 ```
 
 Los engines cloud son opt-in: `fish_tts` necesita `FISH_API_KEY` y

@@ -55,6 +55,10 @@ The wizard also:
   with `TTS_DEVICE=cpu`, all local TTS engines (pocket_tts, piper, kokoro,
   edgetts), mints the internal secrets and only collects the optional
   **`LLM_API_KEY`** — the external LLM endpoint/model are never touched;
+- makes the basic profile accept each engine **license explicitly** on the
+  «Paso 2b · términos y licencias» screen before reaching the review; the
+  acceptance is stored in `ENGINE_TERMS_ACCEPTED`, and the custom profile asks
+  for it inside the TTS section;
 - lists the **missing prerequisites** (docker, compose plugin, ffmpeg, uv,
   virtualenvs) with the command that provides each one and offers to run them;
 - keeps the **gateway key coherent across the three files**

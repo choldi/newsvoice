@@ -53,6 +53,8 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
             "Qué elige: TTS_ENGINE fija un motor; routed reparte por idioma con TTS_ENGINES.",
             "CPU sin GPU: pocket_tts, piper y kokoro funcionan en local. Es la opción del "
             "preset «CPU seguro», que no necesita NVIDIA.",
+            "Piper: la primera voz .onnx se descarga sola con PIPER_AUTO_DOWNLOAD=true; se "
+            "usa la API actual de piper-tts y se cae a la antigua si el paquete es viejo.",
             "GPU: omnivoice, omnivoice_remote, qwen3_tts y chatterbox exigen TTS_DEVICE=cuda:0 "
             "y el overlay GPU. El wizard bloquea el dispositivo si detecta alguno.",
             "Cloud: edgetts no necesita cuenta; fish_tts y openai_tts sí requieren clave. "
@@ -61,9 +63,12 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
             "edgetts, piper, kokoro y openai_tts usan voces del catálogo.",
             "Idiomas: revisa el catálogo del wizard. Si un engine no soporta un idioma, "
             "asigna otro en TTS_ENGINES o usa edgetts para catalán.",
+            "Términos: el perfil básico exige aceptar las licencias de pocket_tts, piper y "
+            "kokoro antes de pasar a la revisión.",
             "",
             "Acción: abre «Asistente TTS guiado» en gateway, aplica un preset y ajusta el "
-            "mapa. TTS_MODEL_DOWNLOADS solo anota checkpoints para precargar.",
+            "mapa. TTS_MODEL_DOWNLOADS solo anota checkpoints para precargar; no baja voces "
+            "Piper.",
         ),
     ),
     GuidePage(
@@ -178,10 +183,11 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
         (
             "1. Elige perfil y método de instalación.",
             "2. Elige motor TTS: pocket_tts y edgetts no necesitan cuentas; Fish y OpenAI sí.",
-            "3. Rellena solo los [externo] de los servicios que vas a usar; deja vacío el resto.",
-            "4. Genera claves internas con «g» y recupera valores por defecto con Ctrl+R.",
-            "5. Pulsa «a» para ver opciones avanzadas y F1 para explicar cada campo.",
-            "6. Guarda y valida; cada error indica el valor o comando que falta.",
+            "3. Acepta los términos de los engines del perfil básico antes de revisar.",
+            "4. Rellena solo los [externo] de los servicios que vas a usar; deja vacío el resto.",
+            "5. Genera claves internas con «g» y recupera valores por defecto con Ctrl+R.",
+            "6. Pulsa «a» para ver opciones avanzadas y F1 para explicar cada campo.",
+            "7. Guarda y valida; cada error indica el valor o comando que falta.",
             "",
             "Enlaces:",
             "· Fish: https://docs.fish.audio/developer-guide/getting-started/api-key",

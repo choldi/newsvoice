@@ -7,7 +7,7 @@
 - Python 3.11+
 - uv (package manager) — se instala automáticamente con `make check-uv`
 - **GPU NVIDIA con CUDA** — solo para `TTS_ENGINE=omnivoice`
-- **Internet** — para `TTS_ENGINE=edgetts` y descarga inicial de Pocket TTS
+- **Internet** — para `TTS_ENGINE=edgetts` y la descarga inicial de Pocket TTS, Kokoro y voces Piper
 
 ## Instalación por engine
 
@@ -17,6 +17,9 @@ make install ENGINE=pocket_tts
 
 # Engine cloud (sin GPU, incluye catalán)
 make install ENGINE=edgetts
+
+# Engine local CPU con voces ONNX (incluye catalán)
+make install ENGINE=piper
 
 # Engine GPU (full features: emociones, voice design)
 make install ENGINE=omnivoice
@@ -35,12 +38,16 @@ cp .env.example .env
 
 | Variable | Descripción | Default |
 |----------|-------------|---------|
-| `TTS_ENGINE` | Engine activo: `pocket_tts`, `edgetts`, `omnivoice`, `mock`, `routed` | `omnivoice` |
+| `TTS_ENGINE` | Engine activo: `pocket_tts`, `piper`, `edgetts`, `omnivoice`, `mock`, `routed` | `omnivoice` |
 | `TTS_ENGINES` | JSON routing por idioma (cuando `routed`) | `""` |
 | `POCKET_TTS_DEFAULT_LANGUAGE` | Idioma por defecto (ISO 639-1) que se carga al arrancar | `es` |
 | `POCKET_TTS_MODEL` | Override global del checkpoint (config YAML) | `""` |
 | `POCKET_TTS_REFERENCES` | JSON de WAVs de referencia para voces stock ES/FR | `""` |
 | `EDGETTS_VOICE_PREFIX` | Locale EdgeTTS | `es-MX` |
+| `PIPER_VOICE` | Modelo Piper por defecto | `ca_ES-upc_ona-medium` |
+| `PIPER_VOICES_DIR` | Directorio de modelos `.onnx` | `storage/piper_voices` |
+| `PIPER_AUTO_DOWNLOAD` | Descargar la voz si falta | `true` |
+| `PIPER_USE_CUDA` | Usar CUDA en lugar de CPU | `false` |
 | `AUTO_TRANSCRIBE` | Auto-transcribir audio de referencia | `false` |
 
 ### Variables comunes
@@ -59,6 +66,19 @@ cp .env.example .env
 | `OMNIVOICE_MODEL_ID` | Modelo HuggingFace | `ModelsLab/omnivoice-singing` |
 | `OMNIVOICE_DEVICE` | Dispositivo de inferencia | `cuda:0` |
 | `OMNIVOICE_FALLBACK_TO_MOCK` | Fallback a mock si falla | `true` |
+
+### Voces Piper (solo `TTS_ENGINE=piper`)
+
+El gateway descarga el `.onnx` a `PIPER_VOICES_DIR` la primera vez que carga
+una voz si `PIPER_AUTO_DOWNLOAD=true`. Usa `piper.download_voices` cuando está
+disponible y mantiene el antiguo `piper.download` como respaldo; si no aparece
+el `.onnx`, la petición falla con `EngineUnavailableError`.
+
+Para precargar la voz o trabajar sin Internet:
+
+```bash
+python -m piper.download_voices ca_ES-upc_ona-medium
+```
 
 ## Despliegue con Docker
 

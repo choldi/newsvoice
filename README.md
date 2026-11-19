@@ -58,12 +58,17 @@ Pasos del asistente:
    **URL y el modelo del LLM** externo, además de la **clave API** (opcional:
    puede quedar vacía con llama.cpp local). La **personalizada** te lleva al
    flujo completo de perfil, método y archivos.
-4. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
+4. **Confirma los términos de los engines** (perfil básico) — el paso «2b»
+   lista las licencias de pocket_tts, piper y kokoro con su URL y exige
+   aceptarlas explícitamente antes de seguir; `Continuar` no avanza mientras
+   falte alguna. La aceptación se guarda en `ENGINE_TERMS_ACCEPTED`. En el
+   perfil personalizado se confirman dentro de la sección de motores TTS.
+5. **Elige el perfil** — Docker Shape A, desarrollo local, Docker Shape B o
    solo revisión; cada uno precarga sus valores por defecto sin pisar lo que
    ya hayas escrito a mano.
-5. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
+6. **Elige cómo instalar dependencias** — `uv sync` del workspace, un `.venv`
    por app con pip (`make venv`) o más tarde.
-6. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
+7. **Rellena los tres `.env`** — `deploy/.env`, `apps/news/.env` y
    `apps/gateway/.env` a partir de sus `.env.example`, sección por sección y
    con la explicación de cada variable. Los secretos se generan con `g`, la
    clave compartida del gateway se copia sola a `TTS_API_KEY` y `API_KEY`, y el
@@ -78,26 +83,27 @@ Pasos del asistente:
    overlay GPU solos; ejecuta `make up` para reconstruir la imagen. La clave del
    gateway es **un mismo valor en los tres archivos**: escribirla en cualquiera
    la sincroniza en las otras dos.
-7. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
+8. **Revisa el diff** antes de escribir nada; cada archivo se guarda con una
    copia `.bak-<fecha>`. Si las tres claves del gateway no coinciden, la
    revisión y la validación lo marcan como error y ofrecen
    **«Unificar la clave del gateway»** (evita los 401 en tiempo de ejecución).
-8. **Valida** — valores obligatorios, claves coherentes entre archivos,
+9. **Valida** — valores obligatorios, claves coherentes entre archivos,
    plantillas sin rellenar, puertos, URL del gateway, requisitos del host y
    dependencias; cada línea roja incluye el comando que la arregla.
-9. **Genera un informe sin secretos** — al guardar escribe
-   `reports/setup-report.md` con host, método, validación, configuración no
-   sensible, motores/voces/modelos TTS y colecciones (destinatarios
-   redactados). Para adjuntarlo a un issue:
-   `./scripts/upload_setup_report.sh` (o `--issue N` para comentar).
+10. **Genera un informe sin secretos** — al guardar escribe
+    `reports/setup-report.md` con host, método, validación, configuración no
+    sensible, motores/voces/modelos TTS y colecciones (destinatarios
+    redactados). Para adjuntarlo a un issue:
+    `./scripts/upload_setup_report.sh` (o `--issue N` para comentar).
 
 `make engines` abre directamente la parte de motores TTS y guarda **solo**
 `deploy/.env` y `apps/gateway/.env` (no toca `news/.env` ni instala
 dependencias). Revisa contenedores y GPU, pide las credenciales obligatorias
 (Fish, OpenAI-compatible, HuggingFace cuando aplica) y confirma los términos de
-cada modelo. La aceptación queda registrada en `ENGINE_TERMS_ACCEPTED`, pero los
-repos gated de HuggingFace siguen necesitando el botón **Agree and access
-repository** en la web antes de que `HF_TOKEN` funcione.
+cada modelo, igual que el paso 4 del perfil básico. La aceptación queda
+registrada en `ENGINE_TERMS_ACCEPTED`, pero los repos gated de HuggingFace
+siguen necesitando el botón **Agree and access repository** en la web antes de
+que `HF_TOKEN` funcione.
 
 Además del flujo guiado, desde la pantalla inicial también puedes:
 
