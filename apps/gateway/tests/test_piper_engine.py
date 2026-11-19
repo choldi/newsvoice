@@ -189,6 +189,75 @@ def test_piper_load_voice_download_but_still_missing(tmp_path, monkeypatch: pyte
         engine._load_voice("no-such-voice")
 
 
+def test_piper_download_voice_uses_modern_api(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    fake_piper = types.ModuleType("piper")
+    fake_piper.__path__ = []
+    modern = types.ModuleType("piper.download_voices")
+    calls: list[tuple[str, object]] = []
+
+    def _download(voice: str, download_dir: object, _force_redownload: bool = False) -> None:
+        calls.append((voice, download_dir))
+        (tmp_path / f"{voice}.onnx").write_bytes(b"onnx")
+
+    modern.download_voice = _download
+    monkeypatch.setitem(sys.modules, "piper", fake_piper)
+    monkeypatch.setitem(sys.modules, "piper.download_voices", modern)
+
+    engine = PiperEngine()
+    engine._voices_dir = tmp_path
+    engine._download_voice("ca_ES-upc_ona-medium")
+
+    assert calls == [("ca_ES-upc_ona-medium", tmp_path)]
+    assert (tmp_path / "ca_ES-upc_ona-medium.onnx").exists()
+
+
+def test_piper_download_voice_falls_back_to_legacy_api(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    fake_piper = types.ModuleType("piper")
+    fake_piper.__path__ = []
+    legacy = types.ModuleType("piper.download")
+    calls: list[str] = []
+
+    def _get_voices(_download_dir: object) -> dict[str, Any]:
+        calls.append("get_voices")
+        return {}
+
+    def _ensure(
+        voice: str,
+        _search_dirs: object,
+        _download_dir: object,
+        _voices_info: dict[str, Any],
+    ) -> None:
+        calls.append("ensure_voice_exists")
+        (tmp_path / f"{voice}.onnx").write_bytes(b"onnx")
+
+    legacy.get_voices = _get_voices
+    legacy.ensure_voice_exists = _ensure
+    monkeypatch.setitem(sys.modules, "piper", fake_piper)
+    monkeypatch.setitem(sys.modules, "piper.download_voices", None)
+    monkeypatch.setitem(sys.modules, "piper.download", legacy)
+
+    engine = PiperEngine()
+    engine._voices_dir = tmp_path
+    engine._download_voice("ca_ES-upc_ona-medium")
+
+    assert calls == ["get_voices", "ensure_voice_exists"]
+    assert (tmp_path / "ca_ES-upc_ona-medium.onnx").exists()
+
+
+def test_piper_download_voice_without_model_raises(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    fake_piper = types.ModuleType("piper")
+    fake_piper.__path__ = []
+    modern = types.ModuleType("piper.download_voices")
+    modern.download_voice = lambda _voice, _dir: None
+    monkeypatch.setitem(sys.modules, "piper", fake_piper)
+    monkeypatch.setitem(sys.modules, "piper.download_voices", modern)
+
+    engine = PiperEngine()
+    engine._voices_dir = tmp_path
+    with pytest.raises(EngineUnavailableError):
+        engine._download_voice("ca_ES-upc_ona-medium")
+
+
 async def test_piper_close_clears_cache(monkeypatch: pytest.MonkeyPatch):
     fake_piper = types.ModuleType("piper")
     monkeypatch.setitem(sys.modules, "piper", fake_piper)

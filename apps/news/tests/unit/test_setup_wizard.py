@@ -29,6 +29,7 @@ from setup_wizard.app import (
     _write_env,
     apply_screen,
     basic_screen,
+    basic_terms_screen,
     build_app,
     build_engines_app,
     env_screen,
@@ -1702,6 +1703,65 @@ def test_mode_screen_offers_basic_and_custom(wizard_context: Context) -> None:
     assert app.current.title == "Paso 1 · perfil"
 
 
+def _accept_terms_and_continue(app: App) -> None:
+    """Accept every license row on the current screen and continue."""
+    for row in app.current.rows:
+        if row.action.startswith("terms:"):
+            row.value = "true"
+            app.current.on_change(app, row)
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "continue")
+    app.handle(10)
+
+
+def test_basic_flow_requires_explicit_engine_terms(wizard_context: Context) -> None:
+    """The basic flow asks for licenses instead of leaving a validation warning."""
+    app = build_app(wizard_context)
+    app.push(mode_screen(app, wizard_context))
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "basic")
+    app.handle(10)
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "apply")
+    app.handle(10)
+
+    assert app.current.title == "Paso 2b · términos y licencias"
+    assert {"terms:pocket_tts", "terms:piper", "terms:kokoro", "continue"} <= {
+        row.action for row in app.current.rows
+    }
+
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "continue")
+    app.handle(10)
+    assert app.current.title == "Paso 2b · términos y licencias"
+
+    for key in ("pocket_tts", "piper", "kokoro"):
+        app.focus = next(
+            i for i, row in enumerate(app.current.rows) if row.action == f"terms:{key}"
+        )
+        app.handle(ord(" "))
+    assert set(split_multi(wizard_context.envs["deploy"].get("ENGINE_TERMS_ACCEPTED"))) == {
+        "pocket_tts",
+        "piper",
+        "kokoro",
+    }
+
+    checks = validation.validate(
+        wizard_context.envs, Report(python="3.12.0"), will_write=False, profile="docker"
+    )
+    assert next(check for check in checks if check.name == "términos engines").status == "ok"
+
+    app.focus = next(i for i, row in enumerate(app.current.rows) if row.action == "continue")
+    app.handle(10)
+    assert app.current.title == "Paso 4 · revisión"
+
+
+def test_basic_terms_screen_lists_terms_from_staged_engines(wizard_context: Context) -> None:
+    """The terms screen derives its rows from the basic profile selection."""
+    _apply_basic_config(wizard_context)
+    screen = basic_terms_screen(build_app(wizard_context), wizard_context)
+
+    labels = [row.label for row in screen.rows if row.action.startswith("terms:")]
+    assert len(labels) == 3
+    assert all("Acepto los términos de" in label for label in labels)
+
+
 def test_basic_config_applies_cpu_engines_and_generates_secrets(
     wizard_context: Context,
 ) -> None:
@@ -1778,6 +1838,7 @@ def test_basic_screen_edits_llm_url_and_model(wizard_context: Context) -> None:
 
     app.focus = next(i for i, row in enumerate(screen.rows) if row.action == "apply")
     app.handle(10)
+    _accept_terms_and_continue(app)
     assert app.current.title == "Paso 4 · revisión"
     changed = {name for name, _old, _new in wizard_context.envs["news"].diff_against_disk()}
     assert {"LLM_API_BASE", "LLM_MODEL"} <= changed
@@ -1804,6 +1865,7 @@ def test_basic_screen_accepts_an_empty_llm_key(wizard_context: Context) -> None:
 
     app.focus = next(i for i, row in enumerate(screen.rows) if row.action == "apply")
     app.handle(10)
+    _accept_terms_and_continue(app)
     assert app.current.title == "Paso 4 · revisión"
     body = " ".join(row.label for row in app.current.rows)
     assert "sk-llm-provider" not in body

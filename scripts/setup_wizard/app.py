@@ -722,14 +722,84 @@ def basic_screen(app: App, ctx: Context) -> Screen:
             news.set("LLM_MODEL", llm_model.value.strip())
             news.set("LLM_API_KEY", llm_key.value.strip())
             _apply_basic_config(ctx)
-            app_.say("Configuración básica aplicada: revisa el diff", "ok")
-            app_.push(review_screen(app_, ctx))
+            app_.say("Configuración básica aplicada: confirma los términos", "ok")
+            app_.push(basic_terms_screen(app_, ctx))
 
     return Screen(
         title="Paso 2 · configuración básica",
         subtitle="Valores CPU y conexión del LLM externo",
         rows=rows,
         footer="F1 Ayuda   Enter Editar   Esc Atrás   F10 Salir",
+        progress="2/6",
+        on_change=on_change,
+        on_activate=activate,
+    )
+
+
+def basic_terms_screen(app: App, ctx: Context) -> Screen:
+    """Ask explicitly for the licenses of the engines staged by the basic mode."""
+
+    def build() -> list[Row]:
+        engine, engine_map, extra = _gateway_selection(ctx)
+        accepted = _accepted_terms(ctx)
+        rows: list[Row] = [
+            Row("note", label="El perfil básico selecciona engines con licencia propia."),
+            Row("note", label="Confirma que has leído sus términos antes de continuar."),
+            Row("note", label=""),
+        ]
+        terms = engine_terms(engine, engine_map, extra)
+        if not terms:
+            rows.append(Row("note", label="La selección no exige aceptación explícita."))
+        for info in terms:
+            rows.append(
+                Row(
+                    "bool",
+                    label=f"Acepto los términos de {info.label}",
+                    value="true" if info.key in accepted else "false",
+                    help=info.terms_url or "Sin URL de términos declarada.",
+                    action=f"terms:{info.key}",
+                )
+            )
+            if info.terms_url:
+                rows.append(Row("note", label=f"  {info.terms_url}"))
+        rows.append(Row("note", label=""))
+        rows.append(Row("button", label="Continuar", action="continue"))
+        rows.append(Row("button", label="Atrás", action="back"))
+        return rows
+
+    def on_change(app_: App, row: Row) -> None:
+        if not row.action.startswith("terms:"):
+            return
+        key = row.action.split(":", 1)[1]
+        accepted = _accepted_terms(ctx)
+        if row.value.strip().lower() in ("true", "1", "yes"):
+            if key not in accepted:
+                accepted.append(key)
+        else:
+            accepted = [name for name in accepted if name != key]
+        _store_accepted_terms(ctx, accepted)
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "continue":
+            engine, engine_map, extra = _gateway_selection(ctx)
+            pending = [
+                info.label
+                for info in engine_terms(engine, engine_map, extra)
+                if info.key not in _accepted_terms(ctx)
+            ]
+            if pending:
+                app_.say("Faltan términos por aceptar: " + ", ".join(pending), "warn")
+                return
+            app_.push(review_screen(app_, ctx))
+
+    return Screen(
+        title="Paso 2b · términos y licencias",
+        subtitle="Engines seleccionados por el perfil básico",
+        rows=build(),
+        footer="F1 Ayuda   Espacio Alternar   Enter Continuar   Esc Atrás   F10 Salir",
         progress="2/6",
         on_change=on_change,
         on_activate=activate,

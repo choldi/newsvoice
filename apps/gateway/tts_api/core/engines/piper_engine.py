@@ -280,21 +280,25 @@ class PiperEngine(TtsEngineBase):
         return voice
 
     def _download_voice(self, model_name: str) -> None:
-        try:
-            from piper.download import ensure_voice_exists, get_voices
-        except ImportError as exc:  # pragma: no cover - version drift
-            raise EngineUnavailableError(
-                "piper.download no disponible; actualiza piper-tts."
-            ) from exc
-
         self._voices_dir.mkdir(parents=True, exist_ok=True)
         try:
-            voices_info = get_voices(self._voices_dir)
-            ensure_voice_exists(model_name, [self._voices_dir], self._voices_dir, voices_info)
+            try:
+                from piper.download_voices import download_voice
+            except ImportError:
+                from piper.download import ensure_voice_exists, get_voices
+
+                voices_info = get_voices(self._voices_dir)
+                ensure_voice_exists(model_name, [self._voices_dir], self._voices_dir, voices_info)
+            else:
+                download_voice(model_name, self._voices_dir)
         except Exception as exc:
             raise EngineUnavailableError(
                 f"No se pudo descargar la voz Piper '{model_name}': {exc}"
             ) from exc
+        if not (self._voices_dir / f"{model_name}.onnx").exists():
+            raise EngineUnavailableError(
+                f"La descarga de la voz Piper '{model_name}' no generó un modelo .onnx"
+            )
 
     @staticmethod
     def _length_scale(speed: float) -> float:
