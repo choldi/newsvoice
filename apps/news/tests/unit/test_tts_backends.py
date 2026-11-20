@@ -405,6 +405,24 @@ async def test_synthesize_cloud_engines_pin_the_gateway_engine(monkeypatch) -> N
     ]
 
 
+async def test_synthesize_omni_voice_honours_the_gateway_engine_pin(monkeypatch) -> None:
+    """A collection's sub-engine pin overrides the gateway's language routing."""
+    seen: list[dict[str, object]] = []
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.append({"voice_id": voice_id, "engine": kwargs.get("engine")})
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    audio = await synthesize(
+        TTSBackend.OMNIVOICE, "hola", "es-mx-male", "es", gateway_engine=" Piper "
+    )
+
+    assert audio == b"RIFFwav"
+    assert seen == [{"voice_id": "es-mx-male", "engine": "piper"}]
+
+
 async def test_synthesize_modal_requires_the_kill_switch(monkeypatch) -> None:
     """Modal off is reported before any network call is attempted."""
     monkeypatch.setattr(tts_backends.get_settings(), "modal_enabled", False)

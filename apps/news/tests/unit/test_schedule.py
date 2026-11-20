@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 
 from src.api.models.monitoring import MonitorRunConfig
+from src.api.models.narration import NarrationSpec, SpeakerRole
 from src.core.collections import CollectionConfig
 from src.core.config import settings
 from src.workers.schedule import (
@@ -222,6 +223,25 @@ def test_pipeline_config_carries_the_collection_backend() -> None:
     config = pipeline_config_for(collection, tts_flag=None)
 
     assert config.tts_backend == "omni_voice"
+
+
+def test_pipeline_config_carries_the_gateway_engine_into_digest_and_narration() -> None:
+    """The collection pin reaches both the TTS activity and the narration spec."""
+    narration_spec = NarrationSpec(
+        roles=[SpeakerRole(name="host", voice_id="es-mx-male")],
+    )
+    collection = _collection(
+        tts_backend="omni_voice",
+        gateway_engine="piper",
+        narration_enabled=True,
+        narration_spec=narration_spec,
+    )
+
+    config = pipeline_config_for(collection, tts_flag=None)
+
+    assert config.gateway_engine == "piper"
+    assert config.narration is not None
+    assert config.narration["spec"]["gateway_engine"] == "piper"
 
 
 def test_pipeline_config_backend_defaults_to_edge() -> None:

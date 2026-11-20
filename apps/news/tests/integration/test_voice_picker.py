@@ -349,6 +349,31 @@ def test_picker_engine_select_filters_with_the_submit_predicate() -> None:
     assert f'value="{MODAL_CUSTOM}"' not in edge.text
 
 
+def test_picker_lists_the_voices_of_the_selected_gateway_engine() -> None:
+    """Choosing a gateway engine loads that engine's stock catalogue."""
+    client = _client()
+
+    async def list_stock(
+        language: str | None = None,
+        force: bool = False,
+        engine: str | None = None,
+    ) -> list[dict[str, str]]:
+        if engine == "piper":
+            return [{"voice_id": "piper-es", "language": "es", "engine": "piper"}]
+        return [{"voice_id": GATEWAY_STOCK, "language": "es", "engine": ""}]
+
+    with patch(
+        "src.api.routes_ui.VoicesService.list_stock",
+        new_callable=AsyncMock,
+        side_effect=list_stock,
+    ):
+        results = client.get("/ui/fragments/voice_picker", params={"engine": "piper"})
+
+    assert results.status_code == 200
+    assert 'value="piper-es"' in results.text
+    assert f'value="{GATEWAY_STOCK}"' not in results.text
+
+
 def test_audiobook_form_wires_the_engine_select_before_the_voice_picker() -> None:
     """The audiobook form picks the motor TTS before the voice, over idioma+motor."""
     client = _client()

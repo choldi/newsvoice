@@ -23,6 +23,7 @@ import email
 import json
 from email import policy
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -420,11 +421,30 @@ def install_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> FakeGateway:
     """
     global _installed
     from src.api.services import voice_catalog_client as client
+    from src.api.services.voices import VoicesService
 
     gateway = FakeGateway()
     _installed = gateway
     monkeypatch.setattr(client, "_dispatcher", lambda: _dispatcher_for(gateway))
     monkeypatch.setattr(client, "_blocking_http", lambda: _blocking_http_for(gateway))
+
+    async def fake_get_engines(self: VoicesService) -> dict[str, Any]:
+        return {
+            "active": "omnivoice",
+            "engines": [
+                {"name": "omnivoice", "available": True},
+                {"name": "pocket_tts", "available": True},
+                {"name": "kokoro", "available": True},
+                {"name": "piper", "available": True},
+                {"name": "chatterbox", "available": True},
+                {"name": "qwen3_tts", "available": True},
+                {"name": "edgetts", "available": True},
+                {"name": "fish_tts", "available": False},
+                {"name": "openai_tts", "available": False},
+            ],
+        }
+
+    monkeypatch.setattr(VoicesService, "get_engines", fake_get_engines)
     client.invalidate_catalog()
     return gateway
 

@@ -66,6 +66,8 @@
         {% set current_language = c.language %}
         {% set current_voice = c.voice %}
         {% set current_backend = c.tts_backend or 'edge' %}
+        {% set current_gateway_engine = c.gateway_engine or '' %}
+        {% set tts_options = tts_options_by_collection.get(c.name, tts_options) %}
         <div id="tts-options-{{ c.name }}" style="display:contents">
           {% include "partials/_tts_options.html" %}
         </div>
@@ -351,6 +353,7 @@
       {% set current_language = 'es' %}
       {% set current_voice = '' %}
       {% set current_backend = 'edge' %}
+      {% set current_gateway_engine = '' %}
       <div id="tts-options-nueva" style="display:contents">
         {% include "partials/_tts_options.html" %}
       </div>

@@ -122,6 +122,14 @@ class CollectionConfig(BaseModel):
             "'voxcpm2'. Empty falls back to TTS_DEFAULT_BACKEND."
         ),
     )
+    gateway_engine: str = Field(
+        default="",
+        description=(
+            "Gateway sub-engine pinned for omni_voice digest/narration audio "
+            "(e.g. 'pocket_tts', 'piper', 'kokoro'). Empty uses the gateway's "
+            "active engine or the language routing."
+        ),
+    )
     prompt_template: str = Field(
         default=DEFAULT_PROMPT_TEMPLATE,
         description="Prompt template name from src/core/prompts.py"
@@ -416,6 +424,12 @@ class CollectionConfig(BaseModel):
         if canonical not in ALLOWED_BACKENDS:
             raise ValueError(f"tts_backend must be one of {list(ALLOWED_BACKENDS)}: {value!r}")
         return canonical
+
+    @field_validator("gateway_engine")
+    @classmethod
+    def _gateway_engine_is_normalized(cls, value: str) -> str:
+        """Normalize a dynamic gateway sub-engine id without a fixed allowlist."""
+        return (value or "").strip().lower()
 
     def resolved_feed_sources(self) -> list[FeedSource]:
         """Return each configured feed with its reliability and extra hosts.

@@ -56,11 +56,12 @@ class VoicesService:
         self._stock_cache: list[dict[str, Any]] = []
         self._cloned_cache: list[dict[str, Any]] = []
 
-    async def _get(self, path: str) -> Any:
+    async def _get(self, path: str, params: dict[str, str] | None = None) -> Any:
         """GET a JSON endpoint of the OmniVoice API.
 
         Args:
             path: Path appended to the base URL (e.g. 'voices/stock').
+            params: Optional query parameters.
 
         Returns:
             Parsed JSON payload.
@@ -71,22 +72,42 @@ class VoicesService:
         settings = get_settings()
         url = f"{self._api_base_url}/{path}"
         async with httpx.AsyncClient(timeout=settings.api_request_timeout) as client:
-            response = await client.get(url, headers=_headers(settings))
+            response = await client.get(url, headers=_headers(settings), params=params)
             response.raise_for_status()
             return response.json()
 
     async def list_stock(
-        self, language: str | None = None, force: bool = False
+        self,
+        language: str | None = None,
+        force: bool = False,
+        engine: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List available stock voices, optionally filtered by language.
+        """List available stock voices, optionally filtered by language and engine.
 
         Args:
             language: ISO 639-1 filter (e.g. 'es', 'en').
             force: Bypass the short-TTL cache.
+            engine: Gateway engine id to ask for its own stock catalogue. ``None``
+                keeps the historical behaviour (the gateway's active engine).
 
         Returns:
             List of stock voice dicts with voice_id / language / gender / name.
         """
+        if engine:
+            params = {"engine": engine}
+            if language:
+                params["language"] = language
+            try:
+                data = await self._get("voices/stock", params=params)
+                if isinstance(data, list):
+                    return [
+                        StockVoice.model_validate(item).model_dump()
+                        for item in data
+                        if isinstance(item, dict)
+                    ]
+            except httpx.HTTPError as exc:
+                logger.warning("voices_engine_stock_fetch_failed", engine=engine, error=str(exc))
+            return []
         now = time.monotonic()
         if force or (now - self._cache_ts) > CACHE_TTL_SECONDS or not self._stock_cache:
             try:
@@ -105,6 +126,27 @@ class VoicesService:
             voices = [v for v in voices if v.get("language") == language]
         return voices
 
+    async def get_engines(self) -> dict[str, Any]:
+        """Return the gateway engine catalog (``GET /engines``).
+
+        Returns:
+            Dict with the ``engines`` list and the top-level ``active`` id.
+            Empty lists when the gateway answers an unexpected shape.
+
+        Raises:
+            httpx.HTTPError: On transport or non-2xx errors.
+        """
+        data = await self._get("engines")
+        if not isinstance(data, dict):
+            return {"engines": [], "active": ""}
+        engines = data.get("engines")
+        return {
+            "engines": [item for item in engines if isinstance(item, dict)]
+            if isinstance(engines, list)
+            else [],
+            "active": str(data.get("active") or ""),
+        }
+
     async def list_engines(self) -> list[dict[str, Any]]:
         """List the gateway engine descriptors (``GET /engines``).
 
@@ -115,12 +157,7 @@ class VoicesService:
         Raises:
             httpx.HTTPError: On transport or non-2xx errors.
         """
-        data = await self._get("engines")
-        if isinstance(data, dict):
-            data = data.get("engines")
-        if not isinstance(data, list):
-            return []
-        return [item for item in data if isinstance(item, dict)]
+        return (await self.get_engines())["engines"]
 
     async def list_languages(self, force: bool = False) -> list[str]:
         """List unique ISO 639-1 language codes across stock voices.

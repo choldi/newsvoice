@@ -575,6 +575,7 @@ async def synthesize(
     speed: float = 1.0,
     emotion: str | None = None,
     pitch_hz: float = 0.0,
+    gateway_engine: str | None = None,
 ) -> bytes:
     """Synthesize ``text`` with the chosen engine.
 
@@ -594,6 +595,8 @@ async def synthesize(
         emotion: Optional emotion tag for engines that support it (currently
             the OmniVoice gateway engine).
         pitch_hz: Pitch shift in hertz for Edge; ignored by the other engines.
+        gateway_engine: Optional gateway sub-engine pin. Only honored for the
+            ``omni_voice`` backend; the explicit Kokoro/Fish/OpenAI pins remain.
 
     Returns:
         Raw audio bytes in the backend's native format (see :func:`ext_for`).
@@ -630,7 +633,11 @@ async def synthesize(
             voice,
             language,
             timeout=timeout if timeout is not None else None,
-            engine=backend.value if backend is not TTSBackend.OMNIVOICE else None,
+            engine=(
+                (gateway_engine or "").strip().lower() or None
+                if backend is TTSBackend.OMNIVOICE
+                else backend.value
+            ),
             speed=speed,
             emotion=emotion if backend is TTSBackend.OMNIVOICE else None,
         )

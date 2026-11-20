@@ -528,8 +528,9 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
     Args:
         digest: Dict containing the digest text under the 'digest' key, optional
             'language'/'voice' overrides for this podcast, optional 'backend'
-            (edge | omni_voice | qwen3_tts | zonos2 | voxcpm2), plus 'run_id' and
-            'collection' used to key the audio job status.
+            (edge | omni_voice | qwen3_tts | zonos2 | voxcpm2), optional
+            'gateway_engine' pin for omni_voice, plus 'run_id' and 'collection'
+            used to key the audio job status.
 
     Returns:
         Dict with audio_path, duration_estimate, cached, voice, backend and
@@ -561,6 +562,7 @@ async def generate_tts_activity(digest: dict[str, Any]) -> dict[str, Any]:
             voice=voice,
             collection=collection,
             backend=digest.get("backend") or None,
+            gateway_engine=digest.get("gateway_engine") or None,
         )
         # Phase 8.1/8.4: the waiter row is written before the queueing begins,
         # which is the event that makes a running document render let go of the

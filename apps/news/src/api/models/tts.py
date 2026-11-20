@@ -39,6 +39,13 @@ class TTSIn(BaseModel):
         default=None,
         description="Synthesis engine; empty falls back to TTS_DEFAULT_BACKEND.",
     )
+    gateway_engine: str | None = Field(
+        default=None,
+        description=(
+            "Gateway sub-engine pin for omni_voice (e.g. 'pocket_tts'); empty "
+            "lets the gateway route by language."
+        ),
+    )
 
     @model_validator(mode="after")
     def _voice_matches_the_backend(self) -> TTSIn:

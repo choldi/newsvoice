@@ -24,9 +24,13 @@ from tts_api.services.voice_service import VoiceService
 router = APIRouter(prefix="/voices", tags=["voices"])
 
 
-async def get_engine_client() -> AsyncIterator[OmniVoiceEngineClient]:
+async def get_engine_client(
+    engine: str | None = Query(None, description="Engine del gateway a consultar"),
+) -> AsyncIterator[OmniVoiceEngineClient]:
     """Dependency para obtener el cliente del engine."""
-    client = OmniVoiceEngineClient()
+    from tts_api.core.engine_factory import create_engine
+
+    client = OmniVoiceEngineClient(create_engine(engine) if engine else None)
     await client.start()
     try:
         yield client

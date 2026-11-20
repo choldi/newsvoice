@@ -96,7 +96,11 @@ SIDECAR_VERSION = 2
 
 
 def _content_hash(
-    speech_text: str, voice: str, language: str, backend: TTSBackend = TTSBackend.EDGE
+    speech_text: str,
+    voice: str,
+    language: str,
+    backend: TTSBackend = TTSBackend.EDGE,
+    gateway_engine: str = "",
 ) -> str:
     """Hash the inputs that fully determine a synthesis.
 
@@ -105,12 +109,13 @@ def _content_hash(
         voice: Resolved voice id, in the backend's own vocabulary.
         language: ISO 639-1 language code.
         backend: Engine that will synthesize (different engines, different audio).
+        gateway_engine: Gateway sub-engine pin; empty for non-gateway backends.
 
     Returns:
         Hex SHA-256 digest.
     """
     return hashlib.sha256(
-        "\x1f".join((str(backend), voice, language, speech_text)).encode()
+        "\x1f".join((str(backend), gateway_engine, voice, language, speech_text)).encode()
     ).hexdigest()
 
 
@@ -319,6 +324,8 @@ class _Prepared:
     """Plain text handed to the engine (truncated and markdown-stripped)."""
     backend: TTSBackend
     """Engine that will synthesize (or did, for a cache hit)."""
+    gateway_engine: str
+    """Gateway sub-engine pin; empty unless the backend is omni_voice."""
     voice: str
     """Voice id in the engine's own vocabulary."""
     language: str
@@ -382,16 +389,22 @@ class TTSService:
         """
         language = payload.language or self._default_language
         backend = resolve_backend(payload.backend)
+        gateway_engine = (
+            (payload.gateway_engine or "").strip().lower()
+            if backend is TTSBackend.OMNIVOICE
+            else ""
+        )
         resolved_voice = await voice_for(backend, payload.voice or self._default_voice, language)
         speech_text = speech_text_for_digest(payload.markdown, self._max_chars)
         audio_path = self._cache_dir / _audio_filename(payload.collection, ext=ext_for(backend))
         return _Prepared(
             speech_text=speech_text,
             backend=backend,
+            gateway_engine=gateway_engine,
             voice=resolved_voice,
             language=language,
             audio_path=audio_path,
-            digest=_content_hash(speech_text, resolved_voice, language, backend),
+            digest=_content_hash(speech_text, resolved_voice, language, backend, gateway_engine),
         )
 
     async def cache_probe(self, payload: TTSIn) -> bool:
@@ -464,6 +477,7 @@ class TTSService:
                             "version": SIDECAR_VERSION,
                             "sha256": prepared.digest,
                             "backend": str(prepared.backend),
+                            "gateway_engine": prepared.gateway_engine,
                             "voice": prepared.voice,
                             "language": prepared.language,
                             "char_count": len(prepared.speech_text),
@@ -539,6 +553,7 @@ class TTSService:
                 prepared.voice,
                 prepared.language,
                 timeout=float(self._request_timeout),
+                gateway_engine=prepared.gateway_engine,
             )
             return audio, False
         except Exception as exc:

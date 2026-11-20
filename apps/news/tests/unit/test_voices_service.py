@@ -65,6 +65,18 @@ async def test_list_stock_handles_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_stock_with_engine_uses_query_params() -> None:
+    """An engine-specific read asks the gateway for that engine's catalogue."""
+    service = VoicesService(api_base_url="http://tts.test/api/v1")
+
+    with patch.object(service, "_get", new_callable=AsyncMock, return_value=STOCK) as mock_get:
+        voices = await service.list_stock(language="es", engine="kokoro")
+
+    assert voices == STOCK
+    mock_get.assert_awaited_once_with("voices/stock", params={"engine": "kokoro", "language": "es"})
+
+
+@pytest.mark.asyncio
 async def test_clone_voice_posts_form() -> None:
     """clone_voice POSTs the reference audio and returns the API JSON."""
     service = VoicesService(api_base_url="http://tts.test/api/v1")

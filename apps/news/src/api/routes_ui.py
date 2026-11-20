@@ -171,7 +171,7 @@ def _collections() -> list:
     return CollectionsRepository().list()
 
 
-async def _omni_options() -> dict:
+async def _omni_options(engine: str | None = None) -> dict:
     """Fetch OmniVoice languages and voices for the TTS dropdowns.
 
     Returns:
@@ -179,7 +179,7 @@ async def _omni_options() -> dict:
         cloned, tagged with engine and category by the voice registry). Empty
         lists if OmniVoice is unreachable.
     """
-    languages, voices = await gateway_options()
+    languages, voices = await gateway_options(engine=engine) if engine else await gateway_options()
     return _registry_options(languages, voices)
 
 
@@ -573,6 +573,24 @@ TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("voxcpm2", "VoxCPM2 (Modal)"),
 )
 
+#: Gateway engine ids reported by ``GET /engines`` that news-engine can drive
+#: through the ``omni_voice`` backend. They are offered as a second select next
+#: to the voice so an operator can pick the engine that actually owns the voice.
+GATEWAY_ENGINE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("", "(engine activo del gateway)"),
+    ("omnivoice", "OmniVoice (local)"),
+    ("omnivoice_remote", "OmniVoice remote (sidecar)"),
+    ("pocket_tts", "Pocket TTS"),
+    ("edgetts", "EdgeTTS (gateway)"),
+    ("piper", "Piper"),
+    ("chatterbox", "Chatterbox"),
+    ("qwen3_tts", "Qwen3-TTS (gateway)"),
+    ("zono2", "ZONOS2"),
+    ("kokoro", "Kokoro"),
+    ("fish_tts", "Fish Audio"),
+    ("openai_tts", "OpenAI-compatible"),
+)
+
 #: Engines the audiobook form may offer (Phase 11.10). The Modal-only engines
 #: are excluded because a book renders for hours, and qwen3_tts is labelled by
 #: the route the audiobook path always takes: the local gateway engine.
@@ -654,6 +672,39 @@ def _modal_voice_options() -> dict:
     return _registry_options(languages, voices)
 
 
+async def _gateway_engine_choices() -> tuple[tuple[str, str], ...]:
+    """Return the gateway engines that are actually available, from ``/engines``.
+
+    The public menu is intentionally wider than the TTSBackend enum: an operator
+    may run Pocket TTS, Piper or Chatterbox behind the gateway, and each has its
+    own voice catalogue. If ``/engines`` cannot be reached, the static list is
+    kept so an outage does not silently remove choices.
+    """
+    from src.api.services.voices import VoicesService
+
+    try:
+        payload = await VoicesService().get_engines()
+    except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
+        logger.warning("gateway_engine_choices_failed", error=str(exc))
+        return GATEWAY_ENGINE_CHOICES
+    engines = payload["engines"]
+    if not engines:
+        return GATEWAY_ENGINE_CHOICES
+    known = {value for value, _ in GATEWAY_ENGINE_CHOICES if value}
+    available = {
+        str(item.get("name") or "")
+        for item in engines
+        if item.get("available") and str(item.get("name") or "") in known
+    }
+    active = str(payload.get("active") or "")
+    choices = [
+        (value, label)
+        for value, label in GATEWAY_ENGINE_CHOICES
+        if not value or value in available or value == active
+    ]
+    return tuple(choices) if len(choices) > 1 else GATEWAY_ENGINE_CHOICES
+
+
 async def _tts_backend_choices() -> tuple[tuple[str, str], ...]:
     """Return the TTS dropdown choices, hiding unconfigured cloud engines.
 
@@ -680,7 +731,7 @@ async def _tts_backend_choices() -> tuple[tuple[str, str], ...]:
     )
 
 
-async def _tts_voice_options(backend: str) -> dict:
+async def _tts_voice_options(backend: str, gateway_engine: str = "") -> dict:
     """Return the language and voice catalogue of one TTS engine.
 
     Each engine has its own voice vocabulary (Edge ShortNames, tts-api stock ids
@@ -690,6 +741,8 @@ async def _tts_voice_options(backend: str) -> dict:
 
     Args:
         backend: Canonical engine id ('edge', 'omni_voice', 'qwen3_tts', ...).
+        gateway_engine: Gateway engine id whose stock voices must be listed when
+            the backend is the tts-api gateway.
 
     Returns:
         Dict with 'languages' and normalized 'voices'; both empty when the
@@ -700,7 +753,7 @@ async def _tts_voice_options(backend: str) -> dict:
     if backend in ("qwen3_tts", "zonos2", "voxcpm2"):
         return _modal_voice_options()
     if backend == "fish_tts":
-        gateway = await _omni_options()
+        gateway = await _omni_options(engine=gateway_engine or "fish_tts")
         catalog = _modal_voice_options()
         fish = [v for v in gateway["voices"] if "fish_tts" in v["engines"]]
         clones = [dict(v, engines=["fish_tts"]) for v in catalog["voices"]]
@@ -713,27 +766,35 @@ async def _tts_voice_options(backend: str) -> dict:
         languages = sorted({v["language"] for v in voices if v["language"]})
         return {"languages": languages, "voices": voices}
     if backend == "openai_tts":
-        gateway = await _omni_options()
+        gateway = await _omni_options(engine=gateway_engine or "openai_tts")
         voices = [v for v in gateway["voices"] if "openai_tts" in v["engines"]]
         languages = sorted({v["language"] for v in voices if v["language"]})
         return {"languages": languages, "voices": voices}
-    gateway = await _omni_options()
+    gateway = await _omni_options(engine=gateway_engine or None)
     return {
         "languages": gateway["languages"],
         "voices": _normalize_voice_entries(gateway["voices"]),
     }
 
 
-async def _tts_options_by_backend(backends: set[str]) -> dict[str, dict]:
+async def _tts_options_by_backend(
+    backends: set[str],
+    gateway_engine_by_backend: dict[str, str] | None = None,
+) -> dict[str, dict]:
     """Fetch the voice catalogue of every engine the page has to render.
 
     Args:
         backends: Canonical engine ids in use by the collections on the page.
+        gateway_engine_by_backend: Optional gateway engine id per public backend.
 
     Returns:
         Mapping of engine id to its catalogue.
     """
-    return {backend: await _tts_voice_options(backend) for backend in sorted(backends)}
+    engines = gateway_engine_by_backend or {}
+    return {
+        backend: await _tts_voice_options(backend, engines.get(backend, ""))
+        for backend in sorted(backends)
+    }
 
 
 def _split_list(raw: str) -> list[str]:
@@ -1083,6 +1144,13 @@ async def ui_collections(request: Request) -> HTMLResponse:
         if any(c.tts_enabled for c in collections)
         else {}
     )
+    tts_options_by_collection: dict[str, dict] = {}
+    if any(c.tts_enabled for c in collections):
+        for c in collections:
+            backend = resolve_backend(c.tts_backend or None).value
+            if backend != "omni_voice" or not c.gateway_engine:
+                continue
+            tts_options_by_collection[c.name] = await _tts_voice_options(backend, c.gateway_engine)
     # Phase 9.2: the cast datalists follow the narration engine of each form,
     # so the page also fetches the catalogue of every engine in narration use.
     cast_engines = {
@@ -1098,7 +1166,10 @@ async def ui_collections(request: Request) -> HTMLResponse:
             "collections": collections,
             "omni": omni,
             "tts_backends": tts_backends,
+            "gateway_engines": await _gateway_engine_choices(),
+            "current_gateway_engine": "",
             "tts_options": tts_options,
+            "tts_options_by_collection": tts_options_by_collection,
             "cast_options": cast_options,
             "emotion_tags": EMOTION_TAGS,
         },
@@ -1512,6 +1583,7 @@ async def ui_fragment_tts_options(
     tts_backend: str = "",
     language: str = "",
     voice: str = "",
+    gateway_engine: str = "",
 ) -> HTMLResponse:
     """Render the engine/language/voice fields for a collection form (Phase 8).
 
@@ -1526,6 +1598,7 @@ async def ui_fragment_tts_options(
         tts_backend: Current engine ('edge', 'omni_voice', ...).
         language: Current language value to keep selected.
         voice: Current voice value to keep selected.
+        gateway_engine: Gateway engine id selected for the voice catalogue.
 
     Returns:
         HTMLResponse with the _tts_options partial.
@@ -1536,7 +1609,11 @@ async def ui_fragment_tts_options(
         engine = str(resolve_backend(tts_backend or None).value)
     except Exception:  # noqa: BLE001 - an unknown engine renders as the default
         engine = "edge"
-    options = await _tts_voice_options(engine) if tts_enabled else {"languages": [], "voices": []}
+    options = (
+        await _tts_voice_options(engine, gateway_engine)
+        if tts_enabled
+        else {"languages": [], "voices": []}
+    )
     tts_backends = await _tts_backend_choices()
     return _render(
         request,
@@ -1545,6 +1622,8 @@ async def ui_fragment_tts_options(
             "tts_enabled": bool(tts_enabled),
             "tts_backends": tts_backends,
             "current_backend": engine,
+            "gateway_engines": await _gateway_engine_choices(),
+            "current_gateway_engine": gateway_engine,
             "tts_options": {engine: options},
             "current_language": language,
             "current_voice": voice,
@@ -1769,6 +1848,7 @@ async def ui_create_collection(request: Request) -> RedirectResponse:
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
             tts_backend=fields.get("tts_backend") or "edge",
+            gateway_engine=fields.get("gateway_engine", "").strip(),
             prompt_template=fields.get("prompt_template") or "default",
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
@@ -1845,6 +1925,7 @@ async def ui_update_collection(name: str, request: Request) -> RedirectResponse:
             language=fields.get("language", ""),
             voice=fields.get("voice", ""),
             tts_backend=fields.get("tts_backend") or current.tts_backend,
+            gateway_engine=fields.get("gateway_engine", current.gateway_engine or "").strip(),
             prompt_template=fields.get("prompt_template") or "default",
             custom_prompt=fields.get("custom_prompt", ""),
             chat_id=fields.get("chat_id") or None,
@@ -2766,6 +2847,11 @@ async def ui_tools(request: Request) -> HTMLResponse:
     omni = await _omni_options()
     edge = await _edge_voice_options()
     all_voices = [voice.model_dump() for voice in await list_all_voices()]
+    gateway_engine_choices = await _gateway_engine_choices()
+    gateway_engines = [value for value, _ in gateway_engine_choices if value]
+    for engine in gateway_engines:
+        voices = _registry_options(*await gateway_options(engine=engine))["voices"]
+        all_voices.extend(voice for voice in voices if voice not in all_voices)
     from src.core.config import get_settings
 
     doc_picker = _picker_context(
@@ -2782,7 +2868,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
         edge["voices"],
         picker_id="audiobook",
         field="voice",
-        engines="edge",
+        engines="all",
         empty_label="(por defecto)",
         langs=False,
         lang="es",
@@ -3102,6 +3188,7 @@ async def ui_fragment_voice_picker(
     voice2_q: str = "",
     lang: str = "",
     engines: str = "all",
+    picker_engines: str = "all",
     engine: str = "",
     empty_label: str = "",
     language: str = "",
@@ -3138,7 +3225,8 @@ async def ui_fragment_voice_picker(
         voice2_q: Glob query typed in the target search box (dual mode).
         lang: Legacy language prefix param, kept for tests ('' normally).
         engines: 'all' or the canonical engine of the vocabulary (the doc
-            picker sends 'edge').
+            picker sends 'edge'). ``picker_engines`` is the actual hidden hint
+            sent by the partial; both are accepted for compatibility.
         engine: Engine select of the form ('', 'all' or a canonical backend);
             wins over the picker's hidden ``engines`` hint and filters the
             results through :func:`engines_for_voice` so the list only shows
@@ -3156,7 +3244,8 @@ async def ui_fragment_voice_picker(
     current = voice2 if wanted_field == "voice2" else voice
     query = (voice2_q if wanted_field == "voice2" else voice_q) or q
     engine_param = (engine or "").strip()
-    legacy_engine = engines.strip() if engines.strip() not in {"", "all"} else ""
+    engine_hint = (picker_engines or engines).strip()
+    legacy_engine = engine_hint if engine_hint not in {"", "all"} else ""
     resolved = _picker_lang_param(
         field=wanted_field,
         lang=lang,
@@ -3166,13 +3255,20 @@ async def ui_fragment_voice_picker(
         target_language=target_language,
     )
     if engine_param and engine_param != "all":
-        # The form's engine select: filter with the same predicate the submit
-        # guard uses (an unknown id stays a wildcard, like validation does).
-        voices = [entry.model_dump() for entry in await list_all_voices()]
+        # The form's engine select: ask the gateway for that engine's own stock
+        # catalogue when it is one of its sub-engines, then let the multi-engine
+        # guard filter the same way submit validation does.
+        voices = [
+            entry.model_dump() for entry in await list_all_voices(gateway_engine=engine_param)
+        ]
         allowed = []
         for entry in voices:
             speaks = engines_for_voice(str(entry.get("id") or ""))
             if not speaks or engine_param in speaks:
+                allowed.append(entry)
+            elif entry.get("category") == "stock" and any(
+                str(g) == engine_param for g in entry.get("engines") or []
+            ):
                 allowed.append(entry)
     else:
         allowed = [

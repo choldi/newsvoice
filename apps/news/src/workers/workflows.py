@@ -134,6 +134,7 @@ class PipelineConfig:
     # workflow cannot read settings, and the schedule/trigger are what know the
     # collection. 'edge' | 'omni_voice' | 'qwen3_tts' | 'zonos2' | 'voxcpm2'.
     tts_backend: str = "edge"
+    gateway_engine: str = ""
     collection: str = "default"
     prompt_template: str = "default"
     custom_prompt: str = ""
@@ -379,6 +380,7 @@ class DigestPipelineWorkflow:
                         "language": config.language,
                         "voice": config.voice,
                         "backend": config.tts_backend,
+                        "gateway_engine": config.gateway_engine,
                         "run_id": workflow.info().workflow_id,
                         "collection": config.collection,
                     },

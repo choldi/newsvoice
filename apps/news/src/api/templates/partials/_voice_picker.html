@@ -19,7 +19,7 @@
    Context: `picker` dict from `_picker_context`. #}
 <div class="voice-picker" id="picker-{{ picker.picker_id }}">
   <input type="hidden" name="field" value="{{ picker.field }}">
-  <input type="hidden" name="engines" value="{{ picker.engines }}">
+  <input type="hidden" name="picker_engines" value="{{ picker.engines }}">
   {% if picker.empty_label %}<input type="hidden" name="empty_label" value="{{ picker.empty_label }}">{% endif %}
   <input type="text" name="{{ picker.field }}_q" value="{{ picker.q }}"
          placeholder="Buscar voz (Mich*clo)"

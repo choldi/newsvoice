@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import src.api.services.tts as tts_module
+from src.api.models.narration import TTSBackend
 from src.api.models.tts import TTSIn
 from src.api.services.tts import (
     TTSService,
@@ -225,6 +226,35 @@ async def test_generate_tts_sidecar_records_inputs(
     assert meta["char_count"] == len("hola mundo")
     assert meta["sha256"] == tts_module._content_hash("hola mundo", "es-MX-JorgeNeural", "es")
     assert meta["generated_at"]
+
+
+async def test_gateway_engine_is_forwarded_and_part_of_the_cache_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two sub-engine pins never share cached audio or the synthesis request."""
+    calls: list[dict[str, object]] = []
+
+    async def fake_synthesize(backend, text, voice, language, **kwargs):
+        calls.append({"backend": backend, "gateway_engine": kwargs.get("gateway_engine")})
+        return b"RIFF"
+
+    monkeypatch.setattr(tts_module, "synthesize_with_backend", fake_synthesize)
+    service = TTSService(cache_dir=str(tmp_path))
+    base = {
+        "markdown": "hola",
+        "voice": "stock-es",
+        "language": "es",
+        "collection": "tech",
+        "backend": TTSBackend.OMNIVOICE,
+    }
+
+    await service.generate_tts(TTSIn(**base, gateway_engine="pocket_tts"))
+    await service.generate_tts(TTSIn(**base, gateway_engine="piper"))
+
+    assert calls == [
+        {"backend": TTSBackend.OMNIVOICE, "gateway_engine": "pocket_tts"},
+        {"backend": TTSBackend.OMNIVOICE, "gateway_engine": "piper"},
+    ]
 
 
 async def test_generate_tts_leaves_no_temp_files(

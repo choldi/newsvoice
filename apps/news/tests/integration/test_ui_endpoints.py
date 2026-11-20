@@ -100,6 +100,43 @@ def test_tts_options_fragment_follows_the_selected_engine() -> None:
     assert '<input type="text" name="voice"' in edge.text
 
 
+def test_tts_options_fragment_offers_the_selected_gateway_engine() -> None:
+    """The API backend exposes the available engines and their own voices."""
+    client = _ui_client()
+    _login(client)
+
+    async def list_stock(
+        language: str | None = None,
+        force: bool = False,
+        engine: str | None = None,
+    ) -> list[dict[str, str]]:
+        if engine == "kokoro":
+            return [{"voice_id": "kokoro-es", "language": "es", "engine": "kokoro"}]
+        return [{"voice_id": "es-mx-male", "language": "es", "engine": ""}]
+
+    with (
+        patch(
+            "src.api.routes_ui.VoicesService.list_stock",
+            new_callable=AsyncMock,
+            side_effect=list_stock,
+        ),
+        patch(
+            "src.api.routes_ui.VoicesService.list_cloned",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        fragment = client.get(
+            f"{_TTS_FRAGMENT_URL}?tts_enabled=on&tts_backend=omni_voice&gateway_engine=kokoro"
+        )
+
+    assert fragment.status_code == 200
+    assert 'name="gateway_engine"' in fragment.text
+    assert 'value="kokoro" selected' in fragment.text
+    assert 'value="kokoro-es"' in fragment.text
+    assert 'value="es-mx-male"' not in fragment.text
+
+
 def test_tts_options_fragment_renders_text_inputs_when_disabled() -> None:
     """Without TTS the fragment falls back to free-text language/voice inputs."""
     client = _ui_client()
@@ -841,6 +878,39 @@ def test_collections_gui_round_trips_the_tts_backend() -> None:
 
     repo = CollectionsRepository()
     assert repo.get("motor").tts_backend == "qwen3_tts"
+
+
+def test_collections_gui_round_trips_the_gateway_engine() -> None:
+    """The gateway sub-engine survives create, edit and the TOML file."""
+    client = _ui_client()
+    _login(client)
+    client.post(
+        "/ui/collections",
+        data={
+            "name": "motor",
+            "tts_enabled": "on",
+            "tts_backend": "omni_voice",
+            "gateway_engine": "piper",
+            "feed_urls": "https://a/rss",
+        },
+    )
+
+    page = client.get("/ui/collections")
+    assert 'name="gateway_engine"' in page.text
+    assert 'value="piper" selected' in page.text
+
+    client.post(
+        "/ui/collections/motor/update",
+        data={
+            "new_name": "motor",
+            "tts_enabled": "on",
+            "tts_backend": "omni_voice",
+            "gateway_engine": "kokoro",
+            "feed_urls": "https://a/rss",
+        },
+    )
+
+    assert CollectionsRepository().get("motor").gateway_engine == "kokoro"
 
 
 def _emit_log(event: str, component: str = "ui.test") -> None:

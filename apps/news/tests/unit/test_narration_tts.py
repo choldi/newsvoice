@@ -488,6 +488,28 @@ async def test_synthesize_turn_pins_engine_per_language(
     await service.aclose()
 
 
+async def test_synthesize_turn_honours_an_explicit_gateway_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spec/collection pin wins over the language routing table."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, content=_wav())
+
+    service, _ = _service(tmp_path, handler)
+    monkeypatch.setattr(settings, "narration_fallback_to_edge", False)
+    monkeypatch.setattr(
+        settings, "narration_engine_by_language", '{"es": "pocket_tts", "ca": "edgetts"}'
+    )
+
+    await service.synthesize_turn("Hola", "es-mx-male", "es", gateway_engine="piper")
+
+    assert seen["engine"] == "piper"
+    await service.aclose()
+
+
 async def test_synthesize_turn_omits_engine_when_unmapped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

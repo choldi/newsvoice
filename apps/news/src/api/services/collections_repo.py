@@ -40,6 +40,7 @@ _COLLECTION_KEYS = (
     "language",
     "voice",
     "tts_backend",
+    "gateway_engine",
     "prompt_template",
     "custom_prompt",
     "chat_id",

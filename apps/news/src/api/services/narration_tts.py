@@ -676,6 +676,7 @@ class NarrationTTSService:
         allow_edge_fallback: bool | None = None,
         backend: TTSBackend = TTSBackend.OMNIVOICE,
         run_in_modal: bool | None = None,
+        gateway_engine: str | None = None,
     ) -> tuple[bytes, bool]:
         """Synthesize one turn, dispatching on the configured backend.
 
@@ -693,6 +694,8 @@ class NarrationTTSService:
                 (default) means use the instance default
                 ``self._fallback_to_edge``.
             backend: Engine that synthesizes the turn.
+            gateway_engine: Gateway sub-engine pin for the omni_voice backend;
+                empty keeps the configured per-language routing.
 
         Returns:
             Tuple of ``(wav_bytes, used_edge_fallback)``. The fallback flag is
@@ -856,7 +859,8 @@ class NarrationTTSService:
             language=language,
             speed=speed,
             emotion=emotion or None,
-            engine=get_settings().narration_engine_for(language),
+            engine=(gateway_engine or "").strip().lower()
+            or get_settings().narration_engine_for(language),
         ).model_dump(exclude_none=True)
         try:
             return await self._post_audio("tts", payload), False
@@ -1386,6 +1390,7 @@ class NarrationTTSService:
                     allow_edge_fallback=allow_fallback,
                     backend=spec.tts_backend,
                     run_in_modal=getattr(spec, "run_in_modal", False),
+                    gateway_engine=getattr(spec, "gateway_engine", ""),
                 )
                 fallbacks += int(used_edge)
                 audio = await self._to_canonical(audio)
@@ -1538,6 +1543,10 @@ class NarrationTTSService:
             raise NarrationRenderError(
                 "conversations strategy is only supported by the omni_voice backend"
             )
+        if used_conversations and (spec.gateway_engine or "").strip():
+            raise NarrationRenderError(
+                "conversations strategy cannot pin a gateway engine; use the turns strategy"
+            )
         is_dialog = self._is_dialog(spec, script, strategy)
         allow_fallback = self._dialog_fallback_to_edge if is_dialog else self._fallback_to_edge
         if is_dialog and not allow_fallback:
@@ -1598,6 +1607,7 @@ class NarrationTTSService:
                     "conversation_blocks": conversation_blocks,
                     "music": spec.music.track if spec.music else None,
                     "tts_backend": str(spec.tts_backend),
+                    "gateway_engine": spec.gateway_engine,
                     "voice_source": str(spec.voice_source),
                     "ai_disclosure": spec.ai_disclosure,
                     "generated_at": datetime.now(UTC).isoformat(),

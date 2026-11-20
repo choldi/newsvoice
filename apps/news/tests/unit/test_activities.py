@@ -113,6 +113,7 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
                 "digest": "# Top Stories",
                 "language": "en",
                 "voice": "en-gb-female",
+                "gateway_engine": "piper",
                 "run_id": "test-tts-run",
                 "collection": "health",
             },
@@ -124,6 +125,7 @@ async def test_generate_tts_activity_returns_audio_path() -> None:
     assert tts_in.language == "en"
     assert tts_in.voice == "en-gb-female"
     assert tts_in.collection == "health"
+    assert tts_in.gateway_engine == "piper"
 
     job = await AudioJobsRepository().get_job("test-tts-run")
     assert job is not None

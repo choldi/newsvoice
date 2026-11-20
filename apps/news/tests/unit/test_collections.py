@@ -626,6 +626,12 @@ def test_tts_backend_accepts_every_engine_and_canonicalizes_aliases() -> None:
     assert CollectionConfig(name="e", tts_backend="edgetts").tts_backend == "edge"
 
 
+def test_gateway_engine_defaults_empty_and_is_normalized() -> None:
+    """A collection can pin a dynamic gateway sub-engine without a fixed enum."""
+    assert CollectionConfig(name="tech").gateway_engine == ""
+    assert CollectionConfig(name="tech", gateway_engine=" KOKORO ").gateway_engine == "kokoro"
+
+
 def test_tts_backend_empty_falls_back_to_the_global_default() -> None:
     """An empty value is allowed so a shared default can be inherited."""
     collection = CollectionConfig(name="tech", tts_backend="")

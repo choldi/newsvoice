@@ -54,6 +54,13 @@ class CollectionIn(BaseModel):
             "'zonos2' or 'voxcpm2'. Empty inherits TTS_DEFAULT_BACKEND."
         ),
     )
+    gateway_engine: str = Field(
+        default="",
+        description=(
+            "Gateway sub-engine pinned for omni_voice audio (e.g. 'pocket_tts', "
+            "'piper', 'kokoro'). Empty uses the gateway's active engine."
+        ),
+    )
     prompt_template: str = Field(
         default=DEFAULT_PROMPT_TEMPLATE,
         description="Prompt template name from DIGEST_TEMPLATE_ADDITIONS",

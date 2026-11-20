@@ -30,7 +30,7 @@ from temporalio.client import (
 )
 
 from src.api.models.monitoring import MonitorRunConfig
-from src.api.models.narration import NarrationSpec
+from src.api.models.narration import NarrationSpec, TTSBackend
 from src.core.collections import CollectionConfig, get_collections
 from src.core.config import settings
 from src.workers.podcast_target import podcast_target
@@ -98,10 +98,17 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
     """
     narration_payload = None
     if collection.narration_enabled and collection.narration_spec:
+        narration_spec = collection.narration_spec.model_dump()
+        if (
+            not narration_spec.get("gateway_engine")
+            and collection.gateway_engine
+            and collection.narration_spec.tts_backend is TTSBackend.OMNIVOICE
+        ):
+            narration_spec["gateway_engine"] = collection.gateway_engine
         narration_payload = {
             "namespace": _narration_namespace(collection.narration_spec),
             "task_queue": _narration_task_queue(collection.narration_spec),
-            "spec": collection.narration_spec.model_dump(),
+            "spec": narration_spec,
             "strategy": collection.narration_strategy,
             # Phase 7.14: resolved here (workflow-safe) and consumed by the
             # render activity on the narration worker; only when the narration
@@ -133,6 +140,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         language=collection.language or settings.tts_language,
         voice=collection.voice or settings.tts_voice,
         tts_backend=collection.tts_backend or settings.tts_default_backend,
+        gateway_engine=collection.gateway_engine,
         collection=collection.name,
         prompt_template=collection.prompt_template,
         custom_prompt=collection.custom_prompt,

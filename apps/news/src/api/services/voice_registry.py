@@ -105,8 +105,13 @@ def _dedupe(voices: list[VoiceOption]) -> list[VoiceOption]:
     return list(merged.values())
 
 
-async def gateway_options() -> tuple[list[str], list[VoiceOption]]:
+async def gateway_options(engine: str | None = None) -> tuple[list[str], list[VoiceOption]]:
     """Fetch the tts-api gateway voices (stock + clones).
+
+    Args:
+        engine: Optional gateway engine id. When set, its own stock catalogue is
+            fetched with ``GET /voices/stock?engine=...``; clones still come from
+            the gateway's clone registry and are tagged with their own engine.
 
     Returns:
         Tuple of ``(languages, voices)``. Both empty when the gateway is
@@ -116,8 +121,12 @@ async def gateway_options() -> tuple[list[str], list[VoiceOption]]:
 
     service = VoicesService()
     try:
-        languages = await service.list_languages()
-        stock = await service.list_stock()
+        if engine:
+            stock = await service.list_stock(engine=engine)
+            languages = sorted({str(v["language"]).strip() for v in stock if v.get("language")})
+        else:
+            languages = await service.list_languages()
+            stock = await service.list_stock()
         cloned = await service.list_cloned()
     except Exception as exc:  # noqa: BLE001 - a dead gateway must not break the page
         logger.warning("voice_registry_gateway_failed", error=str(exc))
@@ -223,6 +232,8 @@ def modal_options() -> tuple[list[str], list[VoiceOption]]:
 async def list_all_voices(
     engine: str | None = None,
     category: str | None = None,
+    *,
+    gateway_engine: str | None = None,
 ) -> list[VoiceOption]:
     """List every selectable voice of every engine.
 
@@ -230,12 +241,16 @@ async def list_all_voices(
         engine: Optional canonical engine id ('edge', 'omni_voice', ...);
             keeps the voices whose id that engine accepts.
         category: Optional 'stock', 'cloned' or 'generated'.
+        gateway_engine: Optional gateway engine id whose stock catalogue must be
+            loaded (e.g. ``kokoro``, ``pocket_tts``, ``piper``).
 
     Returns:
         The merged voices, ordered by category, language and label.
     """
     _, edge = await edge_options()
-    _, gateway = await gateway_options()
+    _, gateway = (
+        await gateway_options(engine=gateway_engine) if gateway_engine else await gateway_options()
+    )
     _, modal = modal_options()
 
     # The Modal catalog is the authoritative metadata for a reference voice: a

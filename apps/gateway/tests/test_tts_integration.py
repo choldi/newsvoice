@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from tts_api.api.v1 import voices as voices_api
 from tts_api.api.v1.tts import get_tts_service
 from tts_api.api.v1.voices import get_engine_client
 from tts_api.main import app
@@ -188,3 +189,39 @@ async def test_voices_endpoint_no_filter() -> None:
         assert "en-us-male" in voice_ids
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_voices_endpoint_uses_the_requested_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stock catalogue can be read from a specific gateway engine."""
+    created: list[str | None] = []
+    seen_languages: list[str | None] = []
+
+    class FakeClient:
+        def __init__(self, engine: object = None) -> None:
+            self.engine = engine
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+        async def list_stock_voices(self, language: str | None = None) -> list[object]:
+            seen_languages.append(language)
+            return []
+
+    def fake_create_engine(name: str) -> str:
+        created.append(name)
+        return name
+
+    monkeypatch.setattr("tts_api.core.engine_factory.create_engine", fake_create_engine)
+    monkeypatch.setattr(voices_api, "OmniVoiceEngineClient", FakeClient)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/voices/stock?engine=kokoro&language=es")
+
+    assert response.status_code == 200
+    assert created == ["kokoro"]
+    assert seen_languages == ["es"]
