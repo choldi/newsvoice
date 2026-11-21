@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
+from tts_contract import EnginesResponse
 
 from src.api.authz import ASSIGNABLE_ROLES, Role
 from src.api.db.database import (
@@ -601,6 +602,14 @@ AUDIOBOOK_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("qwen3_tts", "Qwen3-TTS (local gateway)"),
 )
 
+#: Backends offered by the collection cast editor, in menu order.
+NARRATION_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("omni_voice", "OmniVoice (local)"),
+    ("kokoro", "Kokoro (gateway)"),
+    ("qwen3_tts", "Qwen3-TTS (Modal)"),
+    ("zonos2", "ZONOS2 (Modal)"),
+)
+
 
 def _normalize_voice_entries(entries: list[dict]) -> list[dict]:
     """Reshape engine-specific voice dicts into one template contract.
@@ -672,36 +681,42 @@ def _modal_voice_options() -> dict:
     return _registry_options(languages, voices)
 
 
-async def _gateway_engine_choices() -> tuple[tuple[str, str], ...]:
-    """Return the gateway engines that are actually available, from ``/engines``.
+def _gateway_engine_label(name: str, available: bool = True) -> str:
+    """Return a menu label for a gateway engine id from ``/engines``."""
+    label = dict(GATEWAY_ENGINE_CHOICES).get(name, name)
+    return label if available else f"{label} (no disponible)"
 
-    The public menu is intentionally wider than the TTSBackend enum: an operator
+
+async def _gateway_engine_choices() -> tuple[tuple[str, str], ...]:
+    """Return the gateway catalog from ``/engines`` in menu order.
+
+    The dropdown is intentionally wider than the TTSBackend enum: an operator
     may run Pocket TTS, Piper or Chatterbox behind the gateway, and each has its
-    own voice catalogue. If ``/engines`` cannot be reached, the static list is
-    kept so an outage does not silently remove choices.
+    own voice catalogue. Unknown ids reported by a newer gateway are kept with
+    their raw name so a setup change does not need a news release. If ``/engines``
+    cannot be reached, the static list is kept so an outage does not remove
+    choices.
     """
     from src.api.services.voices import VoicesService
 
     try:
-        payload = await VoicesService().get_engines()
+        catalog = EnginesResponse.model_validate(await VoicesService().get_engines())
     except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
         logger.warning("gateway_engine_choices_failed", error=str(exc))
         return GATEWAY_ENGINE_CHOICES
-    engines = payload["engines"]
-    if not engines:
+    if not catalog.engines:
         return GATEWAY_ENGINE_CHOICES
-    known = {value for value, _ in GATEWAY_ENGINE_CHOICES if value}
-    available = {
-        str(item.get("name") or "")
-        for item in engines
-        if item.get("available") and str(item.get("name") or "") in known
-    }
-    active = str(payload.get("active") or "")
-    choices = [
-        (value, label)
-        for value, label in GATEWAY_ENGINE_CHOICES
-        if not value or value in available or value == active
-    ]
+    choices: list[tuple[str, str]] = [GATEWAY_ENGINE_CHOICES[0]]
+    seen: set[str] = set()
+    for engine in catalog.engines:
+        name = engine.name.strip()
+        if not name or name in seen or name == "routed":
+            continue
+        seen.add(name)
+        choices.append((name, _gateway_engine_label(name, engine.available)))
+    active = catalog.active.strip()
+    if active and active not in seen and active != "routed":
+        choices.append((active, _gateway_engine_label(active)))
     return tuple(choices) if len(choices) > 1 else GATEWAY_ENGINE_CHOICES
 
 
@@ -718,13 +733,13 @@ async def _tts_backend_choices() -> tuple[tuple[str, str], ...]:
     from src.api.services.voices import VoicesService
 
     try:
-        engines = await VoicesService().list_engines()
+        catalog = EnginesResponse.model_validate(await VoicesService().get_engines())
     except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
         logger.warning("tts_backend_choices_failed", error=str(exc))
         return TTS_BACKEND_CHOICES
-    if not engines:
+    if not catalog.engines:
         return TTS_BACKEND_CHOICES
-    available = {str(item.get("name") or "") for item in engines if item.get("available")}
+    available = {engine.name for engine in catalog.engines if engine.available}
     cloud = {"fish_tts", "openai_tts"}
     return tuple(
         choice for choice in TTS_BACKEND_CHOICES if choice[0] not in cloud or choice[0] in available
@@ -1166,6 +1181,7 @@ async def ui_collections(request: Request) -> HTMLResponse:
             "collections": collections,
             "omni": omni,
             "tts_backends": tts_backends,
+            "narration_backends": NARRATION_BACKEND_CHOICES,
             "gateway_engines": await _gateway_engine_choices(),
             "current_gateway_engine": "",
             "tts_options": tts_options,

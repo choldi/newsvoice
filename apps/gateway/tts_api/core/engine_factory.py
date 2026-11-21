@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from tts_api.core.engine_base import TtsEngineBase
+from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
 from tts_api.settings import get_settings
 
 if TYPE_CHECKING:
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 def _create_single_engine(name: str) -> TtsEngineBase:  # noqa: PLR0912
     """Create a single engine instance by name."""
     name = name.lower().strip()
+    if name not in SINGLE_ENGINE_NAMES:
+        raise ValueError(f"Engine desconocido: {name}")
 
     if name == "mock":
         from tts_api.core.engines.mock_engine import MockEngine

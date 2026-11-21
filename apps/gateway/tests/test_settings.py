@@ -104,7 +104,9 @@ class TestSettingsValidation:
 class TestNewEngineSettings:
     """Settings for the piper and chatterbox engines."""
 
-    @pytest.mark.parametrize("engine", ["piper", "chatterbox", "kokoro"])
+    @pytest.mark.parametrize(
+        "engine", ["piper", "chatterbox", "kokoro", "zono2", "omnivoice_remote"]
+    )
     def test_tts_engine_accepts_new_engines(self, engine: str) -> None:
         settings = Settings(TTS_ENGINE=engine)  # type: ignore[arg-type]
         assert engine == settings.TTS_ENGINE

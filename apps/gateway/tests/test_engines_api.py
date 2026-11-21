@@ -14,6 +14,7 @@ def test_list_engines_returns_catalog() -> None:
     # at least one engine reported
     names = {e["name"] for e in data["engines"]}
     assert "qwen3_tts" in names
+    assert {"omnivoice_remote", "zono2"} <= names
     # locations present
     for e in data["engines"]:
         assert "locations" in e

@@ -28,6 +28,32 @@ _SELECT_MARKER = '<select name="language"'
 _TTS_FRAGMENT_URL = "/ui/fragments/tts_options"
 
 
+async def test_gateway_engine_menu_follows_the_gateway_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Engines added in setup appear in the UI without a news code change."""
+    from src.api.routes_ui import _gateway_engine_choices
+    from src.api.services.voices import VoicesService
+
+    async def fake_get_engines(self: VoicesService) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "active": "omnivoice",
+            "engines": [
+                {"name": "omnivoice", "available": True},
+                {"name": "omnivoice_remote", "available": True},
+                {"name": "brand_new_engine", "available": True},
+            ],
+        }
+
+    monkeypatch.setattr(VoicesService, "get_engines", fake_get_engines)
+
+    choices = await _gateway_engine_choices()
+
+    assert ("omnivoice_remote", "OmniVoice remote (sidecar)") in choices
+    assert ("brand_new_engine", "brand_new_engine") in choices
+
+
 def test_tts_options_fragment_renders_selects_when_enabled() -> None:
     """The TTS fragment renders selects populated from the chosen engine."""
     client = _ui_client()

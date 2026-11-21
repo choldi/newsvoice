@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 import structlog
-from tts_contract import ClonedVoice, CloneVoiceResponse, StockVoice
+from tts_contract import ClonedVoice, CloneVoiceResponse, EnginesResponse, StockVoice
 
 from src.api.services.gateway import gateway_headers
 from src.core.config import get_settings
@@ -138,14 +138,8 @@ class VoicesService:
         """
         data = await self._get("engines")
         if not isinstance(data, dict):
-            return {"engines": [], "active": ""}
-        engines = data.get("engines")
-        return {
-            "engines": [item for item in engines if isinstance(item, dict)]
-            if isinstance(engines, list)
-            else [],
-            "active": str(data.get("active") or ""),
-        }
+            return EnginesResponse().model_dump()
+        return EnginesResponse.model_validate(data).model_dump()
 
     async def list_engines(self) -> list[dict[str, Any]]:
         """List the gateway engine descriptors (``GET /engines``).

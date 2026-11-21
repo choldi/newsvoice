@@ -250,10 +250,9 @@
                       hx-trigger="change"
                       hx-target="#cast-voices-{{ c.name }}"
                       hx-swap="innerHTML">
-                <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
-                <option value="kokoro" {{ 'selected' if backend == 'kokoro' else '' }}>Kokoro (gateway)</option>
-                <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
-                <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+                {% for value, label in narration_backends %}
+                <option value="{{ value }}" {{ 'selected' if backend == value else '' }}>{{ label }}</option>
+                {% endfor %}
               </select>
             </div>
           </div>
@@ -535,10 +534,9 @@
                     hx-trigger="change"
                     hx-target="#cast-voices-nueva"
                     hx-swap="innerHTML">
-              <option value="omni_voice" {{ 'selected' if backend == 'omni_voice' else '' }}>OmniVoice (local)</option>
-              <option value="kokoro" {{ 'selected' if backend == 'kokoro' else '' }}>Kokoro (gateway)</option>
-              <option value="qwen3_tts" {{ 'selected' if backend == 'qwen3_tts' else '' }}>Qwen3-TTS (Modal)</option>
-              <option value="zonos2" {{ 'selected' if backend == 'zonos2' else '' }}>ZONOS2 (Modal)</option>
+              {% for value, label in narration_backends %}
+              <option value="{{ value }}" {{ 'selected' if backend == value else '' }}>{{ label }}</option>
+              {% endfor %}
             </select>
           </div>
         </div>

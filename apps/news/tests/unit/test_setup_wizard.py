@@ -229,11 +229,12 @@ def test_tts_fields_expose_cloud_engines_and_sidecars() -> None:
 
 def test_tts_catalog_and_helpers_agree() -> None:
     """The catalog feeds the field options, presets and GPU guard."""
-    assert {"piper", "chatterbox", "fish_tts", "openai_tts"} <= set(ENGINE_INFO)
+    assert {"piper", "chatterbox", "fish_tts", "openai_tts", "zono2"} <= set(ENGINE_INFO)
     assert "omnivoice" in GPU_ENGINES
     assert "omnivoice_remote" in GPU_ENGINES
     assert "piper" not in GPU_ENGINES
     assert "omnivoice:ModelsLab/omnivoice-singing" in MODEL_OPTIONS
+    assert ENGINE_INFO["zono2"].pip_extra == "zono2"
     assert split_multi("kokoro, piper,kokoro") == ["kokoro", "piper"]
     assert join_multi(["kokoro", "piper", "kokoro"]) == "kokoro,piper"
     assert render_engine_map({"es": "piper"}) == '{"es":"piper"}'
@@ -1408,6 +1409,20 @@ def test_tui_starts_with_the_external_values_guide(wizard_context: Context) -> N
     assert app.current.title == "Guía de valores externos"
     assert app.current.progress == "1/9"
     assert any("Fish Audio" in row.label for row in app.current.rows)
+
+
+def test_welcome_menu_can_open_engine_add_remove_screen(wizard_context: Context) -> None:
+    """The menu exposes the standalone engine editor, not only the wizard."""
+    app = build_app(wizard_context)
+    app.push(welcome_screen(app, wizard_context))
+    row = next(r for r in app.current.rows if r.action == "engines")
+    assert "añadir/quitar" in row.label
+
+    app.focus = app.current.rows.index(row)
+    app.handle(10)
+
+    assert app.current.title == "Engines TTS"
+    assert any("añadir/quitar" in r.label for r in app.current.rows)
 
 
 def test_external_guide_paginates_and_can_skip_to_the_menu(

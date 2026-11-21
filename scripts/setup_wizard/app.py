@@ -427,6 +427,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
         [
             Row("button", label="Guía de valores externos (Fish, HF, Telegram…)", action="guide"),
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
+            Row("button", label="Modificar engines TTS (añadir/quitar)", action="engines"),
             Row("button", label="Requisitos del sistema", action="prereqs"),
             Row("button", label="Editar los .env ya configurados", action="edit"),
             Row("button", label="Importar valores desde un archivo .env", action="import"),
@@ -452,6 +453,8 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
             else:
                 app_.say("Básica o personalizada")
                 app_.push(mode_screen(app_, ctx))
+        elif row.action == "engines":
+            app_.push(tts_screen(app_, ctx, standalone=True))
         elif row.action == "prereqs":
             app_.push(prereq_screen(app_, ctx, return_to="welcome"))
         elif row.action == "edit":
@@ -1333,6 +1336,8 @@ def _tts_help_lines() -> list[str]:
         "GATEWAY_UV_EXTRAS se deriva de los engines y añade sus extras pip a la "
         "imagen Docker; reconstruye con make up.",
         "Los engines sin voces stock necesitan una voz clonada o un proveedor.",
+        "Quitar un engine de Engines disponibles retira su perfil/URL y su extra "
+        "pip de la imagen; reconstruye con make up.",
         "Los presets y el editor de mapa modifican el gateway/.env en memoria; "
         "guarda desde la pantalla de gateway.",
     ]
@@ -1574,13 +1579,13 @@ def tts_screen(
     )
     extra_row = Row(
         "multi",
-        label="Engines extra",
+        label="Engines disponibles (añadir/quitar)",
         value=gateway.get("TTS_EXTRA_ENGINES").strip(),
         options=list(EXTRA_ENGINE_OPTIONS),
         option_labels={key: engine_option_label(key) for key in EXTRA_ENGINE_OPTIONS},
         help=(
-            "Solo tienen efecto con routed. Espacio marca; GPU = necesita gráfica; "
-            "ca/es/fr/en ✓/✗ = idioma base soportado."
+            "Espacio añade o quita engines para pins explícitos con routed; "
+            "GPU = necesita gráfica; ca/es/fr/en ✓/✗ = idioma base soportado."
         ),
         action="TTS_EXTRA_ENGINES",
     )

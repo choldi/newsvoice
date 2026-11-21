@@ -181,6 +181,7 @@ class EngineInfo:
         signup_url: Page where an API key or account can be obtained.
         manual_install: Extra installation note when Docker cannot provide it.
         docker_supported: Whether the gateway image can run the engine as-is.
+        pip_extra: Optional gateway ``uv`` extra that installs the engine.
     """
 
     key: str
@@ -204,6 +205,7 @@ class EngineInfo:
     signup_url: str = ""
     manual_install: str = ""
     docker_supported: bool = True
+    pip_extra: str = ""
 
 
 @dataclass(frozen=True)
@@ -376,6 +378,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         terms_url="https://huggingface.co/kyutai/pocket-tts",
         terms_required=True,
         signup_url="https://huggingface.co/settings/tokens",
+        pip_extra="pocket_tts",
     ),
     "piper": EngineInfo(
         "piper",
@@ -393,6 +396,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         _PIPER_VOICES,
         terms_url="https://huggingface.co/rhasspy/piper-voices",
         terms_required=True,
+        pip_extra="piper",
     ),
     "kokoro": EngineInfo(
         "kokoro",
@@ -405,6 +409,19 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         _KOKORO_VOICES,
         terms_url="https://huggingface.co/hexgrad/Kokoro-82M",
         terms_required=True,
+        pip_extra="kokoro",
+    ),
+    "zono2": EngineInfo(
+        "zono2",
+        "ZONOS2",
+        "GPU",
+        True,
+        ("en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh"),
+        "Clonado, emociones y voces stock ZONOS2 en GPU.",
+        (),
+        (),
+        gpu_scope="gateway",
+        pip_extra="zono2",
     ),
     "edgetts": EngineInfo(
         "edgetts",
@@ -415,6 +432,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "400+ voces cloud, incluido catalán; sin clonado.",
         (),
         _EDGETTS_VOICES,
+        pip_extra="edgetts",
     ),
     "chatterbox": EngineInfo(
         "chatterbox",
@@ -489,6 +507,7 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         gpu_scope="gateway",
         terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
         terms_required=True,
+        pip_extra="omnivoice",
     ),
     "omnivoice_remote": EngineInfo(
         "omnivoice_remote",
@@ -917,23 +936,13 @@ BASIC_TTS_MODEL_DOWNLOADS = ",".join(
 )
 
 
-_GATEWAY_PIP_EXTRAS = {
-    "omnivoice": "omnivoice",
-    "pocket_tts": "pocket_tts",
-    "edgetts": "edgetts",
-    "kokoro": "kokoro",
-    "piper": "piper",
-    "zono2": "zono2",
-}
-
-
 def gateway_pip_extras(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
     """Return the gateway pip extras required by the selected engines."""
-    extras = [
-        _GATEWAY_PIP_EXTRAS[name]
-        for name in configured_engines(engine, engine_map, extra)
-        if name in _GATEWAY_PIP_EXTRAS
-    ]
+    extras: list[str] = []
+    for name in configured_engines(engine, engine_map, extra):
+        info = ENGINE_INFO.get(name)
+        if info is not None and info.pip_extra:
+            extras.append(info.pip_extra)
     return list(dict.fromkeys(extras))
 
 

@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -32,20 +34,8 @@ class Settings(BaseSettings):
     # omnivoice_remote: proxy HTTP al sidecar OmniVoice (ver OMNIVOICE_REMOTE_URL)
     # fish_tts: Fish Audio cloud API (stock reference ids + inline clones)
     # openai_tts: generic OpenAI-compatible /audio/speech provider
-    TTS_ENGINE: Literal[
-        "omnivoice",
-        "omnivoice_remote",
-        "pocket_tts",
-        "edgetts",
-        "piper",
-        "chatterbox",
-        "qwen3_tts",
-        "kokoro",
-        "fish_tts",
-        "openai_tts",
-        "mock",
-        "routed",
-    ] = "omnivoice"
+    # zono2: local GPU engine with stock voices and cloning
+    TTS_ENGINE: Literal[*SINGLE_ENGINE_NAMES, "routed"] = "omnivoice"
 
     # Multi-engine routing (when TTS_ENGINE=routed)
     # JSON dict mapping language codes to engine names.

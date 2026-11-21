@@ -10,24 +10,13 @@ from __future__ import annotations
 from fastapi import APIRouter
 from tts_contract import EngineCapabilities, EngineDescriptor, EnginesResponse
 
+from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
 from tts_api.settings import get_settings
 
 router = APIRouter(prefix="/engines", tags=["engines"])
 
 #: Engines that can be instantiated to introspect their capabilities.
-KNOWN_ENGINES = (
-    "edgetts",
-    "pocket_tts",
-    "qwen3_tts",
-    "omnivoice",
-    "piper",
-    "chatterbox",
-    "zono2",
-    "kokoro",
-    "fish_tts",
-    "openai_tts",
-    "mock",
-)
+KNOWN_ENGINES = SINGLE_ENGINE_NAMES
 
 
 def _descriptor(name: str) -> EngineDescriptor:
