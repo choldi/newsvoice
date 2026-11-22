@@ -468,6 +468,42 @@ async def tts(text: str, voice_id: str, language: str) -> bytes:
 
 ---
 
+## Registro declarativo y contrato OpenAI-compatible
+
+### Administración de engines
+
+Todas las rutas requieren el API key cuando `API_KEY` está activo.
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/v1/admin/engines` | Lista el manifiesto efectivo y el engine activo preparado |
+| POST | `/api/v1/admin/engines/validate` | Valida una `EngineSpecPatch` sin escribir nada |
+| PUT | `/api/v1/admin/engines/{id}` | Crea o actualiza un engine en `engines.local.json` |
+| DELETE | `/api/v1/admin/engines/{id}` | Desactiva un engine del manifiesto o elimina uno local |
+| POST | `/api/v1/admin/engines/activate` | Prepara el engine activo para el próximo arranque |
+
+Las mutaciones devuelven `restart_required: true`; la validación devuelve
+`restart_required: false`. Los secretos nunca se envían en el cuerpo: la spec
+solo declara nombres de variables de entorno.
+
+### Fachada `/v1/audio/speech`
+
+```bash
+curl -X POST "http://localhost:8001/v1/audio/speech?language=es" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $GATEWAY_API_KEY" \
+  -d '{"model":"tts-1","input":"Hola mundo","voice":"es-mx-male"}' \
+  --output speech.wav
+```
+
+- `response_format`: `wav` (default) o `mp3`.
+- `speed`: de `0.5` a `2.0`; `language`: código ISO 639-1 de dos letras.
+- `model` se acepta por compatibilidad; el engine activo lo decide el gateway.
+- Los clientes nativos deben seguir usando `/api/v1/tts` para instruct,
+  clonado y las demás capacidades específicas.
+
+---
+
 ## Versionado
 
 - Versión actual: `v1`

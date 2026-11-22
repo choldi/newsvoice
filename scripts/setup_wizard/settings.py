@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 __all__ = [
     "BASIC_LANGUAGES",
@@ -51,12 +53,15 @@ __all__ = [
     "hash_password",
     "join_multi",
     "news_backend_engines",
+    "load_engine_registry",
     "parse_engine_map",
     "profiles",
     "render_engine_map",
+    "registry_engine_infos",
     "required_model_downloads",
     "sections_for",
     "split_multi",
+    "staged_active_engine",
     "valid_language_code",
 ]
 
@@ -561,12 +566,84 @@ ENGINE_INFO: dict[str, EngineInfo] = {
     ),
 }
 
-GPU_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device in ("GPU", "Proxy"))
-CLOUD_ENGINES = frozenset(key for key, info in ENGINE_INFO.items() if info.device == "Cloud")
+ENGINE_MANIFEST_PATH = Path(__file__).resolve().parents[2] / "config" / "engines.toml"
+ENGINE_OVERRIDE_PATH = ENGINE_MANIFEST_PATH.parent / "engines.local.json"
+
+
+def load_engine_registry() -> dict[str, dict]:
+    """Read the gateway manifest and its staged local override."""
+    specs: dict[str, dict] = {}
+    if ENGINE_MANIFEST_PATH.is_file():
+        with ENGINE_MANIFEST_PATH.open("rb") as handle:
+            raw = tomllib.load(handle)
+        for name, spec in (raw.get("engines") or {}).items():
+            if isinstance(spec, dict):
+                specs[str(name)] = spec
+    if ENGINE_OVERRIDE_PATH.is_file():
+        try:
+            override = json.loads(ENGINE_OVERRIDE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            override = {}
+        for name, patch in (override.get("engines") or {}).items():
+            if not isinstance(patch, dict):
+                continue
+            key = str(name)
+            merged = dict(specs.get(key, {}))
+            merged.update(patch)
+            specs[key] = merged
+    return specs
+
+
+def staged_active_engine() -> str | None:
+    """Return the engine id staged in the local override, if any."""
+    if not ENGINE_OVERRIDE_PATH.is_file():
+        return None
+    try:
+        data = json.loads(ENGINE_OVERRIDE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    active = data.get("active")
+    return str(active).strip().lower() if active else None
+
+
+def registry_engine_infos() -> dict[str, EngineInfo]:
+    """Build wizard entries for engines declared only in the registry."""
+    infos: dict[str, EngineInfo] = {}
+    for name, spec in load_engine_registry().items():
+        if name in ENGINE_INFO:
+            continue
+        capabilities = spec.get("capabilities") or {}
+        options = spec.get("options") or {}
+        locations = spec.get("locations") or ["local"]
+        display_name = str(spec.get("display_name") or name)
+        languages = tuple(str(code) for code in capabilities.get("supported_languages", ()))
+        voices = tuple(str(voice) for voice in (options.get("voices") or {}))
+        infos[name] = EngineInfo(
+            name,
+            display_name,
+            "Cloud" if "cloud" in locations else "CPU",
+            bool(capabilities.get("voice_cloning", False)),
+            languages,
+            "Engine declarado en config/engines.toml.",
+            (),
+            voices,
+            required_keys=tuple(str(key) for key in spec.get("required_env", ())),
+        )
+    return infos
+
+
+_ALL_ENGINE_INFO = {**registry_engine_infos(), **ENGINE_INFO}
+GPU_ENGINES = frozenset(
+    key for key, info in _ALL_ENGINE_INFO.items() if info.device in ("GPU", "Proxy")
+)
+CLOUD_ENGINES = frozenset(key for key, info in _ALL_ENGINE_INFO.items() if info.device == "Cloud")
 BASIC_LANGUAGES = ("ca", "es", "fr", "en")
-ENGINE_OPTIONS = ("routed", *ENGINE_INFO)
-EXTRA_ENGINE_OPTIONS = tuple(ENGINE_INFO)
-MODEL_OPTIONS = tuple(download for info in ENGINE_INFO.values() for download in info.downloads)
+ENGINE_OPTIONS = ("routed", *_ALL_ENGINE_INFO)
+EXTRA_ENGINE_OPTIONS = tuple(_ALL_ENGINE_INFO)
+MODEL_OPTIONS = tuple(download for info in _ALL_ENGINE_INFO.values() for download in info.downloads)
+ENGINE_INFO = _ALL_ENGINE_INFO
 
 _SAFE_TTS_ENGINES = (
     '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"piper","_default":"pocket_tts"}'
@@ -636,7 +713,7 @@ def join_multi(values: list[str]) -> str:
 
 def engine_info(key: str) -> EngineInfo | None:
     """Return the catalog entry for ``key``, or ``None`` when unknown."""
-    return ENGINE_INFO.get(key)
+    return _ALL_ENGINE_INFO.get(key)
 
 
 def engine_option_label(key: str) -> str:
@@ -803,6 +880,14 @@ def news_backend_engines(
     """
     if backend == "omni_voice":
         return configured_engines(gateway_engine, engine_map, extra)
+    if backend == "gateway":
+        selected = gateway_engine.strip()
+        if selected == "routed":
+            return configured_engines(selected, engine_map, extra)
+        if selected:
+            return [selected]
+        active = staged_active_engine()
+        return [active] if active else []
     engine = _NEWS_BACKEND_ENGINES.get(backend)
     return [engine] if engine else []
 
@@ -1362,11 +1447,13 @@ _SECTIONS: list[Section] = [
                 file=NEWS,
                 key="TTS_DEFAULT_BACKEND",
                 label="Motor por defecto",
-                help="Motor de los digests; edge no necesita gateway, el resto sí.",
+                help="Motor de los digests; edge no necesita gateway. "
+                "gateway usa el engine activo del manifiesto.",
                 kind="choice",
                 default="edge",
                 options=(
                     "edge",
+                    "gateway",
                     "omni_voice",
                     "qwen3_tts",
                     "kokoro",

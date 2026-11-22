@@ -76,7 +76,7 @@ def _gateway_engine_values(item: dict, *, category: str) -> list[str]:
         name = part.strip().lower()
         if not name:
             continue
-        values.append(_GATEWAY_ENGINE_VALUES.get(name, TTSBackend.OMNIVOICE.value))
+        values.append(_GATEWAY_ENGINE_VALUES.get(name, TTSBackend.GATEWAY.value))
     return list(dict.fromkeys(values)) or [TTSBackend.OMNIVOICE.value]
 
 

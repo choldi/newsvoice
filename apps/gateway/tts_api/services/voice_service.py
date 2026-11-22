@@ -44,7 +44,7 @@ class VoiceService:
     @property
     def _active_engine(self) -> str:
         """Name of the active engine (handles routed)."""
-        engine = self._settings.TTS_ENGINE
+        engine = self._settings.effective_tts_engine
         if engine == "routed":
             return "pocket_tts"
         return engine
@@ -223,7 +223,8 @@ class VoiceService:
         active = self._active_engine
 
         # For routed engines, accept voices tagged with any clone-capable engine
-        if self._settings.TTS_ENGINE == "routed" and voice_engines & CLONE_CAPABLE_ENGINES:
+        is_routed = self._settings.effective_tts_engine == "routed"
+        if is_routed and voice_engines & CLONE_CAPABLE_ENGINES:
             return
 
         # Direct match: active engine is in the voice's engine list

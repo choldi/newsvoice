@@ -1,0 +1,219 @@
+version = 1
+
+[engines.mock]
+kind = "local_class"
+class_path = "tts_api.core.engines.mock_engine.MockEngine"
+display_name = "Mock"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = []
+auto_include_when_configured = false
+
+[engines.mock.capabilities]
+stock_voices = true
+voice_cloning = false
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en"]
+
+[engines.pocket_tts]
+kind = "local_class"
+class_path = "tts_api.core.engines.pocket_tts_engine.PocketTTSEngine"
+display_name = "Pocket TTS"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = ["pocket_tts"]
+auto_include_when_configured = false
+
+[engines.pocket_tts.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr"]
+
+[engines.edgetts]
+kind = "local_class"
+class_path = "tts_api.core.engines.edgetts_engine.EdgeTTSEngine"
+display_name = "Edge TTS"
+enabled = true
+locations = ["local", "cloud"]
+required_env = []
+required_modules = ["edge_tts"]
+auto_include_when_configured = false
+
+[engines.edgetts.capabilities]
+stock_voices = true
+voice_cloning = false
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca", "zh", "ja", "ko"]
+
+[engines.qwen3_tts]
+kind = "local_class"
+class_path = "tts_api.core.engines.qwen3_tts_engine.Qwen3TTSEngine"
+class_path_remote = "tts_api.core.engines.qwen3_remote_engine.Qwen3RemoteEngine"
+remote_url_env = "QWEN3_TTS_REMOTE_URL"
+display_name = "Qwen3-TTS"
+enabled = true
+locations = ["local", "cloud"]
+required_env = []
+required_modules = []
+auto_include_when_configured = true
+
+[engines.qwen3_tts.capabilities]
+stock_voices = false
+voice_cloning = true
+instruct_voice_design = true
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca", "zh", "ja", "ko", "ru"]
+
+[engines.omnivoice]
+kind = "local_class"
+class_path = "tts_api.core.engines.omnivoice_engine_adapter.OmniVoiceAdapter"
+display_name = "OmniVoice"
+enabled = true
+locations = ["local", "cloud"]
+required_env = []
+required_modules = []
+auto_include_when_configured = false
+
+[engines.omnivoice.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = true
+emotions = true
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+
+[engines.omnivoice_remote]
+kind = "local_class"
+class_path = "tts_api.core.engines.omnivoice_remote_engine.OmniVoiceRemoteEngine"
+display_name = "OmniVoice remoto"
+enabled = true
+locations = ["local"]
+required_env = ["OMNIVOICE_REMOTE_URL"]
+required_modules = []
+auto_include_when_configured = true
+
+[engines.omnivoice_remote.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = true
+emotions = true
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+
+[engines.zono2]
+kind = "local_class"
+class_path = "tts_api.core.engines.zono2_engine.Zono2Engine"
+display_name = "ZONO2"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = []
+auto_include_when_configured = false
+
+[engines.zono2.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = false
+emotions = true
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+
+[engines.kokoro]
+kind = "local_class"
+class_path = "tts_api.core.engines.kokoro_engine.KokoroEngine"
+display_name = "Kokoro"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = ["kokoro"]
+auto_include_when_configured = false
+
+[engines.kokoro.capabilities]
+stock_voices = true
+voice_cloning = false
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "it", "pt", "hi"]
+
+[engines.piper]
+kind = "local_class"
+class_path = "tts_api.core.engines.piper_engine.PiperEngine"
+display_name = "Piper"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = ["piper"]
+auto_include_when_configured = false
+
+[engines.piper.capabilities]
+stock_voices = true
+voice_cloning = false
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca"]
+
+[engines.chatterbox]
+kind = "local_class"
+class_path = "tts_api.core.engines.chatterbox_engine.ChatterboxEngine"
+display_name = "Chatterbox"
+enabled = true
+locations = ["local"]
+required_env = []
+required_modules = ["chatterbox"]
+auto_include_when_configured = false
+
+[engines.chatterbox.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+
+[engines.fish_tts]
+kind = "local_class"
+class_path = "tts_api.core.engines.fish_tts_engine.FishTTSEngine"
+display_name = "Fish Audio"
+enabled = true
+locations = ["cloud"]
+required_env = ["FISH_API_KEY"]
+required_modules = []
+auto_include_when_configured = true
+
+[engines.fish_tts.capabilities]
+stock_voices = true
+voice_cloning = true
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+
+[engines.openai_tts]
+kind = "local_class"
+class_path = "tts_api.core.engines.openai_tts_engine.OpenAITTSEngine"
+display_name = "OpenAI compatible"
+enabled = true
+locations = ["cloud"]
+required_env = ["OPENAI_TTS_BASE_URL"]
+required_modules = []
+auto_include_when_configured = true
+
+[engines.openai_tts.capabilities]
+stock_voices = true
+voice_cloning = false
+instruct_voice_design = false
+emotions = false
+streaming = false
+supported_languages = ["es", "en"]

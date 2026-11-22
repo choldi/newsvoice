@@ -43,7 +43,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from tts_api.api.v1 import catalog, conversations, engines, system, tts, voices
+from tts_api.api.v1 import (
+    admin_engines,
+    catalog,
+    conversations,
+    engines,
+    openai_compat,
+    system,
+    tts,
+    voices,
+)
 from tts_api.core.cleanup import start_cleanup_task, stop_cleanup_task
 from tts_api.core.engine_base import TtsEngineBase
 from tts_api.core.engine_client import (
@@ -81,7 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         pass
 
     settings = get_settings()
-    engine_name = settings.TTS_ENGINE
+    engine_name = settings.effective_tts_engine
     logger.info("Application startup: inicializando engine '%s'...", engine_name)
 
     try:
@@ -188,8 +197,10 @@ app.include_router(catalog.router, prefix="/api/v1")
 app.include_router(voices.router, prefix="/api/v1")
 app.include_router(tts.router, prefix="/api/v1")
 app.include_router(engines.router, prefix="/api/v1")
+app.include_router(admin_engines.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(system.router, prefix="/api/v1")
+app.include_router(openai_compat.router)
 
 
 @app.get("/api/v1/emotions", tags=["tts"], summary="Listar emociones soportadas")
@@ -228,7 +239,7 @@ async def health_check() -> JSONResponse:
             content={
                 "status": "not_initialized",
                 "version": settings.APP_VERSION,
-                "engine": settings.TTS_ENGINE,
+                "engine": settings.effective_tts_engine,
             },
             status_code=503,
         )

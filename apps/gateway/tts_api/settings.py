@@ -2,9 +2,16 @@ import json
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
+from tts_api.core.engine_registry import (
+    DEFAULT_ENGINE_CONFIG_PATH,
+    DEFAULT_ENGINE_OVERRIDE_PATH,
+    EngineRegistry,
+    known_engine_names,
+    registry_for,
+)
 
 
 class Settings(BaseSettings):
@@ -22,20 +29,18 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api/v1"
 
     # --- TTS Engine Selection ---
-    # omnivoice: GPU-based, full features (stock, clone, instruct, emotions)
-    # pocket_tts: CPU-first, voice cloning, es/en/fr (no Catalan)
-    # edgetts: cloud, no cloning, 400+ voices including Catalan (ca-ES)
-    # piper: CPU-first local neural TTS, incl. Catalan (ca-ES)
-    # chatterbox: GPU multilingual TTS, zero-shot cloning (no Catalan)
-    # qwen3_tts: local GPU, voice cloning (Base) + voice design (VoiceDesign)
-    # kokoro: CPU, stock voices 82M (es/en/fr/it/pt/hi, sin Catalan)
-    # mock: test tones (for development/testing)
-    # routed: multi-engine, dispatches by language (requires TTS_ENGINES config)
-    # omnivoice_remote: proxy HTTP al sidecar OmniVoice (ver OMNIVOICE_REMOTE_URL)
-    # fish_tts: Fish Audio cloud API (stock reference ids + inline clones)
-    # openai_tts: generic OpenAI-compatible /audio/speech provider
-    # zono2: local GPU engine with stock voices and cloning
-    TTS_ENGINE: Literal[*SINGLE_ENGINE_NAMES, "routed"] = "omnivoice"
+    TTS_ENGINE: str = "omnivoice"
+    TTS_ENGINE_REGISTRY_PATH: Path = DEFAULT_ENGINE_CONFIG_PATH
+    TTS_ENGINE_OVERRIDE_PATH: Path = DEFAULT_ENGINE_OVERRIDE_PATH
+
+    @field_validator("TTS_ENGINE", mode="before")
+    @classmethod
+    def _validate_tts_engine(cls, value: object) -> str:
+        """Accept engine ids declared in the manifest plus the routed strategy."""
+        name = str(value).strip().lower()
+        if name != "routed" and name not in known_engine_names():
+            raise ValueError(f"Unknown TTS engine {value!r}")
+        return name
 
     # Multi-engine routing (when TTS_ENGINE=routed)
     # JSON dict mapping language codes to engine names.
@@ -326,6 +331,16 @@ class Settings(BaseSettings):
         return self._voice_config(self.OPENAI_TTS_VOICES)
 
     @property
+    def engine_registry(self) -> EngineRegistry:
+        """Registry configured for this settings instance."""
+        return registry_for(self)
+
+    @property
+    def effective_tts_engine(self) -> str:
+        """Engine selected for the next process start, including staged changes."""
+        return self.engine_registry.active_name(self.TTS_ENGINE)
+
+    @property
     def omnilang_list(self) -> list[str]:
         """Idiomas soportados por OmniVoice.
 
@@ -334,7 +349,11 @@ class Settings(BaseSettings):
         servicio no bloquee el routing.
         """
         langs = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
-        if self.TTS_ENGINE == "routed" and self.TTS_ENGINES.strip():
+        active = self.effective_tts_engine
+        registry = self.engine_registry
+        if active in registry.names():
+            langs.extend(registry.get(active).capabilities.supported_languages)
+        if active == "routed" and self.TTS_ENGINES.strip():
             try:
                 routing = json.loads(self.TTS_ENGINES)
             except json.JSONDecodeError:
@@ -343,7 +362,7 @@ class Settings(BaseSettings):
                 langs.extend(code for code in routing if code and code != "_default")
                 if "qwen3_tts" in routing.values():
                     langs.extend(["ca", "ru"])
-        if self.TTS_ENGINE == "qwen3_tts":
+        if active == "qwen3_tts":
             langs.extend(["ca", "ru"])
         if self.fish_configured:
             langs.extend(self.fish_languages)

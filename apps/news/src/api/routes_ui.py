@@ -566,6 +566,7 @@ def _lesson_voice_context(
 TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("edge", "edge (local)"),
     ("omni_voice", "tts-api gateway"),
+    ("gateway", "Gateway (engine dinámico)"),
     ("kokoro", "Kokoro (gateway)"),
     ("fish_tts", "Fish Audio (cloud)"),
     ("openai_tts", "OpenAI-compatible (cloud)"),
@@ -605,6 +606,7 @@ AUDIOBOOK_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
 #: Backends offered by the collection cast editor, in menu order.
 NARRATION_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("omni_voice", "OmniVoice (local)"),
+    ("gateway", "Gateway (engine dinámico)"),
     ("kokoro", "Kokoro (gateway)"),
     ("qwen3_tts", "Qwen3-TTS (Modal)"),
     ("zonos2", "ZONOS2 (Modal)"),

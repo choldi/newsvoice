@@ -620,7 +620,7 @@ def test_tts_backend_defaults_to_edge() -> None:
 def test_tts_backend_accepts_every_engine_and_canonicalizes_aliases() -> None:
     """Operator spellings of the gateway collapse onto one canonical id."""
     assert CollectionConfig(name="a", tts_backend="omni_voice").tts_backend == "omni_voice"
-    assert CollectionConfig(name="b", tts_backend="gateway").tts_backend == "omni_voice"
+    assert CollectionConfig(name="b", tts_backend="gateway").tts_backend == "gateway"
     assert CollectionConfig(name="c", tts_backend="QWEN3_TTS").tts_backend == "qwen3_tts"
     assert CollectionConfig(name="d", tts_backend="zonos2").tts_backend == "zonos2"
     assert CollectionConfig(name="e", tts_backend="edgetts").tts_backend == "edge"

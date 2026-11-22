@@ -285,6 +285,7 @@ services:
       - QWEN3_TTS_REMOTE_URL=${QWEN3_TTS_REMOTE_URL:-}
     volumes:
       - ../apps/gateway/storage:/app/storage
+      - ../config:/app/config
       # Persiste los pesos de pocket_tts (~438 MB) descargados de HuggingFace en
       # el primer arranque; sin este volumen se re-descargan en cada recreate.
       - gateway_hf_cache:/root/.cache/huggingface

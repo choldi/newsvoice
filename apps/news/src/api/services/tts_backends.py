@@ -70,7 +70,8 @@ BACKEND_ALIASES: dict[str, str] = {
     "edgetts": TTSBackend.EDGE,
     "omni_voice": TTSBackend.OMNIVOICE,
     "omnivoice": TTSBackend.OMNIVOICE,
-    "gateway": TTSBackend.OMNIVOICE,
+    "gateway": TTSBackend.GATEWAY,
+    "gateway_engine": TTSBackend.GATEWAY,
     "tts_api": TTSBackend.OMNIVOICE,
     "qwen3_tts": TTSBackend.QWEN3_TTS,
     "qwen3": TTSBackend.QWEN3_TTS,
@@ -89,6 +90,7 @@ BACKEND_ALIASES: dict[str, str] = {
 ALLOWED_BACKENDS: tuple[str, ...] = (
     TTSBackend.EDGE,
     TTSBackend.OMNIVOICE,
+    TTSBackend.GATEWAY,
     TTSBackend.QWEN3_TTS,
     TTSBackend.ZONOS2,
     TTSBackend.VOXCPM2,
@@ -212,7 +214,13 @@ def wall_seconds_for(backend: TTSBackend, char_count: float) -> float:
     settings = get_settings()
     if backend is TTSBackend.EDGE:
         return char_count / settings.tts_edge_chars_per_second
-    if backend in (TTSBackend.OMNIVOICE, TTSBackend.KOKORO, TTSBackend.FISH, TTSBackend.OPENAI):
+    if backend in (
+        TTSBackend.OMNIVOICE,
+        TTSBackend.GATEWAY,
+        TTSBackend.KOKORO,
+        TTSBackend.FISH,
+        TTSBackend.OPENAI,
+    ):
         return char_count / settings.tts_gateway_chars_per_second
     from src.core.budget import estimate_gpu_seconds
 
@@ -461,7 +469,7 @@ async def voice_for(
 
         return await resolve_edge_voice(requested, language)
 
-    if backend is TTSBackend.OMNIVOICE or backend is TTSBackend.KOKORO:
+    if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY, TTSBackend.KOKORO):
         # Both speak the gateway stock-id scheme (the Kokoro table maps them);
         # an Edge ShortName is translated through the legacy aliases.
         if not requested:
@@ -621,6 +629,7 @@ async def synthesize(
 
     if backend in (
         TTSBackend.OMNIVOICE,
+        TTSBackend.GATEWAY,
         TTSBackend.KOKORO,
         TTSBackend.FISH,
         TTSBackend.OPENAI,
@@ -635,7 +644,7 @@ async def synthesize(
             timeout=timeout if timeout is not None else None,
             engine=(
                 (gateway_engine or "").strip().lower() or None
-                if backend is TTSBackend.OMNIVOICE
+                if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
                 else backend.value
             ),
             speed=speed,

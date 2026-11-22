@@ -1336,7 +1336,7 @@ the same time.
 ```toml
 [[collections]]
 name = "ai"
-tts_backend = "omni_voice"   # edge | omni_voice | qwen3_tts | zonos2 | voxcpm2
+tts_backend = "gateway"      # edge | gateway | omni_voice | qwen3_tts | zonos2 | voxcpm2
 voice = "es-mx-male"         # id in THAT engine's vocabulary
 ```
 
@@ -1349,6 +1349,13 @@ TTS_DEFAULT_BACKEND=edge
 TTS_FALLBACK_TO_EDGE=false     # never silently swap a clone for a stock voice
 TTS_BACKEND_TIMEOUT_SECONDS=900  # POST /api/admin/tts uses 120s only for edge
 ```
+
+`gateway` is the generic backend: it does not pin a sub-engine and follows the
+engine staged in `config/engines.local.json` (or `TTS_ENGINE` when no override is
+present). Use `TTS_DEFAULT_BACKEND=gateway` globally, or set `gateway_engine` on
+a collection to pin a declarative provider such as a cloud
+`openai_compatible_http` engine. `omni_voice` and `tts_api` remain fixed aliases
+for the historical gateway routing.
 
 The gateway backends store `.wav`, edge stores `.mp3`; the M4A transcode, the
 Whisper check and every delivery are format-agnostic, so nothing downstream

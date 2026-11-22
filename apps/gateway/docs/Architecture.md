@@ -212,6 +212,18 @@ echo 'TTS_ENGINES={"es":"pocket_tts","ca":"edgetts"}' >> .env
 make run
 ```
 
+## 10. Registro declarativo de engines
+
+`config/engines.toml` es la fuente de verdad del catálogo. `EngineRegistry` fusiona ese manifiesto con `config/engines.local.json` (opcional, escrito por la Admin API) y expone tres tipos de engine:
+
+- `local_class`: una clase Python que implementa `TtsEngineBase` (todos los engines actuales).
+- `openai_compatible_http`: un proveedor remoto con contrato `POST /audio/speech`, sin código nuevo por proveedor.
+- `http_native`: reservado para adapters nativos futuros.
+
+`TTS_ENGINE` sigue siendo el valor por defecto, pero `settings.effective_tts_engine` aplica primero el engine activo preparado en el override. El cambio se aplica solo al reiniciar el gateway; la Admin API responde `restart_required: true`.
+
+La fachada `POST /v1/audio/speech` traduce peticiones OpenAI-compatible al contrato interno (`/api/v1/tts`) sin permitir que el campo `model` seleccione arbitrariamente un engine.
+
 ---
 
 **EN:** Engine selected via `TTS_ENGINE` env var. Language routing via `TTS_ENGINES` JSON. Voice cloning supported on Pocket TTS and OmniVoice; EdgeTTS provides cloud quality without cloning.

@@ -1,13 +1,15 @@
-"""Factory for creating TTS engine instances based on TTS_ENGINE setting."""
+"""Factory for creating TTS engine instances from the declarative registry."""
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from tts_api.core.engine_base import TtsEngineBase
-from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
+from tts_api.core.engine_registry import EngineKind, EngineRegistry, registry_for
 from tts_api.settings import get_settings
 
 if TYPE_CHECKING:
@@ -16,84 +18,62 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _create_single_engine(name: str) -> TtsEngineBase:  # noqa: PLR0912
+def _import_engine_class(class_path: str) -> type[TtsEngineBase]:
+    module_name, _, class_name = class_path.rpartition(".")
+    if not module_name or not class_name:
+        raise ValueError(f"class_path inválido: {class_path}")
+    engine_class = getattr(importlib.import_module(module_name), class_name)
+    if not isinstance(engine_class, type) or not issubclass(engine_class, TtsEngineBase):
+        raise ValueError(f"{class_path} no implementa TtsEngineBase")
+    return engine_class
+
+
+def _create_single_engine(name: str, registry: EngineRegistry | None = None) -> TtsEngineBase:
     """Create a single engine instance by name."""
-    name = name.lower().strip()
-    if name not in SINGLE_ENGINE_NAMES:
-        raise ValueError(f"Engine desconocido: {name}")
+    key = name.lower().strip()
+    catalog = registry or registry_for(get_settings())
+    try:
+        spec = catalog.get(key)
+    except KeyError as exc:
+        raise ValueError(str(exc)) from exc
+    if not spec.enabled:
+        raise ValueError(f"Engine desactivado: {key}")
 
-    if name == "mock":
-        from tts_api.core.engines.mock_engine import MockEngine
+    if spec.kind is EngineKind.OPENAI_COMPATIBLE_HTTP:
+        from tts_api.core.engines.openai_compatible_engine import OpenAICompatibleEngine
 
-        engine_class: type[TtsEngineBase] = MockEngine
-    elif name == "pocket_tts":
-        from tts_api.core.engines.pocket_tts_engine import PocketTTSEngine
+        return OpenAICompatibleEngine(spec)
 
-        engine_class = PocketTTSEngine
-    elif name == "edgetts":
-        from tts_api.core.engines.edgetts_engine import EdgeTTSEngine
-
-        engine_class = EdgeTTSEngine
-    elif name == "qwen3_tts":
-        settings = get_settings()
-        if settings.QWEN3_TTS_REMOTE_URL.strip():
-            from tts_api.core.engines.qwen3_remote_engine import Qwen3RemoteEngine
-
-            engine_class = Qwen3RemoteEngine
-        else:
-            from tts_api.core.engines.qwen3_tts_engine import Qwen3TTSEngine
-
-            engine_class = Qwen3TTSEngine
-    elif name == "omnivoice":
-        from tts_api.core.engines.omnivoice_engine_adapter import OmniVoiceAdapter
-
-        engine_class = OmniVoiceAdapter
-    elif name == "omnivoice_remote":
-        from tts_api.core.engines.omnivoice_remote_engine import OmniVoiceRemoteEngine
-
-        engine_class = OmniVoiceRemoteEngine
-    elif name == "zono2":
-        from tts_api.core.engines.zono2_engine import Zono2Engine
-
-        engine_class = Zono2Engine
-    elif name == "kokoro":
-        from tts_api.core.engines.kokoro_engine import KokoroEngine
-
-        engine_class = KokoroEngine
-    elif name == "piper":
-        from tts_api.core.engines.piper_engine import PiperEngine
-
-        engine_class = PiperEngine
-    elif name == "chatterbox":
-        from tts_api.core.engines.chatterbox_engine import ChatterboxEngine
-
-        engine_class = ChatterboxEngine
-    elif name == "fish_tts":
-        from tts_api.core.engines.fish_tts_engine import FishTTSEngine
-
-        engine_class = FishTTSEngine
-    elif name == "openai_tts":
-        from tts_api.core.engines.openai_tts_engine import OpenAITTSEngine
-
-        engine_class = OpenAITTSEngine
-    else:
-        raise ValueError(f"Engine desconocido: '{name}'")
-
+    class_path = spec.class_path or ""
+    remote_active = bool(spec.remote_url_env and os.getenv(spec.remote_url_env, "").strip())
+    if remote_active and spec.class_path_remote:
+        class_path = spec.class_path_remote
+    engine_class = _import_engine_class(class_path)
     return engine_class()
 
 
-def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngineBase:
-    """Create a RoutedEngine from a JSON routing configuration.
+def _auto_configured_engines(registry: EngineRegistry) -> set[str]:
+    names: set[str] = set()
+    for spec in registry.specs.values():
+        if not spec.enabled or not spec.auto_include_when_configured:
+            continue
+        env_names = list(spec.required_env)
+        if spec.remote_url_env:
+            env_names.append(spec.remote_url_env)
+        if env_names and all(os.getenv(name, "").strip() for name in env_names):
+            names.add(spec.name)
+    return names
 
-    The routing JSON maps language codes to engine names:
-        {"es":"pocket_tts","en":"pocket_tts","ca":"edgetts","_default":"pocket_tts"}
 
-    ``extra_engines`` is a comma-separated list of engines to instantiate
-    without routing any language to them, so per-voice ``engine`` pins can
-    target them (e.g. ``omnivoice_remote``).
-    """
+def _create_routed_engine(
+    routing_json: str,
+    extra_engines: str = "",
+    registry: EngineRegistry | None = None,
+) -> TtsEngineBase:
+    """Create a RoutedEngine from a JSON routing configuration."""
     from tts_api.core.engines.routed_engine import RoutedEngine
 
+    catalog = registry or registry_for(get_settings())
     if not routing_json or not routing_json.strip():
         raise ValueError(
             "TTS_ENGINE=routed requiere TTS_ENGINES con el mapeo JSON de idiomas. "
@@ -108,33 +88,20 @@ def _create_routed_engine(routing_json: str, extra_engines: str = "") -> TtsEngi
     if not isinstance(routing, dict):
         raise ValueError("TTS_ENGINES debe ser un dict JSON {idioma: engine_name}")
 
-    # Collect unique engine names needed
-    engine_names: set[str] = set(routing.values())
+    engine_names: set[str] = {str(value) for value in routing.values()}
     engine_names.discard("_default")
     engine_names.update(name.strip() for name in extra_engines.split(",") if name.strip())
+    engine_names.update(_auto_configured_engines(catalog))
 
-    # Cloud engines are opt-in: instantiate them only when configured or
-    # explicitly requested in TTS_EXTRA_ENGINES. They never make health fail.
-    settings = get_settings()
-    if settings.fish_configured:
-        engine_names.add("fish_tts")
-    if settings.openai_tts_configured:
-        engine_names.add("openai_tts")
-    if settings.QWEN3_TTS_REMOTE_URL.strip():
-        engine_names.add("qwen3_tts")
-    # Engines loaded only through TTS_EXTRA_ENGINES (or cloud/sidecar opt-ins)
-    # must not gate routed health. An engine explicitly routed to a language
-    # stays required, so a missing package is reported for the failed language.
-    routed_names = set(routing.values())
+    routed_names = {str(value) for value in routing.values()}
     optional_engines = engine_names - routed_names
 
     if not engine_names:
         raise ValueError("TTS_ENGINES no contiene ningún engine válido")
 
-    # Create engine instances (one per unique engine name)
     engines: dict[str, TtsEngineBase] = {}
     for name in engine_names:
-        engines[name] = _create_single_engine(name)
+        engines[name] = _create_single_engine(name, catalog)
 
     logger.info(
         "Created routed engine: routing=%s, sub-engines=%s, optional=%s",
@@ -154,7 +121,7 @@ def create_engine(engine_name: str | None = None) -> TtsEngineBase:
     """Create and return a TTS engine instance.
 
     Args:
-        engine_name: Engine identifier. If None, reads from TTS_ENGINE env var.
+        engine_name: Engine identifier. If None, uses the effective setting.
 
     Returns:
         An initialized TtsEngineBase implementation.
@@ -162,14 +129,12 @@ def create_engine(engine_name: str | None = None) -> TtsEngineBase:
     Raises:
         ValueError: If the engine name is not recognized.
     """
-    if engine_name is None:
-        settings = get_settings()
-        engine_name = settings.TTS_ENGINE
+    settings = get_settings()
+    catalog = registry_for(settings)
+    selected = engine_name or settings.effective_tts_engine
+    selected = selected.lower().strip()
 
-    engine_name = engine_name.lower().strip()
+    if selected == "routed":
+        return _create_routed_engine(settings.TTS_ENGINES, settings.TTS_EXTRA_ENGINES, catalog)
 
-    if engine_name == "routed":
-        settings = get_settings()
-        return _create_routed_engine(settings.TTS_ENGINES, settings.TTS_EXTRA_ENGINES)
-
-    return _create_single_engine(engine_name)
+    return _create_single_engine(selected, catalog)

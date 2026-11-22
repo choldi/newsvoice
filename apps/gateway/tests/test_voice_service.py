@@ -36,6 +36,7 @@ def voice_service(mock_repository: AsyncMock, mock_audio_validator: AsyncMock) -
     with patch("tts_api.services.voice_service.get_settings") as mock_settings:
         mock_settings.return_value.omnilang_list = ["es", "en", "zh"]
         mock_settings.return_value.TTS_ENGINE = "omnivoice"
+        mock_settings.return_value.effective_tts_engine = "omnivoice"
         mock_settings.return_value.MAX_REFERENCE_DURATION_SEC = 30.0
         mock_settings.return_value.VOICES_DIR = Path("/tmp/test_voices")
         return VoiceService(

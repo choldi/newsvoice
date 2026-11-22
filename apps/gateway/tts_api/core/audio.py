@@ -30,7 +30,7 @@ class AudioValidator:
     def __init__(self, engine_name: str | None = None):
         self._settings = get_settings()
         if engine_name is None:
-            engine_name = self._settings.TTS_ENGINE
+            engine_name = self._settings.effective_tts_engine
             # For routed engines, default to pocket_tts sample rate
             if engine_name == "routed":
                 engine_name = "pocket_tts"

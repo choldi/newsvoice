@@ -1,57 +1,56 @@
-"""Router para introspección del catálogo de engines TTS.
-
-Expone qué engines conoce el gateway y dónde pueden ejecutarse
-(``local`` en este gateway y/o ``cloud``), para que los clientes
-—notablemente news-engine— puedan ofrecer el switch "run in modal".
-"""
+"""Router para introspección del catálogo declarativo de engines TTS."""
 
 from __future__ import annotations
+
+import importlib.util
+import os
 
 from fastapi import APIRouter
 from tts_contract import EngineCapabilities, EngineDescriptor, EnginesResponse
 
-from tts_api.core.engine_names import SINGLE_ENGINE_NAMES
+from tts_api.core.engine_registry import EngineRegistry
 from tts_api.settings import get_settings
 
 router = APIRouter(prefix="/engines", tags=["engines"])
 
-#: Engines that can be instantiated to introspect their capabilities.
-KNOWN_ENGINES = SINGLE_ENGINE_NAMES
 
-
-def _descriptor(name: str) -> EngineDescriptor:
+def _descriptor(name: str, registry: EngineRegistry) -> EngineDescriptor:
     """Build the catalog descriptor for a single engine."""
-    from tts_api.core.engine_factory import create_engine
-
-    settings = get_settings()
-    missing = {
-        "fish_tts": ("FISH_API_KEY", settings.fish_configured),
-        "openai_tts": ("OPENAI_TTS_BASE_URL", settings.openai_tts_configured),
-    }.get(name)
-    if missing and not missing[1]:
+    spec = registry.get(name)
+    missing_env = [key for key in spec.required_env if not os.getenv(key, "").strip()]
+    if spec.remote_url_env and not os.getenv(spec.remote_url_env, "").strip():
+        missing_env.append(spec.remote_url_env)
+    if missing_env:
         return EngineDescriptor(
             name=name,
             available=False,
-            error=f"{missing[0]} no configurada",
+            locations=list(spec.locations),
+            error=f"{', '.join(missing_env)} no configurada",
         )
-
-    try:
-        caps = create_engine(name).capabilities
-    except Exception as exc:  # unknown/unavailable engines are reported, not fatal
-        return EngineDescriptor(name=name, available=False, error=str(exc))
-
+    missing_modules = [
+        module for module in spec.required_modules if importlib.util.find_spec(module) is None
+    ]
+    if missing_modules:
+        return EngineDescriptor(
+            name=name,
+            available=False,
+            locations=list(spec.locations),
+            error=f"dependencia no instalada: {', '.join(missing_modules)}",
+        )
+    declared = spec.capabilities
     return EngineDescriptor(
         name=name,
-        available=True,
-        locations=list(caps.locations),
+        available=spec.enabled,
+        locations=list(spec.locations),
         capabilities=EngineCapabilities(
-            stock_voices=caps.stock_voices,
-            voice_cloning=caps.voice_cloning,
-            instruct_voice_design=caps.instruct_voice_design,
-            emotions=caps.emotions,
-            streaming=caps.streaming,
-            supported_languages=list(caps.supported_languages),
+            stock_voices=declared.stock_voices,
+            voice_cloning=declared.voice_cloning,
+            instruct_voice_design=declared.instruct_voice_design,
+            emotions=declared.emotions,
+            streaming=declared.streaming,
+            supported_languages=list(declared.supported_languages),
         ),
+        error=None if spec.enabled else "engine desactivado",
     )
 
 
@@ -60,13 +59,18 @@ def _descriptor(name: str) -> EngineDescriptor:
     response_model=EnginesResponse,
     summary="Listar engines disponibles y dónde pueden ejecutarse",
     description=(
-        "Devuelve el catálogo de engines del gateway con sus capacidades y las "
+        "Devuelve el catálogo declarativo de engines del gateway con sus capacidades y las "
         "ubicaciones permitidas (``local`` en el propio gateway y/o ``cloud``). "
-        "El campo ``active`` marca el engine configurado por TTS_ENGINE."
+        "El campo ``active`` marca el engine que se aplicará en el próximo arranque."
     ),
 )
 async def list_engines() -> EnginesResponse:
     """Return the engine catalog with capabilities and locations."""
     settings = get_settings()
-    engines = [_descriptor(name) for name in KNOWN_ENGINES]
-    return EnginesResponse(status="ok", active=settings.TTS_ENGINE, engines=engines)
+    registry = settings.engine_registry
+    engines = [_descriptor(name, registry) for name in registry.names()]
+    return EnginesResponse(
+        status="ok",
+        active=settings.effective_tts_engine,
+        engines=engines,
+    )

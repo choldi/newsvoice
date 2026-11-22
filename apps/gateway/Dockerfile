@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir uv && \
 # y storage/ se resuelven relativas al CWD (/app) en runtime.
 COPY apps/gateway/tts_api ./apps/gateway/tts_api
 COPY apps/gateway/voice_profiles.json ./voice_profiles.json
+COPY config/engines.toml ./config/engines.toml
 RUN uv sync --frozen --no-dev --package tts-api ${UV_EXTRAS}
 
 FROM python:3.12-slim

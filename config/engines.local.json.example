@@ -1,0 +1,29 @@
+{
+  "active": "openai_tts",
+  "engines": {
+    "my_provider": {
+      "kind": "openai_compatible_http",
+      "display_name": "Mi proveedor TTS",
+      "enabled": true,
+      "locations": ["cloud"],
+      "required_env": ["MY_TTS_BASE_URL", "MY_TTS_API_KEY"],
+      "capabilities": {
+        "stock_voices": true,
+        "voice_cloning": false,
+        "instruct_voice_design": false,
+        "emotions": false,
+        "streaming": false,
+        "supported_languages": ["es", "en"]
+      },
+      "options": {
+        "base_url_env": "MY_TTS_BASE_URL",
+        "api_key_env": "MY_TTS_API_KEY",
+        "model": "tts-1",
+        "languages": ["es", "en"],
+        "voices": {
+          "es-demo": {"voice": "es-demo", "name": "Demo ES", "language": "es", "gender": "female"}
+        }
+      }
+    }
+  }
+}

@@ -9,12 +9,14 @@ command with side effects is executed.
 from __future__ import annotations
 
 import curses
+import json
 import shutil
 import tomllib
 from pathlib import Path
 
 import pytest
 from setup_wizard import config_report, deps
+from setup_wizard import settings as wizard_settings
 from setup_wizard import validate as validation
 from setup_wizard.app import (
     Context,
@@ -70,7 +72,10 @@ from setup_wizard.settings import (
     gateway_pip_extras,
     hash_password,
     join_multi,
+    load_engine_registry,
+    news_backend_engines,
     parse_engine_map,
+    registry_engine_infos,
     render_engine_map,
     required_engine_keys,
     required_model_downloads,
@@ -220,7 +225,9 @@ def test_tts_fields_expose_cloud_engines_and_sidecars() -> None:
     assert {"qwen3_tts", "omnivoice_remote", "fish_tts", "openai_tts"} <= set(
         gateway["TTS_ENGINE"].options
     )
-    assert {"kokoro", "fish_tts", "openai_tts"} <= set(news["TTS_DEFAULT_BACKEND"].options)
+    assert {"gateway", "kokoro", "fish_tts", "openai_tts"} <= set(
+        news["TTS_DEFAULT_BACKEND"].options
+    )
     assert gateway["FISH_API_KEY"].kind == "secret"
     assert gateway["OPENAI_TTS_BASE_URL"].advanced
     assert gateway["QWEN3_TTS_REMOTE_URL"].advanced
@@ -245,6 +252,59 @@ def test_tts_catalog_and_helpers_agree() -> None:
     assert not valid_language_code("catalan")
     assert config_requires_gpu("routed", '{"es":"omnivoice"}', "")
     assert not config_requires_gpu("routed", '{"es":"piper"}', "")
+
+
+def test_registry_engine_infos_expose_declared_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Custom manifest engines appear in the wizard requirements screen."""
+    manifest = tmp_path / "engines.toml"
+    override = tmp_path / "engines.local.json"
+    manifest.write_text(
+        """\
+version = 1
+
+[engines.vendor_tts]
+kind = "openai_compatible_http"
+display_name = "Vendor TTS"
+locations = ["cloud"]
+required_env = ["VENDOR_BASE_URL"]
+capabilities = { supported_languages = ["es"] }
+options = { base_url_env = "VENDOR_BASE_URL" }
+""",
+        encoding="utf-8",
+    )
+    override.write_text(
+        json.dumps({"version": 1, "active": "vendor_tts", "engines": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wizard_settings, "ENGINE_MANIFEST_PATH", manifest)
+    monkeypatch.setattr(wizard_settings, "ENGINE_OVERRIDE_PATH", override)
+
+    registry = load_engine_registry()
+
+    assert registry["vendor_tts"]["display_name"] == "Vendor TTS"
+    infos = registry_engine_infos()
+    assert infos["vendor_tts"].device == "Cloud"
+    assert infos["vendor_tts"].languages == ("es",)
+    assert infos["vendor_tts"].required_keys == ("VENDOR_BASE_URL",)
+
+
+def test_news_backend_gateway_follows_the_gateway_selection() -> None:
+    """The generic backend resolves to a pin, routed engines or staged active."""
+    assert news_backend_engines("gateway", "vendor_tts") == ["vendor_tts"]
+    assert news_backend_engines("gateway", "routed", '{"es":"mock"}', "") == ["mock"]
+
+
+def test_news_backend_gateway_uses_the_staged_active_when_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a pin the wizard follows the engine staged in the registry."""
+    override = tmp_path / "engines.local.json"
+    override.write_text(json.dumps({"version": 1, "active": "vendor_tts"}), encoding="utf-8")
+    monkeypatch.setattr(wizard_settings, "ENGINE_OVERRIDE_PATH", override)
+
+    assert news_backend_engines("gateway", "", "", "") == ["vendor_tts"]
 
 
 def test_engine_option_labels_show_gpu_cloning_and_base_languages() -> None:

@@ -193,6 +193,51 @@ curl -X POST http://localhost:8000/api/v1/voices/clone \
   -F "engines=pocket_tts,omnivoice"
 ```
 
+## Registro declarativo de engines
+
+El catálogo se versiona en `config/engines.toml` y se copia a
+`/app/config/engines.toml` en la imagen. `deploy/docker-compose.yml` monta el
+directorio `config/` del repo en `/app/config` para que la Admin API pueda
+escribir `engines.local.json` en el host.
+
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `TTS_ENGINE_REGISTRY_PATH` | Ruta del manifiesto TOML | `config/engines.toml` |
+| `TTS_ENGINE_OVERRIDE_PATH` | Ruta del override JSON | `config/engines.local.json` |
+
+`TTS_ENGINE` sigue siendo el valor por defecto cuando no hay un engine activo
+preparado. La Admin API valida y escribe el override; devuelve
+`restart_required: true` y el cambio se aplica al recrear/reiniciar el gateway.
+No escribas secretos en el override: solo nombres de variables de entorno.
+
+Para añadir un proveedor OpenAI-compatible sin código nuevo:
+
+```bash
+curl -X PUT "http://localhost:8001/api/v1/admin/engines/vendor" \
+  -H "X-API-Key: $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "openai_compatible_http",
+    "display_name": "Vendor TTS",
+    "locations": ["cloud"],
+    "capabilities": {"supported_languages": ["es"]},
+    "options": {
+      "base_url_env": "VENDOR_BASE_URL",
+      "api_key_env": "VENDOR_API_KEY",
+      "model": "vendor-model",
+      "voices": {"vendor-es": {"voice": "es-ES-Voice", "language": "es"}}
+    }
+  }'
+
+curl -X POST "http://localhost:8001/api/v1/admin/engines/activate" \
+  -H "X-API-Key: $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"vendor"}'
+```
+
+Después configura `VENDOR_BASE_URL` y `VENDOR_API_KEY` en
+`apps/gateway/.env`/compose y reinicia el gateway.
+
 ## Monitoreo
 
 - **Métricas**: `GET /metrics` (Prometheus)

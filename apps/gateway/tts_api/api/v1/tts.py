@@ -354,9 +354,10 @@ async def get_voice_design_tokens() -> dict[str, Any]:
     """
     settings = get_settings()
 
-    if settings.TTS_ENGINE not in ("omnivoice", "omnivoice_remote"):
+    active_engine = settings.effective_tts_engine
+    if active_engine not in ("omnivoice", "omnivoice_remote"):
         return {
-            "note": f"Voice design no soportado por el engine '{settings.TTS_ENGINE}'. "
+            "note": f"Voice design no soportado por el engine '{active_engine}'. "
             "Cambia TTS_ENGINE=omnivoice para usar voice design.",
             "gender": [],
             "age": [],

@@ -31,6 +31,7 @@ from src.api.services.tts_backends import (
 def test_resolve_backend_accepts_every_documented_name() -> None:
     """The five engines and their aliases land on the same enum."""
     assert resolve_backend("edge") is TTSBackend.EDGE
+    assert resolve_backend("gateway") is TTSBackend.GATEWAY
     assert resolve_backend("omni_voice") is TTSBackend.OMNIVOICE
     assert resolve_backend("qwen3_tts") is TTSBackend.QWEN3_TTS
     assert resolve_backend("zonos2") is TTSBackend.ZONOS2
@@ -41,7 +42,7 @@ def test_resolve_backend_accepts_every_documented_name() -> None:
 
 def test_resolve_backend_maps_operator_spellings() -> None:
     """The gateway answers to its new and its old names alike."""
-    assert resolve_backend("gateway") is TTSBackend.OMNIVOICE
+    assert resolve_backend("gateway_engine") is TTSBackend.GATEWAY
     assert resolve_backend("tts_api") is TTSBackend.OMNIVOICE
     assert resolve_backend("OmniVoice") is TTSBackend.OMNIVOICE
     assert resolve_backend("edgetts") is TTSBackend.EDGE
@@ -204,6 +205,12 @@ async def test_voice_for_gateway_rejects_an_unmapped_language() -> None:
     """A language with no known stock id fails with instructions."""
     with pytest.raises(TTSBackendError, match="no default tts-api voice"):
         await voice_for(TTSBackend.OMNIVOICE, "", "pt")
+
+
+async def test_voice_for_dynamic_gateway_uses_the_same_stock_ids() -> None:
+    """The generic gateway backend speaks the same voice vocabulary."""
+    assert await voice_for(TTSBackend.GATEWAY, "es-MX-JorgeNeural", "es") == "es-mx-male"
+    assert await voice_for(TTSBackend.GATEWAY, "", "en") == "en-us-male"
 
 
 async def test_voice_for_modal_picks_the_language_default(monkeypatch) -> None:
@@ -385,6 +392,58 @@ async def test_synthesize_gateway_calls_the_gateway(monkeypatch) -> None:
 
     assert audio == b"RIFFwav"
     assert seen["voice_id"] == "es-mx-male"
+
+
+async def test_synthesize_dynamic_gateway_forwards_the_engine_pin(monkeypatch) -> None:
+    """A generic gateway backend can pin any declarative engine without emotion."""
+    seen: list[dict[str, object]] = []
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.append(
+            {
+                "text": text,
+                "voice_id": voice_id,
+                "engine": kwargs.get("engine"),
+                "emotion": kwargs.get("emotion"),
+            }
+        )
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    audio = await synthesize(
+        TTSBackend.GATEWAY,
+        "hola",
+        "es-mx-male",
+        "es",
+        gateway_engine="VendorTTS",
+        emotion="happy",
+    )
+
+    assert audio == b"RIFFwav"
+    assert seen == [
+        {
+            "text": "hola",
+            "voice_id": "es-mx-male",
+            "engine": "vendortts",
+            "emotion": None,
+        }
+    ]
+
+
+async def test_synthesize_dynamic_gateway_without_pin_uses_gateway_routing(monkeypatch) -> None:
+    """An empty pin leaves the active gateway engine in charge."""
+    seen: list[object] = []
+
+    async def fake_gateway(text, voice_id, language, **kwargs):
+        seen.append(kwargs.get("engine"))
+        return b"RIFFwav"
+
+    monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+
+    await synthesize(TTSBackend.GATEWAY, "hola", "es-mx-male", "es", gateway_engine="  ")
+
+    assert seen == [None]
 
 
 async def test_synthesize_cloud_engines_pin_the_gateway_engine(monkeypatch) -> None:

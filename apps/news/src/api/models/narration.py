@@ -53,9 +53,12 @@ class TTSBackend(StrEnum):
             inline reference-audio clones; no voice design, no audiobooks.
         OPENAI: Generic OpenAI-compatible ``/audio/speech`` provider via the
             gateway. Stock voices only; no cloning, design or audiobooks.
+        GATEWAY: Any engine registered in the gateway catalog, selected with
+            ``gateway_engine``. Honors the selected engine's own capabilities.
     """
 
     EDGE = "edge"
+    GATEWAY = "gateway"
     OMNIVOICE = "omni_voice"
     QWEN3_TTS = "qwen3_tts"
     ZONOS2 = "zonos2"
