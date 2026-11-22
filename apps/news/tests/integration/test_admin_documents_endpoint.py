@@ -71,6 +71,8 @@ def test_submit_starts_the_workflow_and_records_the_job(_doc_tts_env: Path) -> N
             PLAIN_TXT,
             title="Clase de espanol",
             language="es",
+            tts_backend="gateway",
+            gateway_engine="kokoro",
         )
 
     assert response.status_code == 202
@@ -87,6 +89,8 @@ def test_submit_starts_the_workflow_and_records_the_job(_doc_tts_env: Path) -> N
     assert config.filename == "clase_de_espanol.txt"
     assert config.title == "Clase de espanol"
     assert config.language == "es"
+    assert config.tts_backend == "gateway"
+    assert config.gateway_engine == "kokoro"
     assert Path(config.source_path).is_file()
     assert Path(config.source_path).parent.name == "uploads"
 
@@ -96,6 +100,8 @@ def test_submit_starts_the_workflow_and_records_the_job(_doc_tts_env: Path) -> N
     meta = read_job_meta(body["workflow_id"])
     assert meta["title"] == "Clase de espanol"
     assert meta["filename"] == "clase_de_espanol.txt"
+    assert meta["tts_backend"] == "gateway"
+    assert meta["gateway_engine"] == "kokoro"
     job = _job(body["workflow_id"])
     assert job["status"] == "STARTING"
     assert job["collection"] == JOB_COLLECTION

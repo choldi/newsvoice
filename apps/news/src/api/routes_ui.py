@@ -24,7 +24,6 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
-from tts_contract import EnginesResponse
 
 from src.api.authz import ASSIGNABLE_ROLES, Role
 from src.api.db.database import (
@@ -48,6 +47,17 @@ from src.api.services.audio_cleanup import delete_job_artifacts
 from src.api.services.collections_repo import CollectionConflictError, CollectionsRepository
 from src.api.services.doc_tts import read_job_meta, submit_document
 from src.api.services.env_editor import build_schema
+from src.api.services.gateway_engine_catalog import (
+    GATEWAY_ENGINE_CHOICES,  # noqa: F401 - re-exported for existing callers
+    GatewayEngineCatalog,
+    load_gateway_engine_catalog,
+)
+from src.api.services.gateway_engine_catalog import (
+    backend_choices as catalog_backend_choices,
+)
+from src.api.services.gateway_engine_catalog import (
+    gateway_engine_choices as catalog_gateway_engine_choices,
+)
 from src.api.services.lesson import (
     LessonError,
     lesson_audio_link,
@@ -409,6 +419,7 @@ def _picker_context(
     guard: bool = False,
     langs: bool = True,
     lang_input: str = "",
+    engine_input: str = "",
 ) -> dict:
     """Build the full context of one tools voice picker (Phase 9.7).
 
@@ -436,6 +447,8 @@ def _picker_context(
         lang_input: CSS selector (or comma list) of the form's language
             field(s) the picker must include in its htmx requests so the
             debounced search keeps the language filter (Phase 9.8).
+        engine_input: CSS selector of the form's engine selector, included in
+            htmx requests so voice results follow the chosen backend and pin.
 
     Returns:
         Results context plus picker_id, engines, empty_label, guard, lang_input
@@ -450,6 +463,7 @@ def _picker_context(
             "empty_label": empty_label,
             "guard": guard,
             "lang_input": lang_input,
+            "engine_input": engine_input,
             "langs": voice_search.language_options(dicts) if langs else [],
         }
     )
@@ -538,6 +552,7 @@ def _lesson_voice_context(
             guard=True,
             langs=False,
             lang_input=lesson_lang_input,
+            engine_input="#engine-selector-lesson",
         ),
         "voice2_picker": _picker_context(
             entries,
@@ -550,6 +565,7 @@ def _lesson_voice_context(
             guard=True,
             langs=False,
             lang_input=lesson_lang_input,
+            engine_input="#engine-selector-lesson",
         ),
         "mixed_message": _mixed_engine_message(voice, voice2),
         "fragment": fragment,
@@ -575,22 +591,10 @@ TTS_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("voxcpm2", "VoxCPM2 (Modal)"),
 )
 
-#: Gateway engine ids reported by ``GET /engines`` that news-engine can drive
-#: through the ``omni_voice`` backend. They are offered as a second select next
-#: to the voice so an operator can pick the engine that actually owns the voice.
-GATEWAY_ENGINE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("", "(engine activo del gateway)"),
-    ("omnivoice", "OmniVoice (local)"),
-    ("omnivoice_remote", "OmniVoice remote (sidecar)"),
-    ("pocket_tts", "Pocket TTS"),
-    ("edgetts", "EdgeTTS (gateway)"),
-    ("piper", "Piper"),
-    ("chatterbox", "Chatterbox"),
-    ("qwen3_tts", "Qwen3-TTS (gateway)"),
-    ("zono2", "ZONOS2"),
-    ("kokoro", "Kokoro"),
-    ("fish_tts", "Fish Audio"),
-    ("openai_tts", "OpenAI-compatible"),
+#: Backend choices of the tools forms that may inherit a collection's engine.
+TOOL_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("", "(por defecto)"),
+    *TTS_BACKEND_CHOICES,
 )
 
 #: Engines the audiobook form may offer (Phase 11.10). The Modal-only engines
@@ -599,6 +603,7 @@ GATEWAY_ENGINE_CHOICES: tuple[tuple[str, str], ...] = (
 AUDIOBOOK_BACKEND_CHOICES: tuple[tuple[str, str], ...] = (
     ("edge", "edge (local)"),
     ("omni_voice", "tts-api gateway"),
+    ("gateway", "Gateway (engine dinámico)"),
     ("kokoro", "Kokoro (gateway)"),
     ("qwen3_tts", "Qwen3-TTS (local gateway)"),
 )
@@ -683,69 +688,39 @@ def _modal_voice_options() -> dict:
     return _registry_options(languages, voices)
 
 
-def _gateway_engine_label(name: str, available: bool = True) -> str:
-    """Return a menu label for a gateway engine id from ``/engines``."""
-    label = dict(GATEWAY_ENGINE_CHOICES).get(name, name)
-    return label if available else f"{label} (no disponible)"
+async def _gateway_engine_choices(
+    catalog: GatewayEngineCatalog | None = None,
+    *,
+    selected: str = "",
+) -> tuple[tuple[str, str], ...]:
+    """Return the gateway-engine choices from one catalog snapshot.
 
-
-async def _gateway_engine_choices() -> tuple[tuple[str, str], ...]:
-    """Return the gateway catalog from ``/engines`` in menu order.
-
-    The dropdown is intentionally wider than the TTSBackend enum: an operator
-    may run Pocket TTS, Piper or Chatterbox behind the gateway, and each has its
-    own voice catalogue. Unknown ids reported by a newer gateway are kept with
-    their raw name so a setup change does not need a news release. If ``/engines``
-    cannot be reached, the static list is kept so an outage does not remove
-    choices.
-    """
-    from src.api.services.voices import VoicesService
-
-    try:
-        catalog = EnginesResponse.model_validate(await VoicesService().get_engines())
-    except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
-        logger.warning("gateway_engine_choices_failed", error=str(exc))
-        return GATEWAY_ENGINE_CHOICES
-    if not catalog.engines:
-        return GATEWAY_ENGINE_CHOICES
-    choices: list[tuple[str, str]] = [GATEWAY_ENGINE_CHOICES[0]]
-    seen: set[str] = set()
-    for engine in catalog.engines:
-        name = engine.name.strip()
-        if not name or name in seen or name == "routed":
-            continue
-        seen.add(name)
-        choices.append((name, _gateway_engine_label(name, engine.available)))
-    active = catalog.active.strip()
-    if active and active not in seen and active != "routed":
-        choices.append((active, _gateway_engine_label(active)))
-    return tuple(choices) if len(choices) > 1 else GATEWAY_ENGINE_CHOICES
-
-
-async def _tts_backend_choices() -> tuple[tuple[str, str], ...]:
-    """Return the TTS dropdown choices, hiding unconfigured cloud engines.
-
-    The gateway reports Fish/OpenAI as unavailable until their credentials are
-    set. If the gateway cannot be reached, every choice is kept so an outage
-    does not silently change the operator's options.
+    Args:
+        catalog: Reusable catalog snapshot; loaded on demand when omitted.
+        selected: Value that must remain visible even when unavailable.
 
     Returns:
-        The visible ``(value, label)`` pairs in menu order.
+        ``(value, label)`` pairs in menu order.
     """
-    from src.api.services.voices import VoicesService
+    snapshot = catalog or await load_gateway_engine_catalog()
+    return catalog_gateway_engine_choices(snapshot, selected=selected)
 
-    try:
-        catalog = EnginesResponse.model_validate(await VoicesService().get_engines())
-    except Exception as exc:  # noqa: BLE001 - a dead gateway keeps all choices
-        logger.warning("tts_backend_choices_failed", error=str(exc))
-        return TTS_BACKEND_CHOICES
-    if not catalog.engines:
-        return TTS_BACKEND_CHOICES
-    available = {engine.name for engine in catalog.engines if engine.available}
-    cloud = {"fish_tts", "openai_tts"}
-    return tuple(
-        choice for choice in TTS_BACKEND_CHOICES if choice[0] not in cloud or choice[0] in available
-    )
+
+async def _tts_backend_choices(
+    catalog: GatewayEngineCatalog | None = None,
+    choices: tuple[tuple[str, str], ...] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Return backend choices from one catalog snapshot.
+
+    Args:
+        catalog: Reusable catalog snapshot; loaded on demand when omitted.
+        choices: Backend pairs to filter; defaults to the digest choices.
+
+    Returns:
+        Visible backend pairs in menu order.
+    """
+    snapshot = catalog or await load_gateway_engine_catalog()
+    return catalog_backend_choices(snapshot, choices or TTS_BACKEND_CHOICES)
 
 
 async def _tts_voice_options(backend: str, gateway_engine: str = "") -> dict:
@@ -998,7 +973,11 @@ def _logic_delivery_from_form(
     )
 
 
-async def start_collection_podcast(name: str) -> tuple[str, str]:
+async def start_collection_podcast(
+    name: str,
+    tts_backend: str = "",
+    gateway_engine: str = "",
+) -> tuple[str, str]:
     """Resolve and start the podcast render of a collection's latest digest.
 
     Shared by the tools page and the collections page buttons (Phase 7.12 UI):
@@ -1007,6 +986,8 @@ async def start_collection_podcast(name: str) -> tuple[str, str]:
 
     Args:
         name: Collection name (as typed/submitted).
+        tts_backend: Optional backend override for this render only.
+        gateway_engine: Optional gateway sub-engine override for this render only.
 
     Returns:
         Tuple of (flash level, message): 'ok' with both ids, or 'error' with
@@ -1030,10 +1011,24 @@ async def start_collection_podcast(name: str) -> tuple[str, str]:
     if source is None:
         return "error", f"'{name}' aún no tiene ejecuciones; genera un digesto primero"
     run_id = str(source["workflow_id"])
+    spec = collection.narration_spec
+    updates: dict[str, object] = {}
+    if tts_backend:
+        try:
+            from src.api.services.tts_backends import resolve_backend
+
+            backend = resolve_backend(tts_backend)
+        except Exception as exc:
+            return "error", f"Backend TTS desconocido: {exc}"
+        updates["tts_backend"] = backend
+        if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY):
+            updates["gateway_engine"] = gateway_engine.strip().lower()
+    if updates:
+        spec = spec.model_copy(update=updates)
     try:
         result = await TemporalAdminService().start_narration_render(
             collection=collection.name,
-            spec=collection.narration_spec,
+            spec=spec,
             strategy=collection.narration_strategy,
             run_id=run_id,
         )
@@ -1161,11 +1156,12 @@ async def ui_collections(request: Request) -> HTMLResponse:
         if any(c.tts_enabled for c in collections)
         else {}
     )
+    catalog = await load_gateway_engine_catalog()
     tts_options_by_collection: dict[str, dict] = {}
     if any(c.tts_enabled for c in collections):
         for c in collections:
             backend = resolve_backend(c.tts_backend or None).value
-            if backend != "omni_voice" or not c.gateway_engine:
+            if backend not in ("omni_voice", "gateway") or not c.gateway_engine:
                 continue
             tts_options_by_collection[c.name] = await _tts_voice_options(backend, c.gateway_engine)
     # Phase 9.2: the cast datalists follow the narration engine of each form,
@@ -1175,16 +1171,15 @@ async def ui_collections(request: Request) -> HTMLResponse:
     }
     cast_engines.add("omni_voice")  # the create form defaults to the gateway
     cast_options = await _tts_options_by_backend(cast_engines)
-    tts_backends = await _tts_backend_choices()
     return _render(
         request,
         "collections.html",
         {
             "collections": collections,
             "omni": omni,
-            "tts_backends": tts_backends,
+            "tts_backends": await _tts_backend_choices(catalog),
             "narration_backends": NARRATION_BACKEND_CHOICES,
-            "gateway_engines": await _gateway_engine_choices(),
+            "gateway_engines": await _gateway_engine_choices(catalog),
             "current_gateway_engine": "",
             "tts_options": tts_options,
             "tts_options_by_collection": tts_options_by_collection,
@@ -1594,6 +1589,73 @@ async def ui_terminate_run(workflow_id: str) -> RedirectResponse:
     return _flash("/ui/runs", f"Ejecución '{workflow_id}' detenida")
 
 
+@router.get("/ui/fragments/engine_selector", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_engine_selector(
+    request: Request,
+    tts_backend: str = "",
+    gateway_engine: str = "",
+    engine_wrapper_id: str = "engine-selector",
+    engine_backend_id: str = "",
+    engine_gateway_id: str = "",
+    engine_choices: str = "tts",
+    engine_fragment_url: str = "/ui/fragments/engine_selector",
+    engine_hx_target: str = "closest div[id^='engine-selector']",
+    engine_hx_include: str = "closest form",
+    backend_field: str = "tts_backend",
+    gateway_field: str = "gateway_engine",
+) -> HTMLResponse:
+    """Render the shared backend/gateway-engine selector for a tools form.
+
+    Args:
+        request: Incoming request.
+        tts_backend: Currently selected backend id.
+        gateway_engine: Currently selected gateway sub-engine id.
+        engine_wrapper_id: DOM id of the swapped wrapper.
+        engine_backend_id: Optional DOM id of the backend select.
+        engine_gateway_id: Optional DOM id of the gateway-engine select.
+        engine_choices: ``audiobook`` uses the local-only backend menu.
+        engine_fragment_url: URL used by both selects after a change.
+        engine_hx_target: HTMX target of the selector swap.
+        engine_hx_include: HTMX include expression carrying the form values.
+        backend_field: Name of the backend select in the calling form.
+        gateway_field: Name of the gateway-engine select in the calling form.
+
+    Returns:
+        HTMLResponse with the engine selector partial.
+    """
+    from src.api.services.tts_backends import resolve_backend
+
+    selected_backend = request.query_params.get(backend_field, tts_backend)
+    selected_gateway = request.query_params.get(gateway_field, gateway_engine)
+    try:
+        backend = str(resolve_backend(selected_backend or None).value)
+    except Exception:
+        backend = "edge"
+    catalog = await load_gateway_engine_catalog()
+    backend_options = (
+        AUDIOBOOK_BACKEND_CHOICES if engine_choices == "audiobook" else TTS_BACKEND_CHOICES
+    )
+    return _render(
+        request,
+        "partials/_engine_selector.html",
+        {
+            "tts_backends": await _tts_backend_choices(catalog, backend_options),
+            "current_backend": backend,
+            "gateway_engines": await _gateway_engine_choices(catalog, selected=selected_gateway),
+            "current_gateway_engine": selected_gateway,
+            "backend_field": backend_field,
+            "gateway_field": gateway_field,
+            "engine_wrapper_id": engine_wrapper_id,
+            "backend_id": engine_backend_id,
+            "gateway_id": engine_gateway_id,
+            "engine_choices": engine_choices,
+            "engine_fragment_url": engine_fragment_url,
+            "engine_hx_target": engine_hx_target,
+            "engine_hx_include": engine_hx_include,
+        },
+    )
+
+
 @router.get("/ui/fragments/tts_options", response_class=HTMLResponse, include_in_schema=False)
 async def ui_fragment_tts_options(
     request: Request,
@@ -1632,15 +1694,15 @@ async def ui_fragment_tts_options(
         if tts_enabled
         else {"languages": [], "voices": []}
     )
-    tts_backends = await _tts_backend_choices()
+    catalog = await load_gateway_engine_catalog()
     return _render(
         request,
         "partials/_tts_options.html",
         {
             "tts_enabled": bool(tts_enabled),
-            "tts_backends": tts_backends,
+            "tts_backends": await _tts_backend_choices(catalog),
             "current_backend": engine,
-            "gateway_engines": await _gateway_engine_choices(),
+            "gateway_engines": await _gateway_engine_choices(catalog, selected=gateway_engine),
             "current_gateway_engine": gateway_engine,
             "tts_options": {engine: options},
             "current_language": language,
@@ -1653,6 +1715,7 @@ async def ui_fragment_tts_options(
 async def ui_fragment_cast_voices(
     request: Request,
     narr_backend: str = "",
+    narr_gateway_engine: str = "",
     cast: str = "",
     rows: int = 2,
 ) -> HTMLResponse:
@@ -1669,6 +1732,7 @@ async def ui_fragment_cast_voices(
     Args:
         request: Incoming request.
         narr_backend: Engine chosen in the form ('omni_voice', 'qwen3_tts', ...).
+        narr_gateway_engine: Gateway sub-engine chosen for omni_voice/gateway.
         cast: Form identifier of the cast ('nueva' or the collection name).
         rows: Number of rows of the cast table (clamped to 1..8).
 
@@ -1680,7 +1744,7 @@ async def ui_fragment_cast_voices(
     engine = (narr_backend or "").strip().lower()
     if engine not in ALLOWED_BACKENDS:
         engine = TTSBackend.OMNIVOICE.value
-    options = await _tts_voice_options(engine)
+    options = await _tts_voice_options(engine, narr_gateway_engine)
     return _render(
         request,
         "partials/_cast_voices_oob.html",
@@ -1809,6 +1873,9 @@ def _narration_spec_from_form(
             "emotion": (fields.get("narr_emotion") or "").strip() or None,
             "tts_backend": (fields.get("narr_backend") or "").strip()
             or payload.get("tts_backend", "omni_voice"),
+            "gateway_engine": (fields.get("narr_gateway_engine") or "").strip().lower()
+            or payload.get("gateway_engine")
+            or "",
             "ai_disclosure": fields.get("narr_disclosure") == "on",
             "run_in_modal": fields.get("narr_run_in_modal") == "on",
         }
@@ -2865,7 +2932,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
     omni = await _omni_options()
     edge = await _edge_voice_options()
     all_voices = [voice.model_dump() for voice in await list_all_voices()]
-    gateway_engine_choices = await _gateway_engine_choices()
+    catalog = await load_gateway_engine_catalog()
+    gateway_engine_choices = await _gateway_engine_choices(catalog)
     gateway_engines = [value for value, _ in gateway_engine_choices if value]
     for engine in gateway_engines:
         voices = _registry_options(*await gateway_options(engine=engine))["voices"]
@@ -2881,6 +2949,7 @@ async def ui_tools(request: Request) -> HTMLResponse:
         langs=False,
         lang="es",
         lang_input="#doc-language",
+        engine_input="#engine-selector-doc",
     )
     audiobook_picker = _picker_context(
         edge["voices"],
@@ -2890,7 +2959,8 @@ async def ui_tools(request: Request) -> HTMLResponse:
         empty_label="(por defecto)",
         langs=False,
         lang="es",
-        lang_input="#audiobook-language, #audiobook-engine",
+        lang_input="#audiobook-language",
+        engine_input="#engine-selector-audiobook",
     )
     return _render(
         request,
@@ -2902,7 +2972,11 @@ async def ui_tools(request: Request) -> HTMLResponse:
             "doc_language_options": voice_search.language_options(edge["voices"]),
             "audiobook_picker": audiobook_picker,
             "audiobook_language_options": voice_search.language_options(edge["voices"]),
-            "audiobook_engine_choices": AUDIOBOOK_BACKEND_CHOICES,
+            "tts_backends": await _tts_backend_choices(catalog, TOOL_BACKEND_CHOICES),
+            "gateway_engines": gateway_engine_choices,
+            "audiobook_engine_choices": await _tts_backend_choices(
+                catalog, AUDIOBOOK_BACKEND_CHOICES
+            ),
             "lesson_language_options": voice_search.language_options(all_voices),
             # Phase 7.16: the lesson form only offers the adaptation when the
             # teacher feature can actually run it.
@@ -2970,6 +3044,8 @@ async def ui_tools_doc_tts(request: Request) -> RedirectResponse:
             voice=fields.get("voice") or None,
             language=fields.get("language") or None,
             title=fields.get("title") or None,
+            tts_backend=(fields.get("tts_backend") or "").strip() or None,
+            gateway_engine=(fields.get("gateway_engine") or "").strip() or None,
         )
     except SubmitError as exc:
         return _flash(target, exc.message, "error")
@@ -3011,6 +3087,8 @@ async def ui_tools_lessons(request: Request) -> RedirectResponse:
             voice2=fields.get("voice2") or None,
             phonetic_adaptation=fields.get("phonetic_adaptation") == "on",
             run_in_modal=fields.get("narr_run_in_modal") == "on",
+            tts_backend=(fields.get("tts_backend") or "").strip() or None,
+            gateway_engine=(fields.get("gateway_engine") or "").strip() or None,
         )
     except SubmitError as exc:
         return _flash(target, exc.message, "error")
@@ -3046,6 +3124,7 @@ async def ui_tools_audiobooks(request: Request) -> RedirectResponse:
             language=fields.get("language") or None,
             title=fields.get("title") or None,
             engine=fields.get("engine") or None,
+            gateway_engine=(fields.get("gateway_engine") or "").strip() or None,
             cover=cover if hasattr(cover, "filename") else None,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
@@ -3125,7 +3204,11 @@ async def ui_tools_podcast(request: Request) -> RedirectResponse:
     target = "/ui/tools#tool-podcast"
     fields = await _form(request)
     name = (fields.get("collection") or "default").strip()
-    level, message = await start_collection_podcast(name)
+    level, message = await start_collection_podcast(
+        name,
+        tts_backend=(fields.get("tts_backend") or "").strip(),
+        gateway_engine=(fields.get("gateway_engine") or "").strip(),
+    )
     return _flash(target, message, level)
 
 
@@ -3208,6 +3291,8 @@ async def ui_fragment_voice_picker(
     engines: str = "all",
     picker_engines: str = "all",
     engine: str = "",
+    tts_backend: str = "",
+    gateway_engine: str = "",
     empty_label: str = "",
     language: str = "",
     mode: str = "",
@@ -3249,6 +3334,8 @@ async def ui_fragment_voice_picker(
             wins over the picker's hidden ``engines`` hint and filters the
             results through :func:`engines_for_voice` so the list only shows
             voices that engine would accept at submit.
+        tts_backend: Shared tools selector backend; wins over ``engine``.
+        gateway_engine: Gateway sub-engine pin of the shared selector.
         empty_label: Label of the value='' option ('' omits it).
         language: Document form language field ('es' matches es and es-ES).
         mode: Lesson mode driving the per-role language mapping.
@@ -3261,7 +3348,12 @@ async def ui_fragment_voice_picker(
     wanted_field = field if field in {"voice", "voice2"} else "voice"
     current = voice2 if wanted_field == "voice2" else voice
     query = (voice2_q if wanted_field == "voice2" else voice_q) or q
-    engine_param = (engine or "").strip()
+    engine_param = (tts_backend or engine or "").strip()
+    gateway_filter = (
+        (gateway_engine or "").strip()
+        if engine_param in {"omni_voice", "gateway"}
+        else engine_param
+    )
     engine_hint = (picker_engines or engines).strip()
     legacy_engine = engine_hint if engine_hint not in {"", "all"} else ""
     resolved = _picker_lang_param(
@@ -3277,17 +3369,21 @@ async def ui_fragment_voice_picker(
         # catalogue when it is one of its sub-engines, then let the multi-engine
         # guard filter the same way submit validation does.
         voices = [
-            entry.model_dump() for entry in await list_all_voices(gateway_engine=engine_param)
+            entry.model_dump()
+            for entry in await list_all_voices(gateway_engine=gateway_filter or None)
         ]
-        allowed = []
-        for entry in voices:
-            speaks = engines_for_voice(str(entry.get("id") or ""))
-            if not speaks or engine_param in speaks:
-                allowed.append(entry)
-            elif entry.get("category") == "stock" and any(
-                str(g) == engine_param for g in entry.get("engines") or []
-            ):
-                allowed.append(entry)
+        if engine_param == "gateway":
+            allowed = voices
+        else:
+            allowed = []
+            for entry in voices:
+                speaks = engines_for_voice(str(entry.get("id") or ""))
+                if not speaks or engine_param in speaks:
+                    allowed.append(entry)
+                elif entry.get("category") == "stock" and any(
+                    str(g) == engine_param for g in entry.get("engines") or []
+                ):
+                    allowed.append(entry)
     else:
         allowed = [
             entry.model_dump() for entry in await list_all_voices(engine=legacy_engine or None)

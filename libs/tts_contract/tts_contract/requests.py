@@ -53,3 +53,4 @@ class ConversationRequest(BaseModel):
     turns: list[ConversationTurn]
     pause_ms: int = 300
     speed: float = 1.0
+    engine: str | None = None

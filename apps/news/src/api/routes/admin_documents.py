@@ -47,6 +47,12 @@ async def submit_document_tts(
     voice: str | None = Form(default=None, description="Edge voice override"),
     language: str | None = Form(default=None, description="ISO 639-1 language override"),
     title: str | None = Form(default=None, description="Title for the audio file"),
+    tts_backend: str | None = Form(
+        default=None, description="TTS backend override for this document"
+    ),
+    gateway_engine: str | None = Form(
+        default=None, description="Gateway sub-engine pin for omni_voice/gateway"
+    ),
 ) -> DocTTSSubmitOut:
     """POST /admin/documents/tts endpoint handler.
 
@@ -56,6 +62,8 @@ async def submit_document_tts(
         voice: Optional voice override.
         language: Optional language override.
         title: Optional title override.
+        tts_backend: Optional TTS backend override.
+        gateway_engine: Optional gateway sub-engine pin.
 
     Returns:
         DocTTSSubmitOut with the workflow id and the status URL.
@@ -71,6 +79,8 @@ async def submit_document_tts(
             voice=voice,
             language=language,
             title=title,
+            tts_backend=tts_backend,
+            gateway_engine=gateway_engine,
         )
     except SubmitError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

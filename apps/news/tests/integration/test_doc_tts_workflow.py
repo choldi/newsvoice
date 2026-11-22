@@ -81,6 +81,8 @@ async def test_document_workflow_happy_path() -> None:
         title="Clase de espanol",
         voice="es-ES-ElviraNeural",
         language="es",
+        tts_backend="gateway",
+        gateway_engine="kokoro",
     )
 
     result = await _run(config)
@@ -95,12 +97,16 @@ async def test_document_workflow_happy_path() -> None:
     assert extract["run_id"] == "doc-tts-test", "the id comes from workflow.info()"
     assert extract["source_path"].endswith("doc-tts-test.epub")
     assert extract["filename"] == "clase.epub"
+    assert extract["tts_backend"] == "gateway"
+    assert extract["gateway_engine"] == "kokoro"
 
     assert len(SYNTH_CALLS) == 1
     synthesize = SYNTH_CALLS[0]
     assert synthesize["text_path"] == EXTRACTED["text_path"], "extract result must feed synth"
     assert synthesize["title"] == EXTRACTED["title"]
     assert synthesize["voice"] == "es-ES-ElviraNeural"
+    assert synthesize["tts_backend"] == "gateway"
+    assert synthesize["gateway_engine"] == "kokoro"
     assert synthesize["run_id"] == "doc-tts-test"
 
 

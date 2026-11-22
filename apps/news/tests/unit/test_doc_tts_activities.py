@@ -143,23 +143,21 @@ async def test_synthesize_closes_the_job_with_the_audio_path(
     # The service returns a frozen dataclass; a SimpleNamespace matches it.
     from types import SimpleNamespace
 
-    with patch(
-        "src.workers.doc_tts_activities.DocTTSService",
-        return_value=AsyncMock(
-            synthesize_document=AsyncMock(
-                return_value=SimpleNamespace(
-                    audio_path=str(tmp_path / "audio.mp3"),
-                    voice="es-ES-ElviraNeural",
-                    language="es",
-                    title="Doc",
-                    char_count=37,
-                    chunk_count=1,
-                    duration_estimate=2.47,
-                    cached=False,
-                )
+    service = AsyncMock(
+        synthesize_document=AsyncMock(
+            return_value=SimpleNamespace(
+                audio_path=str(tmp_path / "audio.mp3"),
+                voice="es-ES-ElviraNeural",
+                language="es",
+                title="Doc",
+                char_count=37,
+                chunk_count=1,
+                duration_estimate=2.47,
+                cached=False,
             )
-        ),
-    ):
+        )
+    )
+    with patch("src.workers.doc_tts_activities.DocTTSService", return_value=service):
         result = await environment.run(
             synthesize_document_activity,
             {
@@ -168,9 +166,13 @@ async def test_synthesize_closes_the_job_with_the_audio_path(
                 "title": "Doc",
                 "voice": "",
                 "language": "es",
+                "tts_backend": "gateway",
+                "gateway_engine": "kokoro",
             },
         )
 
+    assert service.synthesize_document.call_args.kwargs["tts_backend"] == "gateway"
+    assert service.synthesize_document.call_args.kwargs["gateway_engine"] == "kokoro"
     assert result["audio_path"].endswith("audio.mp3")
     assert result["chunk_count"] == 1
     job = await _job()

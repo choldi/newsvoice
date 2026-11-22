@@ -42,8 +42,8 @@ class TTSIn(BaseModel):
     gateway_engine: str | None = Field(
         default=None,
         description=(
-            "Gateway sub-engine pin for omni_voice (e.g. 'pocket_tts'); empty "
-            "lets the gateway route by language."
+            "Gateway sub-engine pin for omni_voice/gateway (e.g. 'pocket_tts'); "
+            "empty lets the gateway route by language."
         ),
     )
 

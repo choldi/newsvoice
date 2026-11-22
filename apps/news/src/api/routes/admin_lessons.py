@@ -66,6 +66,10 @@ async def submit_lesson_endpoint(
             "backend and an enabled phonetic_heuristics row for the pair)"
         ),
     ),
+    tts_backend: str | None = Form(default=None, description="TTS backend override"),
+    gateway_engine: str | None = Form(
+        default=None, description="Gateway sub-engine pin for omni_voice/gateway"
+    ),
 ) -> LessonSubmitOut:
     """POST /admin/lessons endpoint handler.
 
@@ -82,6 +86,8 @@ async def submit_lesson_endpoint(
         voice2: Voice of the target-language role; required for mode='dual'.
         phonetic_adaptation: Whether the script must be phonetically adapted
             for the native-language voice (Phase 7.16).
+        tts_backend: Optional TTS backend override.
+        gateway_engine: Optional gateway sub-engine pin.
 
     Returns:
         LessonSubmitOut with the workflow id and the status URL.
@@ -103,6 +109,8 @@ async def submit_lesson_endpoint(
             voice=voice,
             voice2=voice2,
             phonetic_adaptation=phonetic_adaptation,
+            tts_backend=tts_backend,
+            gateway_engine=gateway_engine,
         )
     except SubmitError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

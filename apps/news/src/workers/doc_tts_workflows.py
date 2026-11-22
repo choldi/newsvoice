@@ -59,6 +59,10 @@ class DocTTSConfig:
     """Requested Edge voice; empty uses the configured default."""
     language: str = ""
     """ISO 639-1 language; empty uses the configured default."""
+    tts_backend: str = "edge"
+    """Engine that synthesizes the document."""
+    gateway_engine: str = ""
+    """Gateway sub-engine pin for the omni_voice/gateway backends."""
 
 
 @workflow.defn
@@ -101,6 +105,8 @@ class DocumentTtsWorkflow:
                     # extraction resolves them too.
                     "voice": config.voice,
                     "language": config.language,
+                    "tts_backend": config.tts_backend,
+                    "gateway_engine": config.gateway_engine,
                 },
                 start_to_close_timeout=DOC_TTS_EXTRACT_TIMEOUT,
                 retry_policy=DOC_TTS_RETRY_POLICY,
@@ -115,6 +121,8 @@ class DocumentTtsWorkflow:
                     "title": extracted["title"],
                     "voice": config.voice,
                     "language": config.language,
+                    "tts_backend": config.tts_backend,
+                    "gateway_engine": config.gateway_engine,
                 },
                 start_to_close_timeout=DOC_TTS_SYNTHESIZE_TIMEOUT,
                 heartbeat_timeout=DOC_TTS_HEARTBEAT_TIMEOUT,

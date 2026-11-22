@@ -196,6 +196,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
                     voice=str(payload.get("voice") or ""),
                     language=str(payload.get("language") or "es"),
                     backend=backend,
+                    gateway_engine=str(payload.get("gateway_engine") or ""),
                     gate=gate,
                     run_id=run_id,
                     chapter_range=chapter_range,

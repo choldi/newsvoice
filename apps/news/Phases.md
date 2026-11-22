@@ -1212,6 +1212,41 @@ verdes.
 **Effort:** 10-14 hours.
 
 
+## FASE 12: Selector TTS unificado en Herramientas
+
+**Objetivo:** Ofrecer en un solo sitio el par `tts_backend` + `gateway_engine`
+para colecciones, TTS de documentos, clases de idiomas, podcast y audiolibro,
+con el catálogo del gateway tomado del propio gateway y sin mezclar backends.
+
+### Checklist
+- [x] **12.1 Catálogo dinámico**: `gateway_engine_catalog.py` consulta
+      `/api/v1/engines`, separa engines ofrecibles de la estrategia `routed` y
+      alimenta todos los selectores sin tocar código al añadir un engine.
+- [x] **12.2 Partial compartido**: `_engine_selector.html` admite nombres de
+      campo/id, `engine_choices`, fragmento HTMX y destino configurables; lo
+      usan las colecciones y los cuatro formularios de `/ui/tools`.
+- [x] **12.3 Colecciones**: el TTS y el cast de cada colección persist
+      `tts_backend`/`gateway_engine` y refrescan sus voces al cambiar de motor.
+- [x] **12.4 Herramientas**: doc TTS, lessons, podcast y audiolibro envían el
+      par selector como override de la petición; los pickers de voz filtran por
+      el engine elegido.
+- [x] **12.5 Servicios/workflows**: `submit_document`, `submit_lesson`,
+      `start_collection_podcast` y `submit_audiobook` propagan el override hasta
+      la configuración del workflow; doc TTS y audiolibro usan la ruta genérica
+      con caché por backend/pin.
+- [x] **12.6 Gateway**: el endpoint de conversaciones acepta `engine` y
+      `ConversationService` lo pasa como `engine_name` a cada turno.
+- [x] **12.7 Tests**: cobertura del fragmento compartido, de los cuatro
+      formularios, de los overrides de submit, del workflow de doc TTS, de la
+      actividad de audiolibro y del engine del gateway.
+
+**Success criteria:** el usuario elige motor y sub-engine una sola vez por
+herramienta; la voz ofrecida siempre pertenece a ese motor; el cache y el job
+registran el pin; lint + tests verdes.
+
+**Effort:** 4-6 hours.
+
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable

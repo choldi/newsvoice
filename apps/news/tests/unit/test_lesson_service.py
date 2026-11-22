@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.datastructures import UploadFile
 
 from src.api.models.lesson import LessonContent, LessonMode
 from src.api.models.narration import NarrationSpec, SpeakerRole, TTSBackend
@@ -25,6 +28,7 @@ from src.api.services.lesson import (
     roles_summary,
     save_lesson,
     should_attach_audio,
+    submit_lesson,
     update_lesson_meta,
     validate_lesson_id,
     validate_mode,
@@ -32,6 +36,7 @@ from src.api.services.lesson import (
     validate_phonetic_adaptation,
 )
 from src.api.services.submit import SubmitError
+from src.core.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -454,3 +459,26 @@ async def test_adaptation_rejects_a_dual_cast_without_a_native_role() -> None:
 async def test_adaptation_ignores_role_languages_outside_dual() -> None:
     """mixed/native speak the native language by definition: no role needed."""
     await validate_phonetic_adaptation(True, _qwen_cast(), "en", "es", mode=LessonMode.MIXED)
+
+
+async def test_submit_lesson_applies_the_engine_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tools override rewrites the cast before the workflow is started."""
+    monkeypatch.setattr(settings, "teacher_enabled", True)
+    upload = UploadFile(filename="apuntes.md", file=BytesIO(b"# Apuntes\n\nHola."))
+
+    with patch(
+        "src.api.services.temporal_admin.TemporalAdminService.start_lesson",
+        new_callable=AsyncMock,
+    ) as start:
+        result = await submit_lesson(
+            upload=upload,
+            target_language="en",
+            native_language="es",
+            tts_backend="gateway",
+            gateway_engine="piper",
+        )
+
+    assert result["workflow_id"]
+    config = start.call_args.args[0]
+    assert config.spec["tts_backend"] == "gateway"
+    assert config.spec["gateway_engine"] == "piper"

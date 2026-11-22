@@ -72,6 +72,10 @@ async def generate_conversation(
         Body(ge=0, le=5000, description="Milisilundos de silencio entre turnos (0-5000)"),
     ] = 300,
     speed: Annotated[float, Body(ge=0.5, le=2.0, description="Velocidad de habla")] = 1.0,
+    engine: Annotated[
+        str | None,
+        Body(description="Sub-engine del gateway que sintetiza todos los turnos"),
+    ] = None,
     stream: Annotated[bool, Query(description="Streaming por chunks")] = False,
     tts_service: ConversationService = Depends(get_conversation_service),
 ) -> Response:
@@ -116,6 +120,7 @@ async def generate_conversation(
             turns=conversation_turns,
             pause_ms=pause_ms,
             speed=speed,
+            engine=engine,
         )
 
     except HTTPException:

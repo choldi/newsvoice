@@ -17,6 +17,7 @@
    mixed-engine submit guard recomputes.
 
    Context: `picker` dict from `_picker_context`. #}
+{% set picker_include = "#picker-" ~ picker.picker_id ~ (", " ~ picker.lang_input if picker.lang_input else '') ~ (", " ~ picker.engine_input if picker.engine_input else '') %}
 <div class="voice-picker" id="picker-{{ picker.picker_id }}">
   <input type="hidden" name="field" value="{{ picker.field }}">
   <input type="hidden" name="picker_engines" value="{{ picker.engines }}">
@@ -26,7 +27,7 @@
          hx-get="/ui/fragments/voice_picker"
          hx-trigger="keyup changed delay:300ms"
          hx-target="#voice-results-{{ picker.picker_id }}"
-         hx-include="#picker-{{ picker.picker_id }}{{ ', ' ~ picker.lang_input if picker.lang_input else '' }}"
+         hx-include="{{ picker_include }}"
          hx-swap="innerHTML"
          style="width:100%;min-width:140px">
   <div id="voice-results-{{ picker.picker_id }}" class="voice-results"
@@ -34,8 +35,8 @@
        hx-get="/ui/fragments/lesson_voices"
        hx-trigger="change"
        hx-target="#lesson-voices"
-       hx-include="#lesson-voices{{ ', ' ~ picker.lang_input if picker.lang_input else '' }}"
-       hx-swap="innerHTML"
+        hx-include="#lesson-voices, #picker-{{ picker.picker_id }}{{ ', ' ~ picker.lang_input if picker.lang_input else '' }}{{ ', ' ~ picker.engine_input if picker.engine_input else '' }}"
+        hx-swap="innerHTML"
        {% endif %}>
     {% include "partials/_voice_picker_results.html" %}
   </div>

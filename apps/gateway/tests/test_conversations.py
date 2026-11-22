@@ -119,6 +119,30 @@ async def test_conversation_forwards_speed_to_every_turn():
 
 
 @pytest.mark.asyncio
+async def test_conversation_forwards_engine_to_every_turn():
+    """El engine del gateway se fija en todos los turnos de la conversación."""
+    mock_tts = AsyncMock()
+    mock_tts.synthesize_stock.return_value = AudioResult(
+        wav_bytes=_make_wav(),
+        duration_sec=0.5,
+        sample_rate=22050,
+    )
+    service = ConversationService(tts_service=mock_tts)
+
+    await service.generate(
+        turns=[
+            ConversationTurn(voice_id="es-mx-male", text="Hola", language="es"),
+            ConversationTurn(voice_id="es-mx-female", text="Adiós", language="es"),
+        ],
+        engine=" Kokoro ",
+    )
+
+    assert all(
+        call.kwargs["engine_name"] == "kokoro" for call in mock_tts.synthesize_stock.call_args_list
+    )
+
+
+@pytest.mark.asyncio
 async def test_conversation_multiple_turns():
     mock_tts = AsyncMock()
     mock_tts.synthesize_stock.return_value = AudioResult(
@@ -310,6 +334,35 @@ async def test_conversations_endpoint_forwards_speed(async_client):
         assert resp.status_code == 200
         assert mock_service.generate.call_args.kwargs["speed"] == 1.2
         assert mock_service.generate.call_args.kwargs["pause_ms"] == 300
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_conversations_endpoint_forwards_engine(async_client):
+    from tts_api.api.v1.conversations import get_conversation_service
+    from tts_api.main import app
+
+    mock_service = AsyncMock()
+    mock_service.generate.return_value = AudioResult(
+        wav_bytes=_make_wav(),
+        duration_sec=1.0,
+        sample_rate=22050,
+    )
+    app.dependency_overrides[get_conversation_service] = lambda: mock_service
+    try:
+        resp = await async_client.post(
+            "/api/v1/conversations",
+            json={
+                "turns": [
+                    {"voice_id": "es-mx-male", "text": "First", "language": "es"},
+                    {"voice_id": "es-mx-female", "text": "Second", "language": "es"},
+                ],
+                "engine": "piper",
+            },
+        )
+        assert resp.status_code == 200
+        assert mock_service.generate.call_args.kwargs["engine"] == "piper"
     finally:
         app.dependency_overrides.clear()
 

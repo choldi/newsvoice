@@ -1361,6 +1361,13 @@ The gateway backends store `.wav`, edge stores `.mp3`; the M4A transcode, the
 Whisper check and every delivery are format-agnostic, so nothing downstream
 changes.
 
+`/ui → Herramientas` adds the same two-level selector to document TTS, lessons,
+podcast and audiobook: choose the backend, then (for `omni_voice`/`gateway`) the
+sub-engine. The dropdown is filled from the running gateway, so a new engine in
+`config/engines.toml` appears without an app release. The choice overrides the
+default **only for that submission**; collection edits persist it. The REST
+submit endpoints accept the same `tts_backend`/`gateway_engine` form fields.
+
 **The lease** (`tts_leases` + `tts_lease_waiters`, migration `011`)
 
 ```bash

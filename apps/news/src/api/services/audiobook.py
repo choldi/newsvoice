@@ -543,6 +543,7 @@ class AudiobookService:
         voice: str = "",
         language: str = "es",
         backend: TTSBackend = TTSBackend.EDGE,
+        gateway_engine: str = "",
         loudnorm: bool = True,
         gate: Any = None,
         run_id: str | None = None,
@@ -589,6 +590,11 @@ class AudiobookService:
                         cover_path = str(cover_file)
                         break
 
+        pin = (
+            (gateway_engine or "").strip().lower()
+            if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
+            else ""
+        )
         block_signature = "\x1e".join(
             f"{block.role}:{block.title}:{block.text}" for block in structured
         )
@@ -597,6 +603,7 @@ class AudiobookService:
             author,
             language,
             str(backend),
+            pin,
             text,
             block_signature,
             voice,
@@ -770,6 +777,7 @@ class AudiobookService:
                 voice=voice,
                 language=language,
                 backend=backend,
+                gateway_engine=pin,
                 gate=gate,
                 on_progress=_chunk_progress,
             )
@@ -968,6 +976,7 @@ class AudiobookService:
         voice: str,
         language: str,
         backend: TTSBackend,
+        gateway_engine: str = "",
         blocks: tuple[BookBlock, ...] | list[BookBlock] | None = None,
         gate: Any = None,
         on_progress: Callable[[int, int], Any] | None = None,
@@ -985,6 +994,7 @@ class AudiobookService:
             voice: Requested voice id (resolved through ``voice_for``).
             language: ISO 639-1 language code.
             backend: Engine that synthesizes (always the local gateway/Edge).
+            gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
             blocks: Structural blocks in reading order.
             gate: Optional RenderGate for the digest hand-over.
             on_progress: Optional callback ``(done_chunks, total_chunks)``
@@ -1027,6 +1037,7 @@ class AudiobookService:
             for index, chunk in enumerate(chunks):
                 key = _hash(
                     str(backend),
+                    gateway_engine,
                     resolved,
                     language,
                     PROFILE_VERSION,
@@ -1061,6 +1072,7 @@ class AudiobookService:
                         text=chunk,
                         voice=resolved,
                         language=language,
+                        gateway_engine=gateway_engine,
                         profile=profile,
                     )
                     atomic_write(chunk_path, data)
@@ -1098,6 +1110,7 @@ class AudiobookService:
         text: str,
         voice: str,
         language: str,
+        gateway_engine: str,
         profile: DeliveryProfile,
     ) -> bytes:
         """Synthesize one chunk with its profile and return canonical WAV bytes.
@@ -1107,6 +1120,7 @@ class AudiobookService:
             text: Chunk speech text.
             voice: Engine-specific resolved voice.
             language: ISO 639-1 language code.
+            gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
             profile: Delivery profile for this structural block.
 
         Returns:
@@ -1118,7 +1132,10 @@ class AudiobookService:
         """
         from src.api.services.tts_backends import synthesize
 
-        options: dict[str, Any] = {"run_in_modal": False}
+        options: dict[str, Any] = {
+            "run_in_modal": False,
+            "gateway_engine": gateway_engine or None,
+        }
         if profile.speed != 1.0:
             options["speed"] = profile.speed
         if profile.emotion:
@@ -1236,6 +1253,7 @@ async def submit_audiobook(
     language: str | None = None,
     title: str | None = None,
     engine: str | None = None,
+    gateway_engine: str | None = None,
     cover=None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
@@ -1266,6 +1284,11 @@ async def submit_audiobook(
         backend = resolve_backend(engine or "edge")
     except TTSBackendError as exc:
         raise SubmitError(str(exc), status_code=422) from exc
+    pin = (
+        (gateway_engine or "").strip().lower()
+        if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
+        else ""
+    )
 
     # Modal is banned for audiobooks: a book renders for hours, so the two
     # Modal-only engines would spend real GPU money. qwen3_tts stays allowed
@@ -1340,6 +1363,7 @@ async def submit_audiobook(
             "voice": (voice or "").strip(),
             "language": (language or "").strip(),
             "engine": str(backend),
+            "gateway_engine": pin,
             "mode": str(backend),
             "chapter_start": chapter_start,
             "chapter_end": chapter_end,
@@ -1365,6 +1389,7 @@ async def submit_audiobook(
                 voice=(voice or "").strip(),
                 language=(language or "").strip(),
                 engine=str(backend),
+                gateway_engine=pin,
                 chapter_start=chapter_start,
                 chapter_end=chapter_end,
             ),

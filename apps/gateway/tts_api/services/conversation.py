@@ -46,6 +46,7 @@ class ConversationService:
         turns: list[ConversationTurn],
         pause_ms: int = 300,
         speed: float = 1.0,
+        engine: str | None = None,
     ) -> AudioResult:
         """Genera audio concatenando múltiples turnos con silencios entre ellos.
 
@@ -56,6 +57,7 @@ class ConversationService:
             pause_ms: Milisilundos de silencio entre turnos (default: 300).
             speed: Factor de velocidad aplicado a cada turno (default: 1.0).
                 Los ``pause_ms`` no se escalan.
+            engine: Sub-engine opcional del gateway, compartido por todos los turnos.
 
         Returns:
             AudioResult con el WAV concatenado.
@@ -78,12 +80,15 @@ class ConversationService:
         sample_rate = 22050  # default mock rate
 
         for turn in turns:
-            result = await cast(TtsService, self._tts_service).synthesize_stock(
-                text=turn.text,
-                voice_id=turn.voice_id,
-                language=turn.language,
-                speed=speed,
-            )
+            kwargs: dict[str, object] = {
+                "text": turn.text,
+                "voice_id": turn.voice_id,
+                "language": turn.language,
+                "speed": speed,
+            }
+            if engine:
+                kwargs["engine_name"] = engine.strip().lower()
+            result = await cast(TtsService, self._tts_service).synthesize_stock(**kwargs)
             audio_segments.append(result.wav_bytes)
             sample_rate = result.sample_rate
 

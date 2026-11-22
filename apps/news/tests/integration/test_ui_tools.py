@@ -204,7 +204,12 @@ def test_doc_submit_calls_the_shared_service() -> None:
         response = client.post(
             "/ui/tools/doc-tts",
             files={"file": ("libro.pdf", b"%PDF-fake", "application/pdf")},
-            data={"title": "Mi libro", "voice": "es-MX-JorgeNeural"},
+            data={
+                "title": "Mi libro",
+                "voice": "es-MX-JorgeNeural",
+                "tts_backend": "edge",
+                "gateway_engine": "kokoro",
+            },
             follow_redirects=False,
         )
 
@@ -212,6 +217,8 @@ def test_doc_submit_calls_the_shared_service() -> None:
     kwargs = submit.call_args.kwargs
     assert kwargs["title"] == "Mi libro"
     assert kwargs["voice"] == "es-MX-JorgeNeural"
+    assert kwargs["tts_backend"] == "edge"
+    assert kwargs["gateway_engine"] == "kokoro"
     assert kwargs["upload"].filename == "libro.pdf"
     assert kwargs["content_length"], "the size guard must receive the header"
 
@@ -268,6 +275,8 @@ def test_lesson_submit_calls_the_shared_service() -> None:
                 "native_language": "es",
                 "collection": "tech",
                 "title": "Subjuntivo",
+                "tts_backend": "gateway",
+                "gateway_engine": "piper",
             },
             follow_redirects=False,
         )
@@ -278,6 +287,8 @@ def test_lesson_submit_calls_the_shared_service() -> None:
     assert kwargs["target_language"] == "en"
     assert kwargs["native_language"] == "es"
     assert kwargs["collection"] == "tech"
+    assert kwargs["tts_backend"] == "gateway"
+    assert kwargs["gateway_engine"] == "piper"
 
 
 def test_lesson_submit_forwards_both_voices() -> None:
@@ -811,7 +822,8 @@ def test_audiobook_submit_forwards_engine_and_voice() -> None:
                 "title": "Mi libro",
                 "voice": "es-mx-male",
                 "language": "es",
-                "engine": "kokoro",
+                "engine": "gateway",
+                "gateway_engine": "kokoro",
                 "chapter_start": "2",
                 "chapter_end": "4",
             },
@@ -820,10 +832,27 @@ def test_audiobook_submit_forwards_engine_and_voice() -> None:
 
     assert "audiobook-abc" in _flash_of(response.headers["location"])
     kwargs = submit.call_args.kwargs
-    assert kwargs["engine"] == "kokoro"
+    assert kwargs["engine"] == "gateway"
+    assert kwargs["gateway_engine"] == "kokoro"
     assert kwargs["voice"] == "es-mx-male"
     assert kwargs["language"] == "es"
     assert (kwargs["chapter_start"], kwargs["chapter_end"]) == (2, 4)
+
+
+def test_tools_page_exposes_the_shared_engine_selector_in_every_form() -> None:
+    """All four tools use the same backend/gateway selector contract."""
+    client = _client()
+    page = client.get("/ui/tools")
+
+    assert page.status_code == 200
+    for backend_id, gateway_id in (
+        ("doc-tts-backend", "doc-gateway-engine"),
+        ("lesson-tts-backend", "lesson-gateway-engine"),
+        ("podcast-tts-backend", "podcast-gateway-engine"),
+        ("audiobook-engine", "audiobook-gateway-engine"),
+    ):
+        assert f'name="engine_backend_id" value="{backend_id}"' in page.text
+        assert f'name="engine_gateway_id" value="{gateway_id}"' in page.text
 
 
 def test_audiobook_form_offers_only_local_engines() -> None:

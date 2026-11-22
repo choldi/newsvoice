@@ -603,8 +603,9 @@ async def synthesize(
         emotion: Optional emotion tag for engines that support it (currently
             the OmniVoice gateway engine).
         pitch_hz: Pitch shift in hertz for Edge; ignored by the other engines.
-        gateway_engine: Optional gateway sub-engine pin. Only honored for the
-            ``omni_voice`` backend; the explicit Kokoro/Fish/OpenAI pins remain.
+        gateway_engine: Optional gateway sub-engine pin. Honored for the
+            ``omni_voice`` and ``gateway`` backends; the explicit
+            Kokoro/Fish/OpenAI pins remain.
 
     Returns:
         Raw audio bytes in the backend's native format (see :func:`ext_for`).

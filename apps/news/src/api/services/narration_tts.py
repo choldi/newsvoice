@@ -846,7 +846,7 @@ class NarrationTTSService:
                     raise NarrationGatewayError(
                         f"gateway failed ({exc}) and the Edge fallback failed ({edge_exc})"
                     ) from edge_exc
-        if backend is not TTSBackend.OMNIVOICE:
+        if backend not in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY):
             return (
                 await self._post_modal_tts(
                     text, voice_id, language, speed=speed, emotion=emotion, backend=backend
@@ -892,6 +892,7 @@ class NarrationTTSService:
         pause_ms: int,
         speed: float = 1.0,
         gate: RenderGate | None = None,
+        engine: str | None = None,
     ) -> bytes:
         """Render a conversation as several gateway requests, one per block.
 
@@ -915,6 +916,7 @@ class NarrationTTSService:
             gate: Optional render gate; between blocks the render hands the
                 engine to a higher-priority waiter (a scheduled digest) and
                 takes it back before the next block.
+            engine: Optional gateway sub-engine pin shared by every turn.
 
         Returns:
             A single WAV payload in canonical format.
@@ -942,6 +944,7 @@ class NarrationTTSService:
                 turns=[ConversationTurn.model_validate(turn) for turn in block],
                 pause_ms=pause_ms,
                 speed=speed,
+                engine=engine,
             )
             audio = await self._post_conversation_block(
                 conversation.model_dump(exclude_none=True), index=index
@@ -1539,13 +1542,12 @@ class NarrationTTSService:
 
         used_voices = self._used_voices(spec, script)
         used_conversations = strategy == RenderStrategy.CONVERSATIONS
-        if used_conversations and spec.tts_backend not in (TTSBackend.OMNIVOICE,):
+        if used_conversations and spec.tts_backend not in (
+            TTSBackend.OMNIVOICE,
+            TTSBackend.GATEWAY,
+        ):
             raise NarrationRenderError(
-                "conversations strategy is only supported by the omni_voice backend"
-            )
-        if used_conversations and (spec.gateway_engine or "").strip():
-            raise NarrationRenderError(
-                "conversations strategy cannot pin a gateway engine; use the turns strategy"
+                "conversations strategy is only supported by the omni_voice/gateway backends"
             )
         is_dialog = self._is_dialog(spec, script, strategy)
         allow_fallback = self._dialog_fallback_to_edge if is_dialog else self._fallback_to_edge
@@ -1568,7 +1570,13 @@ class NarrationTTSService:
                 )
             )
             audio = await self._to_canonical(
-                await self.synthesize_conversation(turns, spec.pause_ms, speed=speed, gate=gate)
+                await self.synthesize_conversation(
+                    turns,
+                    spec.pause_ms,
+                    speed=speed,
+                    gate=gate,
+                    engine=(spec.gateway_engine or "").strip().lower() or None,
+                )
             )
             fallbacks = 0
         else:

@@ -670,6 +670,8 @@ async def submit_lesson(
     voice2: str | None = None,
     phonetic_adaptation: bool = False,
     run_in_modal: bool = False,
+    tts_backend: str | None = None,
+    gateway_engine: str | None = None,
 ) -> dict[str, str]:
     """Validate, store and start a lesson job (Phase 7.12).
 
@@ -691,6 +693,8 @@ async def submit_lesson(
             to how a native of ``native_language`` would read them (7.16).
         run_in_modal: For the QWEN3_TTS backend, run synthesis in Modal instead
             of the gateway local (default).
+        tts_backend: Engine override for this lesson.
+        gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
 
     Returns:
         Dict with workflow_id, collection, title, mode and status_url.
@@ -746,6 +750,20 @@ async def submit_lesson(
         voice2=voice2,
         run_in_modal=run_in_modal,
     )
+    if tts_backend:
+        from src.api.services.tts_backends import TTSBackendError, resolve_backend
+
+        try:
+            backend = resolve_backend(tts_backend)
+        except TTSBackendError as exc:
+            raise SubmitError(str(exc), status_code=422) from exc
+        updates: dict[str, object] = {"tts_backend": backend}
+        if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY):
+            updates["gateway_engine"] = (gateway_engine or "").strip().lower()
+        try:
+            cast = NarrationSpec.model_validate(cast.model_dump(mode="json") | updates)
+        except ValidationError as exc:
+            raise SubmitError(str(exc), status_code=422) from exc
     try:
         validate_mode(lesson_mode, cast)
     except LessonError as exc:

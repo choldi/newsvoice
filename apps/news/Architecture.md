@@ -114,6 +114,16 @@ another engine's bytes, and a `TTS_FALLBACK_TO_EDGE` degradation is written
 downstream (M4A transcode, Whisper verification, Telegram) is ffmpeg-based and
 extension-driven.
 
+Phase 12 adds a two-level selector to the GUI: `tts_backend` plus a conditional
+`gateway_engine`. `src/api/services/gateway_engine_catalog.py` reads the live
+gateway catalogue (`config/engines.toml` in the gateway) and filters out routing
+strategies such as `routed`; `partials/_engine_selector.html` is shared by
+collections and the four tools forms. The override is a per-request value: the
+submit services pin it into the workflow config, the voice pickers ask the
+gateway for that sub-engine's catalogue, and doc-TTS/audiobook cache keys include
+the pin. A collection edit persists both fields; the tools forms only override
+the current run.
+
 ### The engine lease (Phase 8.1)
 
 The digest, doc-tts and audiobook workers are separate containers sharing one
@@ -154,8 +164,9 @@ tools pickers (searchable radios, Phase 9.7) and the unified `/ui/voices`
 table (Phase 9.6). The collection digest voice and the cast stay
 **per-engine** selects (`_tts_voice_options`), because an engine only accepts
 its own ids: the cast refreshes each row's options out-of-band via
-`GET /ui/fragments/cast_voices` (`hx-swap-oob`) when the backend changes, and
-document TTS stays Edge-only (user decision).
+`GET /ui/fragments/cast_voices` (`hx-swap-oob`) when the backend changes.
+Document TTS defaults to Edge (user decision, Phase 9); since Phase 12 an
+explicit backend/gateway pin can override that run.
 
 Both search and table share one service, `src/api/services/voice_search.py`:
 a glob-style query (`*`/`?`, literals escaped, case-folded and **unanchored**

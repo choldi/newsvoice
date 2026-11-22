@@ -175,8 +175,8 @@ def test_tts_rejects_a_modal_voice_for_edge() -> None:
     assert "belongs to engine" in response.text
 
 
-def test_doc_tts_rejects_a_non_edge_voice() -> None:
-    """Document TTS synthesizes through edge only (user decision, Fase 9)."""
+def test_doc_tts_rejects_a_voice_outside_the_selected_engine() -> None:
+    """Document TTS defaults to edge and rejects voices from other engines."""
     client = _rest_client()
     response = client.post(
         "/api/admin/documents/tts",
@@ -185,7 +185,7 @@ def test_doc_tts_rejects_a_non_edge_voice() -> None:
     )
 
     assert response.status_code == 422
-    assert "document TTS only accepts edge voices" in response.text
+    assert "document TTS voice does not match engine edge" in response.text
 
 
 # ---------------------------------------------------------------------------

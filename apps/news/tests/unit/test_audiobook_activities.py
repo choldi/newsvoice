@@ -72,7 +72,8 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         "title": "Libro",
         "voice": "es_ma_juan__qwen3_tts",
         "language": "es",
-        "engine": "qwen3_tts",
+        "engine": "gateway",
+        "gateway_engine": "kokoro",
     }
     payload.update(overrides)
     return payload
@@ -143,8 +144,10 @@ async def test_render_forwards_structured_blocks(monkeypatch: pytest.MonkeyPatch
         ),
     )
 
-    blocks = service.calls[0]["blocks"]
+    call = service.calls[0]
+    blocks = call["blocks"]
     assert [block.role for block in blocks] == [BookRole.DEDICATION, BookRole.BODY]
+    assert call["gateway_engine"] == "kokoro"
 
 
 async def test_render_cancellation_closes_the_job(monkeypatch: pytest.MonkeyPatch) -> None:

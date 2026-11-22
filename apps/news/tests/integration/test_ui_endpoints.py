@@ -54,6 +54,31 @@ async def test_gateway_engine_menu_follows_the_gateway_catalog(
     assert ("brand_new_engine", "brand_new_engine") in choices
 
 
+def test_engine_selector_fragment_honours_form_field_names() -> None:
+    """The shared fragment adapts its input names to the calling form."""
+    client = _ui_client()
+    _login(client)
+
+    fragment = client.get(
+        "/ui/fragments/engine_selector",
+        params={
+            "tts_backend": "gateway",
+            "gateway_engine": "kokoro",
+            "backend_field": "podcast_backend",
+            "gateway_field": "podcast_gateway",
+            "engine_wrapper_id": "engine-selector-podcast",
+        },
+    )
+
+    assert fragment.status_code == 200
+    assert 'id="engine-selector-podcast"' in fragment.text
+    assert 'name="engine_backend_field" value="podcast_backend"' in fragment.text
+    assert 'name="engine_gateway_field" value="podcast_gateway"' in fragment.text
+    assert '<select name="podcast_backend"' in fragment.text
+    assert '<select name="podcast_gateway"' in fragment.text
+    assert 'value="kokoro" selected' in fragment.text
+
+
 def test_tts_options_fragment_renders_selects_when_enabled() -> None:
     """The TTS fragment renders selects populated from the chosen engine."""
     client = _ui_client()
@@ -161,6 +186,34 @@ def test_tts_options_fragment_offers_the_selected_gateway_engine() -> None:
     assert 'value="kokoro" selected' in fragment.text
     assert 'value="kokoro-es"' in fragment.text
     assert 'value="es-mx-male"' not in fragment.text
+
+
+def test_voice_picker_uses_the_shared_gateway_engine() -> None:
+    """The tools picker asks the gateway for the pinned sub-engine catalogue."""
+    from src.api.models.voices import VoiceOption
+
+    client = _ui_client()
+    _login(client)
+    voice = VoiceOption(
+        id="kokoro-es",
+        label="Kokoro ES",
+        language="es",
+        engines=["kokoro"],
+        category="stock",
+    )
+    with patch(
+        "src.api.routes_ui.list_all_voices",
+        new_callable=AsyncMock,
+        return_value=[voice],
+    ) as list_voices:
+        results = client.get(
+            "/ui/fragments/voice_picker",
+            params={"tts_backend": "gateway", "gateway_engine": "kokoro"},
+        )
+
+    assert results.status_code == 200
+    assert list_voices.call_args.kwargs["gateway_engine"] == "kokoro"
+    assert 'value="kokoro-es"' in results.text
 
 
 def test_tts_options_fragment_renders_text_inputs_when_disabled() -> None:

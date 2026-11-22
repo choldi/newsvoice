@@ -102,7 +102,7 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
         if (
             not narration_spec.get("gateway_engine")
             and collection.gateway_engine
-            and collection.narration_spec.tts_backend is TTSBackend.OMNIVOICE
+            and collection.narration_spec.tts_backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
         ):
             narration_spec["gateway_engine"] = collection.gateway_engine
         narration_payload = {

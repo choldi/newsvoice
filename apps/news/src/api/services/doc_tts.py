@@ -175,7 +175,14 @@ class DocTTSService:
         self._request_timeout = settings.tts_request_timeout
 
     async def estimate(
-        self, *, text: str, voice: str = "", language: str = "", title: str = ""
+        self,
+        *,
+        text: str,
+        voice: str = "",
+        language: str = "",
+        title: str = "",
+        tts_backend: str | None = None,
+        gateway_engine: str | None = None,
     ) -> SynthesisEstimate:
         """Price one synthesis without performing any of it (Phase 8.5).
 
@@ -190,6 +197,8 @@ class DocTTSService:
             voice: Requested voice; empty uses the configured default.
             language: ISO 639-1 language; empty uses the configured default.
             title: Document title (part of the finished file's cache key).
+            tts_backend: Engine that will synthesize the document.
+            gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
 
         Returns:
             The estimate for this exact text, voice and cache state.
@@ -197,15 +206,26 @@ class DocTTSService:
         Raises:
             RuntimeError: When the text is empty.
         """
+        from src.api.services.tts_backends import ext_for, resolve_backend, voice_for
+
         settings = get_settings()
         language = language or settings.tts_language
-        resolved_voice = await resolve_edge_voice(voice or settings.tts_voice, language)
         speech_text = text.strip()
         if not speech_text:
             raise RuntimeError("No text to estimate")
-
-        digest = _hash(resolved_voice, language, speech_text)
-        audio_path = self._audio_dir / f"doc_{slugify(title)}_{digest[:12]}.mp3"
+        backend = resolve_backend(tts_backend or "edge")
+        pin = (
+            (gateway_engine or "").strip().lower()
+            if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
+            else ""
+        )
+        if backend is TTSBackend.EDGE:
+            resolved_voice = await resolve_edge_voice(voice or settings.tts_voice, language)
+            digest = _hash(resolved_voice, language, speech_text)
+        else:
+            resolved_voice = await voice_for(backend, voice or settings.tts_voice, language)
+            digest = _hash(backend.value, pin, resolved_voice, language, speech_text)
+        audio_path = self._audio_dir / f"doc_{slugify(title)}_{digest[:12]}{ext_for(backend)}"
         finished = (
             audio_path.exists()
             and (read_sidecar(sidecar_path(audio_path)) or {}).get("sha256") == digest
@@ -219,7 +239,7 @@ class DocTTSService:
 
         return estimate_synthesis(
             chunks,
-            backend=TTSBackend.EDGE,
+            backend=backend,
             concurrency=self._concurrency,
             is_cached=_cached,
         )
@@ -233,6 +253,8 @@ class DocTTSService:
         title: str = "",
         on_progress: ProgressCallback | None = None,
         gate: RenderGate | None = None,
+        tts_backend: str | None = None,
+        gateway_engine: str | None = None,
     ) -> DocTTSResult:
         """Synthesize the whole document, reusing cached chunks and files.
 
@@ -250,23 +272,36 @@ class DocTTSService:
                 The chunks already in flight are never interrupted: they finish
                 first, so at most one chunk of overlap exists and the cache
                 makes whatever follows cheap.
+            tts_backend: Engine that will synthesize the document.
+            gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
 
         Returns:
-            The finished MP3 path with its metadata.
+            The finished audio path with its metadata.
 
         Raises:
             RuntimeError: When a chunk keeps failing after the retries, or a
                 synthesis yields no audio.
         """
+        from src.api.services.tts_backends import ext_for, resolve_backend, voice_for
+
         settings = get_settings()
         language = language or settings.tts_language
-        resolved_voice = await resolve_edge_voice(voice or settings.tts_voice, language)
         speech_text = text.strip()
         if not speech_text:
             raise RuntimeError("No text to synthesize")
-
-        digest = _hash(resolved_voice, language, speech_text)
-        audio_path = self._audio_dir / f"doc_{slugify(title)}_{digest[:12]}.mp3"
+        backend = resolve_backend(tts_backend or "edge")
+        pin = (
+            (gateway_engine or "").strip().lower()
+            if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
+            else ""
+        )
+        if backend is TTSBackend.EDGE:
+            resolved_voice = await resolve_edge_voice(voice or settings.tts_voice, language)
+            digest = _hash(resolved_voice, language, speech_text)
+        else:
+            resolved_voice = await voice_for(backend, voice or settings.tts_voice, language)
+            digest = _hash(backend.value, pin, resolved_voice, language, speech_text)
+        audio_path = self._audio_dir / f"doc_{slugify(title)}_{digest[:12]}{ext_for(backend)}"
         sidecar = sidecar_path(audio_path)
         self._audio_dir.mkdir(parents=True, exist_ok=True)
 
@@ -297,8 +332,11 @@ class DocTTSService:
         async def _one(index: int) -> bytes:
             nonlocal done
             chunk = chunks[index]
-            chunk_digest = _hash(resolved_voice, language, chunk)[:16]
-            chunk_path = self._chunk_dir / f"{chunk_digest}.mp3"
+            if backend is TTSBackend.EDGE:
+                chunk_digest = _hash(resolved_voice, language, chunk)[:16]
+            else:
+                chunk_digest = _hash(backend.value, pin, resolved_voice, language, chunk)[:16]
+            chunk_path = self._chunk_dir / f"{chunk_digest}{ext_for(backend)}"
             if not chunk_path.exists():
                 # Phase 8.4: a cached chunk costs no engine time, so only a real
                 # synthesis checks the yield. The check happens INSIDE the
@@ -312,7 +350,12 @@ class DocTTSService:
                     if gate is not None and await gate.should_pause():
                         await gate.yield_and_wait()
                     data = await _synthesize_with_retries(
-                        chunk, resolved_voice, timeout=self._request_timeout
+                        chunk,
+                        resolved_voice,
+                        backend=backend,
+                        gateway_engine=pin,
+                        language=language,
+                        timeout=self._request_timeout,
                     )
                 atomic_write(chunk_path, data)
             done += 1
@@ -321,7 +364,9 @@ class DocTTSService:
             return chunk_path.read_bytes()
 
         parts = await asyncio.gather(*(_one(i) for i in range(total)))
-        audio_bytes = b"".join(parts)
+        audio_bytes = (
+            b"".join(parts) if backend is TTSBackend.EDGE else await _join_wav_chunks(parts)
+        )
         atomic_write(audio_path, audio_bytes)
         atomic_write(
             sidecar,
@@ -331,6 +376,8 @@ class DocTTSService:
                     "sha256": digest,
                     "voice": resolved_voice,
                     "language": language,
+                    "tts_backend": backend.value,
+                    "gateway_engine": pin,
                     "title": title,
                     "char_count": len(speech_text),
                     "chunk_count": total,
@@ -359,24 +406,49 @@ class DocTTSService:
         )
 
 
-async def _synthesize_with_retries(text: str, voice: str, *, timeout: int) -> bytes:
-    """Synthesize one chunk, retrying transient Edge failures.
+async def _synthesize_with_retries(
+    text: str,
+    voice: str,
+    *,
+    backend: TTSBackend = TTSBackend.EDGE,
+    gateway_engine: str = "",
+    language: str = "es",
+    timeout: int,
+) -> bytes:
+    """Synthesize one chunk, retrying transient engine failures.
 
     Args:
         text: Chunk text.
-        voice: Resolved Edge voice ShortName.
+        voice: Voice id resolved for the selected engine.
+        backend: Engine that will synthesize the chunk.
+        gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
+        language: ISO 639-1 language of this document.
         timeout: Per-attempt timeout in seconds.
 
     Returns:
-        MP3 bytes of the chunk.
+        Audio bytes of the chunk in the backend's native format.
 
     Raises:
         RuntimeError: When every attempt failed.
     """
+    from src.api.services.tts_backends import synthesize
+
     last_error: Exception | None = None
     for attempt in range(1, CHUNK_ATTEMPTS + 1):
         try:
-            return await synthesize_mp3(text, voice, timeout=timeout)
+            if backend is TTSBackend.EDGE:
+                return await synthesize_mp3(text, voice, timeout=timeout)
+            options: dict[str, object] = {"gateway_engine": gateway_engine or None}
+            if backend is TTSBackend.QWEN3_TTS:
+                options["run_in_modal"] = False
+            return await synthesize(
+                backend,
+                text,
+                voice,
+                language,
+                timeout=timeout,
+                **options,
+            )
         except Exception as exc:  # noqa: BLE001 - re-raised after the attempts
             last_error = exc
             if attempt < CHUNK_ATTEMPTS:
@@ -384,10 +456,28 @@ async def _synthesize_with_retries(text: str, voice: str, *, timeout: int) -> by
                     "doc_tts_chunk_retry",
                     attempt=attempt,
                     voice=voice,
+                    backend=backend.value,
                     error=str(exc),
                 )
                 await asyncio.sleep(float(attempt))
     raise RuntimeError(f"chunk synthesis failed after {CHUNK_ATTEMPTS} attempts: {last_error}")
+
+
+async def _join_wav_chunks(parts: list[bytes]) -> bytes:
+    """Resample and concatenate non-Edge chunks into one WAV.
+
+    Args:
+        parts: Audio payloads in the order they must be played.
+
+    Returns:
+        One canonical WAV payload.
+    """
+    from src.api.services.narration_tts import NarrationTTSService, concat_wavs
+
+    renderer = NarrationTTSService()
+    args = ["-i", "pipe:0", "-f", "wav", *NarrationTTSService._canonical_output_args()]
+    canonical = [await renderer._ffmpeg_bytes(args, part) for part in parts]
+    return concat_wavs([(part, 0) for part in canonical])
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +615,8 @@ async def submit_document(
     voice: str | None = None,
     language: str | None = None,
     title: str | None = None,
+    tts_backend: str | None = None,
+    gateway_engine: str | None = None,
 ) -> dict[str, str]:
     """Validate, store and start a document TTS job (Phase 7.11).
 
@@ -537,6 +629,8 @@ async def submit_document(
         voice: Optional Edge voice override.
         language: Optional ISO 639-1 override.
         title: Optional title override (defaults to the filename stem).
+        tts_backend: Engine override; empty uses the configured default.
+        gateway_engine: Gateway sub-engine pin for omni_voice/gateway.
 
     Returns:
         Dict with workflow_id, title, filename, kind and status_url.
@@ -557,18 +651,27 @@ async def submit_document(
         )
     check_content_length(content_length, settings.doc_tts_max_file_bytes)
 
-    # Phase 9.2: document TTS synthesizes through Edge only, so a voice from
-    # another engine's vocabulary (a clone UUID, a Modal catalog name) would be
-    # silently swapped for the language default. Reject it before storing data.
+    from src.api.services.tts_backends import TTSBackendError, resolve_backend
+
+    try:
+        backend = resolve_backend(tts_backend or "edge")
+    except TTSBackendError as exc:
+        raise SubmitError(str(exc), status_code=422) from exc
+    pin = (
+        (gateway_engine or "").strip().lower()
+        if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
+        else ""
+    )
     requested_voice = (voice or "").strip()
     if requested_voice:
         from src.api.services.voice_engine import VoiceEngineError, assert_voice_engine
 
         try:
-            assert_voice_engine(requested_voice, TTSBackend.EDGE, field="voice")
+            assert_voice_engine(requested_voice, backend, field="voice")
         except VoiceEngineError as exc:
             raise SubmitError(
-                f"document TTS only accepts edge voices: {exc}", status_code=422
+                f"document TTS voice does not match engine {backend.value}: {exc}",
+                status_code=422,
             ) from exc
 
     filename = Path(upload.filename or "").name.strip()
@@ -594,6 +697,8 @@ async def submit_document(
             "kind": kind,
             "voice": (voice or "").strip(),
             "language": (language or "").strip(),
+            "tts_backend": backend.value,
+            "gateway_engine": pin,
         },
     )
 
@@ -610,6 +715,8 @@ async def submit_document(
                 title=(title or "").strip(),
                 voice=(voice or "").strip(),
                 language=(language or "").strip(),
+                tts_backend=backend.value,
+                gateway_engine=pin,
             ),
             workflow_id,
         )

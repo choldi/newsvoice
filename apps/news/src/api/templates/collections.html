@@ -243,17 +243,24 @@
             </div>
             <div class="col">
               <label>Backend TTS</label>
-              <span id="cast-voices-{{ c.name }}" hidden></span>
+              <span id="cast-voices-{{ c.name }}" hidden
+                    hx-get="/ui/fragments/cast_voices?cast={{ c.name }}&rows={{ rows }}"
+                    hx-trigger="change from:[name='narr_backend'], change from:[name='narr_gateway_engine']"
+                    hx-target="#cast-voices-{{ c.name }}"
+                    hx-include="closest form"
+                    hx-swap="innerHTML"></span>
               {% set backend = c.narration_spec.tts_backend if c.narration_spec else 'omni_voice' %}
-              <select name="narr_backend"
-                      hx-get="/ui/fragments/cast_voices?cast={{ c.name }}&rows={{ rows }}"
-                      hx-trigger="change"
-                      hx-target="#cast-voices-{{ c.name }}"
-                      hx-swap="innerHTML">
-                {% for value, label in narration_backends %}
-                <option value="{{ value }}" {{ 'selected' if backend == value else '' }}>{{ label }}</option>
-                {% endfor %}
-              </select>
+              {% set current_backend = backend %}
+              {% set current_gateway_engine = c.narration_spec.gateway_engine if c.narration_spec else '' %}
+              {% set tts_backends = narration_backends %}
+              {% set backend_field = 'narr_backend' %}
+              {% set gateway_field = 'narr_gateway_engine' %}
+              {% set engine_wrapper_id = 'cast-engine-' ~ c.name %}
+              {% set backend_id = 'cast-backend-' ~ c.name %}
+              {% set gateway_id = 'cast-gateway-' ~ c.name %}
+              {% set engine_fragment_url = '/ui/fragments/engine_selector?backend_field=narr_backend&gateway_field=narr_gateway_engine' %}
+              {% set engine_hx_target = "closest div[id^='cast-engine']" %}
+              {% include "partials/_engine_selector.html" %}
             </div>
           </div>
           <div class="row">
@@ -527,17 +534,23 @@
           </div>
           <div class="col">
             <label>Backend TTS</label>
-            <span id="cast-voices-nueva" hidden></span>
-            {% set backend = 'omni_voice' %}
-            <select name="narr_backend"
-                    hx-get="/ui/fragments/cast_voices?cast=nueva&rows={{ rows }}"
-                    hx-trigger="change"
-                    hx-target="#cast-voices-nueva"
-                    hx-swap="innerHTML">
-              {% for value, label in narration_backends %}
-              <option value="{{ value }}" {{ 'selected' if backend == value else '' }}>{{ label }}</option>
-              {% endfor %}
-            </select>
+            <span id="cast-voices-nueva" hidden
+                  hx-get="/ui/fragments/cast_voices?cast=nueva&rows={{ rows }}"
+                  hx-trigger="change from:[name='narr_backend'], change from:[name='narr_gateway_engine']"
+                  hx-target="#cast-voices-nueva"
+                  hx-include="closest form"
+                  hx-swap="innerHTML"></span>
+            {% set current_backend = 'omni_voice' %}
+            {% set current_gateway_engine = '' %}
+            {% set tts_backends = narration_backends %}
+            {% set backend_field = 'narr_backend' %}
+            {% set gateway_field = 'narr_gateway_engine' %}
+            {% set engine_wrapper_id = 'cast-engine-nueva' %}
+            {% set backend_id = 'cast-backend-nueva' %}
+            {% set gateway_id = 'cast-gateway-nueva' %}
+            {% set engine_fragment_url = '/ui/fragments/engine_selector?backend_field=narr_backend&gateway_field=narr_gateway_engine' %}
+            {% set engine_hx_target = "closest div[id^='cast-engine']" %}
+            {% include "partials/_engine_selector.html" %}
           </div>
         </div>
         <div class="row">

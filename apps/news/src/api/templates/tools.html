@@ -57,17 +57,31 @@
                 hx-get="/ui/fragments/voice_picker"
                 hx-trigger="change"
                 hx-target="#voice-results-doc"
-                hx-include="#picker-doc, [name='language']"
-                hx-swap="innerHTML">
+                 hx-include="#picker-doc, [name='language'], #engine-selector-doc"
+                 hx-swap="innerHTML">
           {% for option in doc_language_options %}
           <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
           {% endfor %}
         </select>
       </div>
       <div class="col">
-        <label>Voz (solo Edge)</label>
+        <label>Voz</label>
         {% with picker = doc_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
+    </div>
+    <div class="row">
+      {% set current_backend = 'edge' %}
+      {% set current_gateway_engine = '' %}
+      {% set engine_wrapper_id = 'engine-selector-doc' %}
+      {% set backend_id = 'doc-tts-backend' %}
+      {% set gateway_id = 'doc-gateway-engine' %}
+      {% include "partials/_engine_selector.html" %}
+      <span id="doc-voice-refresh" hidden
+            hx-get="/ui/fragments/voice_picker"
+            hx-trigger="change from:[name='tts_backend'], change from:[name='gateway_engine']"
+            hx-include="#picker-doc, [name='language'], #engine-selector-doc"
+            hx-target="#voice-results-doc"
+            hx-swap="innerHTML"></span>
     </div>
     <button type="submit" class="primary">Convertir a audio</button>
     <p class="muted" style="font-size:12px">
@@ -93,7 +107,7 @@
                 hx-get="/ui/fragments/lesson_voices"
                 hx-trigger="change"
                 hx-target="#lesson-voices"
-                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language'], #engine-selector-lesson"
                 hx-swap="innerHTML">
           <option value="mixed" {{ 'selected' if mode == 'mixed' else '' }}>mixed — nativa + ejemplos en objetivo</option>
           <option value="dual" {{ 'selected' if mode == 'dual' else '' }}>dual — dos voces, dos idiomas</option>
@@ -106,7 +120,7 @@
                 hx-get="/ui/fragments/lesson_voices"
                 hx-trigger="change"
                 hx-target="#lesson-voices"
-                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language'], #engine-selector-lesson"
                 hx-swap="innerHTML">
           {% for option in lesson_language_options %}
           <option value="{{ option.code }}" {{ 'selected' if option.code == 'en' else '' }}>{{ option.code }} ({{ option.count }})</option>
@@ -119,13 +133,27 @@
                 hx-get="/ui/fragments/lesson_voices"
                 hx-trigger="change"
                 hx-target="#lesson-voices"
-                hx-include="#lesson-voices, [name='native_language'], [name='target_language']"
+                hx-include="#lesson-voices, [name='native_language'], [name='target_language'], #engine-selector-lesson"
                 hx-swap="innerHTML">
           {% for option in lesson_language_options %}
           <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
           {% endfor %}
         </select>
       </div>
+    </div>
+    <div class="row">
+      {% set current_backend = '' %}
+      {% set current_gateway_engine = '' %}
+      {% set engine_wrapper_id = 'engine-selector-lesson' %}
+      {% set backend_id = 'lesson-tts-backend' %}
+      {% set gateway_id = 'lesson-gateway-engine' %}
+      {% include "partials/_engine_selector.html" %}
+      <span id="lesson-engine-refresh" hidden
+            hx-get="/ui/fragments/lesson_voices"
+            hx-trigger="change from:[name='tts_backend'], change from:[name='gateway_engine']"
+            hx-include="#lesson-voices, [name='native_language'], [name='target_language'], #engine-selector-lesson"
+            hx-target="#lesson-voices"
+            hx-swap="innerHTML"></span>
     </div>
     <div class="row">
       <div class="col">
@@ -205,6 +233,14 @@
         </p>
       </div>
     </div>
+    <div class="row">
+      {% set current_backend = '' %}
+      {% set current_gateway_engine = '' %}
+      {% set engine_wrapper_id = 'engine-selector-podcast' %}
+      {% set backend_id = 'podcast-tts-backend' %}
+      {% set gateway_id = 'podcast-gateway-engine' %}
+      {% include "partials/_engine_selector.html" %}
+    </div>
     <button type="submit" class="primary">Generar podcast ahora</button>
   </form>
 {% endif %}
@@ -243,7 +279,7 @@
                 hx-get="/ui/fragments/voice_picker"
                 hx-trigger="change"
                 hx-target="#voice-results-audiobook"
-                hx-include="#picker-audiobook, #audiobook-language, #audiobook-engine"
+                hx-include="#picker-audiobook, #audiobook-language, #engine-selector-audiobook"
                 hx-swap="innerHTML">
           {% for option in audiobook_language_options %}
           <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
@@ -252,16 +288,24 @@
       </div>
       <div class="col">
         <label>Motor TTS</label>
-        <select name="engine" id="audiobook-engine"
-                hx-get="/ui/fragments/voice_picker"
-                hx-trigger="change"
-                hx-target="#voice-results-audiobook"
-                hx-include="#picker-audiobook, #audiobook-language, #audiobook-engine"
-                hx-swap="innerHTML">
-          {% for value, label in audiobook_engine_choices %}
-          <option value="{{ value }}" {{ 'selected' if value == 'edge' else '' }}>{{ label }}</option>
-          {% endfor %}
-        </select>
+        <span id="audiobook-voice-refresh" hidden
+              hx-get="/ui/fragments/voice_picker"
+              hx-trigger="change from:[name='engine'], change from:[name='gateway_engine']"
+              hx-include="#picker-audiobook, #audiobook-language, #engine-selector-audiobook"
+              hx-target="#voice-results-audiobook"
+              hx-swap="innerHTML"></span>
+        {% set tts_backends = audiobook_engine_choices %}
+        {% set current_backend = 'edge' %}
+        {% set current_gateway_engine = '' %}
+        {% set backend_field = 'engine' %}
+        {% set gateway_field = 'gateway_engine' %}
+        {% set engine_wrapper_id = 'engine-selector-audiobook' %}
+        {% set backend_id = 'audiobook-engine' %}
+        {% set gateway_id = 'audiobook-gateway-engine' %}
+        {% set engine_choices = 'audiobook' %}
+        {% set engine_fragment_url = '/ui/fragments/engine_selector?backend_field=engine&gateway_field=gateway_engine&engine_choices=audiobook' %}
+        {% set engine_hx_target = "closest div[id^='engine-selector-audiobook']" %}
+        {% include "partials/_engine_selector.html" %}
       </div>
       <div class="col">
         <label>Voz</label>

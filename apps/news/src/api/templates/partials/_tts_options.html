@@ -1,38 +1,7 @@
 {% set opts = tts_options.get(current_backend, {"languages": [], "voices": []}) %}
 {% set gateway_engines = gateway_engines | default([]) %}
 {% set current_gateway_engine = current_gateway_engine | default('') %}
-<div class="col">
-  <label>Motor TTS</label>
-  {# The catalogue follows the engine, so changing it re-fetches this partial.
-     `closest` keeps the swap working from both the static include and a
-     fragment response, without the partial having to know the container id
-     or the form id of the row that triggered it. #}
-  <select name="tts_backend"
-          hx-get="/ui/fragments/tts_options"
-          hx-trigger="change"
-          hx-target="closest div[id^='tts-options']"
-          hx-include="closest form"
-          hx-swap="innerHTML">
-    {% for value, label in tts_backends %}
-    <option value="{{ value }}" {{ 'selected' if value == current_backend else '' }}>{{ label }}</option>
-    {% endfor %}
-  </select>
-</div>
-{% if current_backend == 'omni_voice' and gateway_engines %}
-<div class="col">
-  <label>Engine del gateway</label>
-  <select name="gateway_engine"
-          hx-get="/ui/fragments/tts_options"
-          hx-trigger="change"
-          hx-target="closest div[id^='tts-options']"
-          hx-include="closest form"
-          hx-swap="innerHTML">
-    {% for value, label in gateway_engines %}
-    <option value="{{ value }}" {{ 'selected' if value == current_gateway_engine else '' }}>{{ label }}</option>
-    {% endfor %}
-  </select>
-</div>
-{% endif %}
+{% include "partials/_engine_selector.html" %}
 {% if opts.languages %}
 <div class="col">
   <label>Idioma</label>

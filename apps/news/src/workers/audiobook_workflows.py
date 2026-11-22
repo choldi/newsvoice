@@ -28,6 +28,7 @@ class AudiobookConfig:
     voice: str = ""
     language: str = "es"
     engine: str = "edge"
+    gateway_engine: str = ""
     #: Optional 1-based inclusive chapter range (None = the whole book).
     chapter_start: int | None = None
     chapter_end: int | None = None
@@ -62,6 +63,7 @@ class AudiobookWorkflow:
                     "voice": config.voice,
                     "language": config.language,
                     "engine": config.engine,
+                    "gateway_engine": config.gateway_engine,
                     "chapter_start": config.chapter_start,
                     "chapter_end": config.chapter_end,
                 },

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.api.models.narration import TTSBackend
 from src.api.services.doc_tts import (
     DocTTSService,
     chunk_speech_text,
@@ -198,6 +199,34 @@ async def test_synthesize_second_call_hits_the_cache(
     assert second.cached is True
     assert second.audio_path == first.audio_path
     assert synth.await_count == 1, "a cache hit must not touch the engine"
+
+
+async def test_synthesize_supports_a_generic_gateway_backend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A gateway-pinned backend uses the generic synthesis path and WAV output."""
+    _reset_settings(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "src.api.services.tts_backends.voice_for",
+        AsyncMock(return_value="kokoro-es"),
+    )
+    synth = AsyncMock(return_value=b"WAV")
+    monkeypatch.setattr("src.api.services.tts_backends.synthesize", synth)
+    join = AsyncMock(return_value=b"joined-wav")
+    monkeypatch.setattr("src.api.services.doc_tts._join_wav_chunks", join)
+
+    result = await DocTTSService().synthesize_document(
+        text="Texto para el motor generico.",
+        title="Doc",
+        tts_backend="gateway",
+        gateway_engine="kokoro",
+    )
+
+    assert result.audio_path.endswith(".wav")
+    assert synth.await_count == 1
+    assert synth.call_args.args[0] is TTSBackend.GATEWAY
+    assert synth.call_args.kwargs["gateway_engine"] == "kokoro"
+    assert join.await_count == 1
 
 
 async def test_synthesize_reuses_chunks_when_the_final_file_is_gone(

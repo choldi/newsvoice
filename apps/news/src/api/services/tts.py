@@ -325,7 +325,7 @@ class _Prepared:
     backend: TTSBackend
     """Engine that will synthesize (or did, for a cache hit)."""
     gateway_engine: str
-    """Gateway sub-engine pin; empty unless the backend is omni_voice."""
+    """Gateway sub-engine pin; empty unless the backend is omni_voice/gateway."""
     voice: str
     """Voice id in the engine's own vocabulary."""
     language: str
@@ -391,7 +391,7 @@ class TTSService:
         backend = resolve_backend(payload.backend)
         gateway_engine = (
             (payload.gateway_engine or "").strip().lower()
-            if backend is TTSBackend.OMNIVOICE
+            if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
             else ""
         )
         resolved_voice = await voice_for(backend, payload.voice or self._default_voice, language)

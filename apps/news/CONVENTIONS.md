@@ -214,6 +214,11 @@
   → `PipelineConfig.tts_backend` → the `generate_tts_activity` payload. A
   workflow cannot read settings, and the schedule/trigger are what know the
   collection — same rule as `verify`, `audio_verify` and `narration`.
+- Phase 12 selector rule: the GUI always sends `tts_backend` and, only for
+  `omni_voice`/`gateway`, `gateway_engine`. Submit services normalize the pin,
+  validate the voice against the resolved backend and write both into job meta
+  and workflow config. `gateway_engine_catalog.py` is the only place that maps
+  gateway engines to labels; do not hardcode the engine list in a form.
 - **Round-trip rule** (same as any new collection field): `CollectionIn`
   (`extra="forbid"`), `_COLLECTION_KEYS`, `collections.html` (create + edit) and
   `partials/_tts_options.html` + `routes_ui.py::ui_fragment_tts_options` in one
