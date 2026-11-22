@@ -164,3 +164,11 @@ def test_settings_effective_engine_prefers_staged_active(
     settings = Settings()
 
     assert settings.effective_tts_engine == "mock"
+
+
+def test_gateway_dockerfiles_copy_engine_manifest() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+
+    for name in ("Dockerfile", "Dockerfile.qwen3", "Dockerfile.omnivoice"):
+        content = (repo_root / "apps/gateway" / name).read_text(encoding="utf-8")
+        assert "COPY config/engines.toml ./config/engines.toml" in content

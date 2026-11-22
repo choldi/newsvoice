@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir uv && \
 
 COPY apps/gateway/tts_api ./apps/gateway/tts_api
 COPY apps/gateway/voice_profiles.json ./voice_profiles.json
+COPY config/engines.toml ./config/engines.toml
 RUN uv sync --frozen --no-dev --package tts-api && \
     uv pip install --python /app/.venv/bin/python --no-cache-dir "omnivoice==0.2.1"
 
