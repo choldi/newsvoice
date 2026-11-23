@@ -158,6 +158,23 @@ async def gateway_options(engine: str | None = None) -> tuple[list[str], list[Vo
     return languages, voices
 
 
+async def gateway_options_many(
+    engines: list[str],
+) -> dict[str, tuple[list[str], list[VoiceOption]]]:
+    """Fetch several gateway engine catalogues concurrently.
+
+    Args:
+        engines: Gateway engine ids whose stock catalogues must be loaded.
+
+    Returns:
+        Mapping of engine id to its ``(languages, voices)`` result, preserving
+        the input order. Duplicate ids are fetched once.
+    """
+    unique = list(dict.fromkeys(engines))
+    results = await asyncio.gather(*(gateway_options(engine=engine) for engine in unique))
+    return dict(zip(unique, results))
+
+
 async def edge_options() -> tuple[list[str], list[VoiceOption]]:
     """Fetch the real edge-tts catalogue (ShortNames).
 
@@ -255,10 +272,8 @@ async def list_all_voices(
     Returns:
         The merged voices, ordered by category, language and label.
     """
-    _, edge = await edge_options()
-    _, gateway = (
-        await gateway_options(engine=gateway_engine) if gateway_engine else await gateway_options()
-    )
+    gateway_task = gateway_options(engine=gateway_engine) if gateway_engine else gateway_options()
+    (_, edge), (_, gateway) = await asyncio.gather(edge_options(), gateway_task)
     _, modal = modal_options()
 
     # The Modal catalog is the authoritative metadata for a reference voice: a

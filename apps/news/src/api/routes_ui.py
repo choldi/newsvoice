@@ -15,6 +15,7 @@ multipart forms (the Phase 7.11/7.12 tool uploads) go through Starlette's
 since Phase 7.11.
 """
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode
@@ -78,6 +79,7 @@ from src.api.services.voice_engine import engines_for_voice
 from src.api.services.voice_registry import (
     edge_options,
     gateway_options,
+    gateway_options_many,
     list_all_voices,
     modal_options,
     voices_for_engine,
@@ -1021,10 +1023,11 @@ async def _tts_options_by_backend(
         Mapping of engine id to its catalogue.
     """
     engines = gateway_engine_by_backend or {}
-    return {
-        backend: await _tts_voice_options(backend, engines.get(backend, ""))
-        for backend in sorted(backends)
-    }
+    ordered = sorted(backends)
+    options = await asyncio.gather(
+        *(_tts_voice_options(backend, engines.get(backend, "")) for backend in ordered)
+    )
+    return dict(zip(ordered, options))
 
 
 def _split_list(raw: str) -> list[str]:
@@ -1375,33 +1378,59 @@ async def ui_collections(request: Request) -> HTMLResponse:
         HTMLResponse for the collections page.
     """
     collections = _collections()
-    # The cast editor needs the voice catalog even when TTS is off for every
-    # collection (a NarrationSpec can exist without digest TTS).
-    omni = (
-        await _omni_options()
-        if any(c.tts_enabled or c.narration_spec for c in collections)
-        else {"languages": [], "voices": []}
-    )
-    # Phase 8: the engine selects the voice vocabulary, so the page fetches the
-    # catalogue of every engine its collections actually use (at most four) —
-    # and only when some collection would synthesize at all.
     from src.api.services.tts_backends import resolve_backend
 
-    tts_options = (
-        await _tts_options_by_backend(
-            {resolve_backend(c.tts_backend or None).value for c in collections} or {"edge"}
-        )
-        if any(c.tts_enabled for c in collections)
-        else {}
+    any_tts = any(c.tts_enabled for c in collections)
+    needs_voice_catalog = any(c.tts_enabled or c.narration_spec for c in collections)
+    tts_backends = (
+        {resolve_backend(c.tts_backend or None).value for c in collections} or {"edge"}
+        if any_tts
+        else set()
     )
-    catalog = await load_gateway_engine_catalog()
-    tts_options_by_collection: dict[str, dict] = {}
-    if any(c.tts_enabled for c in collections):
-        for c in collections:
-            backend = resolve_backend(c.tts_backend or None).value
-            if backend not in ("omni_voice", "gateway") or not c.gateway_engine:
-                continue
-            tts_options_by_collection[c.name] = await _tts_voice_options(backend, c.gateway_engine)
+    tts_pins: list[tuple[str, str, str]] = []
+    for c in collections:
+        if not any_tts:
+            continue
+        backend = resolve_backend(c.tts_backend or None).value
+        if backend in ("omni_voice", "gateway") and c.gateway_engine:
+            tts_pins.append((c.name, backend, c.gateway_engine))
+    cast_engines = {
+        str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice" for c in collections
+    }
+    cast_engines.add("omni_voice")
+    cast_pins: list[tuple[str, str, str]] = []
+    for c in collections:
+        backend = str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice"
+        pin = (
+            str(c.narration_spec.gateway_engine)
+            if c.narration_spec and c.narration_spec.gateway_engine
+            else ""
+        )
+        if backend in ("omni_voice", "gateway") and pin:
+            cast_pins.append((c.name, backend, pin))
+    (
+        omni,
+        tts_options,
+        catalog,
+        pinned_tts_options,
+        cast_options,
+        pinned_cast_options,
+    ) = await asyncio.gather(
+        _omni_options()
+        if needs_voice_catalog
+        else asyncio.sleep(0, result={"languages": [], "voices": []}),
+        _tts_options_by_backend(tts_backends) if any_tts else asyncio.sleep(0, result={}),
+        load_gateway_engine_catalog(),
+        asyncio.gather(*(_tts_voice_options(b, p) for _, b, p in tts_pins)),
+        _tts_options_by_backend(cast_engines),
+        asyncio.gather(*(_tts_voice_options(b, p) for _, b, p in cast_pins)),
+    )
+    tts_options_by_collection = {
+        name: options for (name, _, _), options in zip(tts_pins, pinned_tts_options)
+    }
+    cast_options_by_collection = {
+        name: options for (name, _, _), options in zip(cast_pins, pinned_cast_options)
+    }
     tts_combos: dict[str, dict] = {}
     for c in collections:
         backend = resolve_backend(c.tts_backend or None).value
@@ -1419,13 +1448,6 @@ async def ui_collections(request: Request) -> HTMLResponse:
         "",
         "nueva",
     )
-    # Phase 9.2: the cast datalists follow the narration engine of each form,
-    # so the page also fetches the catalogue of every engine in narration use.
-    cast_engines = {
-        str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice" for c in collections
-    }
-    cast_engines.add("omni_voice")  # the create form defaults to the gateway
-    cast_options = await _tts_options_by_backend(cast_engines)
     cast_pickers: dict[str, dict] = {}
     for c in collections:
         backend = str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice"
@@ -1434,9 +1456,9 @@ async def ui_collections(request: Request) -> HTMLResponse:
             if c.narration_spec and c.narration_spec.gateway_engine
             else ""
         )
-        options = cast_options.get(backend, {"voices": []})
-        if backend in ("omni_voice", "gateway") and pin:
-            options = await _tts_voice_options(backend, pin)
+        options = cast_options_by_collection.get(c.name) or cast_options.get(
+            backend, {"voices": []}
+        )
         roles = c.narration_spec.roles if c.narration_spec else []
         rows = min(max(len(roles) + 1, 2), 8)
         cast_pickers[c.name] = _cast_combo_rows(
@@ -3289,15 +3311,19 @@ async def ui_tools(request: Request) -> HTMLResponse:
         Phase 9.7 picker over the edge vocabulary, the lessons one over the
         whole registry.
     """
-    omni = await _omni_options()
-    edge = await _edge_voice_options()
-    all_voices = [voice.model_dump() for voice in await list_all_voices()]
     catalog = await load_gateway_engine_catalog()
     gateway_engine_choices = await _gateway_engine_choices(catalog)
     gateway_engines = [value for value, _ in gateway_engine_choices if value]
-    for engine in gateway_engines:
-        voices = _registry_options(*await gateway_options(engine=engine))["voices"]
-        all_voices.extend(voice for voice in voices if voice not in all_voices)
+    omni, edge, all_voice_options, engine_options = await asyncio.gather(
+        _omni_options(),
+        _edge_voice_options(),
+        list_all_voices(),
+        gateway_options_many(gateway_engines),
+    )
+    all_voices = [voice.model_dump() for voice in all_voice_options]
+    for voices in engine_options.values():
+        options = _registry_options(*voices)["voices"]
+        all_voices.extend(voice for voice in options if voice not in all_voices)
     from src.core.config import get_settings
 
     doc_picker = _picker_context(

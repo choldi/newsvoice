@@ -1,5 +1,6 @@
 """Unit tests for the unified voice registry (Phase 9.1)."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -97,6 +98,31 @@ async def test_gateway_options_degrade_when_unreachable(
 
     assert languages == []
     assert voices == []
+
+
+async def test_gateway_options_many_fetches_unique_engines_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Engine catalogues are requested once each, without waiting in a row."""
+    started: list[str | None] = []
+    release = asyncio.Event()
+
+    async def _gateway(engine: str | None = None) -> tuple[list[str], list[VoiceOption]]:
+        started.append(engine)
+        if len(started) == 2:
+            release.set()
+        await release.wait()
+        return ([engine] if engine else []), []
+
+    monkeypatch.setattr(voice_registry, "gateway_options", _gateway)
+
+    result = await asyncio.wait_for(
+        voice_registry.gateway_options_many(["kokoro", "piper", "kokoro"]), timeout=1
+    )
+
+    assert started == ["kokoro", "piper"]
+    assert list(result) == ["kokoro", "piper"]
+    assert result["kokoro"][0] == ["kokoro"]
 
 
 async def test_edge_options_tags_stock(monkeypatch: pytest.MonkeyPatch) -> None:
