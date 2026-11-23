@@ -2060,7 +2060,7 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
 
 | Pestaña | Acción | Estado |
 |---|---|---|
-| Resumen de URL | `POST /ui/tools/url` (url, colección, store, deliver) | últimos `url-summary-*` en `digest_runs` |
+| Resumen de URL | `POST /ui/tools/url` (url, colección, store, deliver, motor/idioma/voz y «Narrar/entregar audio») | últimos `url-summary-*` en `digest_runs` |
 | TTS de documentos | `POST /ui/tools/doc-tts` (PDF/EPUB/TXT/MD) | jobs `kind='doc_tts'` + enlace firmado |
 | Clase de idiomas | `POST /ui/tools/lessons` (apuntes, modo, idiomas, cast) | jobs `kind='lesson'` + enlace/texto |
 | Podcast | `POST /ui/tools/podcast` (colección) | jobs `kind='narration'` + enlace firmado |
@@ -2074,6 +2074,11 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
   o falta el spec, la GUI lo explica sin lanzar nada.
 - Enlaces firmados: `/api/audio/doc/...`, `/api/audio/lesson/...` y
   `/api/audio/narration/...` (nuevo) — mismos secretos y TTL, sin token.
+- Fase 13: URL/doc/audiolibro comparten el selector de motor y los combos de
+  idioma/voz (`/ui/fragments/tool_combos`). El buscador filtra opciones reales;
+  no existe la opción «tal cual». En Resumen de URL, «Narrar el resumen» activa
+  `tts_enabled`; sin voz seleccionada el workflow sigue generando solo texto y,
+  si se pide, entrega el audio por email/Telegram con `audio_path` en el run.
 - Fase 7.16: la pestaña de clase gana la casilla **Adaptación fonética**
   (oculta si `TEACHER_RESPELLING_ENABLED=false`), que llega al servicio como
   `phonetic_adaptation`; sus heurísticas se editan en el menú **Fonética**
@@ -2082,12 +2087,12 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
 ### 16.2 Cast de narración (`/ui/collections`)
 
 - El textarea JSON se sustituyó por un **editor de cast**: filas rol
-  (nombre, voz con `<select>` del registro —opciones del motor elegido,
-  refrescadas por `/ui/fragments/cast_voices` al cambiar el backend, y un
-  valor que ningún catálogo conoce se conserva como opción propia—, idioma,
+  (nombre, voz e idioma con combos de búsqueda —opciones del motor elegido,
+  refrescadas por `/ui/fragments/cast_voices` al cambiar el backend—,
   velocidad, emoción) + campos del spec (título, idioma, pausas, velocidad,
-  emoción, backend, divulgación de IA). Las filas vacías se ignoran; nombre
-  sin voz (o al revés) rechaza el guardado con mensaje.
+  emoción, backend, divulgación de IA). Un id que ningún catálogo conoce se
+  conserva solo como selección actual, nunca como opción inventada. Las filas
+  vacías se ignoran; nombre sin voz (o al revés) rechaza el guardado con mensaje.
 - El **JSON avanzado** sigue disponible en un `<details>`: se usa solo si el
   cast de arriba está vacío, y los campos que el editor no expone (`music`,
   `max_chars_per_request`...) se **conservan** del spec existente.
@@ -2168,9 +2173,11 @@ doc-TTS) beben del mismo registro (`GET /api/admin/voices/all`), filtrado por
 motor donde el motor solo acepta su vocabulario; doc-TTS sigue siendo
 solo-Edge. En Herramientas las lecciones y el doc-TTS usan **pickers con
 búsqueda** (Fase 9.7): campo de glob + filtro de idioma + resultados en
-radios, hasta 20 con contador; la selección sobrevive a las búsquedas y una
-consulta sin coincidencias añade la opción "Usar «q» tal cual". Las lecciones
-recalculan el guard anti-mezcla tras cada selección.
+radios, hasta 20 con contador; la selección sobrevive a las búsquedas. Desde
+la Fase 13 una consulta sin coincidencias **no** añade la opción "Usar «q» tal
+cual": el texto solo filtra y las lecciones siguen recalculando el guard
+anti-mezcla tras cada selección. Colecciones, cast, URL, doc-TTS y audiolibro
+comparten ahora los combos de idioma/voz por motor.
 
 ### 16.7 Menú Fonética (`/ui/phonetics`, Fase 7.16)
 

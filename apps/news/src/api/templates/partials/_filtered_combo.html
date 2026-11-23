@@ -1,0 +1,30 @@
+{% set include_parts = ['#picker-' ~ combo.picker_id] %}
+{% if combo.lang_input | default('') %}{% set include_parts = include_parts + [combo.lang_input] %}{% endif %}
+{% if combo.engine_input | default('') %}{% set include_parts = include_parts + [combo.engine_input] %}{% endif %}
+{% set results_id = combo.results_id | default('combo-results-' ~ combo.picker_id) %}
+{% set placeholder = combo.placeholder | default('Buscar ' ~ ('idioma' if combo.kind == 'language' else 'voz')) %}
+<div class="voice-picker" id="picker-{{ combo.picker_id }}">
+  <input type="hidden" name="field" value="{{ combo.field }}">
+  <input type="hidden" name="picker_engines" value="{{ combo.engines | default('all') }}">
+  <input type="hidden" name="combo_backend" value="{{ combo.combo_backend | default('') }}">
+  <input type="hidden" name="combo_gateway_engine" value="{{ combo.combo_gateway_engine | default('') }}">
+  {% if combo.empty_label | default('') %}<input type="hidden" name="empty_label" value="{{ combo.empty_label }}">{% endif %}
+  <input type="text" name="{{ combo.field }}_q" value="{{ combo.q | default('') }}"
+         placeholder="{{ placeholder }}"
+         hx-get="{{ combo.endpoint }}"
+         hx-trigger="keyup changed delay:300ms"
+         hx-target="#{{ results_id }}"
+         hx-include="{{ include_parts | join(', ') }}"
+         hx-swap="innerHTML"
+         style="width:100%;min-width:140px">
+  <div id="{{ results_id }}" class="voice-results"
+       {% if combo.guard | default(false) %}
+       hx-get="{{ combo.guard_endpoint | default(combo.endpoint) }}"
+       hx-trigger="change"
+       hx-target="{{ combo.guard_target | default('#' ~ results_id) }}"
+       hx-include="{{ combo.guard_include | default('#picker-' ~ combo.picker_id) }}"
+       hx-swap="innerHTML"
+       {% endif %}>
+    {% include "partials/_filtered_combo_results.html" %}
+  </div>
+</div>

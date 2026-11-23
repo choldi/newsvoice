@@ -649,18 +649,19 @@ def test_job_fragment_explains_a_lease_pause(_ui_env: Path) -> None:
 
 
 def test_tools_doc_form_wires_the_language_select_before_the_picker() -> None:
-    """The doc form has one idiom select that filters the edge picker."""
+    """The doc form uses engine-driven language and voice combos."""
     client = _client()
     page = client.get("/ui/tools")
 
     assert page.status_code == 200
     doc_form = page.text.split('action="/ui/tools/doc-tts"', 1)[1].split("</form>", 1)[0]
-    assert 'name="language"' in doc_form
     assert 'id="doc-language"' in doc_form
-    assert 'hx-target="#voice-results-doc"' in doc_form
-    assert 'name="language_q"' not in doc_form, "no internal picker language select"
-    assert doc_form.index('name="language"') < doc_form.index('id="picker-doc"'), (
-        "the language select precedes the voice picker"
+    assert 'name="language_q"' in doc_form
+    assert 'name="voice_q"' in doc_form
+    assert 'hx-get="/ui/fragments/language_picker"' in doc_form
+    assert 'hx-get="/ui/fragments/voice_picker"' in doc_form
+    assert doc_form.index('id="doc-language"') < doc_form.index('id="picker-doc"'), (
+        "the language combo precedes the voice combo"
     )
 
 

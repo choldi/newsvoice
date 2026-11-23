@@ -124,6 +124,18 @@ gateway for that sub-engine's catalogue, and doc-TTS/audiobook cache keys includ
 the pin. A collection edit persists both fields; the tools forms only override
 the current run.
 
+Phase 13 replaces the language/voice `<select>` pairs with HTMX combos:
+`partials/_filtered_combo.html` and `_filtered_combo_results.html` render a
+search input plus radio results from `routes_ui.py`, whose
+`voice_registry.voices_for_engine`/`languages_for_engine` load only the
+vocabulary of the selected backend (including gateway sub-engine pins). The
+query filters real options; it never becomes a value. Cast rows are refreshed
+out-of-band by `/ui/fragments/cast_voices`, and the URL/doc/audiobook tools
+forms share `/ui/fragments/tool_combos`. `UrlSummarizeWorkflow` treats audio as
+opt-in: with no voice it keeps the historical text-only digest, otherwise it
+runs `generate_tts_activity`, optionally compresses and delivers the file, and
+records `audio_path` without making an audio failure cancel the summary.
+
 ### The engine lease (Phase 8.1)
 
 The digest, doc-tts and audiobook workers are separate containers sharing one

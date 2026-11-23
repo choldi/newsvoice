@@ -218,8 +218,18 @@
   `omni_voice`/`gateway`, `gateway_engine`. Submit services normalize the pin,
   validate the voice against the resolved backend and write both into job meta
   and workflow config. `gateway_engine_catalog.py` is the only place that maps
-  gateway engines to labels; do not hardcode the engine list in a form.
+   gateway engines to labels; do not hardcode the engine list in a form.
+- Phase 13 combo rule: language and voice controls are search inputs plus radio
+   results from `/ui/fragments/language_picker` and
+   `/ui/fragments/voice_picker`; `voice_registry.voices_for_engine` is the only
+   catalogue source, and the query only filters existing ids. Never render the
+   typed query as a selectable value; keep a legacy id only as the current
+   checked option. Cast OOB fragments refresh both controls per row.
+- URL summary audio is opt-in: `tts_enabled` gates narration and `deliver_audio`
+   is ignored unless narration was requested; an empty `voice` means text-only,
+   so existing REST/GUI callers keep their behaviour.
 - **Round-trip rule** (same as any new collection field): `CollectionIn`
+
   (`extra="forbid"`), `_COLLECTION_KEYS`, `collections.html` (create + edit) and
   `partials/_tts_options.html` + `routes_ui.py::ui_fragment_tts_options` in one
   commit. `tests/unit/test_collections_repo.py::test_collection_keys_cover_every_model_field`

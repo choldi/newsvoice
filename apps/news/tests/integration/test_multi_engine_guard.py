@@ -311,9 +311,10 @@ def test_cast_voices_fragment_follows_the_engine() -> None:
     assert modal.status_code == 200
     assert MODAL_NAME in modal.text
     assert GATEWAY_STOCK not in modal.text
-    assert modal.text.count('hx-swap-oob="innerHTML"') == 3
+    assert modal.text.count('hx-swap-oob="innerHTML"') == 6
     for row in range(3):
         assert f'id="cast-voice-tech-{row}"' in modal.text
+        assert f'id="cast-language-tech-{row}"' in modal.text
 
     gateway = client.get(
         "/ui/fragments/cast_voices", params={"narr_backend": "omni_voice", **params}
@@ -328,7 +329,7 @@ def test_cast_voices_fragment_follows_the_engine() -> None:
 
 
 def test_collections_page_wires_the_cast_selects() -> None:
-    """Both forms get per-row selects refreshed by the hx-fetchable fragment."""
+    """Both forms get per-row combos refreshed by the hx-fetchable fragment."""
     (tmp_toml := Path(settings.collections_file)).parent.mkdir(parents=True, exist_ok=True)
     tmp_toml.write_text(
         '[[collections]]\nname = "tech"\ntime = "08:00"\n'
@@ -340,9 +341,15 @@ def test_collections_page_wires_the_cast_selects() -> None:
     page = client.get("/ui/collections")
 
     assert page.status_code == 200
-    # Every cast row is a <select>; no input+datalist pair remains.
-    assert '<div id="cast-voice-tech-0"><select name="role0_voice"' in page.text
-    assert '<div id="cast-voice-nueva-0"><select name="role0_voice"' in page.text
+    # Every cast row is a searchable radio combo; no input+datalist pair remains.
+    tech_voice_cell = page.text.split('id="cast-voice-tech-0"')[1].split(
+        'id="cast-language-tech-0"'
+    )[0]
+    nueva_voice_cell = page.text.split('id="cast-voice-nueva-0"')[1].split(
+        'id="cast-language-nueva-0"'
+    )[0]
+    assert '<div class="voice-picker"' in tech_voice_cell
+    assert '<div class="voice-picker"' in nueva_voice_cell
     assert 'list="cast-voices' not in page.text, "the cast datalists are gone"
     # The engine select targets the sink span and asks for its row count.
     assert page.text.count('hx-get="/ui/fragments/cast_voices?cast=') >= 2

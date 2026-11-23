@@ -15,6 +15,7 @@ multipart forms (the Phase 7.11/7.12 tool uploads) go through Starlette's
 since Phase 7.11.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode
 
@@ -79,6 +80,7 @@ from src.api.services.voice_registry import (
     gateway_options,
     list_all_voices,
     modal_options,
+    voices_for_engine,
 )
 from src.api.services.voices import VoicesService
 from src.core import logging as logging_ext
@@ -230,32 +232,37 @@ def _picker_results_context(
     current: str = "",
     q: str = "",
     lang: str = "",
+    kind: str = "voice",
 ) -> dict:
-    """Filter, order and cap the radio results of one voice picker (Phase 9.7).
+    """Filter, order and cap the radio results of one picker (Phases 9.7/13).
 
-    The glob query and the language prefix run through
+    The glob query and — for voice combos — the language prefix run through
     :mod:`src.api.services.voice_search`, then the category order (designs,
     clones, stock) applies and the list is capped to
     :data:`VOICE_PICKER_LIMIT`. The current selection is always kept —
     prepended when it falls past the cap or is unknown to every catalogue —
-    so no re-render can drop what was picked; an unknown id keeps the exact
-    text the operator typed, which the guards then treat as a wildcard.
+    so no re-render can drop what was picked. FASE 13 removed the old literal
+    option: a free-text query filters the catalogue but never becomes a value.
 
     Args:
         entries: Registry dicts ({id, label, language, engines, category})
             or :class:`VoiceOption` objects.
-        field: Radio group name ('voice' or 'voice2').
-        current: Voice id currently checked in this group ('' = none).
+        field: Radio group name ('voice', 'language', 'role0_voice', ...).
+        current: Value currently checked in this group ('' = none).
         q: Glob-style query (see :func:`voice_search.matches`).
-        lang: Language prefix filter ('es' matches es and es-ES).
+        lang: Language prefix filter ('es' matches es and es-ES); ignored for
+            language combos, where the entries are language codes themselves.
+        kind: 'voice' or 'language'; controls the category tag rendering.
 
     Returns:
-        Context for ``partials/_voice_picker_results.html``: field, current,
-        q, lang, shown (capped, tagged), total matches, limit and the
-        literal option (query text to send as-is when nothing matched).
+        Context for ``partials/_filtered_combo_results.html``: kind, field,
+        current, q, lang, shown (capped, tagged), total matches and limit.
     """
     dicts = [entry if isinstance(entry, dict) else entry.model_dump() for entry in entries]
-    ordered = voice_search.picker_order(voice_search.filter_voices(dicts, query=q, lang=lang))
+    active_lang = "" if kind == "language" else lang
+    ordered = voice_search.picker_order(
+        voice_search.filter_voices(dicts, query=q, lang=active_lang)
+    )
     total = len(ordered)
     shown = ordered[:VOICE_PICKER_LIMIT]
     shown_ids = {str(entry["id"]) for entry in shown}
@@ -273,19 +280,23 @@ def _picker_results_context(
     tagged = [
         {
             **entry,
-            "tag": " · ".join(
-                part
-                for part in (
-                    "/".join(str(engine) for engine in (entry.get("engines") or [])),
-                    entry.get("category") or "",
+            "tag": (
+                " · ".join(
+                    part
+                    for part in (
+                        "/".join(str(engine) for engine in (entry.get("engines") or [])),
+                        entry.get("category") or "",
+                    )
+                    if part
                 )
-                if part
+                if kind == "voice"
+                else ""
             ),
         }
         for entry in shown
     ]
-    text = q.strip()
     return {
+        "kind": kind,
         "field": field,
         "current": current,
         "q": q,
@@ -293,7 +304,6 @@ def _picker_results_context(
         "shown": tagged,
         "total": total,
         "limit": VOICE_PICKER_LIMIT,
-        "literal": bool(text) and total == 0 and text != current,
     }
 
 
@@ -458,13 +468,76 @@ def _picker_context(
     context = _picker_results_context(dicts, field=field, current=current, q=q, lang=lang)
     context.update(
         {
+            "kind": "voice",
             "picker_id": picker_id,
+            "endpoint": "/ui/fragments/voice_picker",
+            "results_id": f"voice-results-{picker_id}",
             "engines": engines,
             "empty_label": empty_label,
             "guard": guard,
             "lang_input": lang_input,
             "engine_input": engine_input,
             "langs": voice_search.language_options(dicts) if langs else [],
+        }
+    )
+    return context
+
+
+def _language_combo_context(
+    entries: list,
+    *,
+    picker_id: str,
+    field: str,
+    current: str = "",
+    q: str = "",
+    engine_input: str = "",
+    empty_label: str = "",
+    guard_endpoint: str = "",
+    guard_target: str = "",
+    guard_include: str = "",
+) -> dict:
+    """Build the FASE 13 language combo context of one form field.
+
+    Args:
+        entries: Voice registry dicts of the selected engine.
+        picker_id: Unique DOM id segment of this combo.
+        field: Radio group name ('language', 'role0_lang', ...).
+        current: Currently selected language code.
+        q: Pre-filled glob query.
+        engine_input: CSS selector of the engine selector to include in HTMX
+            requests, so language choices follow the selected backend/pin.
+        empty_label: Label of the value='' option ('' omits it).
+        guard_endpoint: Optional fragment re-fetched when a radio changes.
+        guard_target: HTMX target of the guard fragment.
+        guard_include: HTMX include list of the guard fragment.
+
+    Returns:
+        Context for ``partials/_filtered_combo.html`` and its results partial.
+    """
+    codes = voice_search.language_options(
+        [entry if isinstance(entry, dict) else entry.model_dump() for entry in entries]
+    )
+    lang_entries = [
+        {"id": option["code"], "label": option["code"], "language": option["code"]}
+        for option in codes
+    ]
+    context = _picker_results_context(
+        lang_entries, field=field, current=current, q=q, kind="language"
+    )
+    context.update(
+        {
+            "kind": "language",
+            "picker_id": picker_id,
+            "endpoint": "/ui/fragments/language_picker",
+            "results_id": f"language-results-{picker_id}",
+            "empty_label": empty_label,
+            "guard": bool(guard_endpoint),
+            "guard_endpoint": guard_endpoint,
+            "guard_target": guard_target,
+            "guard_include": guard_include,
+            "lang_input": "",
+            "engine_input": engine_input,
+            "langs": codes,
         }
     )
     return context
@@ -573,6 +646,193 @@ def _lesson_voice_context(
             normalized, target, native, current_voice, current_voice2
         ),
         "preview_ready": _lesson_preview_ready(normalized, current_voice, current_voice2),
+    }
+
+
+def _cast_combo_rows(
+    cast: str,
+    rows: int,
+    backend: str,
+    gateway_engine: str,
+    voices: list[dict],
+    cast_roles: list | None = None,
+) -> dict:
+    """Build both FASE 13 combos of every cast row.
+
+    Args:
+        cast: Form identifier of the cast ('nueva' or a collection name).
+        rows: Number of rows to render.
+        backend: Narration backend selected in the form.
+        gateway_engine: Gateway pin selected in the form.
+        voices: Voice dicts of the selected engine.
+        cast_roles: Existing roles supplying the current voice/language values.
+
+    Returns:
+        Dict with ``language_pickers`` and ``voice_pickers`` lists.
+    """
+    roles = cast_roles or []
+    language_pickers: list[dict] = []
+    voice_pickers: list[dict] = []
+    for index in range(rows):
+        role = roles[index] if len(roles) > index else None
+        if isinstance(role, dict):
+            current_voice = str(role.get("voice_id") or role.get("voice") or "")
+            current_language = str(role.get("language") or "")
+        else:
+            current_voice = str(getattr(role, "voice_id", "") or "")
+            current_language = str(getattr(role, "language", "") or "")
+        voice_context = _picker_context(
+            voices,
+            picker_id=f"cast-{cast}-voice-{index}",
+            field=f"role{index}_voice",
+            current=current_voice,
+            lang=current_language,
+            engines="all",
+            empty_label="(elige una voz)",
+            langs=False,
+        )
+        language_context = _language_combo_context(
+            voices,
+            picker_id=f"cast-{cast}-language-{index}",
+            field=f"role{index}_lang",
+            current=current_language,
+            empty_label="(spec)",
+        )
+        for context in (voice_context, language_context):
+            context["combo_backend"] = backend
+            context["combo_gateway_engine"] = gateway_engine
+        voice_pickers.append(voice_context)
+        language_pickers.append(language_context)
+    return {"language_pickers": language_pickers, "voice_pickers": voice_pickers}
+
+
+def _tts_combo_contexts(
+    options: dict,
+    backend: str,
+    gateway_engine: str,
+    current_language: str,
+    current_voice: str,
+    cast: str,
+) -> dict:
+    """Build the FASE 13 language/voice combos of one collection TTS form.
+
+    Args:
+        options: Engine catalogue with a ``voices`` list.
+        backend: Currently selected backend.
+        gateway_engine: Currently selected gateway pin.
+        current_language: Saved language code.
+        current_voice: Saved voice id.
+        cast: Form identifier used to build unique DOM ids.
+
+    Returns:
+        Context with ``language_picker``, ``voice_picker`` and engine ids.
+    """
+    from src.api.services.tts_backends import resolve_backend
+
+    try:
+        engine = str(resolve_backend(backend).value)
+    except Exception:  # noqa: BLE001 - unknown backend renders as the default
+        engine = TTSBackend.EDGE.value
+    voices = options.get("voices", [])
+    wrapper_id = f"tts-engine-{cast}"
+    language_picker = _language_combo_context(
+        voices,
+        picker_id=f"tts-{cast}-language",
+        field="language",
+        current=current_language,
+        engine_input=f"#{wrapper_id}",
+    )
+    voice_picker = _picker_context(
+        voices,
+        picker_id=f"tts-{cast}-voice",
+        field="voice",
+        current=current_voice,
+        lang=current_language,
+        engines="all",
+        empty_label="(por defecto)",
+        langs=False,
+        engine_input=f"#{wrapper_id}",
+    )
+    for context in (language_picker, voice_picker):
+        context["combo_backend"] = engine
+        context["combo_gateway_engine"] = gateway_engine
+    return {
+        "language_picker": language_picker,
+        "voice_picker": voice_picker,
+        "tts_wrapper_id": wrapper_id,
+        "tts_backend_id": f"tts-backend-{cast}",
+        "tts_gateway_id": f"tts-gateway-{cast}",
+    }
+
+
+def _tool_combo_contexts(
+    voices: list[dict],
+    *,
+    prefix: str,
+    backend: str,
+    gateway_engine: str,
+    language: str,
+    voice: str,
+    language_q: str = "",
+    voice_q: str = "",
+    language_id: str = "",
+    lang_guard: bool = False,
+) -> dict:
+    """Build the FASE 13 language/voice combos of one tools form.
+
+    Args:
+        voices: Voice dicts of the selected engine.
+        prefix: DOM id prefix ('doc', 'audiobook', 'url').
+        backend: Currently selected backend.
+        gateway_engine: Currently selected gateway pin.
+        language: Currently selected language code.
+        voice: Currently selected voice id.
+        language_q: Typed language filter to keep across refreshes.
+        voice_q: Typed voice filter to keep across refreshes.
+        language_id: Extra DOM id of the language wrapper, for legacy hooks.
+        lang_guard: Whether changing the language re-runs the lesson guard.
+
+    Returns:
+        Context for ``partials/_tool_combos.html``.
+    """
+    from src.api.services.tts_backends import resolve_backend
+
+    try:
+        engine = str(resolve_backend(backend).value)
+    except Exception:  # noqa: BLE001 - unknown backend renders as the default
+        engine = TTSBackend.EDGE.value
+    guard_include = f"#picker-{prefix}-language, #picker-{prefix}, #engine-selector-{prefix}"
+    language_picker = _language_combo_context(
+        voices,
+        picker_id=f"{prefix}-language",
+        field="language",
+        current=language,
+        q=language_q,
+        engine_input=f"#engine-selector-{prefix}",
+        guard_endpoint="/ui/fragments/lesson_voices" if lang_guard else "",
+        guard_target="#lesson-voices" if lang_guard else "",
+        guard_include=guard_include if lang_guard else "",
+    )
+    voice_picker = _picker_context(
+        voices,
+        picker_id=prefix,
+        field="voice",
+        current=voice,
+        q=voice_q,
+        lang=language,
+        engines="all",
+        empty_label="(por defecto)",
+        langs=False,
+        lang_input=f"#picker-{prefix}-language",
+        engine_input=f"#engine-selector-{prefix}",
+    )
+    for context in (language_picker, voice_picker):
+        context["combo_backend"] = engine
+        context["combo_gateway_engine"] = gateway_engine
+    return {
+        "language_picker": language_picker,
+        "voice_picker": voice_picker,
+        "language_id": language_id,
     }
 
 
@@ -740,33 +1000,11 @@ async def _tts_voice_options(backend: str, gateway_engine: str = "") -> dict:
         Dict with 'languages' and normalized 'voices'; both empty when the
         catalogue is unavailable (the partial then renders text inputs).
     """
-    if backend == "edge":
-        return await _edge_voice_options()
-    if backend in ("qwen3_tts", "zonos2", "voxcpm2"):
-        return _modal_voice_options()
-    if backend == "fish_tts":
-        gateway = await _omni_options(engine=gateway_engine or "fish_tts")
-        catalog = _modal_voice_options()
-        fish = [v for v in gateway["voices"] if "fish_tts" in v["engines"]]
-        clones = [dict(v, engines=["fish_tts"]) for v in catalog["voices"]]
-        seen: set[str] = set()
-        voices = []
-        for voice in [*fish, *clones]:
-            if voice["id"] not in seen:
-                seen.add(voice["id"])
-                voices.append(voice)
-        languages = sorted({v["language"] for v in voices if v["language"]})
-        return {"languages": languages, "voices": voices}
-    if backend == "openai_tts":
-        gateway = await _omni_options(engine=gateway_engine or "openai_tts")
-        voices = [v for v in gateway["voices"] if "openai_tts" in v["engines"]]
-        languages = sorted({v["language"] for v in voices if v["language"]})
-        return {"languages": languages, "voices": voices}
-    gateway = await _omni_options(engine=gateway_engine or None)
-    return {
-        "languages": gateway["languages"],
-        "voices": _normalize_voice_entries(gateway["voices"]),
-    }
+    voices = await voices_for_engine(backend, gateway_engine)
+    return _registry_options(
+        sorted({voice.language.split("-")[0].lower() for voice in voices if voice.language}),
+        voices,
+    )
 
 
 async def _tts_options_by_backend(
@@ -1164,6 +1402,23 @@ async def ui_collections(request: Request) -> HTMLResponse:
             if backend not in ("omni_voice", "gateway") or not c.gateway_engine:
                 continue
             tts_options_by_collection[c.name] = await _tts_voice_options(backend, c.gateway_engine)
+    tts_combos: dict[str, dict] = {}
+    for c in collections:
+        backend = resolve_backend(c.tts_backend or None).value
+        options = tts_options_by_collection.get(c.name) or tts_options.get(
+            backend, {"languages": [], "voices": []}
+        )
+        tts_combos[c.name] = _tts_combo_contexts(
+            options, backend, c.gateway_engine or "", c.language or "", c.voice or "", c.name
+        )
+    tts_combos["nueva"] = _tts_combo_contexts(
+        tts_options.get("edge", {"languages": [], "voices": []}),
+        TTSBackend.EDGE.value,
+        "",
+        "",
+        "",
+        "nueva",
+    )
     # Phase 9.2: the cast datalists follow the narration engine of each form,
     # so the page also fetches the catalogue of every engine in narration use.
     cast_engines = {
@@ -1171,6 +1426,29 @@ async def ui_collections(request: Request) -> HTMLResponse:
     }
     cast_engines.add("omni_voice")  # the create form defaults to the gateway
     cast_options = await _tts_options_by_backend(cast_engines)
+    cast_pickers: dict[str, dict] = {}
+    for c in collections:
+        backend = str(c.narration_spec.tts_backend) if c.narration_spec else "omni_voice"
+        pin = (
+            str(c.narration_spec.gateway_engine)
+            if c.narration_spec and c.narration_spec.gateway_engine
+            else ""
+        )
+        options = cast_options.get(backend, {"voices": []})
+        if backend in ("omni_voice", "gateway") and pin:
+            options = await _tts_voice_options(backend, pin)
+        roles = c.narration_spec.roles if c.narration_spec else []
+        rows = min(max(len(roles) + 1, 2), 8)
+        cast_pickers[c.name] = _cast_combo_rows(
+            c.name, rows, backend, pin, options["voices"], roles
+        )
+    cast_pickers["nueva"] = _cast_combo_rows(
+        "nueva",
+        2,
+        "omni_voice",
+        "",
+        cast_options.get("omni_voice", {"voices": []})["voices"],
+    )
     return _render(
         request,
         "collections.html",
@@ -1183,7 +1461,9 @@ async def ui_collections(request: Request) -> HTMLResponse:
             "current_gateway_engine": "",
             "tts_options": tts_options,
             "tts_options_by_collection": tts_options_by_collection,
+            "tts_combos": tts_combos,
             "cast_options": cast_options,
+            "cast_pickers": cast_pickers,
             "emotion_tags": EMOTION_TAGS,
         },
     )
@@ -1664,6 +1944,7 @@ async def ui_fragment_tts_options(
     language: str = "",
     voice: str = "",
     gateway_engine: str = "",
+    form_id: str = "",
 ) -> HTMLResponse:
     """Render the engine/language/voice fields for a collection form (Phase 8).
 
@@ -1695,6 +1976,13 @@ async def ui_fragment_tts_options(
         else {"languages": [], "voices": []}
     )
     catalog = await load_gateway_engine_catalog()
+    form = (
+        form_id
+        or request.query_params.get("new_name", "")
+        or request.query_params.get("name", "")
+        or "nueva"
+    )
+    combos = _tts_combo_contexts(options, engine, gateway_engine, language, voice, form)
     return _render(
         request,
         "partials/_tts_options.html",
@@ -1707,8 +1995,69 @@ async def ui_fragment_tts_options(
             "tts_options": {engine: options},
             "current_language": language,
             "current_voice": voice,
+            **combos,
         },
     )
+
+
+@router.get("/ui/fragments/tool_combos", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_tool_combos(
+    request: Request,
+    prefix: str = "doc",
+    language: str = "",
+    voice: str = "",
+    language_q: str = "",
+    voice_q: str = "",
+    tts_backend: str = "",
+    engine: str = "",
+    narr_backend: str = "",
+    gateway_engine: str = "",
+    narr_gateway_engine: str = "",
+    combo_backend: str = "",
+    combo_gateway_engine: str = "",
+) -> HTMLResponse:
+    """Refresh the language/voice combos of one tools form (FASE 13).
+
+    Args:
+        request: Incoming request.
+        prefix: DOM prefix identifying the form ('doc', 'audiobook', 'url').
+        language: Currently selected language code.
+        voice: Currently selected voice id.
+        language_q: Typed language filter.
+        voice_q: Typed voice filter.
+        tts_backend: Shared tools engine selector value.
+        engine: Audiobook engine selector value.
+        narr_backend: Narration engine selector value.
+        gateway_engine: Shared tools gateway selector value.
+        narr_gateway_engine: Narration gateway selector value.
+        combo_backend: Explicit engine hint from a combo wrapper.
+        combo_gateway_engine: Explicit pin from a combo wrapper.
+
+    Returns:
+        HTMLResponse with both combos of the requested form.
+    """
+    safe_prefix = _combo_field(prefix, "doc")
+    backend = _combo_engine(
+        request, tts_backend=tts_backend, engine=engine, narr_backend=narr_backend
+    )
+    gateway = _combo_gateway_engine(
+        request,
+        gateway_engine=gateway_engine,
+        narr_gateway_engine=narr_gateway_engine,
+    )
+    voices = await voices_for_engine(backend or None, gateway or None)
+    contexts = _tool_combo_contexts(
+        [entry.model_dump() for entry in voices],
+        prefix=safe_prefix,
+        backend=backend,
+        gateway_engine=gateway,
+        language=language,
+        voice=voice,
+        language_q=language_q,
+        voice_q=voice_q,
+        language_id=f"{safe_prefix}-language",
+    )
+    return _render(request, "partials/_tool_combos.html", contexts)
 
 
 @router.get("/ui/fragments/cast_voices", response_class=HTMLResponse, include_in_schema=False)
@@ -1719,25 +2068,23 @@ async def ui_fragment_cast_voices(
     cast: str = "",
     rows: int = 2,
 ) -> HTMLResponse:
-    """Out-of-band options of every cast voice select for one engine (Phase 9.5).
+    """Refresh both cast combos of every row for one engine (Phases 9.5/13).
 
-    The cast editor's engine select re-fetches this fragment so each
-    ``<select>`` only offers ids the selected engine accepts; a Modal name in
-    a gateway cast (or the reverse) is what the multi-engine guard would
-    reject anyway. The response carries one ``hx-swap-oob`` block per cast row
-    (ids ``cast-voice-<cast>-<i>``), so a single fetch refreshes every row and
-    each select resets to the empty option: the old voice belonged to the
-    previous engine.
+    The cast editor's engine select re-fetches this fragment so the language
+    and voice radios only offer values the selected engine accepts. The
+    response carries two ``hx-swap-oob`` blocks per row (``cast-language-*`` and
+    ``cast-voice-*``); the current selections ride along in the form include so
+    a saved legacy value is never silently dropped.
 
     Args:
-        request: Incoming request.
+        request: Incoming request, including the current cast row values.
         narr_backend: Engine chosen in the form ('omni_voice', 'qwen3_tts', ...).
         narr_gateway_engine: Gateway sub-engine chosen for omni_voice/gateway.
         cast: Form identifier of the cast ('nueva' or the collection name).
         rows: Number of rows of the cast table (clamped to 1..8).
 
     Returns:
-        HTMLResponse with the out-of-band ``<option>`` payloads.
+        HTMLResponse with the out-of-band combo payloads.
     """
     from src.api.services.tts_backends import ALLOWED_BACKENDS
 
@@ -1745,14 +2092,27 @@ async def ui_fragment_cast_voices(
     if engine not in ALLOWED_BACKENDS:
         engine = TTSBackend.OMNIVOICE.value
     options = await _tts_voice_options(engine, narr_gateway_engine)
+    clamped_rows = max(1, min(rows or 2, 8))
+    params = request.query_params
+    roles = [
+        {
+            "voice_id": params.get(f"role{index}_voice", ""),
+            "language": params.get(f"role{index}_lang", ""),
+        }
+        for index in range(clamped_rows)
+    ]
+    pickers = _cast_combo_rows(
+        (cast or "").strip(),
+        clamped_rows,
+        engine,
+        (narr_gateway_engine or "").strip(),
+        options["voices"],
+        roles,
+    )
     return _render(
         request,
         "partials/_cast_voices_oob.html",
-        {
-            "cast": (cast or "").strip(),
-            "rows": max(1, min(rows or 2, 8)),
-            "voices": options["voices"],
-        },
+        {**pickers, "cast": (cast or "").strip()},
     )
 
 
@@ -2962,15 +3322,45 @@ async def ui_tools(request: Request) -> HTMLResponse:
         lang_input="#audiobook-language",
         engine_input="#engine-selector-audiobook",
     )
+    url_combos = _tool_combo_contexts(
+        edge["voices"],
+        prefix="url",
+        backend=TTSBackend.EDGE.value,
+        gateway_engine="",
+        language="es",
+        voice="",
+        language_id="url-language",
+    )
+    doc_combos = _tool_combo_contexts(
+        edge["voices"],
+        prefix="doc",
+        backend=TTSBackend.EDGE.value,
+        gateway_engine="",
+        language="es",
+        voice="",
+        language_id="doc-language",
+    )
+    audiobook_combos = _tool_combo_contexts(
+        edge["voices"],
+        prefix="audiobook",
+        backend=TTSBackend.EDGE.value,
+        gateway_engine="",
+        language="es",
+        voice="",
+        language_id="audiobook-language",
+    )
     return _render(
         request,
         "tools.html",
         {
             "collections": _collections(),
             "omni_languages": omni["languages"],
+            "url_combos": url_combos,
             "doc_picker": doc_picker,
+            "doc_combos": doc_combos,
             "doc_language_options": voice_search.language_options(edge["voices"]),
             "audiobook_picker": audiobook_picker,
+            "audiobook_combos": audiobook_combos,
             "audiobook_language_options": voice_search.language_options(edge["voices"]),
             "tts_backends": await _tts_backend_choices(catalog, TOOL_BACKEND_CHOICES),
             "gateway_engines": gateway_engine_choices,
@@ -2995,7 +3385,8 @@ async def ui_tools_url(request: Request) -> RedirectResponse:
     """Start a single-URL summary (Phase 7.10) from the tools page.
 
     Args:
-        request: The form body (url, collection, store, deliver).
+        request: The form body (url, collection, store, deliver and Phase 13
+            narration options).
 
     Returns:
         Redirect back to the tools page with a flash.
@@ -3015,6 +3406,12 @@ async def ui_tools_url(request: Request) -> RedirectResponse:
             url=url,
             store=fields.get("store") == "on",
             deliver=fields.get("deliver") == "on",
+            language=(fields.get("language") or "").strip() or None,
+            voice=(fields.get("voice") or "").strip() or None,
+            tts_backend=(fields.get("tts_backend") or fields.get("engine") or "").strip() or None,
+            gateway_engine=(fields.get("gateway_engine") or "").strip() or None,
+            tts_enabled=fields.get("tts") == "on",
+            deliver_audio=fields.get("audio") == "on",
         )
     except Exception as exc:
         logger.error("ui_url_failed", url=url, error=str(exc), exc_info=True)
@@ -3278,12 +3675,92 @@ async def ui_fragment_lesson_voices(
     )
 
 
+_COMBO_FIELD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _combo_field(field: str, default: str) -> str:
+    """Return a field name safe to render as a radio group.
+
+    Args:
+        field: Raw query parameter.
+        default: Fallback when the value is empty or not an identifier.
+
+    Returns:
+        The field name or ``default``.
+    """
+    cleaned = (field or "").strip()
+    return cleaned if _COMBO_FIELD_RE.fullmatch(cleaned) else default
+
+
+def _combo_engine(
+    request: Request,
+    *,
+    tts_backend: str = "",
+    engine: str = "",
+    narr_backend: str = "",
+    combo_backend: str = "",
+) -> str:
+    """Resolve the backend that must feed one FASE 13 combo.
+
+    Args:
+        request: Incoming request, used for dynamically named fields.
+        tts_backend: Shared tools engine selector value.
+        engine: Audiobook engine selector value.
+        narr_backend: Collection narration engine selector value.
+        combo_backend: Explicit engine hint rendered by a combo wrapper.
+
+    Returns:
+        The winning backend name ('' when the page has no engine selector).
+    """
+    params = request.query_params
+    return (
+        combo_backend
+        or params.get("combo_backend", "")
+        or tts_backend
+        or narr_backend
+        or engine
+        or params.get("tts_backend", "")
+        or params.get("narr_backend", "")
+        or params.get("engine", "")
+    ).strip()
+
+
+def _combo_gateway_engine(
+    request: Request,
+    *,
+    gateway_engine: str = "",
+    narr_gateway_engine: str = "",
+    combo_gateway_engine: str = "",
+) -> str:
+    """Resolve the gateway pin that must feed one FASE 13 combo.
+
+    Args:
+        request: Incoming request, used for dynamically named fields.
+        gateway_engine: Shared tools gateway selector value.
+        narr_gateway_engine: Collection narration gateway selector value.
+        combo_gateway_engine: Explicit pin rendered by a combo wrapper.
+
+    Returns:
+        The winning gateway engine id ('' when unpinned).
+    """
+    params = request.query_params
+    return (
+        combo_gateway_engine
+        or params.get("combo_gateway_engine", "")
+        or gateway_engine
+        or narr_gateway_engine
+        or params.get("gateway_engine", "")
+        or params.get("narr_gateway_engine", "")
+    ).strip()
+
+
 @router.get("/ui/fragments/voice_picker", response_class=HTMLResponse, include_in_schema=False)
 async def ui_fragment_voice_picker(
     request: Request,
     field: str = "voice",
     voice: str = "",
     voice2: str = "",
+    current: str = "",
     q: str = "",
     voice_q: str = "",
     voice2_q: str = "",
@@ -3292,7 +3769,11 @@ async def ui_fragment_voice_picker(
     picker_engines: str = "all",
     engine: str = "",
     tts_backend: str = "",
+    narr_backend: str = "",
     gateway_engine: str = "",
+    narr_gateway_engine: str = "",
+    combo_backend: str = "",
+    combo_gateway_engine: str = "",
     empty_label: str = "",
     language: str = "",
     mode: str = "",
@@ -3345,14 +3826,19 @@ async def ui_fragment_voice_picker(
     Returns:
         HTMLResponse with the _voice_picker_results partial.
     """
-    wanted_field = field if field in {"voice", "voice2"} else "voice"
-    current = voice2 if wanted_field == "voice2" else voice
-    query = (voice2_q if wanted_field == "voice2" else voice_q) or q
-    engine_param = (tts_backend or engine or "").strip()
-    gateway_filter = (
-        (gateway_engine or "").strip()
-        if engine_param in {"omni_voice", "gateway"}
-        else engine_param
+    wanted_field = _combo_field(field, "voice")
+    params = request.query_params
+    dynamic_current = params.get(wanted_field, "")
+    dynamic_query = params.get(f"{wanted_field}_q", "")
+    selected = current or dynamic_current or (voice2 if wanted_field == "voice2" else voice)
+    query = dynamic_query or (voice2_q if wanted_field == "voice2" else voice_q) or q
+    engine_param = _combo_engine(
+        request, tts_backend=tts_backend, engine=engine, narr_backend=narr_backend
+    )
+    gateway_param = _combo_gateway_engine(
+        request,
+        gateway_engine=gateway_engine,
+        narr_gateway_engine=narr_gateway_engine,
     )
     engine_hint = (picker_engines or engines).strip()
     legacy_engine = engine_hint if engine_hint not in {"", "all"} else ""
@@ -3365,34 +3851,81 @@ async def ui_fragment_voice_picker(
         target_language=target_language,
     )
     if engine_param and engine_param != "all":
-        # The form's engine select: ask the gateway for that engine's own stock
-        # catalogue when it is one of its sub-engines, then let the multi-engine
-        # guard filter the same way submit validation does.
-        voices = [
-            entry.model_dump()
-            for entry in await list_all_voices(gateway_engine=gateway_filter or None)
-        ]
-        if engine_param == "gateway":
-            allowed = voices
-        else:
-            allowed = []
-            for entry in voices:
-                speaks = engines_for_voice(str(entry.get("id") or ""))
-                if not speaks or engine_param in speaks:
-                    allowed.append(entry)
-                elif entry.get("category") == "stock" and any(
-                    str(g) == engine_param for g in entry.get("engines") or []
-                ):
-                    allowed.append(entry)
+        voices = await voices_for_engine(engine_param, gateway_param)
+        allowed = [voice.model_dump() for voice in voices]
     else:
         allowed = [
             entry.model_dump() for entry in await list_all_voices(engine=legacy_engine or None)
         ]
     context = _picker_results_context(
-        allowed, field=wanted_field, current=current, q=query, lang=resolved
+        allowed, field=wanted_field, current=selected, q=query, lang=resolved
     )
     context["empty_label"] = empty_label
-    return _render(request, "partials/_voice_picker_results.html", {"picker": context})
+    return _render(request, "partials/_filtered_combo_results.html", {"combo": context})
+
+
+@router.get("/ui/fragments/language_picker", response_class=HTMLResponse, include_in_schema=False)
+async def ui_fragment_language_picker(
+    request: Request,
+    field: str = "language",
+    current: str = "",
+    q: str = "",
+    language: str = "",
+    tts_backend: str = "",
+    engine: str = "",
+    narr_backend: str = "",
+    gateway_engine: str = "",
+    narr_gateway_engine: str = "",
+    combo_backend: str = "",
+    combo_gateway_engine: str = "",
+    empty_label: str = "",
+) -> HTMLResponse:
+    """Search results of one FASE 13 language combo.
+
+    The language vocabulary is derived from the voices of the selected engine,
+    so switching backend or gateway pin changes both the voice and the language
+    choices. The typed query filters the codes but never becomes a value.
+
+    Args:
+        request: Incoming request.
+        field: Radio group name ('language', 'role0_lang', ...).
+        current: Currently checked language code.
+        q: Legacy glob query param; forms send ``<field>_q``.
+        language: Current form value, used when ``current`` is absent.
+        tts_backend: Shared tools engine selector value.
+        engine: Audiobook engine selector value.
+        narr_backend: Collection narration engine selector value.
+        gateway_engine: Shared tools gateway selector value.
+        narr_gateway_engine: Collection narration gateway selector value.
+        combo_backend: Explicit engine hint rendered by a combo wrapper.
+        combo_gateway_engine: Explicit pin rendered by a combo wrapper.
+        empty_label: Label of the value='' option ('' omits it).
+
+    Returns:
+        HTMLResponse with the filtered combo results partial.
+    """
+    wanted_field = _combo_field(field, "language")
+    params = request.query_params
+    selected = current or params.get(wanted_field, "") or language or params.get("language", "")
+    query = params.get(f"{wanted_field}_q", "") or q
+    engine_param = _combo_engine(
+        request, tts_backend=tts_backend, engine=engine, narr_backend=narr_backend
+    )
+    gateway_param = _combo_gateway_engine(
+        request,
+        gateway_engine=gateway_engine,
+        narr_gateway_engine=narr_gateway_engine,
+    )
+    voices = await voices_for_engine(engine_param or None, gateway_param or None)
+    context = _language_combo_context(
+        [voice.model_dump() for voice in voices],
+        picker_id="results",
+        field=wanted_field,
+        current=selected,
+        q=query,
+        empty_label=empty_label,
+    )
+    return _render(request, "partials/_filtered_combo_results.html", {"combo": context})
 
 
 @router.get("/ui/fragments/tool_jobs", response_class=HTMLResponse, include_in_schema=False)

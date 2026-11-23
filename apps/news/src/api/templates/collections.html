@@ -68,6 +68,12 @@
         {% set current_backend = c.tts_backend or 'edge' %}
         {% set current_gateway_engine = c.gateway_engine or '' %}
         {% set tts_options = tts_options_by_collection.get(c.name, tts_options) %}
+        {% set combos = tts_combos[c.name] %}
+        {% set language_picker = combos.language_picker %}
+        {% set voice_picker = combos.voice_picker %}
+        {% set tts_wrapper_id = combos.tts_wrapper_id %}
+        {% set tts_backend_id = combos.tts_backend_id %}
+        {% set tts_gateway_id = combos.tts_gateway_id %}
         <div id="tts-options-{{ c.name }}" style="display:contents">
           {% include "partials/_tts_options.html" %}
         </div>
@@ -195,8 +201,8 @@
               {% set r = roles[i] if roles|length > i else None %}
               <tr>
                 <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
-                <td><div id="cast-voice-{{ c.name }}-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
-                <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+                <td><div id="cast-voice-{{ c.name }}-{{ i }}">{% with combo = cast_pickers[c.name]['voice_pickers'][i] %}{% include "partials/_filtered_combo.html" %}{% endwith %}</div></td>
+                <td><div id="cast-language-{{ c.name }}-{{ i }}">{% with combo = cast_pickers[c.name]['language_pickers'][i] %}{% include "partials/_filtered_combo.html" %}{% endwith %}</div></td>
                 <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
                 <td><input type="number" name="role{{ i }}_pitch" min="-6" max="6" step="0.5" value="{{ r.pitch_semitones if r and r.pitch_semitones is not none else 0.0 }}"></td>
                 <td>
@@ -360,6 +366,12 @@
       {% set current_voice = '' %}
       {% set current_backend = 'edge' %}
       {% set current_gateway_engine = '' %}
+      {% set combos = tts_combos['nueva'] %}
+      {% set language_picker = combos.language_picker %}
+      {% set voice_picker = combos.voice_picker %}
+      {% set tts_wrapper_id = combos.tts_wrapper_id %}
+      {% set tts_backend_id = combos.tts_backend_id %}
+      {% set tts_gateway_id = combos.tts_gateway_id %}
       <div id="tts-options-nueva" style="display:contents">
         {% include "partials/_tts_options.html" %}
       </div>
@@ -486,8 +498,8 @@
             {% set r = roles[i] if roles|length > i else None %}
             <tr>
               <td><input name="role{{ i }}_name" value="{{ r.name if r else '' }}" placeholder="anchor"></td>
-              <td><div id="cast-voice-nueva-{{ i }}"><select name="role{{ i }}_voice">{% with voices = cast_options.get(cast_engine, {"voices": []}).voices, current_voice = r.voice_id if r else '' %}{% include "partials/_cast_options.html" %}{% endwith %}</select></div></td>
-              <td><input name="role{{ i }}_lang" list="lang-list" value="{{ r.language if r and r.language else '' }}" placeholder="spec"></td>
+              <td><div id="cast-voice-nueva-{{ i }}">{% with combo = cast_pickers['nueva']['voice_pickers'][i] %}{% include "partials/_filtered_combo.html" %}{% endwith %}</div></td>
+              <td><div id="cast-language-nueva-{{ i }}">{% with combo = cast_pickers['nueva']['language_pickers'][i] %}{% include "partials/_filtered_combo.html" %}{% endwith %}</div></td>
               <td><input type="number" name="role{{ i }}_speed" min="0.5" max="2" step="0.1" value="{{ r.speed if r else 1.0 }}"></td>
               <td><input type="number" name="role{{ i }}_pitch" min="-6" max="6" step="0.5" value="0.0"></td>
               <td>

@@ -83,6 +83,12 @@ async def summarize_url(payload: UrlSummarizeIn) -> UrlSummarizeOut:
             url=payload.url,
             store=payload.store,
             deliver=payload.deliver,
+            language=payload.language,
+            voice=payload.voice,
+            tts_backend=payload.tts_backend,
+            gateway_engine=payload.gateway_engine,
+            tts_enabled=payload.tts_enabled,
+            deliver_audio=payload.deliver_audio,
         )
     except Exception as exc:
         logger.error("url_summary_start_failed", url=payload.url, error=str(exc), exc_info=True)

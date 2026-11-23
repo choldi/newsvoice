@@ -1,0 +1,25 @@
+{% set combo = combo | default(picker) %}
+{% if combo.empty_label %}
+<label class="voice-option">
+  <input type="radio" name="{{ combo.field }}" value="" {{ 'checked' if not combo.current else '' }}>
+  <span>{{ combo.empty_label }}</span>
+</label>
+{% endif %}
+{% for entry in combo.shown %}
+<label class="voice-option">
+  <input type="radio" name="{{ combo.field }}" value="{{ entry.id }}" {{ 'checked' if entry.id == combo.current else '' }}>
+  <span>{{ entry.label }}<small>{{ entry.id }}{% if entry.language and entry.language != entry.id %} · {{ entry.language }}{% endif %}{% if entry.tag %} · {{ entry.tag }}{% endif %}</small></span>
+</label>
+{% endfor %}
+{% if not combo.shown %}
+<div class="empty">{{ 'Sin opciones en el catálogo' if not combo.q else 'Ninguna opción coincide con «' ~ combo.q ~ '»' }}</div>
+{% endif %}
+{% if combo.total %}
+<div class="muted voice-hint">
+  {% if combo.q %}
+  {{ combo.total }} {{ 'coincidencia' if combo.total == 1 else 'coincidencias' }}{% if combo.total > combo.limit %} · mostrando las {{ combo.limit }} primeras{% endif %}
+  {% else %}
+  {% if combo.kind == 'language' %}{{ combo.total }} {{ 'idioma' if combo.total == 1 else 'idiomas' }}{% else %}{{ combo.total }} {{ 'voz' if combo.total == 1 else 'voces' }}{% endif %} · escribe para filtrar
+  {% endif %}
+</div>
+{% endif %}

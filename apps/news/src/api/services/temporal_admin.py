@@ -187,15 +187,32 @@ class TemporalAdminService:
         return workflow_id
 
     async def start_url_summarize(
-        self, collection: CollectionConfig, *, url: str, store: bool, deliver: bool
+        self,
+        collection: CollectionConfig,
+        *,
+        url: str,
+        store: bool,
+        deliver: bool,
+        language: str | None = None,
+        voice: str | None = None,
+        tts_backend: str | None = None,
+        gateway_engine: str | None = None,
+        tts_enabled: bool = False,
+        deliver_audio: bool = False,
     ) -> str:
-        """Start a single-URL summary workflow (Phase 7.10).
+        """Start a single-URL summary workflow (Phases 7.10/13).
 
         Args:
             collection: Collection supplying the prompt and destinations.
             url: Article URL to summarize.
             store: Persist the extracted article in `articles`.
             deliver: Deliver to the collection's channels.
+            language: Optional narration language override.
+            voice: Optional narration voice override.
+            tts_backend: Optional synthesis backend override.
+            gateway_engine: Optional gateway engine pin override.
+            tts_enabled: Generate narration audio for this summary.
+            deliver_audio: Deliver the generated audio.
 
         Returns:
             The workflow id of the started run.
@@ -203,7 +220,18 @@ class TemporalAdminService:
         from src.core.config import settings as app_settings
         from src.workers.workflows import UrlSummarizeWorkflow
 
-        config = url_summarize_config_for(collection, url=url, store=store, deliver=deliver)
+        config = url_summarize_config_for(
+            collection,
+            url=url,
+            store=store,
+            deliver=deliver,
+            language=language,
+            voice=voice,
+            tts_backend=tts_backend,
+            gateway_engine=gateway_engine,
+            tts_enabled=tts_enabled,
+            deliver_audio=deliver_audio,
+        )
         workflow_id = (
             f"url-summary-{collection.name}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
             f"-{uuid4().hex[:8]}"

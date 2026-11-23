@@ -141,15 +141,16 @@ def test_picker_restricts_the_vocabulary_by_engine() -> None:
     assert GATEWAY_STOCK not in edge_only.text, "the gateway vocabulary must not leak in"
 
 
-def test_picker_offers_the_literal_option_for_an_unknown_id() -> None:
-    """A search with zero matches offers to send the query text as-is."""
+def test_picker_never_turns_the_query_into_a_value() -> None:
+    """A search with zero matches filters the catalogue without inventing a voice."""
     client = _client()
 
     results = client.get("/ui/fragments/voice_picker", params={"q": "voz fantasma"})
 
     assert results.status_code == 200
-    assert 'value="voz fantasma" checked' in results.text
-    assert "tal cual" in results.text
+    assert "Ninguna opción coincide con" in results.text
+    assert 'value="voz fantasma"' not in results.text
+    assert "tal cual" not in results.text
 
 
 def test_picker_keeps_the_checked_voice_visible_after_a_search() -> None:
@@ -163,8 +164,8 @@ def test_picker_keeps_the_checked_voice_visible_after_a_search() -> None:
     assert 'value="anchor_neutral_m"' in results.text, "the match itself is still listed"
 
 
-def test_picker_does_not_duplicate_the_literal_for_the_current_voice() -> None:
-    """When the current voice is the query, it shows once, as the checked one."""
+def test_picker_keeps_the_current_unknown_voice_once() -> None:
+    """A saved id absent from the catalogue stays visible, checked, exactly once."""
     client = _client()
 
     results = client.get(
@@ -174,7 +175,7 @@ def test_picker_does_not_duplicate_the_literal_for_the_current_voice() -> None:
     assert results.status_code == 200
     assert results.text.count('value="voz fantasma"') == 1
     assert 'value="voz fantasma" checked' in results.text
-    assert "tal cual" not in results.text, "the literal option is redundant here"
+    assert "tal cual" not in results.text
 
 
 def test_picker_marks_the_default_option() -> None:
@@ -328,7 +329,8 @@ def test_picker_search_reads_the_browser_query_field() -> None:
 
     miss = client.get("/ui/fragments/voice_picker", params={"voice_q": "zzz"})
     assert 'value="es-ES-DarioNeural"' not in miss.text
-    assert 'value="zzz" checked' in miss.text, "the unmatched query drops the list"
+    assert 'value="zzz"' not in miss.text, "the unmatched query never becomes a voice"
+    assert "Ninguna opción coincide con" in miss.text
 
 
 def test_picker_engine_select_filters_with_the_submit_predicate() -> None:
@@ -375,7 +377,7 @@ def test_picker_lists_the_voices_of_the_selected_gateway_engine() -> None:
 
 
 def test_audiobook_form_wires_the_engine_select_before_the_voice_picker() -> None:
-    """The audiobook form picks the motor TTS before the voice, over idioma+motor."""
+    """The audiobook form picks the engine first, then language/voice combos."""
     client = _client()
     page = client.get("/ui/tools")
 
@@ -385,10 +387,7 @@ def test_audiobook_form_wires_the_engine_select_before_the_voice_picker() -> Non
     assert 'id="audiobook-engine"' in ab_form
     assert 'id="picker-audiobook"' in ab_form
     assert 'id="audiobook-language"' in ab_form
-    assert (
-        ab_form.index('id="audiobook-language"')
-        < ab_form.index('id="audiobook-engine"')
-        < (ab_form.index('id="picker-audiobook"'))
-    ), "idioma → motor → voz"
-    assert 'hx-target="#voice-results-audiobook"' in ab_form
-    assert ab_form.count("hx-include=") >= 2, "language and engine selects refetch too"
+    assert ab_form.index('id="audiobook-engine"') < ab_form.index('id="picker-audiobook"')
+    assert 'hx-get="/ui/fragments/language_picker"' in ab_form
+    assert 'hx-get="/ui/fragments/voice_picker"' in ab_form
+    assert ab_form.count("hx-include=") >= 2, "language and engine inputs refetch too"

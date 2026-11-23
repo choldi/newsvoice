@@ -1247,6 +1247,48 @@ registran el pin; lint + tests verdes.
 **Effort:** 4-6 hours.
 
 
+## FASE 13: Combos de idioma/voz y narración de resumen de URL
+
+**Objetivo:** sustituir los desplegables de idioma/voz de Colecciones y
+Herramientas por combos con búsqueda que solo ofrezcan opciones reales del
+engine seleccionado, y permitir narrar opcionalmente el resumen de una URL con
+ese mismo par motor/voz.
+
+### Checklist
+- [x] **13.1 Registro por motor**: `voice_registry.py` añade
+      `voices_for_engine` / `languages_for_engine`, con pins de gateway
+      (`kokoro`, `fish_tts`, `openai_tts`, ...), dedupe y respeto al guard
+      `assert_voice_engine`.
+- [x] **13.2 Combos HTMX**: `_filtered_combo.html` +
+      `_filtered_combo_results.html` ofrecen campo de búsqueda y resultados en
+      radios, sin JavaScript nuevo; la consulta filtra, nunca se convierte en
+      valor, y un id legacy ausente del catálogo se mantiene solo como selección
+      actual.
+- [x] **13.3 Colecciones**: el TTS y cada fila del cast usan combos de
+      idioma/voz; `/ui/fragments/cast_voices` devuelve ambos controles por fila
+      vía OOB al cambiar de motor.
+- [x] **13.4 Herramientas**: los formularios de URL, doc-TTS y audiolibro
+      comparten `/ui/fragments/tool_combos`; el selector de motor recarga el par
+      idioma/voz con `hx-include="closest form"`. Lessons conserva su guard
+      anti-mezcla.
+- [x] **13.5 Resumen de URL**: `UrlSummarizeIn` y el workflow aceptan
+      `language`, `voice`, `tts_backend`, `gateway_engine`, `tts_enabled` y
+      `deliver_audio`; sin voz no se sintetiza nada y el comportamiento sigue
+      siendo solo texto.
+- [x] **13.6 Entrega**: el audio se genera en una actividad, se comprime cuando
+      se va a entregar y se adjunta a email/Telegram; un fallo de audio se
+      registra sin tumbar el resumen.
+- [x] **13.7 Tests y docs**: cobertura de fragmentos, cast OOB, catalogación por
+      motor, payload REST y workflow con audio; `Architecture.md`,
+      `CONVENTIONS.md` y `Deploy.md` actualizados.
+
+**Success criteria:** el usuario elige motor una sola vez y ve solo idiomas y
+voces compatibles; teclear `is` encuentra `isabel`/`luis`, pero no crea una voz
+«is»; el resumen de URL sin voz sigue entregando texto; lint + tests verdes.
+
+**Effort:** 6-8 hours.
+
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable

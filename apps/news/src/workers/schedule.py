@@ -164,12 +164,24 @@ def pipeline_config_for(collection: CollectionConfig, tts_flag: bool | None) -> 
 
 
 def url_summarize_config_for(
-    collection: CollectionConfig, *, url: str, store: bool, deliver: bool
+    collection: CollectionConfig,
+    *,
+    url: str,
+    store: bool,
+    deliver: bool,
+    language: str | None = None,
+    voice: str | None = None,
+    tts_backend: str | None = None,
+    gateway_engine: str | None = None,
+    tts_enabled: bool = False,
+    deliver_audio: bool = False,
 ) -> UrlSummarizeConfig:
-    """Build the UrlSummarizeConfig for one single-URL summary (Phase 7.10).
+    """Build the UrlSummarizeConfig for one single-URL summary (Phases 7.10/13).
 
     Everything a workflow cannot read (settings, collection options, the Phase
-    7.13 verification payload) is resolved here, outside the workflow.
+    7.13 verification payload) is resolved here, outside the workflow. Audio is
+    opt-in: without ``tts_enabled`` the run keeps the historical text-only
+    behaviour regardless of the collection's digest settings.
 
     Args:
         collection: Collection supplying the prompt and the delivery
@@ -177,10 +189,20 @@ def url_summarize_config_for(
         url: Article URL to summarize.
         store: Persist the extracted article in `articles`.
         deliver: Deliver to the collection's configured channels.
+        language: Optional narration language override.
+        voice: Optional narration voice override.
+        tts_backend: Optional synthesis backend override.
+        gateway_engine: Optional gateway engine pin override.
+        tts_enabled: Generate narration audio for this summary.
+        deliver_audio: Deliver the generated audio.
 
     Returns:
         A UrlSummarizeConfig ready to hand to UrlSummarizeWorkflow.
     """
+    backend = tts_backend or collection.tts_backend or settings.tts_default_backend
+    pin = gateway_engine or (
+        collection.gateway_engine if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY) else ""
+    )
     return UrlSummarizeConfig(
         url=url,
         collection=collection.name,
@@ -189,7 +211,7 @@ def url_summarize_config_for(
         prompt_template=collection.prompt_template,
         custom_prompt=collection.custom_prompt,
         podcast_behavior=collection.podcast_behavior or settings.tts_podcast_behavior,
-        language=collection.language or settings.tts_language,
+        language=language or collection.language or settings.tts_language,
         main_story_count=collection.main_story_count,
         headline_count=collection.headline_count,
         delivery_channels=collection.delivery_channels,
@@ -198,6 +220,11 @@ def url_summarize_config_for(
         whatsapp_recipients=collection.whatsapp_recipients,
         whatsapp_group_id=collection.whatsapp_group_id,
         verify=collection.resolve_llm_verify(),
+        voice=voice or collection.voice or settings.tts_voice,
+        tts_backend=backend,
+        gateway_engine=pin or "",
+        tts_enabled=tts_enabled,
+        deliver_audio=deliver_audio and tts_enabled,
     )
 
 

@@ -80,7 +80,7 @@ def test_engine_selector_fragment_honours_form_field_names() -> None:
 
 
 def test_tts_options_fragment_renders_selects_when_enabled() -> None:
-    """The TTS fragment renders selects populated from the chosen engine."""
+    """The TTS fragment renders engine-driven language/voice combos."""
     client = _ui_client()
     _login(client)
     with (
@@ -110,11 +110,11 @@ def test_tts_options_fragment_renders_selects_when_enabled() -> None:
 
     assert fragment.status_code == 200
     assert '<select name="tts_backend"' in fragment.text
-    assert '<select name="language"' in fragment.text
-    assert '<option value="es"' in fragment.text
-    assert '<option value="en"' in fragment.text
-    assert 'value="es-mx-male"' in fragment.text
-    assert "selected" in fragment.text
+    assert '<input type="text" name="language_q"' in fragment.text
+    assert 'name="language" value="es" checked' in fragment.text
+    assert 'name="language" value="en"' in fragment.text
+    assert '<input type="text" name="voice_q"' in fragment.text
+    assert 'name="voice" value="es-mx-male" checked' in fragment.text
 
 
 def test_tts_options_fragment_follows_the_selected_engine() -> None:
@@ -145,10 +145,10 @@ def test_tts_options_fragment_follows_the_selected_engine() -> None:
     edge = client.get(f"{_TTS_FRAGMENT_URL}?tts_enabled=on&tts_backend=edge")
 
     assert gateway.status_code == edge.status_code == 200
-    assert '<option value="es-mx-male"' in gateway.text
-    assert '<select name="voice"' in gateway.text
-    assert '<option value="es-mx-male"' not in edge.text
-    assert '<input type="text" name="voice"' in edge.text
+    assert 'name="voice" value="es-mx-male"' in gateway.text
+    assert '<input type="text" name="voice_q"' in gateway.text
+    assert 'name="voice" value="es-mx-male"' not in edge.text
+    assert '<input type="text" name="voice_q"' in edge.text
 
 
 def test_tts_options_fragment_offers_the_selected_gateway_engine() -> None:
@@ -202,17 +202,17 @@ def test_voice_picker_uses_the_shared_gateway_engine() -> None:
         category="stock",
     )
     with patch(
-        "src.api.routes_ui.list_all_voices",
+        "src.api.services.voice_registry.gateway_options",
         new_callable=AsyncMock,
-        return_value=[voice],
-    ) as list_voices:
+        return_value=(["es"], [voice]),
+    ) as gateway_voices:
         results = client.get(
             "/ui/fragments/voice_picker",
             params={"tts_backend": "gateway", "gateway_engine": "kokoro"},
         )
 
     assert results.status_code == 200
-    assert list_voices.call_args.kwargs["gateway_engine"] == "kokoro"
+    assert gateway_voices.call_args.kwargs["engine"] == "kokoro"
     assert 'value="kokoro-es"' in results.text
 
 
@@ -265,7 +265,8 @@ def test_collections_page_shows_omni_selects_for_tts_collection() -> None:
         page = client.get("/ui/collections")
 
     assert page.status_code == 200
-    assert '<select name="language"' in page.text
+    assert '<input type="text" name="language_q"' in page.text
+    assert 'name="voice" value="es-mx-male" checked' in page.text
 
 
 def test_collections_page_keeps_text_inputs_without_tts() -> None:

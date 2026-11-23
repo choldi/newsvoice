@@ -30,6 +30,30 @@
       <div class="col">
         <div class="check" style="margin-top:26px"><input type="checkbox" name="deliver" checked><label>Entregar a los canales</label></div>
       </div>
+      <div class="col">
+        <div class="check" style="margin-top:26px"><input type="checkbox" name="tts"><label>Narrar el resumen</label></div>
+      </div>
+      <div class="col">
+        <div class="check" style="margin-top:26px"><input type="checkbox" name="audio"><label>Entregar el audio</label></div>
+      </div>
+    </div>
+    <div class="row">
+      {% set current_backend = 'edge' %}
+      {% set current_gateway_engine = '' %}
+      {% set engine_wrapper_id = 'engine-selector-url' %}
+      {% set backend_id = 'url-tts-backend' %}
+      {% set gateway_id = 'url-gateway-engine' %}
+      {% set backend_field = 'tts_backend' %}
+      {% set gateway_field = 'gateway_engine' %}
+      {% set engine_fragment_url = '/ui/fragments/tool_combos?prefix=url' %}
+      {% set engine_hx_target = '#tool-combos-url' %}
+      {% set engine_hx_include = 'closest form' %}
+      {% include "partials/_engine_selector.html" %}
+    </div>
+    <div class="row" id="tool-combos-url">
+      {% with language_picker = url_combos.language_picker, voice_picker = url_combos.voice_picker, language_id = url_combos.language_id %}
+      {% include "partials/_tool_combos.html" %}
+      {% endwith %}
     </div>
     <button type="submit" class="primary">Resumir</button>
   </form>
@@ -51,37 +75,22 @@
         <input type="text" name="title" placeholder="Se usa el nombre del fichero">
       </div>
       <div class="col">
-        <label>Idioma</label>
-        <select name="language" id="doc-language"
-                required
-                hx-get="/ui/fragments/voice_picker"
-                hx-trigger="change"
-                hx-target="#voice-results-doc"
-                 hx-include="#picker-doc, [name='language'], #engine-selector-doc"
-                 hx-swap="innerHTML">
-          {% for option in doc_language_options %}
-          <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col">
-        <label>Voz</label>
-        {% with picker = doc_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
+        <label>Motor TTS</label>
+        {% set current_backend = 'edge' %}
+        {% set current_gateway_engine = '' %}
+        {% set engine_wrapper_id = 'engine-selector-doc' %}
+        {% set backend_id = 'doc-tts-backend' %}
+        {% set gateway_id = 'doc-gateway-engine' %}
+        {% set engine_fragment_url = '/ui/fragments/tool_combos?prefix=doc' %}
+        {% set engine_hx_target = '#tool-combos-doc' %}
+        {% set engine_hx_include = 'closest form' %}
+        {% include "partials/_engine_selector.html" %}
       </div>
     </div>
-    <div class="row">
-      {% set current_backend = 'edge' %}
-      {% set current_gateway_engine = '' %}
-      {% set engine_wrapper_id = 'engine-selector-doc' %}
-      {% set backend_id = 'doc-tts-backend' %}
-      {% set gateway_id = 'doc-gateway-engine' %}
-      {% include "partials/_engine_selector.html" %}
-      <span id="doc-voice-refresh" hidden
-            hx-get="/ui/fragments/voice_picker"
-            hx-trigger="change from:[name='tts_backend'], change from:[name='gateway_engine']"
-            hx-include="#picker-doc, [name='language'], #engine-selector-doc"
-            hx-target="#voice-results-doc"
-            hx-swap="innerHTML"></span>
+    <div class="row" id="tool-combos-doc">
+      {% with language_picker = doc_combos.language_picker, voice_picker = doc_combos.voice_picker, language_id = doc_combos.language_id %}
+      {% include "partials/_tool_combos.html" %}
+      {% endwith %}
     </div>
     <button type="submit" class="primary">Convertir a audio</button>
     <p class="muted" style="font-size:12px">
@@ -273,27 +282,7 @@
     </div>
     <div class="row">
       <div class="col">
-        <label>Idioma</label>
-        <select name="language" id="audiobook-language"
-                required
-                hx-get="/ui/fragments/voice_picker"
-                hx-trigger="change"
-                hx-target="#voice-results-audiobook"
-                hx-include="#picker-audiobook, #audiobook-language, #engine-selector-audiobook"
-                hx-swap="innerHTML">
-          {% for option in audiobook_language_options %}
-          <option value="{{ option.code }}" {{ 'selected' if option.code == 'es' else '' }}>{{ option.code }} ({{ option.count }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col">
         <label>Motor TTS</label>
-        <span id="audiobook-voice-refresh" hidden
-              hx-get="/ui/fragments/voice_picker"
-              hx-trigger="change from:[name='engine'], change from:[name='gateway_engine']"
-              hx-include="#picker-audiobook, #audiobook-language, #engine-selector-audiobook"
-              hx-target="#voice-results-audiobook"
-              hx-swap="innerHTML"></span>
         {% set tts_backends = audiobook_engine_choices %}
         {% set current_backend = 'edge' %}
         {% set current_gateway_engine = '' %}
@@ -303,18 +292,20 @@
         {% set backend_id = 'audiobook-engine' %}
         {% set gateway_id = 'audiobook-gateway-engine' %}
         {% set engine_choices = 'audiobook' %}
-        {% set engine_fragment_url = '/ui/fragments/engine_selector?backend_field=engine&gateway_field=gateway_engine&engine_choices=audiobook' %}
-        {% set engine_hx_target = "closest div[id^='engine-selector-audiobook']" %}
+        {% set engine_fragment_url = '/ui/fragments/tool_combos?prefix=audiobook' %}
+        {% set engine_hx_target = '#tool-combos-audiobook' %}
+        {% set engine_hx_include = 'closest form' %}
         {% include "partials/_engine_selector.html" %}
-      </div>
-      <div class="col">
-        <label>Voz</label>
-        {% with picker = audiobook_picker %}{% include "partials/_voice_picker.html" %}{% endwith %}
       </div>
       <div class="col">
         <label>Portada (opcional, JPG/PNG)</label>
         <input type="file" name="cover" accept="image/*">
       </div>
+    </div>
+    <div class="row" id="tool-combos-audiobook">
+      {% with language_picker = audiobook_combos.language_picker, voice_picker = audiobook_combos.voice_picker, language_id = audiobook_combos.language_id %}
+      {% include "partials/_tool_combos.html" %}
+      {% endwith %}
     </div>
     <div class="row">
       <div class="col">

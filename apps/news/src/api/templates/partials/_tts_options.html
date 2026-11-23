@@ -1,32 +1,25 @@
 {% set opts = tts_options.get(current_backend, {"languages": [], "voices": []}) %}
-{% set gateway_engines = gateway_engines | default([]) %}
-{% set current_gateway_engine = current_gateway_engine | default('') %}
+{% set engine_wrapper_id = tts_wrapper_id | default('engine-selector') %}
+{% set backend_id = tts_backend_id | default('') %}
+{% set gateway_id = tts_gateway_id | default('') %}
+{% set engine_fragment_url = '/ui/fragments/tts_options' %}
+{% set engine_hx_target = "closest div[id^='tts-options-']" %}
+{% set engine_hx_include = 'closest form' %}
 {% include "partials/_engine_selector.html" %}
-{% if opts.languages %}
+{% if tts_enabled %}
 <div class="col">
   <label>Idioma</label>
-  <select name="language">
-    {% for lang in opts.languages %}
-    <option value="{{ lang }}" {{ 'selected' if lang == current_language else '' }}>{{ lang }}</option>
-    {% endfor %}
-  </select>
+  {% with combo = language_picker %}{% include "partials/_filtered_combo.html" %}{% endwith %}
+</div>
+<div class="col">
+  <label>Voz</label>
+  {% with combo = voice_picker %}{% include "partials/_filtered_combo.html" %}{% endwith %}
 </div>
 {% else %}
 <div class="col">
   <label>Idioma (es/en/…)</label>
   <input type="text" name="language" value="{{ current_language }}">
 </div>
-{% endif %}
-{% if opts.voices %}
-<div class="col">
-  <label>Voz</label>
-  <select name="voice">
-    {% for v in opts.voices %}
-    <option value="{{ v.id }}" {{ 'selected' if v.id == current_voice else '' }}>{{ v.label }} ({{ v.language or '—' }})</option>
-    {% endfor %}
-  </select>
-</div>
-{% else %}
 <div class="col">
   <label>Voz</label>
   <input type="text" name="voice" value="{{ current_voice }}">

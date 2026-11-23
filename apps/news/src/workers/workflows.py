@@ -167,11 +167,12 @@ class PipelineConfig:
 
 @dataclass
 class UrlSummarizeConfig:
-    """Input configuration for a single-URL summary run (Phase 7.10).
+    """Input configuration for a single-URL summary run (Phases 7.10/13).
 
     The prompt, the delivery destinations and the Phase 7.13 verification
     payload are resolved from the collection **outside** the workflow, exactly
-    like PipelineConfig, because a workflow cannot read settings.
+    like PipelineConfig, because a workflow cannot read settings. Phase 13 adds
+    optional narration with an explicit voice/engine, resolved the same way.
     """
 
     url: str = ""
@@ -194,6 +195,12 @@ class UrlSummarizeConfig:
     whatsapp_group_id: str | None = None
     # Phase 7.13 verification, resolved outside the workflow; None = no gate.
     verify: dict[str, Any] | None = None
+    # Phase 13 narration; empty voice/backend means the configured defaults.
+    voice: str = ""
+    tts_backend: str = ""
+    gateway_engine: str = ""
+    tts_enabled: bool = False
+    deliver_audio: bool = False
 
 
 @workflow.defn
@@ -1046,7 +1053,13 @@ class UrlSummarizeWorkflow:
                     non_retryable=True,
                 )
 
-        delivery_status = await self._deliver(config, digest_markdown)
+        audio: dict[str, Any] | None = None
+        audio_status: list[dict[str, Any]] = []
+        if config.tts_enabled:
+            audio, audio_status = await self._generate_audio(config, digest_markdown)
+
+        delivery_status = await self._deliver(config, digest_markdown, audio) + audio_status
+        audio_path = audio.get("audio_path") if audio else None
 
         await self._record_run(
             config,
@@ -1054,6 +1067,7 @@ class UrlSummarizeWorkflow:
             article_count=article_count,
             cluster_count=1,
             digest_preview=digest_markdown,
+            audio_path=audio_path,
         )
         workflow.logger.info(f"URL summary completed: {config.url}")
         return {
@@ -1061,6 +1075,7 @@ class UrlSummarizeWorkflow:
             "url": config.url,
             "article_count": article_count,
             "digest": digest_markdown,
+            "audio_path": audio_path,
             "delivery_status": delivery_status,
             "verification": (
                 {
@@ -1075,8 +1090,64 @@ class UrlSummarizeWorkflow:
             ),
         }
 
-    async def _deliver(
+    async def _generate_audio(
         self, config: UrlSummarizeConfig, digest_markdown: str
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Generate optional narration for the URL digest (Phase 13).
+
+        Audio is a secondary deliverable: a failure is reported in the run's
+        delivery status but never fails the text-only summary.
+
+        Args:
+            config: Resolved run configuration.
+            digest_markdown: Generated digest text.
+
+        Returns:
+            The generated audio metadata (or None) and status entries.
+        """
+        workflow.logger.info("Generating URL summary narration")
+        try:
+            audio = await workflow.execute_activity(
+                generate_tts_activity,
+                {
+                    "digest": digest_markdown,
+                    "language": config.language,
+                    "voice": config.voice,
+                    "backend": config.tts_backend,
+                    "gateway_engine": config.gateway_engine,
+                    "run_id": workflow.info().workflow_id,
+                    "collection": config.collection,
+                },
+                start_to_close_timeout=TTS_TIMEOUT,
+                retry_policy=NETWORK_RETRY_POLICY,
+            )
+            if config.deliver_audio and audio.get("audio_path"):
+                try:
+                    compressed = await workflow.execute_activity(
+                        compress_audio_activity,
+                        audio["audio_path"],
+                        start_to_close_timeout=COMPRESS_TIMEOUT,
+                        retry_policy=RetryPolicy(maximum_attempts=1),
+                    )
+                    audio["audio_path"] = compressed["audio_path"]
+                except (ActivityError, ApplicationError) as exc:
+                    detail = getattr(exc, "cause", None) or exc
+                    workflow.logger.warning(
+                        f"Audio compression failed; delivering WAV instead: {detail}"
+                    )
+            elif config.deliver_audio and not audio.get("audio_path"):
+                return None, [{"status": "error", "error": "no audio generated"}]
+            return audio, []
+        except (ActivityError, ApplicationError) as exc:
+            detail = getattr(exc, "cause", None) or exc
+            workflow.logger.warning(f"URL narration failed; text digest kept: {detail}")
+            return None, [{"status": "error", "error": str(detail)}]
+
+    async def _deliver(
+        self,
+        config: UrlSummarizeConfig,
+        digest_markdown: str,
+        audio: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Deliver the digest to the collection's configured channels.
 
@@ -1086,6 +1157,7 @@ class UrlSummarizeWorkflow:
         Args:
             config: Resolved run configuration.
             digest_markdown: Generated digest text.
+            audio: Optional narration metadata to attach/send.
 
         Returns:
             One entry per attempted channel.
@@ -1107,11 +1179,14 @@ class UrlSummarizeWorkflow:
             except (ActivityError, ApplicationError) as exc:
                 delivery_status.append(self._delivery_failure("telegram", exc))
         if "email" in channels and config.email_recipients:
+            email_args: list[Any] = [config.email_recipients, digest_markdown, config.collection]
+            if config.deliver_audio and audio and audio.get("audio_path"):
+                email_args.append(audio["audio_path"])
             try:
                 delivery_status.append(
                     await workflow.execute_activity(
                         deliver_email_activity,
-                        args=[config.email_recipients, digest_markdown, config.collection],
+                        args=email_args,
                         start_to_close_timeout=EMAIL_TIMEOUT,
                         retry_policy=NETWORK_RETRY_POLICY,
                     )
@@ -1134,6 +1209,18 @@ class UrlSummarizeWorkflow:
                 )
             except (ActivityError, ApplicationError) as exc:
                 delivery_status.append(self._delivery_failure("whatsapp", exc))
+        if "telegram" in channels and config.deliver_audio and audio and audio.get("audio_path"):
+            try:
+                delivery_status.append(
+                    await workflow.execute_activity(
+                        deliver_telegram_audio_activity,
+                        args=[audio["audio_path"], digest_markdown[:1000], config.chat_id],
+                        start_to_close_timeout=DELIVERY_TIMEOUT,
+                        retry_policy=NETWORK_RETRY_POLICY,
+                    )
+                )
+            except (ActivityError, ApplicationError) as exc:
+                delivery_status.append(self._delivery_failure("telegram_audio", exc))
         return delivery_status
 
     @staticmethod
@@ -1160,6 +1247,7 @@ class UrlSummarizeWorkflow:
         cluster_count: int,
         digest_preview: str | None = None,
         error: str | None = None,
+        audio_path: str | None = None,
     ) -> None:
         """Persist the outcome of this run via record_run_activity.
 
@@ -1170,6 +1258,7 @@ class UrlSummarizeWorkflow:
             cluster_count: Number of clusters summarized (always 1 here).
             digest_preview: Generated digest text, when there is one.
             error: Error message for failed runs.
+            audio_path: Generated narration path, when there is one.
         """
         await workflow.execute_activity(
             record_run_activity,
@@ -1180,7 +1269,7 @@ class UrlSummarizeWorkflow:
                 "article_count": article_count,
                 "cluster_count": cluster_count,
                 "digest_preview": digest_preview,
-                "audio_path": None,
+                "audio_path": audio_path,
                 "error": error,
             },
             start_to_close_timeout=RECORD_RUN_TIMEOUT,

@@ -37,6 +37,14 @@ MODAL_ENGINES: tuple[str, ...] = (
     TTSBackend.VOXCPM2.value,
 )
 
+#: Gateway sub-engine id used by each public backend that renders through the
+#: gateway, so selecting ``kokoro`` loads the Kokoro catalogue directly.
+_GATEWAY_BACKEND_PINS: dict[str, str] = {
+    TTSBackend.KOKORO.value: "kokoro",
+    TTSBackend.FISH.value: "fish_tts",
+    TTSBackend.OPENAI.value: "openai_tts",
+}
+
 #: Gateway sub-engine name -> public backend value. ``pocket_tts`` et al. are
 #: reached through the routed OmniVoice backend unless they have their own
 #: public value (Kokoro, Fish, OpenAI).
@@ -273,3 +281,112 @@ async def list_all_voices(
             voice.label,
         ),
     )
+
+
+def _accepts_backend(voice: VoiceOption, backend: str) -> bool:
+    """Check one voice against the submit guard used by TTS forms (FASE 13).
+
+    Args:
+        voice: Catalogue entry under consideration.
+        backend: Canonical backend the form would submit.
+
+    Returns:
+        True when the guard accepts the id, including unknown ids whose engine
+        cannot be inferred from their spelling.
+    """
+    from src.api.services.voice_engine import engines_for_voice
+
+    allowed = engines_for_voice(voice.id)
+    return not allowed or backend in allowed
+
+
+def _unique_voices(voices: list[VoiceOption]) -> list[VoiceOption]:
+    """Return voices in input order with duplicate ids removed.
+
+    Args:
+        voices: Voices from one or more sources.
+
+    Returns:
+        One entry per id, keeping the first occurrence.
+    """
+    seen: set[str] = set()
+    result: list[VoiceOption] = []
+    for voice in voices:
+        if voice.id in seen:
+            continue
+        seen.add(voice.id)
+        result.append(voice)
+    return result
+
+
+async def voices_for_engine(
+    backend: str | None, gateway_engine: str | None = None
+) -> list[VoiceOption]:
+    """List the voices selectable with one TTS backend (FASE 13).
+
+    Unlike :func:`list_all_voices`, this helper resolves the operator's backend
+    alias and loads only the vocabulary that backend can actually synthesize.
+    Gateway sub-engines (``kokoro``, ``piper``, ``qwen3_tts``, ...) are queried
+    with their own stock catalogue, so a pin change immediately changes both
+    the language and the voice choices.
+
+    Args:
+        backend: Canonical backend id or one of its accepted aliases.
+        gateway_engine: Gateway sub-engine pin of ``gateway``/``omni_voice``.
+
+    Returns:
+        Voices ordered by category, language and label. Sources that cannot be
+        reached contribute no voices instead of raising.
+    """
+    from src.api.services.tts_backends import resolve_backend
+
+    raw = (backend or "").strip().lower()
+    unresolved = False
+    try:
+        engine = resolve_backend(raw).value
+        pin = (gateway_engine or "").strip().lower() or _GATEWAY_BACKEND_PINS.get(engine, "")
+    except Exception:  # noqa: BLE001 - an unregistered id is a gateway sub-engine
+        engine = TTSBackend.GATEWAY.value
+        pin = raw
+        unresolved = True
+
+    if engine == TTSBackend.EDGE.value:
+        _, voices = await edge_options()
+        return list(voices)
+    if engine in MODAL_ENGINES:
+        _, voices = modal_options()
+        return list(voices)
+    if engine == TTSBackend.FISH.value:
+        _, gateway = await gateway_options(engine=pin or "fish_tts")
+        _, modal = modal_options()
+        fish = [voice for voice in gateway if TTSBackend.FISH.value in voice.engines]
+        clones = [voice.model_copy(update={"engines": [TTSBackend.FISH.value]}) for voice in modal]
+        return _unique_voices([*fish, *clones])
+    if engine == TTSBackend.OPENAI.value:
+        _, gateway = await gateway_options(engine=pin or "openai_tts")
+        return [voice for voice in gateway if TTSBackend.OPENAI.value in voice.engines]
+
+    if engine == TTSBackend.OMNIVOICE.value and not pin:
+        _, voices = await gateway_options()
+        return list(voices)
+    _, voices = await gateway_options(engine=pin or None)
+    if unresolved:
+        return list(voices)
+    guard = _GATEWAY_ENGINE_VALUES.get(pin, pin) if pin else engine
+    if guard and guard not in (TTSBackend.GATEWAY.value, TTSBackend.OMNIVOICE.value):
+        voices = [voice for voice in voices if _accepts_backend(voice, guard)]
+    return list(voices)
+
+
+async def languages_for_engine(backend: str | None, gateway_engine: str | None = None) -> list[str]:
+    """List the ISO 639-1 languages offered by one TTS backend (FASE 13).
+
+    Args:
+        backend: Canonical backend id or one of its accepted aliases.
+        gateway_engine: Gateway sub-engine pin of ``gateway``/``omni_voice``.
+
+    Returns:
+        Sorted language prefixes derived from that backend's voices.
+    """
+    voices = await voices_for_engine(backend, gateway_engine)
+    return sorted({voice.language.split("-")[0].lower() for voice in voices if voice.language})

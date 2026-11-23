@@ -82,8 +82,9 @@ def test_page_renders_the_structured_cast_for_a_spec_collection(_ui_env: Path) -
     # Two existing roles + one free row (cap is 8).
     card = body.split('<details class="card" id="d-gaming"')[1].split("</details>")[0]
     assert 'name="role0_name" value="michael"' in card
-    assert '<div id="cast-voice-gaming-0"><select name="role0_voice"' in card
-    assert 'value="clone-1" selected' in card, "the saved voice stays selected"
+    voice_cell = card.split('id="cast-voice-gaming-0"')[1].split('id="cast-language-gaming-0"')[0]
+    assert '<div class="voice-picker"' in voice_cell
+    assert 'name="role0_voice" value="clone-1" checked' in card, "the saved voice stays selected"
     assert 'name="role1_name" value="dwight"' in card
     assert 'value="excited"' in card
     assert 'name="narr_title" value="Game Over"' in card
@@ -102,7 +103,7 @@ def test_page_keeps_a_voice_the_catalogue_lacks(_ui_env: Path) -> None:
 
     assert response.status_code == 200
     card = response.text.split('<details class="card" id="d-gaming"')[1].split("</details>")[0]
-    assert '<option value="legacy_voice" selected>legacy_voice</option>' in card
+    assert 'name="role0_voice" value="legacy_voice" checked' in card
     assert 'name="role1_name" value="dwight"' in card
 
 

@@ -1,0 +1,8 @@
+<div class="col" id="{{ language_id }}">
+  <label>Idioma</label>
+  {% with combo = language_picker %}{% include "partials/_filtered_combo.html" %}{% endwith %}
+</div>
+<div class="col">
+  <label>Voz</label>
+  {% with combo = voice_picker %}{% include "partials/_filtered_combo.html" %}{% endwith %}
+</div>

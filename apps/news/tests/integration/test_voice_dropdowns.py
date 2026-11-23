@@ -178,7 +178,7 @@ def test_lesson_fragment_keeps_a_voice_out_of_every_catalogue() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cast: native selects + per-row OOB refresh
+# Cast: searchable combos + per-row OOB refresh
 # ---------------------------------------------------------------------------
 
 
@@ -191,12 +191,12 @@ def test_cast_fragment_clamps_the_row_count() -> None:
         params={"narr_backend": "qwen3_tts", "cast": "tech", "rows": "99"},
     )
     assert huge.status_code == 200
-    assert huge.text.count('hx-swap-oob="innerHTML"') == 8
+    assert huge.text.count('hx-swap-oob="innerHTML"') == 16
 
     empty = client.get(
         "/ui/fragments/cast_voices",
         params={"narr_backend": "omni_voice", "cast": "nueva", "rows": "0"},
     )
     assert empty.status_code == 200
-    assert empty.text.count('hx-swap-oob="innerHTML"') == 2
+    assert empty.text.count('hx-swap-oob="innerHTML"') == 4
     assert 'id="cast-voice-nueva-0"' in empty.text
