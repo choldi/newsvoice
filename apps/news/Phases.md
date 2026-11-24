@@ -1281,6 +1281,12 @@ ese mismo par motor/voz.
 - [x] **13.7 Tests y docs**: cobertura de fragmentos, cast OOB, catalogación por
       motor, payload REST y workflow con audio; `Architecture.md`,
       `CONVENTIONS.md` y `Deploy.md` actualizados.
+- [x] **13.8 Limpieza de IDs y availability**: `libs/tts_contract` fija los IDs
+      canónicos y los aliases de solo lectura; gateway y news publican/consumen
+      capabilities reales desde `/api/v1/engines`; los submits rechazan motores
+      confirmados como no disponibles y el render cae a `edgetts` con warning
+      (outage del catálogo = desconocido, sin bloqueo); caché con
+      `SIDECAR_VERSION = 3`; tests migrados a vocabulario canónico.
 
 **Success criteria:** el usuario elige motor una sola vez y ve solo idiomas y
 voces compatibles; teclear `is` encuentra `isabel`/`luis`, pero no crea una voz

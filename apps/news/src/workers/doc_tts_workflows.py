@@ -59,7 +59,7 @@ class DocTTSConfig:
     """Requested Edge voice; empty uses the configured default."""
     language: str = ""
     """ISO 639-1 language; empty uses the configured default."""
-    tts_backend: str = "edge"
+    tts_backend: str = "edgetts"
     """Engine that synthesizes the document."""
     gateway_engine: str = ""
     """Gateway sub-engine pin for the omni_voice/gateway backends."""

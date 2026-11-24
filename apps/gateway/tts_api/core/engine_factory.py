@@ -8,6 +8,8 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from tts_contract import canonical_engine_id
+
 from tts_api.core.engine_base import TtsEngineBase
 from tts_api.core.engine_registry import EngineKind, EngineRegistry, registry_for
 from tts_api.settings import get_settings
@@ -28,15 +30,20 @@ def _import_engine_class(class_path: str) -> type[TtsEngineBase]:
     return engine_class
 
 
-def _create_single_engine(name: str, registry: EngineRegistry | None = None) -> TtsEngineBase:
+def _create_single_engine(
+    name: str,
+    registry: EngineRegistry | None = None,
+    *,
+    require_enabled: bool = True,
+) -> TtsEngineBase:
     """Create a single engine instance by name."""
-    key = name.lower().strip()
+    key = canonical_engine_id(name)
     catalog = registry or registry_for(get_settings())
     try:
         spec = catalog.get(key)
     except KeyError as exc:
         raise ValueError(str(exc)) from exc
-    if not spec.enabled:
+    if require_enabled and not spec.enabled:
         raise ValueError(f"Engine desactivado: {key}")
 
     if spec.kind is EngineKind.OPENAI_COMPATIBLE_HTTP:
@@ -50,6 +57,11 @@ def _create_single_engine(name: str, registry: EngineRegistry | None = None) -> 
         class_path = spec.class_path_remote
     engine_class = _import_engine_class(class_path)
     return engine_class()
+
+
+def create_engine_for_catalog(name: str, registry: EngineRegistry | None = None) -> TtsEngineBase:
+    """Create an engine for catalog introspection without requiring it to be active."""
+    return _create_single_engine(name, registry, require_enabled=False)
 
 
 def _auto_configured_engines(registry: EngineRegistry) -> set[str]:
@@ -131,8 +143,7 @@ def create_engine(engine_name: str | None = None) -> TtsEngineBase:
     """
     settings = get_settings()
     catalog = registry_for(settings)
-    selected = engine_name or settings.effective_tts_engine
-    selected = selected.lower().strip()
+    selected = canonical_engine_id(engine_name or settings.effective_tts_engine)
 
     if selected == "routed":
         return _create_routed_engine(settings.TTS_ENGINES, settings.TTS_EXTRA_ENGINES, catalog)

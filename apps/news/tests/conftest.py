@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from src.api.db.database import run_migrations
+from src.api.services.gateway_engine_catalog import reset_gateway_engine_catalog_cache
 from src.api.services.voices import reset_voice_catalog_cache
 from src.core.config import settings
 from src.workers.client import configure_temporal_logging
@@ -52,8 +53,9 @@ def offline_edge_voices(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def clean_voice_catalog_cache() -> None:
-    """Keep the process-wide voice cache isolated between tests."""
+    """Keep the process-wide catalog caches isolated between tests."""
     reset_voice_catalog_cache()
+    reset_gateway_engine_catalog_cache()
 
 
 @pytest.fixture(autouse=True)

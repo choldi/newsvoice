@@ -16,6 +16,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from tts_contract import canonical_engine_id
 
 from src.api.models.voices import VoiceSource
 from src.core.prompts import EMOTION_TAGS
@@ -34,7 +35,7 @@ class TTSBackend(StrEnum):
     """Which engine synthesizes a narration or a digest.
 
     Attributes:
-        EDGE: Client-side ``edge-tts`` (Microsoft neural voices). No gateway,
+        EDGE: Client-side ``edge-tts`` (canonical id ``edgetts``). No gateway,
             no spend, no GPU. This is the digest default and the fallback the
             other engines degrade to.
         OMNIVOICE: The self-hosted TTS gateway (rebranded ``tts-api``, port
@@ -57,11 +58,11 @@ class TTSBackend(StrEnum):
             ``gateway_engine``. Honors the selected engine's own capabilities.
     """
 
-    EDGE = "edge"
+    EDGE = "edgetts"
     GATEWAY = "gateway"
-    OMNIVOICE = "omni_voice"
+    OMNIVOICE = "omnivoice"
     QWEN3_TTS = "qwen3_tts"
-    ZONOS2 = "zonos2"
+    ZONOS2 = "zono2"
     VOXCPM2 = "voxcpm2"
     KOKORO = "kokoro"
     FISH = "fish_tts"
@@ -187,7 +188,7 @@ class NarrationSpec(BaseModel):
         speed: Default speaking rate for roles that do not override it.
         emotion: Default emotion for roles that do not override it.
         tts_backend: Engine that synthesizes this narration.
-        gateway_engine: Gateway sub-engine pin for the omni_voice backend.
+        gateway_engine: Gateway sub-engine pin for the omnivoice backend.
         voice_source: Where the reference voice comes from (non-OMNIVOICE only).
         voice_ref: Reference voice name from the catalog (non-OMNIVOICE only).
         ai_disclosure: Prepend an audible AI-generated disclosure.
@@ -212,7 +213,7 @@ class NarrationSpec(BaseModel):
     )
     gateway_engine: str = Field(
         default="",
-        description="Gateway sub-engine pin for the omni_voice backend (empty = language routing)",
+        description="Gateway sub-engine pin for the omnivoice backend (empty = language routing)",
     )
     voice_source: VoiceSource = Field(
         default=VoiceSource.QWEN_DESIGN,
@@ -228,6 +229,14 @@ class NarrationSpec(BaseModel):
         default=False,
         description="For QWEN3_TTS backend, run synthesis in Modal instead of gateway local",
     )
+
+    @field_validator("tts_backend", mode="before")
+    @classmethod
+    def _tts_backend_is_canonical(cls, value: object) -> object:
+        """Accept legacy engine spellings from stored TOML and forms."""
+        if isinstance(value, str):
+            return canonical_engine_id(value) or value
+        return value
 
     @field_validator("gateway_engine")
     @classmethod

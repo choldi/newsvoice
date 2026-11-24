@@ -81,17 +81,17 @@ def test_voices_all_returns_tagged_options() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     by_id = {voice["id"]: voice for voice in payload["voices"]}
-    assert by_id["es-ES-DelviraNeural"]["engines"] == ["edge"]
+    assert by_id["es-ES-DelviraNeural"]["engines"] == ["edgetts"]
     assert by_id["es-mx-male"]["category"] == "stock"
     assert by_id["uuid-1"]["category"] == "cloned"
     assert by_id["anchor_m"]["category"] == "stock"
-    assert by_id["anchor_m"]["engines"] == ["qwen3_tts", "zonos2", "voxcpm2"]
+    assert by_id["anchor_m"]["engines"] == ["qwen3_tts", "zono2", "voxcpm2"]
     assert by_id["custom_es"]["category"] == "generated"
 
 
 def test_voices_all_filters_by_engine() -> None:
     """engine keeps only the voices that engine accepts."""
-    response = client.get("/api/admin/voices/all", params={"engine": "omni_voice"})
+    response = client.get("/api/admin/voices/all", params={"engine": "omnivoice"})
 
     assert response.status_code == 200
     ids = [voice["id"] for voice in response.json()["voices"]]

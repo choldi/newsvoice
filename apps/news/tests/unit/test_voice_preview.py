@@ -72,11 +72,11 @@ async def test_preview_synthesizes_then_serves_from_cache(
     first = await voice_preview.preview("es-mx-male")
     second = await voice_preview.preview("es-mx-male")
 
-    assert first["engine"] == "omni_voice"
+    assert first["engine"] == "omnivoice"
     assert first["note"] == "muestra sintetizada"
     assert second["note"] == "muestra en caché"
     assert first["url"] == second["url"]
-    assert first["url"].startswith("/ui/voices/sample/es-mx-male-omni_voice-")
+    assert first["url"].startswith("/ui/voices/sample/es-mx-male-omnivoice-")
     assert first["url"].endswith(".wav")
     filename = first["url"].rsplit("/", 1)[-1]
     assert (voice_preview.samples_dir() / filename).read_bytes() == b"AUDIO-BYTES"
@@ -94,7 +94,7 @@ async def test_preview_prefers_edge_for_an_edge_shortname(
 
     result = await voice_preview.preview("es-ES-DalvaNeural")
 
-    assert result["engine"] == "edge"
+    assert result["engine"] == "edgetts"
     assert result["url"].endswith(".mp3")
     assert voice_for.await_args.args[0] is TTSBackend.EDGE
 
@@ -221,7 +221,7 @@ def test_sample_filename_is_deterministic_and_safe() -> None:
     name = voice_preview.sample_filename(*args)
 
     assert name == voice_preview.sample_filename(*args)
-    assert name.startswith("es-es-dalvaneural-edge-")
+    assert name.startswith("es-es-dalvaneural-edgetts-")
     assert name.endswith(".mp3")
 
     weird = voice_preview.sample_filename("Mi Voz/Extraña!", TTSBackend.OMNIVOICE, "es", "hola")

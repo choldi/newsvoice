@@ -32,7 +32,7 @@ T = TypeVar("T")
 #: Modal GPU attached to each backend; ``None`` means the call is CPU-only.
 BACKEND_GPU: dict[str, str | None] = {
     "qwen3_tts": "l4",
-    "zonos2": "h100",
+    "zono2": "h100",
     "voxcpm2": "l4",
     "judge": "l4",
     "design": "l4",

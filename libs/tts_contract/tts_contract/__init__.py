@@ -25,7 +25,14 @@ from tts_contract.catalog import (
     sha256_bytes,
     sha256_text,
 )
-from tts_contract.engines import EngineCapabilities, EngineDescriptor, EnginesResponse
+from tts_contract.engines import (
+    CANONICAL_ENGINE_IDS,
+    LEGACY_ENGINE_ALIASES,
+    EngineCapabilities,
+    EngineDescriptor,
+    EnginesResponse,
+    canonical_engine_id,
+)
 from tts_contract.errors import (
     GatewayErrorBody,
     GatewayErrorDetail,
@@ -46,6 +53,8 @@ from tts_contract.voices import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "CANONICAL_ENGINE_IDS",
+    "LEGACY_ENGINE_ALIASES",
     "STATUS_GENERATED",
     "STATUS_PENDING",
     "STATUS_STALE",
@@ -72,6 +81,7 @@ __all__ = [
     "VoiceProfile",
     "VoiceSource",
     "__version__",
+    "canonical_engine_id",
     "classify_status",
     "is_stale",
     "is_voice_slug",

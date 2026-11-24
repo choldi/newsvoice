@@ -1,4 +1,4 @@
-{% set current_backend = current_backend | default('edge') %}
+{% set current_backend = current_backend | default('edgetts') %}
 {% set current_gateway_engine = current_gateway_engine | default('') %}
 {% set gateway_engines = gateway_engines | default([]) %}
 {% set wrapper_id = engine_wrapper_id | default('engine-selector') %}
@@ -28,7 +28,7 @@
       {% endfor %}
     </select>
   </div>
-  {% if current_backend in ('omni_voice', 'gateway') and gateway_engines %}
+  {% if current_backend in ('omnivoice', 'gateway') and gateway_engines %}
   <div class="col">
     <label>Engine del gateway</label>
     <select name="{{ gateway_field }}"

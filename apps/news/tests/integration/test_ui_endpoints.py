@@ -944,7 +944,7 @@ def test_collections_gui_round_trips_the_tts_backend() -> None:
 
     page = client.get("/ui/collections")
     assert '<select name="tts_backend"' in page.text
-    assert '<option value="omni_voice" selected>' in page.text
+    assert '<option value="omnivoice" selected>' in page.text
 
     client.post(
         "/ui/collections/motor/update",

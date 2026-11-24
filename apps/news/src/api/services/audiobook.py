@@ -1281,7 +1281,7 @@ async def submit_audiobook(
     # The engine drives both the voice vocabulary and the synthesis path;
     # reject an unknown backend before storing any data.
     try:
-        backend = resolve_backend(engine or "edge")
+        backend = resolve_backend(engine or "edgetts")
     except TTSBackendError as exc:
         raise SubmitError(str(exc), status_code=422) from exc
     pin = (

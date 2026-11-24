@@ -83,7 +83,7 @@ def _narration_spec(**overrides: object) -> dict[str, object]:
         "roles": [{"name": "anchor", "voice_id": "es-mx-male"}],
     }
     payload.update(overrides)
-    if str(payload.get("tts_backend", "")) in {"qwen3_tts", "zonos2"} and "roles" not in overrides:
+    if str(payload.get("tts_backend", "")) in {"qwen3_tts", "zono2"} and "roles" not in overrides:
         payload["roles"] = [{"name": "anchor", "voice_id": "anchor_neutral_m"}]
     return payload
 
@@ -91,7 +91,7 @@ def _narration_spec(**overrides: object) -> dict[str, object]:
 def test_narration_routes_to_local_queue_for_omni_voice() -> None:
     collection = _collection(
         narration_enabled=True,
-        narration_spec=_narration_spec(tts_backend="omni_voice"),
+        narration_spec=_narration_spec(tts_backend="omnivoice"),
     )
     config = pipeline_config_for(collection, tts_flag=None)
 
@@ -125,7 +125,7 @@ def test_narration_routes_to_modal_queue_for_qwen3_tts_when_requested() -> None:
 def test_narration_routes_to_modal_queue_for_zonos2() -> None:
     collection = _collection(
         narration_enabled=True,
-        narration_spec=_narration_spec(tts_backend="zonos2"),
+        narration_spec=_narration_spec(tts_backend="zono2"),
     )
     config = pipeline_config_for(collection, tts_flag=None)
 
@@ -218,11 +218,11 @@ def test_cleanup_schedule_id_and_interval() -> None:
 
 def test_pipeline_config_carries_the_collection_backend() -> None:
     """The schedule payload must tell the activity which engine to use."""
-    collection = _collection(tts_backend="omni_voice")
+    collection = _collection(tts_backend="omnivoice")
 
     config = pipeline_config_for(collection, tts_flag=None)
 
-    assert config.tts_backend == "omni_voice"
+    assert config.tts_backend == "omnivoice"
 
 
 def test_pipeline_config_carries_the_gateway_engine_into_digest_and_narration() -> None:
@@ -248,7 +248,7 @@ def test_pipeline_config_backend_defaults_to_edge() -> None:
     """An unset collection backend keeps edge, whatever the engine default is."""
     collection = _collection()
 
-    assert pipeline_config_for(collection, tts_flag=None).tts_backend == "edge"
+    assert pipeline_config_for(collection, tts_flag=None).tts_backend == "edgetts"
 
 
 def test_pipeline_config_backend_honours_the_global_default(

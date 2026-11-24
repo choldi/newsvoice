@@ -296,7 +296,7 @@ async def test_generate_rejects_adaptation_on_the_wrong_backend(
     respell = AsyncMock()
     monkeypatch.setattr("src.core.llm.generate_completion", generate)
     monkeypatch.setattr("src.core.respelling.generate_completion", respell)
-    payload = _dual_payload(notes, spec={**DUAL_SPEC, "tts_backend": "omni_voice"})
+    payload = _dual_payload(notes, spec={**DUAL_SPEC, "tts_backend": "omnivoice"})
 
     with pytest.raises(ApplicationError, match="qwen3_tts backend"):
         await ActivityEnvironment().run(generate_lesson_activity, payload)

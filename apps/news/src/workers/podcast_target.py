@@ -11,12 +11,14 @@ and the dispatch activity), so it lives here once: Modal backends render on
 the Modal queue inside the Modal namespace, everything else renders locally in
 the local namespace. The backend is read from the serialized spec dict so this
 helper stays importable from workflows, activities and routes alike, without
-pulling the pydantic models in.
+pulling the Temporal runtime in.
 """
 
 from __future__ import annotations
 
 from typing import Any, NamedTuple
+
+from tts_contract import canonical_engine_id
 
 from src.core.config import settings
 
@@ -42,17 +44,18 @@ def backend_from_spec(spec: dict[str, Any] | None) -> str:
         spec: Serialized ``NarrationSpec`` payload, or None.
 
     Returns:
-        The backend id, or ``omni_voice`` (local) when absent or unknown.
+        The canonical backend id, or ``omnivoice`` when absent or unknown.
     """
     if not isinstance(spec, dict):
-        return "omni_voice"
-    return str(spec.get("tts_backend") or "omni_voice")
+        return "omnivoice"
+    backend = canonical_engine_id(str(spec.get("tts_backend") or ""))
+    return backend or "omnivoice"
 
 
 #: Backends that always render on the local worker. Cloud Fish/OpenAI go
 #: through the local gateway, so they are local too.
 LOCAL_BACKENDS: frozenset[str] = frozenset(
-    {"edge", "omni_voice", "kokoro", "fish_tts", "openai_tts"}
+    {"edgetts", "omnivoice", "kokoro", "fish_tts", "openai_tts"}
 )
 
 

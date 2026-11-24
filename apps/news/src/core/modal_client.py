@@ -151,7 +151,7 @@ async def modal_zonos2_tts(
         zonos.generate_tts_zonos2.remote.aio(
             text=text, voice_ref=voice_ref, language=language, speed=speed, emotion=emotion
         ),
-        backend="zonos2",
+        backend="zono2",
     )
     return audio
 

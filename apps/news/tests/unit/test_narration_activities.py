@@ -325,7 +325,7 @@ async def test_render_activity_raises_when_zonos2_disabled(
     payload = {
         "run_id": "r",
         "collection": "tech",
-        "spec": _modal_spec(tts_backend="zonos2"),
+        "spec": _modal_spec(tts_backend="zono2"),
         "script": SCRIPT,
     }
 

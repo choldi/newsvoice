@@ -77,18 +77,18 @@ asked for** (`tts_backend`, resolved outside the workflow by
 
 | backend | call | output |
 |---------|------|--------|
-| `edge` (default) | client-side `edge_tts.Communicate` | `.mp3` |
-| `omni_voice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
+| `edgetts` (default) | client-side `edge_tts.Communicate` | `.mp3` |
+| `omnivoice` | `POST {TTS_API_BASE_URL}/tts` (the `tts-api` gateway) | `.wav` |
 | `kokoro` | same gateway POST with the sub-engine pinned (`engine=kokoro`) | `.wav` |
 | `qwen3_tts` | `modal_client.modal_tts()` — the digest carries no `run_in_modal` flag | `.wav` |
-| `zonos2` | `modal_client.modal_zonos2_tts()` | `.wav` |
+| `zono2` | `modal_client.modal_zonos2_tts()` | `.wav` |
 | `voxcpm2` | `modal_client.modal_voxcpm2_tts()` (48 kHz, Apache-2.0) | `.wav` |
 
 A `qwen3_tts` render goes **local** (gateway `engine=qwen3_tts`) when its
 caller passes `run_in_modal=False` to `tts_backends.voice_for`/`synthesize`
 (Phase 10 switch): narration and lessons carry the explicit
 `NarrationSpec.run_in_modal` flag, and the **audiobook path always does** — a
-book renders for hours, so Modal would be unaffordable; `zonos2`/`voxcpm2`
+book renders for hours, so Modal would be unaffordable; `zono2`/`voxcpm2`
 are rejected at audiobook submit (Phase 11.10). The digest and the voice
 preview keep the historical Modal call (they never pass the flag).
 
@@ -108,7 +108,7 @@ the self-contained `gateway-qwen3` sidecar, whose dedicated venv holds
 
 `src/api/services/tts_backends.py` owns the dispatch, the per-engine voice
 resolution and the output extension. The engine is part of the cache hash
-(`SIDECAR_VERSION = 2`), so switching engines regenerates instead of serving
+(`SIDECAR_VERSION = 3`), so switching engines regenerates instead of serving
 another engine's bytes, and a `TTS_FALLBACK_TO_EDGE` degradation is written
 **without** a sidecar so the next run retries the requested engine. Everything
 downstream (M4A transcode, Whisper verification, Telegram) is ffmpeg-based and
@@ -122,7 +122,16 @@ collections and the four tools forms. The override is a per-request value: the
 submit services pin it into the workflow config, the voice pickers ask the
 gateway for that sub-engine's catalogue, and doc-TTS/audiobook cache keys include
 the pin. A collection edit persists both fields; the tools forms only override
-the current run.
+the current run. Phase 13 cleanup makes IDs canonical end-to-end:
+`libs/tts_contract.engines` owns `CANONICAL_ENGINE_IDS` plus read-only aliases
+(`edge→edgetts`, `omni_voice→omnivoice`, `zonos2→zono2`, ...), and the gateway's
+`/api/v1/engines` reports the capabilities the runtime actually has.
+
+The same cleanup adds availability guards. `gateway_engine_catalog` reads those
+capabilities with a 30 s cache: submit paths reject an engine explicitly
+reported unavailable, while `synthesize()` falls back to `edgetts` with a
+structlog warning when unavailability is confirmed. A catalog outage is
+unknown, not unavailable, so renders keep going.
 
 Phase 13 replaces the language/voice `<select>` pairs with HTMX combos:
 `partials/_filtered_combo.html` and `_filtered_combo_results.html` render a
@@ -177,7 +186,7 @@ table (Phase 9.6). The collection digest voice and the cast stay
 **per-engine** selects (`_tts_voice_options`), because an engine only accepts
 its own ids: the cast refreshes each row's options out-of-band via
 `GET /ui/fragments/cast_voices` (`hx-swap-oob`) when the backend changes.
-Document TTS defaults to Edge (user decision, Phase 9); since Phase 12 an
+Document TTS defaults to `edgetts` (user decision, Phase 9); since Phase 12 an
 explicit backend/gateway pin can override that run.
 
 Both search and table share one service, `src/api/services/voice_search.py`:
@@ -279,11 +288,11 @@ Both audio paths coexist on the same run: `audio_jobs` is keyed by
 The narration branch supports an on-prem `qwen3_tts` render: the spec sets
 `tts_backend = 'qwen3_tts'` and `run_in_modal = false`, and the render activity
 synthesizes through the local gateway (`engine=qwen3_tts`) instead of Modal. The
-Modal spend guard applies only to `zonos2`, `voxcpm2` and `qwen3_tts` **with**
+Modal spend guard applies only to `zono2`, `voxcpm2` and `qwen3_tts` **with**
 `run_in_modal = true`; a local qwen3 render works with `MODAL_ENABLED=false`.
 Because the backend is still routed to the podcast *modal* namespace by
 `podcast_target`, the `narration-modal-worker` must be running (it is the
-worker for every non-`omni_voice`/`edge` backend, whether or not the render
+worker for every non-`omnivoice`/`edgetts` backend, whether or not the render
 spends GPU in Modal).
 
 Before synthesis, `resolve_narration_script_activity` optionally respells the

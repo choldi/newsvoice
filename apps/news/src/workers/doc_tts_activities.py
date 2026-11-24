@@ -113,7 +113,7 @@ async def extract_document_activity(payload: dict[str, Any]) -> dict[str, Any]:
             voice=str(payload.get("voice") or ""),
             language=str(payload.get("language") or ""),
             title=title,
-            tts_backend=str(payload.get("tts_backend") or "edge"),
+            tts_backend=str(payload.get("tts_backend") or "edgetts"),
             gateway_engine=str(payload.get("gateway_engine") or ""),
         )
         estimate: dict | None = forecast.as_dict()
@@ -221,7 +221,7 @@ async def synthesize_document_activity(payload: dict[str, Any]) -> dict[str, Any
                 title=title,
                 on_progress=_progress,
                 gate=gate,
-                tts_backend=str(payload.get("tts_backend") or "edge"),
+                tts_backend=str(payload.get("tts_backend") or "edgetts"),
                 gateway_engine=str(payload.get("gateway_engine") or ""),
             )
     except Exception as exc:

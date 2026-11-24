@@ -330,9 +330,9 @@ class Settings(BaseSettings):
     # --- Phase 8.2: digest TTS engine routing --------------------------------
     # Engine a collection inherits when it declares no `tts_backend`. Collections
     # override it per entry in collections.toml; this only sets the floor.
-    # 'edge' (client-side edge-tts) | 'omni_voice' (tts-api gateway) |
-    # 'qwen3_tts' | 'zonos2' | 'voxcpm2' (all on Modal, see modal_enabled).
-    tts_default_backend: str = "edge"
+    # Canonical ids: 'edgetts' (client-side edge-tts) | 'omnivoice' (tts-api
+    # gateway) | 'qwen3_tts' | 'zono2' | 'voxcpm2' (Modal, see modal_enabled).
+    tts_default_backend: str = "edgetts"
     # Degrade to edge when the gateway or Modal fails. Off by default: a clone
     # or a designed voice silently replaced by a stock Edge voice is a product
     # change, not a retry, so a failing engine must surface as "no audio" until

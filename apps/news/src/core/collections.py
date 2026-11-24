@@ -115,10 +115,10 @@ class CollectionConfig(BaseModel):
     language: str = Field(default="", description="ISO 639-1 language code for the digest")
     voice: str = Field(default="", description="Voice override, in the backend's vocabulary")
     tts_backend: str = Field(
-        default="edge",
+        default="edgetts",
         description=(
-            "Engine that synthesizes this collection's digest audio: 'edge', "
-            "'omni_voice' (the tts-api gateway), 'qwen3_tts', 'zonos2' or "
+            "Engine that synthesizes this collection's digest audio: 'edgetts', "
+            "'omnivoice' (the tts-api gateway), 'qwen3_tts', 'zono2' or "
             "'voxcpm2'. Empty falls back to TTS_DEFAULT_BACKEND."
         ),
     )

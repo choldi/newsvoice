@@ -34,21 +34,21 @@ def modal_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_edge_shortname_voices_both_network_engines() -> None:
-    assert engines_for_voice("es-MX-JorgeNeural") == {"edge", "gateway", "omni_voice"}
+    assert engines_for_voice("es-MX-JorgeNeural") == {"edgetts", "gateway", "omnivoice"}
 
 
 def test_gateway_stock_ids_are_reachable_from_both_network_engines() -> None:
     # Gateway stock ids also map through Kokoro's stock voice table.
-    assert engines_for_voice("es-mx-male") == {"edge", "gateway", "omni_voice", "kokoro"}
+    assert engines_for_voice("es-mx-male") == {"edgetts", "gateway", "omnivoice", "kokoro"}
 
 
 def test_clone_uuid_is_shared_by_clone_capable_gateway_engines() -> None:
     uuid = "123e4567-e89b-12d3-a456-426614174000"
-    assert engines_for_voice(uuid) == {"gateway", "omni_voice", "fish_tts"}
+    assert engines_for_voice(uuid) == {"gateway", "omnivoice", "fish_tts"}
 
 
 def test_modal_catalog_names_select_all_modal_engines(modal_catalog: None) -> None:
-    assert engines_for_voice(MODAL_NAME) == {"qwen3_tts", "zonos2", "voxcpm2"}
+    assert engines_for_voice(MODAL_NAME) == {"qwen3_tts", "zono2", "voxcpm2"}
 
 
 def test_unknown_and_empty_voices_are_wildcards() -> None:
@@ -127,7 +127,7 @@ def test_assert_same_engine_rejects_clone_plus_modal(modal_catalog: None) -> Non
 
 
 def test_infer_backend_keeps_the_gateway_default_for_network_voices() -> None:
-    assert infer_backend(["es-MX-JorgeNeural", "es-mx-male"]) == "omni_voice"
+    assert infer_backend(["es-MX-JorgeNeural", "es-mx-male"]) == "omnivoice"
 
 
 def test_infer_backend_selects_modal_for_catalog_voices(modal_catalog: None) -> None:

@@ -94,7 +94,7 @@
 - No hardcoded secrets; no default prod values
 - `tts_*` is the digest audio namespace: it talks to edge-tts directly by
   default and, since Phase 8, to `tts_api_base_url` whenever a collection picks
-  `tts_backend = "omni_voice"` — which is also what `VoicesService` uses for the
+  `tts_backend = "omnivoice"` — which is also what `VoicesService` uses for the
   GUI voice catalog. The Phase 7 narration pipeline keeps its own `narration_*`
   namespace (separate gateway URL, cache dir, task queue) and never repoints
   `tts_api_base_url`, so moving the digest's gateway never moves the cast's.
@@ -197,11 +197,15 @@
 
 ## TTS engines and the engine lease (Phase 8)
 
-- One vocabulary for engines across the project: `TTSBackend`
-  (`src/api/models/narration.py`) = `edge` | `omni_voice` (the rebranded
-  `tts-api` gateway) | `qwen3_tts` | `zonos2` | `voxcpm2` (gated). `TTSBackend.EDGE` was added in
-  Phase 8; `podcast_target` must map it to the **local** namespace/queue, never
-  to Modal.
+- One canonical ID vocabulary across news, the gateway and `libs/tts_contract`:
+  `edgetts`, `gateway`, `omnivoice`, `omnivoice_remote`, `pocket_tts`, `piper`,
+  `chatterbox`, `qwen3_tts`, `zono2`, `voxcpm2`, `kokoro`, `fish_tts`,
+  `openai_tts`. `TTSBackend.EDGE == "edgetts"` and maps to the **local**
+  namespace/queue in `podcast_target`, never to Modal.
+- Legacy spellings (`edge`, `omni_voice`, `tts_api`, `gateway_engine`, `zonos2`,
+  `fish`, `openai`, ...) are read-only aliases normalised at the model boundary.
+  Stored values, API responses, cache keys and UI form values are canonical;
+  keep alias coverage only in migration tests.
 - The Phase 10 local/Modal switch on the digest backends is
   `tts_backends.voice_for`/`synthesize(run_in_modal: bool | None)`: `False`
   resolves + pins the gateway's **local** `qwen3_tts` engine, `True` forces
@@ -215,7 +219,7 @@
   workflow cannot read settings, and the schedule/trigger are what know the
   collection — same rule as `verify`, `audio_verify` and `narration`.
 - Phase 12 selector rule: the GUI always sends `tts_backend` and, only for
-  `omni_voice`/`gateway`, `gateway_engine`. Submit services normalize the pin,
+  `omnivoice`/`gateway`, `gateway_engine`. Submit services normalize the pin,
   validate the voice against the resolved backend and write both into job meta
   and workflow config. `gateway_engine_catalog.py` is the only place that maps
    gateway engines to labels; do not hardcode the engine list in a form.
@@ -225,6 +229,12 @@
    catalogue source, and the query only filters existing ids. Never render the
    typed query as a selectable value; keep a legacy id only as the current
    checked option. Cast OOB fragments refresh both controls per row.
+- Availability guards: `gateway_engine_catalog.assert_backend_available` reads
+  the live `/api/v1/engines` capabilities with a 30 s cache. Submit paths reject
+  engines the catalog reports unavailable; synthesis falls back to `edgetts`
+  with a warning when unavailability is confirmed, while a catalog outage is
+  treated as unknown and never blocks. Normalise a blank `gateway_engine` pin
+  before both the guard and the route selection.
 - URL summary audio is opt-in: `tts_enabled` gates narration and `deliver_audio`
    is ignored unless narration was requested; an empty `voice` means text-only,
    so existing REST/GUI callers keep their behaviour.
@@ -241,11 +251,12 @@
   a real typo raises `TTSBackendError`, which activities turn into a
   non-retryable `ApplicationError` and HTTP turns into 422.
 - The engine is part of the cache key (`_content_hash(..., backend)`,
-  `SIDECAR_VERSION = 2`), so flipping a collection never serves another engine's
+  `SIDECAR_VERSION = 3`), so flipping a collection never serves another engine's
   bytes. **Fallback audio is never cached**: `TTS_FALLBACK_TO_EDGE` writes the
   file but skips the sidecar, so the next run retries the requested engine
   instead of pinning the degraded answer.
-- Output follows the engine: `.mp3` for edge, `.wav` for the gateway and Modal.
+- Output follows the engine: `.mp3` for `edgetts`, `.wav` for the gateway and
+  Modal.
   Everything downstream (`AudioCompressService`, `verify_audio`, the Telegram
   sender) is ffmpeg/extension-driven; only the cache filename and the doc-TTS
   chunk join ever had to care.
@@ -308,11 +319,11 @@
 - Submit is a `Role.USER` exception in `authz.py`; status and download stay
   viewer-readable. The UI submit and job fragment must use the same paths.
 - **Phase 11.10, engines:** audiobooks never render on Modal. The submit
-  rejects `zonos2`/`voxcpm2` (422) and `_synthesize_chapter` passes
+  rejects `zono2`/`voxcpm2` (422) and `_synthesize_chapter` passes
   `run_in_modal=False`, so `qwen3_tts` resolves the catalog profile through
   `resolve_gateway_qwen_voice` and pins the local gateway engine. The form
-  offers only `AUDIOBOOK_BACKEND_CHOICES` (edge / gateway / Kokoro / Qwen3
-  local); keep that tuple and the submit guard in sync.
+  offers only `AUDIOBOOK_BACKEND_CHOICES` (`edgetts` / `gateway` / Kokoro /
+  Qwen3 local); keep that tuple and the submit guard in sync.
 - Mux to a sibling `.<stem>.<pid>.part.m4b` and publish with `os.replace`.
   Never write ffmpeg directly to the final path: a failed run would be served
   as a cached M4B on the next request.

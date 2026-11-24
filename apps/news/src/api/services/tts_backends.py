@@ -10,14 +10,14 @@ Three families of backend, three output formats:
 ===========  ==========================================  ========
 backend      call                                         output
 ===========  ==========================================  ========
-edge         ``edge_tts.Communicate`` (local process)     ``.mp3``
-omni_voice   ``POST {tts_api_base_url}/tts`` (tts-api)    ``.wav``
+edgetts      ``edge_tts.Communicate`` (local process)     ``.mp3``
+omnivoice    ``POST {tts_api_base_url}/tts`` (tts-api)    ``.wav``
 kokoro       ``POST {tts_api_base_url}/tts`` (engine      ``.wav``
              pinned to ``kokoro``)
 qwen3_tts    ``POST .../tts`` with ``engine=qwen3_tts``   ``.wav``
              when ``run_in_modal=False`` (gateway local);
              ``modal_client.modal_tts()`` otherwise
-zonos2 /     ``modal_client.modal_zonos2_tts()`` /        ``.wav``
+zono2 /      ``modal_client.modal_zonos2_tts()`` /        ``.wav``
 voxcpm2      ``_voxcpm2``
 ===========  ==========================================  ========
 
@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import httpx
 import structlog
-from tts_contract import TTSRequest
+from tts_contract import LEGACY_ENGINE_ALIASES, TTSRequest, canonical_engine_id
 from tts_contract import parse_gateway_error as parse_gateway_error_body
 
 from src.api.models.narration import TTSBackend
@@ -62,42 +62,14 @@ from src.core.tracing import trace_function
 
 logger = structlog.get_logger(__name__)
 
-#: Accept the operator-facing spellings of the gateway alongside the canonical
-#: enum value: the service was renamed from ``omnivoice-api`` to ``tts-api``, so
-#: both names appear in the docs.
+#: Legacy spellings accepted while reading stored configuration. Writing always
+#: uses the canonical enum values defined in :mod:`tts_contract`.
 BACKEND_ALIASES: dict[str, str] = {
-    "edge": TTSBackend.EDGE,
-    "edgetts": TTSBackend.EDGE,
-    "omni_voice": TTSBackend.OMNIVOICE,
-    "omnivoice": TTSBackend.OMNIVOICE,
-    "gateway": TTSBackend.GATEWAY,
-    "gateway_engine": TTSBackend.GATEWAY,
-    "tts_api": TTSBackend.OMNIVOICE,
-    "qwen3_tts": TTSBackend.QWEN3_TTS,
-    "qwen3": TTSBackend.QWEN3_TTS,
-    "zonos2": TTSBackend.ZONOS2,
-    "voxcpm2": TTSBackend.VOXCPM2,
-    "voxcpm": TTSBackend.VOXCPM2,
-    "kokoro": TTSBackend.KOKORO,
-    "fish": TTSBackend.FISH,
-    "fish_tts": TTSBackend.FISH,
-    "fish_audio": TTSBackend.FISH,
-    "openai": TTSBackend.OPENAI,
-    "openai_tts": TTSBackend.OPENAI,
+    alias: TTSBackend(canonical).value for alias, canonical in LEGACY_ENGINE_ALIASES.items()
 }
 
 #: Every value a collection may declare for ``tts_backend``.
-ALLOWED_BACKENDS: tuple[str, ...] = (
-    TTSBackend.EDGE,
-    TTSBackend.OMNIVOICE,
-    TTSBackend.GATEWAY,
-    TTSBackend.QWEN3_TTS,
-    TTSBackend.ZONOS2,
-    TTSBackend.VOXCPM2,
-    TTSBackend.KOKORO,
-    TTSBackend.FISH,
-    TTSBackend.OPENAI,
-)
+ALLOWED_BACKENDS: tuple[str, ...] = tuple(backend.value for backend in TTSBackend)
 
 #: Edge ShortName -> gateway stock id. Inverse of ``tts.LEGACY_VOICE_ALIASES``,
 #: which maps the other way, so a collection keeps its voice when the operator
@@ -160,8 +132,8 @@ def resolve_backend(value: str | None) -> TTSBackend:
     """
     raw = (value or "").strip().lower()
     if not raw:
-        raw = (get_settings().tts_default_backend or "").strip().lower() or "edge"
-    canonical = BACKEND_ALIASES.get(raw, raw)
+        raw = canonical_engine_id(get_settings().tts_default_backend) or TTSBackend.EDGE.value
+    canonical = canonical_engine_id(raw)
     if canonical not in ALLOWED_BACKENDS:
         raise TTSBackendError(
             f"unknown tts backend {value!r}: expected one of {list(ALLOWED_BACKENDS)}"
@@ -597,7 +569,7 @@ async def synthesize(
             through the gateway's **local** ``qwen3_tts`` engine (pinned, so the
             gateway's language routing cannot redirect the request); ``True``/
             ``None`` keep the historical Modal call. Ignored by other backends
-            (zonos2/voxcpm2 have no local engine).
+            (zono2/voxcpm2 have no local engine).
         speed: Speaking rate multiplier. Supported by Edge and the gateway
             engines; Modal keeps its historical default.
         emotion: Optional emotion tag for engines that support it (currently
@@ -616,6 +588,24 @@ async def synthesize(
         RuntimeError: If synthesis produced no audio.
         TTSGatewayError: If the gateway rejected the request.
     """
+    pin = (gateway_engine or "").strip().lower() or None
+    if backend is not TTSBackend.EDGE:
+        from src.api.services.gateway_engine_catalog import (
+            BackendUnavailableError,
+            assert_backend_available,
+        )
+
+        try:
+            await assert_backend_available(backend.value, gateway_engine=pin or "", strict=False)
+        except BackendUnavailableError as exc:
+            logger.warning(
+                "tts engine unavailable; falling back to edgetts",
+                backend=backend.value,
+                gateway_engine=pin or "",
+                reason=str(exc),
+            )
+            backend = TTSBackend.EDGE
+
     if backend is TTSBackend.EDGE:
         from src.api.services.tts import synthesize_mp3
 
@@ -644,9 +634,7 @@ async def synthesize(
             language,
             timeout=timeout if timeout is not None else None,
             engine=(
-                (gateway_engine or "").strip().lower() or None
-                if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
-                else backend.value
+                pin if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY) else backend.value
             ),
             speed=speed,
             emotion=emotion if backend is TTSBackend.OMNIVOICE else None,
@@ -687,7 +675,7 @@ async def _modal_synthesize(backend: TTSBackend, text: str, voice_ref: str, lang
     if not settings.modal_enabled:
         raise TTSBackendError(f"tts backend {backend} requires modal, but modal is disabled")
     if backend is TTSBackend.ZONOS2 and not settings.zonos2_enabled:
-        raise TTSBackendError("tts backend zonos2 is behind the benchmark gate and not enabled")
+        raise TTSBackendError("tts backend zono2 is behind the benchmark gate and not enabled")
     if backend is TTSBackend.VOXCPM2 and not settings.voxcpm2_enabled:
         raise TTSBackendError("tts backend voxcpm2 is behind the benchmark gate and not enabled")
     if not settings.modal_token_id or not settings.modal_token_secret:

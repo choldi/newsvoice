@@ -88,11 +88,10 @@ async def _available_voice_names() -> set[str]:
 
 # Schema version stored in the cache sidecar, so a future change of the hashing
 # inputs invalidates every cached file instead of reusing a wrong audio.
-# v2: the backend is part of the hash, so flipping a collection from edge to the
-# gateway regenerates the audio instead of serving Edge bytes under a gateway
-# voice. The hash itself changed too, which is what actually invalidates old
-# sidecars (the version is recorded, not compared).
-SIDECAR_VERSION = 2
+# v3: canonical backend ids are part of the hash, so migrating 'edge' to
+# 'edgetts' (or 'zonos2' to 'zono2') regenerates the audio once instead of
+# reusing a sidecar written under the legacy spelling.
+SIDECAR_VERSION = 3
 
 
 def _content_hash(

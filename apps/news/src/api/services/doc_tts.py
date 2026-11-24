@@ -213,7 +213,7 @@ class DocTTSService:
         speech_text = text.strip()
         if not speech_text:
             raise RuntimeError("No text to estimate")
-        backend = resolve_backend(tts_backend or "edge")
+        backend = resolve_backend(tts_backend or "edgetts")
         pin = (
             (gateway_engine or "").strip().lower()
             if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
@@ -289,7 +289,7 @@ class DocTTSService:
         speech_text = text.strip()
         if not speech_text:
             raise RuntimeError("No text to synthesize")
-        backend = resolve_backend(tts_backend or "edge")
+        backend = resolve_backend(tts_backend or "edgetts")
         pin = (
             (gateway_engine or "").strip().lower()
             if backend in (TTSBackend.OMNIVOICE, TTSBackend.GATEWAY)
@@ -654,7 +654,7 @@ async def submit_document(
     from src.api.services.tts_backends import TTSBackendError, resolve_backend
 
     try:
-        backend = resolve_backend(tts_backend or "edge")
+        backend = resolve_backend(tts_backend or "edgetts")
     except TTSBackendError as exc:
         raise SubmitError(str(exc), status_code=422) from exc
     pin = (

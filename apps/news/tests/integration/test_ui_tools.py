@@ -863,12 +863,12 @@ def test_audiobook_form_offers_only_local_engines() -> None:
 
     assert response.status_code == 200
     select = response.text.split('id="audiobook-engine"', 1)[1].split("</select>", 1)[0]
-    assert 'value="edge"' in select
-    assert 'value="omni_voice"' in select
+    assert 'value="edgetts"' in select
+    assert 'value="omnivoice"' in select
     assert 'value="kokoro"' in select
     assert 'value="qwen3_tts"' in select
     assert "Qwen3-TTS (local gateway)" in select
-    assert 'value="zonos2"' not in select, "Modal-only engines never render a book"
+    assert 'value="zono2"' not in select, "Modal-only engines never render a book"
     assert 'value="voxcpm2"' not in select
 
 

@@ -16,7 +16,7 @@ voice_cloning = false
 instruct_voice_design = false
 emotions = false
 streaming = false
-supported_languages = ["es", "en"]
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko", "ca"]
 
 [engines.pocket_tts]
 kind = "local_class"
@@ -52,7 +52,7 @@ voice_cloning = false
 instruct_voice_design = false
 emotions = false
 streaming = false
-supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca", "zh", "ja", "ko"]
+supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca"]
 
 [engines.qwen3_tts]
 kind = "local_class"
@@ -177,10 +177,13 @@ auto_include_when_configured = false
 [engines.chatterbox.capabilities]
 stock_voices = true
 voice_cloning = true
-instruct_voice_design = false
+instruct_voice_design = true
 emotions = false
 streaming = false
-supported_languages = ["es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"]
+supported_languages = [
+    "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it", "ja",
+    "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv", "sw", "tr", "zh",
+]
 
 [engines.fish_tts]
 kind = "local_class"

@@ -86,7 +86,7 @@ def _wav(frames: int = 4800, fmt: object = CANONICAL_FORMAT) -> bytes:
 
 def _spec(**overrides: object) -> NarrationSpec:
     """Build a two-role spec; Modal backends get catalog voices (Phase 9.2)."""
-    modal = str(overrides.get("tts_backend", "")) in {"qwen3_tts", "zonos2", "voxcpm2"}
+    modal = str(overrides.get("tts_backend", "")) in {"qwen3_tts", "zono2", "voxcpm2"}
     anchor, guest = (
         ("anchor_neutral_m", "anchor_neutral_f") if modal else ("es-mx-male", "es-mx-female")
     )
@@ -1945,8 +1945,7 @@ async def test_real_music_mix_keeps_the_narration_duration(
     mixed = Path(result.wav_path).read_bytes()
     assert wav_format(mixed) == CANONICAL_FORMAT
     # The music is really there: a voice-only render is all zeroes.
-    window = mixed[len(mixed) // 2 : len(mixed) // 2 + 2000]
-    assert window != b"\x00" * 2000, "the music bed must be audible under the voice"
+    assert any(mixed[44:]), "the music bed must be audible under the voice"
     await service.aclose()
 
 

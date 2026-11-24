@@ -516,10 +516,10 @@ def test_tts_backend_round_trips_through_the_api() -> None:
         "/api/admin/collections", json=_collection_payload(tts_backend="omni_voice")
     )
     assert created.status_code == 201
-    assert created.json()["collection"]["tts_backend"] == "omni_voice"
+    assert created.json()["collection"]["tts_backend"] == "omnivoice"
 
     fetched = client.get("/api/admin/collections/tech").json()["collection"]
-    assert fetched["tts_backend"] == "omni_voice"
+    assert fetched["tts_backend"] == "omnivoice"
 
     updated = client.put(
         "/api/admin/collections/tech",
@@ -547,4 +547,4 @@ def test_tts_backend_defaults_to_edge() -> None:
     created = client.post("/api/admin/collections", json=_collection_payload())
 
     assert created.status_code == 201
-    assert created.json()["collection"]["tts_backend"] == "edge"
+    assert created.json()["collection"]["tts_backend"] == "edgetts"

@@ -31,7 +31,7 @@ EDGE_VOICE = VoiceOption(
     id="es-ES-DarioNeural",
     label="Dario (Neural)",
     language="es-ES",
-    engines=["edge"],
+    engines=["edgetts"],
     category="stock",
 )
 
@@ -129,11 +129,11 @@ def test_doc_tts_stays_edge_only_beside_the_full_lesson_list() -> None:
 def test_lesson_options_tag_engines_and_categories() -> None:
     """Each result tells the engines that accept it and where it comes from."""
     expected = {
-        EDGE_VOICE.id: "edge · stock",
-        GATEWAY_STOCK: "omni_voice · stock",
-        CLONE_UUID: "omni_voice · cloned",
-        MODAL_COMMITTED: "qwen3_tts/zonos2/voxcpm2 · stock",
-        MODAL_CUSTOM: "qwen3_tts/zonos2/voxcpm2 · generated",
+        EDGE_VOICE.id: "es-ES · edgetts · stock",
+        GATEWAY_STOCK: "omnivoice · stock",
+        CLONE_UUID: "omnivoice · cloned",
+        MODAL_COMMITTED: "qwen3_tts/zono2/voxcpm2 · stock",
+        MODAL_CUSTOM: "qwen3_tts/zono2/voxcpm2 · generated",
     }
     client = _client()
     for voice, tag in expected.items():

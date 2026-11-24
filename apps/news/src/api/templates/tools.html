@@ -38,7 +38,7 @@
       </div>
     </div>
     <div class="row">
-      {% set current_backend = 'edge' %}
+      {% set current_backend = 'edgetts' %}
       {% set current_gateway_engine = '' %}
       {% set engine_wrapper_id = 'engine-selector-url' %}
       {% set backend_id = 'url-tts-backend' %}
@@ -76,7 +76,7 @@
       </div>
       <div class="col">
         <label>Motor TTS</label>
-        {% set current_backend = 'edge' %}
+        {% set current_backend = 'edgetts' %}
         {% set current_gateway_engine = '' %}
         {% set engine_wrapper_id = 'engine-selector-doc' %}
         {% set backend_id = 'doc-tts-backend' %}
@@ -284,7 +284,7 @@
       <div class="col">
         <label>Motor TTS</label>
         {% set tts_backends = audiobook_engine_choices %}
-        {% set current_backend = 'edge' %}
+        {% set current_backend = 'edgetts' %}
         {% set current_gateway_engine = '' %}
         {% set backend_field = 'engine' %}
         {% set gateway_field = 'gateway_engine' %}

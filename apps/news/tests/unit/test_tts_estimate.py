@@ -81,7 +81,7 @@ def test_the_backend_decides_the_rate() -> None:
     gateway = estimate_synthesis(chunks, backend=TTSBackend.OMNIVOICE)
 
     assert gateway.wall_seconds > edge.wall_seconds
-    assert gateway.backend == "omni_voice"
+    assert gateway.backend == "omnivoice"
 
 
 def test_unknown_backend_is_rejected() -> None:

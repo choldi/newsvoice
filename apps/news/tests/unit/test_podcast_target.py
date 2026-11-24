@@ -79,9 +79,9 @@ def test_a_missing_spec_renders_locally() -> None:
 
 
 def test_backend_from_spec_defaults_to_the_local_backend() -> None:
-    assert backend_from_spec(None) == "omni_voice"
-    assert backend_from_spec({}) == "omni_voice"
-    assert backend_from_spec({"tts_backend": "zonos2"}) == "zonos2"
+    assert backend_from_spec(None) == "omnivoice"
+    assert backend_from_spec({}) == "omnivoice"
+    assert backend_from_spec({"tts_backend": "zonos2"}) == "zono2"
 
 
 def test_the_two_podcast_targets_never_share_namespace_or_queue() -> None:

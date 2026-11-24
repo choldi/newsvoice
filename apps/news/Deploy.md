@@ -491,7 +491,7 @@ Local qwen3 (`run_in_modal = false`) renders in the local narration namespace
 (see §9), so `narration-worker` must be running; the `narration-modal-worker`
 is only needed for Modal backends or `run_in_modal = true`.
 `MODAL_ENABLED=false` is valid for this path: the spend guard is enforced only
-for `zonos2`, `voxcpm2` and `qwen3_tts` with `run_in_modal = true`.
+for `zono2`, `voxcpm2` and `qwen3_tts` with `run_in_modal = true`.
 
 Respelling runs inside `resolve_narration_script_activity` and persists
 `tts_text` on the stored script. Configure it in `apps/news/.env`:
@@ -880,7 +880,7 @@ so there is no spend.
    ```
 3. Opt a collection into a Modal backend in `collections.toml`:
    ```toml
-   narration_tts_backend = "qwen3_tts"   # or "zonos2"/"voxcpm2" once the gate passes
+   narration_tts_backend = "qwen3_tts"   # or "zono2"/"voxcpm2" once the gate passes
    narration_voice_source = "qwen_design"
    ```
 
@@ -900,7 +900,7 @@ always allowed. The `modal_budget` monitor check alerts at 50/80/100%.
 
 ```bash
 docker compose --profile modal down
-# and set MODAL_ENABLED=false, or revert narration_tts_backend to "omni_voice"
+# and set MODAL_ENABLED=false, or revert narration_tts_backend to "omnivoice"
 ```
 
 `collections.toml` is bind-mounted on the server (inode 461207). Changing
@@ -1336,7 +1336,7 @@ the same time.
 ```toml
 [[collections]]
 name = "ai"
-tts_backend = "gateway"      # edge | gateway | omni_voice | qwen3_tts | zonos2 | voxcpm2
+tts_backend = "gateway"      # edgetts | gateway | omnivoice | qwen3_tts | zono2 | voxcpm2
 voice = "es-mx-male"         # id in THAT engine's vocabulary
 ```
 
@@ -1345,28 +1345,31 @@ never type an Edge ShortName into a field the gateway will reject. Global floor
 in `.env`:
 
 ```bash
-TTS_DEFAULT_BACKEND=edge
+TTS_DEFAULT_BACKEND=edgetts
 TTS_FALLBACK_TO_EDGE=false     # never silently swap a clone for a stock voice
-TTS_BACKEND_TIMEOUT_SECONDS=900  # POST /api/admin/tts uses 120s only for edge
+TTS_BACKEND_TIMEOUT_SECONDS=900  # POST /api/admin/tts uses 120s only for edgetts
 ```
 
 `gateway` is the generic backend: it does not pin a sub-engine and follows the
 engine staged in `config/engines.local.json` (or `TTS_ENGINE` when no override is
 present). Use `TTS_DEFAULT_BACKEND=gateway` globally, or set `gateway_engine` on
 a collection to pin a declarative provider such as a cloud
-`openai_compatible_http` engine. `omni_voice` and `tts_api` remain fixed aliases
-for the historical gateway routing.
+`openai_compatible_http` engine. Legacy `edge`, `omni_voice`, `tts_api` and
+`zonos2` are read-only aliases; stored values and responses are canonical.
 
-The gateway backends store `.wav`, edge stores `.mp3`; the M4A transcode, the
+The gateway backends store `.wav`, `edgetts` stores `.mp3`; the M4A transcode, the
 Whisper check and every delivery are format-agnostic, so nothing downstream
 changes.
 
 `/ui → Herramientas` adds the same two-level selector to document TTS, lessons,
-podcast and audiobook: choose the backend, then (for `omni_voice`/`gateway`) the
+podcast and audiobook: choose the backend, then (for `omnivoice`/`gateway`) the
 sub-engine. The dropdown is filled from the running gateway, so a new engine in
 `config/engines.toml` appears without an app release. The choice overrides the
 default **only for that submission**; collection edits persist it. The REST
 submit endpoints accept the same `tts_backend`/`gateway_engine` form fields.
+An engine reported unavailable by `/api/v1/engines` is rejected on submit;
+a render already in flight falls back to `edgetts` with a warning, unless the
+catalog itself is unreachable (unknown availability never blocks).
 
 **The lease** (`tts_leases` + `tts_lease_waiters`, migration `011`)
 
@@ -1746,11 +1749,11 @@ curl -OJ -H "X-Admin-Token: $ADMIN_API_TOKEN" \
 - La portada explícita se guarda en `data/audiobooks/covers/<run_id>.*`; si no
   hay, se extrae del EPUB. El M4B se publica con `os.replace` solo cuando ffmpeg
   termina: un fallo nunca deja un fichero parcial que parezca cacheado.
-- **Motores (Phase 11.10):** `edge`, `omni_voice` (gateway), `kokoro` (gateway,
+- **Motores (Phase 11.10):** `edgetts`, `omnivoice` (gateway), `kokoro` (gateway,
   pin `engine=kokoro`) y `qwen3_tts` **local** — el submit fija
   `run_in_modal=False`, así la voz de catálogo se resuelve al clon
   `<name>__qwen3_tts` y la síntesis va al gateway, nunca a Modal.
-  `zonos2`/`voxcpm2` se rechazan con 422: un audiolibro renderiza durante horas
+  `zono2`/`voxcpm2` se rechazan con 422: un audiolibro renderiza durante horas
   y no gasta GPU de pago. El gateway debe arrancar con `TTS_ENGINE=routed` +
   `TTS_EXTRA_ENGINES=kokoro,qwen3_tts,omnivoice_remote` (ver
   `apps/gateway/.env.example`); para Qwen3 hace falta además el sidecar
@@ -2079,6 +2082,8 @@ Cuatro pestañas con polling htmx cada 10 s (`/ui/fragments/tool_jobs?kind=...`)
   no existe la opción «tal cual». En Resumen de URL, «Narrar el resumen» activa
   `tts_enabled`; sin voz seleccionada el workflow sigue generando solo texto y,
   si se pide, entrega el audio por email/Telegram con `audio_path` en el run.
+  La limpieza 13.8 deja los IDs canónicos en TOML/API/GUI/caché y publica las
+  capabilities reales del gateway en `/api/v1/engines`.
 - Fase 7.16: la pestaña de clase gana la casilla **Adaptación fonética**
   (oculta si `TEACHER_RESPELLING_ENABLED=false`), que llega al servicio como
   `phonetic_adaptation`; sus heurísticas se editan en el menú **Fonética**

@@ -71,8 +71,8 @@ async def list_all_voice_options(
     accept it so a mixed-engine selection can be rejected before generation.
 
     Args:
-        engine: Optional canonical engine id ('edge', 'omni_voice', 'qwen3_tts',
-            'zonos2') to filter by.
+        engine: Optional canonical engine id ('edgetts', 'omnivoice',
+            'qwen3_tts', 'zono2') to filter by.
         category: Optional 'stock', 'cloned' or 'generated' to filter by.
 
     Returns:

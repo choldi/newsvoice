@@ -139,7 +139,7 @@ async def render_audiobook_activity(payload: dict[str, Any]) -> dict[str, Any]:
     from src.api.services.tts_backends import TTSBackendError, resolve_backend
 
     try:
-        backend = resolve_backend(str(payload.get("engine") or "edge"))
+        backend = resolve_backend(str(payload.get("engine") or "edgetts"))
     except TTSBackendError as exc:
         await _finish_error(repo, run_id, str(exc))
         raise ApplicationError(f"audiobook engine: {exc}", non_retryable=True) from exc

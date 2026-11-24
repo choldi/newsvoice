@@ -27,7 +27,7 @@ class AudiobookConfig:
     title: str = ""
     voice: str = ""
     language: str = "es"
-    engine: str = "edge"
+    engine: str = "edgetts"
     gateway_engine: str = ""
     #: Optional 1-based inclusive chapter range (None = the whole book).
     chapter_start: int | None = None

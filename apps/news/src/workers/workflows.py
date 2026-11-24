@@ -132,8 +132,8 @@ class PipelineConfig:
     # Phase 8.2: engine that synthesizes this collection's digest audio. Resolved
     # **outside** the workflow, like every other engine-dependent option: a
     # workflow cannot read settings, and the schedule/trigger are what know the
-    # collection. 'edge' | 'omni_voice' | 'qwen3_tts' | 'zonos2' | 'voxcpm2'.
-    tts_backend: str = "edge"
+    # collection. 'edgetts' | 'omnivoice' | 'qwen3_tts' | 'zono2' | 'voxcpm2'.
+    tts_backend: str = "edgetts"
     gateway_engine: str = ""
     collection: str = "default"
     prompt_template: str = "default"

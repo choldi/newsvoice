@@ -95,6 +95,18 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
 - Tests de workflow con `WorkflowEnvironment`
 - Coverage objetivo: **80%** en `src/api/services/`
 
+### Vocabulario TTS (Fase 13.8):
+- IDs canónicos: `edgetts`, `gateway`, `omnivoice`, `omnivoice_remote`,
+  `pocket_tts`, `piper`, `chatterbox`, `qwen3_tts`, `zono2`, `voxcpm2`,
+  `kokoro`, `fish_tts`, `openai_tts`
+- Aliases legacy (`edge`, `omni_voice`, `tts_api`, `zonos2`, ...) solo en
+  lectura/migración: nunca los escribas en TOML, API, GUI ni caché
+- La fuente de verdad es `libs/tts_contract`; las capabilities viven en
+  `/api/v1/engines` del gateway, no en un literal del formulario
+- Motores confirmados como no disponibles se rechazan al submit; un render en
+  curso cae a `edgetts` con warning. Un catálogo caído es "desconocido" y no
+  bloquea
+
 ## REGLAS DE GIT Y COMMITS
 
 ### Antes de cada commit:

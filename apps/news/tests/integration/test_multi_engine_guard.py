@@ -127,7 +127,7 @@ def test_rest_create_rejects_a_mixed_narration_cast() -> None:
             narration_enabled=True,
             narration_spec={
                 "language": "en",
-                "tts_backend": "omni_voice",
+                "tts_backend": "omnivoice",
                 "roles": [
                     {"name": "anchor", "voice_id": GATEWAY_STOCK, "language": "es"},
                     {"name": "cohost", "voice_id": MODAL_NAME, "language": "en"},
@@ -168,7 +168,7 @@ def test_tts_rejects_a_modal_voice_for_edge() -> None:
     client = _rest_client()
     response = client.post(
         "/api/admin/tts",
-        json={"markdown": "Hola clase", "voice": MODAL_NAME, "backend": "edge"},
+        json={"markdown": "Hola clase", "voice": MODAL_NAME, "backend": "edgetts"},
     )
 
     assert response.status_code == 422
@@ -273,7 +273,7 @@ def test_ui_advanced_json_mixed_cast_is_rejected_not_dropped() -> None:
     """A well-formed spec that fails validation must flash, not silently vanish."""
     client = _ui_client()
     mixed_spec = (
-        '{"title":"X","language":"en","tts_backend":"omni_voice","roles":['
+        '{"title":"X","language":"en","tts_backend":"omnivoice","roles":['
         f'{{"name":"a","voice_id":"{GATEWAY_STOCK}"}},'
         f'{{"name":"b","voice_id":"{MODAL_NAME}"}}]}}'
     )

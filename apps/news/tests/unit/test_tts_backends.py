@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -410,6 +411,10 @@ async def test_synthesize_dynamic_gateway_forwards_the_engine_pin(monkeypatch) -
         return b"RIFFwav"
 
     monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+    monkeypatch.setattr(
+        "src.api.services.gateway_engine_catalog.assert_backend_available",
+        AsyncMock(return_value=None),
+    )
 
     audio = await synthesize(
         TTSBackend.GATEWAY,
@@ -455,6 +460,10 @@ async def test_synthesize_cloud_engines_pin_the_gateway_engine(monkeypatch) -> N
         return b"RIFFwav"
 
     monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
+    monkeypatch.setattr(
+        "src.api.services.gateway_engine_catalog.assert_backend_available",
+        AsyncMock(return_value=None),
+    )
 
     assert await synthesize(TTSBackend.FISH, "hola", "es_fish", "es") == b"RIFFwav"
     assert await synthesize(TTSBackend.OPENAI, "hola", "es_openai", "es") == b"RIFFwav"
@@ -519,6 +528,10 @@ async def test_synthesize_voxcpm2_requires_the_gate(monkeypatch) -> None:
     """VoxCPM2 stays inert until its gate is flipped, like ZONOS2."""
     monkeypatch.setattr(tts_backends.get_settings(), "modal_enabled", True)
     monkeypatch.setattr(tts_backends.get_settings(), "voxcpm2_enabled", False)
+    monkeypatch.setattr(
+        "src.api.services.gateway_engine_catalog.assert_backend_available",
+        AsyncMock(return_value=None),
+    )
 
     with pytest.raises(TTSBackendError, match="voxcpm2 is behind the benchmark gate"):
         await synthesize(TTSBackend.VOXCPM2, "hola", "voice", "es")
@@ -648,18 +661,16 @@ async def test_switching_backend_regenerates_and_changes_the_extension(
 
     with_edge = await service.generate_tts(TTSIn(**base, collection="tech"))
 
-    assert with_edge.backend == "edge"
+    assert with_edge.backend == "edgetts"
     assert with_edge.audio_path.endswith(".mp3")
 
     async def fake_gateway(text, voice_id, language, **kwargs):
         return b"RIFFwav-bytes"
 
     monkeypatch.setattr(tts_backends, "gateway_tts", fake_gateway)
-    with_gateway = await service.generate_tts(
-        TTSIn(**base, collection="tech", backend="omni_voice")
-    )
+    with_gateway = await service.generate_tts(TTSIn(**base, collection="tech", backend="omnivoice"))
 
-    assert with_gateway.backend == "omni_voice"
+    assert with_gateway.backend == "omnivoice"
     assert with_gateway.audio_path.endswith(".wav")
     assert with_gateway.cached is False
     assert with_gateway.audio_path != with_edge.audio_path
@@ -693,13 +704,13 @@ async def test_fallback_audio_is_not_pinned_as_a_cache_hit(tmp_path: Path, monke
     monkeypatch.setattr(tts_backends, "gateway_tts", failing_gateway)
     service = TTSService(cache_dir=str(tmp_path))
     payload = TTSIn(
-        markdown="hola", voice="es-mx-male", language="es", collection="y", backend="omni_voice"
+        markdown="hola", voice="es-mx-male", language="es", collection="y", backend="omnivoice"
     )
 
     first = await service.generate_tts(payload)
     second = await service.generate_tts(payload)
 
-    assert first.backend == "edge"
+    assert first.backend == "edgetts"
     assert calls["gateway"] == 2, "the requested engine must be retried every run"
     assert second.cached is False
 
@@ -714,7 +725,7 @@ async def test_fallback_is_off_by_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(tts_backends, "gateway_tts", failing_gateway)
     service = TTSService(cache_dir=str(tmp_path))
     payload = TTSIn(
-        markdown="hola", voice="es-mx-male", language="es", collection="z", backend="omni_voice"
+        markdown="hola", voice="es-mx-male", language="es", collection="z", backend="omnivoice"
     )
 
     with pytest.raises(TTSGatewayError, match="gateway is down"):

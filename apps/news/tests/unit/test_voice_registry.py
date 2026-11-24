@@ -53,7 +53,7 @@ async def test_gateway_options_tags_stock_and_cloned(monkeypatch: pytest.MonkeyP
     assert languages == ["en", "es"]
     by_id = {voice.id: voice for voice in voices}
     assert by_id["es-mx-male"].category == "stock"
-    assert by_id["es-mx-male"].engines == ["omni_voice"]
+    assert by_id["es-mx-male"].engines == ["omnivoice"]
     assert by_id["uuid-1"].category == "cloned"
     assert by_id["uuid-1"].label == "mario"
 
@@ -139,7 +139,7 @@ async def test_edge_options_tags_stock(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert languages == ["es"]
     assert voices[0].id == "es-ES-DelviraNeural"
-    assert voices[0].engines == ["edge"]
+    assert voices[0].engines == ["edgetts"]
     assert voices[0].category == "stock"
 
 
@@ -160,7 +160,7 @@ def test_modal_options_separates_stock_and_generated(
     by_id = {voice.id: voice for voice in voices}
     assert by_id["anchor_m"].category == "stock"
     assert by_id["custom_es"].category == "generated"
-    assert by_id["custom_es"].engines == ["qwen3_tts", "zonos2", "voxcpm2"]
+    assert by_id["custom_es"].engines == ["qwen3_tts", "zono2", "voxcpm2"]
 
 
 async def test_list_all_merges_sources_and_dedupes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,18 +196,25 @@ async def test_list_all_keeps_catalog_origin_over_gateway_clone(
 
     The gateway holds a clone under the same name as the committed profile, so
     the merge must not relabel the stock voice as 'cloned' and hide it from the
-    stock filter of qwen3_tts/zonos2.
+    stock filter of qwen3_tts/zono2.
     """
 
     async def _gateway() -> tuple[list[str], list[VoiceOption]]:
-        return ["en"], [_option("anchor_neutral_m", language="en", category="cloned")]
+        return ["en"], [
+            _option(
+                "anchor_neutral_m",
+                language="en",
+                engines=["omnivoice"],
+                category="cloned",
+            )
+        ]
 
     def _modal() -> tuple[list[str], list[VoiceOption]]:
         return ["en"], [
             _option(
                 "anchor_neutral_m",
                 language="en",
-                engines=["qwen3_tts", "zonos2", "voxcpm2"],
+                engines=["qwen3_tts", "zono2", "voxcpm2"],
                 category="stock",
             )
         ]
@@ -216,10 +223,10 @@ async def test_list_all_keeps_catalog_origin_over_gateway_clone(
     monkeypatch.setattr(voice_registry, "gateway_options", _gateway)
     monkeypatch.setattr(voice_registry, "modal_options", _modal)
 
-    stock = await voice_registry.list_all_voices(engine="zonos2", category="stock")
+    stock = await voice_registry.list_all_voices(engine="zono2", category="stock")
 
     assert [voice.id for voice in stock] == ["anchor_neutral_m"]
-    assert sorted(stock[0].engines) == ["omni_voice", "qwen3_tts", "voxcpm2", "zonos2"]
+    assert sorted(stock[0].engines) == ["omnivoice", "qwen3_tts", "voxcpm2", "zono2"]
 
 
 async def test_list_all_filters_by_engine_and_category(

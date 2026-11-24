@@ -614,16 +614,16 @@ def test_tts_backend_defaults_to_edge() -> None:
     """A collection that says nothing keeps the current behaviour."""
     collection = CollectionConfig(name="tech", feed_urls=["https://x/rss"])
 
-    assert collection.tts_backend == "edge"
+    assert collection.tts_backend == "edgetts"
 
 
 def test_tts_backend_accepts_every_engine_and_canonicalizes_aliases() -> None:
     """Operator spellings of the gateway collapse onto one canonical id."""
-    assert CollectionConfig(name="a", tts_backend="omni_voice").tts_backend == "omni_voice"
+    assert CollectionConfig(name="a", tts_backend="omni_voice").tts_backend == "omnivoice"
     assert CollectionConfig(name="b", tts_backend="gateway").tts_backend == "gateway"
     assert CollectionConfig(name="c", tts_backend="QWEN3_TTS").tts_backend == "qwen3_tts"
-    assert CollectionConfig(name="d", tts_backend="zonos2").tts_backend == "zonos2"
-    assert CollectionConfig(name="e", tts_backend="edgetts").tts_backend == "edge"
+    assert CollectionConfig(name="d", tts_backend="zonos2").tts_backend == "zono2"
+    assert CollectionConfig(name="e", tts_backend="edgetts").tts_backend == "edgetts"
 
 
 def test_gateway_engine_defaults_empty_and_is_normalized() -> None:

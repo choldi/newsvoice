@@ -96,7 +96,7 @@ def test_ui_test_voice_returns_an_audio_player(
     assert response.status_code == 200
     text = response.text
     assert "<audio" in text
-    assert "/ui/voices/sample/es-mx-male-omni_voice-" in text
+    assert "/ui/voices/sample/es-mx-male-omnivoice-" in text
     assert "muestra sintetizada" in text
     samples = list((Path(settings.voices_dir) / "samples").glob("*.wav"))
     assert len(samples) == 1

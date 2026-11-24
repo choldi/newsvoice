@@ -138,7 +138,7 @@ def test_public_generate_tts_is_gone() -> None:
 def test_tts_endpoint_accepts_a_gateway_backend(
     fake_edge_tts: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """backend=omni_voice routes the synthesis to the tts-api gateway."""
+    """backend=omnivoice routes the synthesis to the tts-api gateway."""
     from src.api.services import tts_backends
 
     async def fake_gateway(text, voice_id, language, **kwargs):
@@ -153,7 +153,7 @@ def test_tts_endpoint_accepts_a_gateway_backend(
             "markdown": "hola",
             "voice": "es-mx-male",
             "language": "es",
-            "backend": "omni_voice",
+            "backend": "omnivoice",
         },
         headers=AUTH_HEADERS,
     )
@@ -161,7 +161,7 @@ def test_tts_endpoint_accepts_a_gateway_backend(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["backend"] == "omni_voice"
+    assert body["backend"] == "omnivoice"
     assert body["audio_path"].endswith(".wav")
 
 
@@ -176,7 +176,7 @@ def test_tts_endpoint_rejects_an_unknown_backend(fake_edge_tts: None) -> None:
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert detail[0]["loc"] == ["body", "backend"]
-    assert "omni_voice" in detail[0]["msg"]
+    assert "omnivoice" in detail[0]["msg"]
 
 
 def test_tts_endpoint_defaults_to_the_configured_engine(
@@ -186,5 +186,5 @@ def test_tts_endpoint_defaults_to_the_configured_engine(
     response = client.post("/api/admin/tts", json={"markdown": "hola"}, headers=AUTH_HEADERS)
 
     assert response.status_code == 200
-    assert response.json()["backend"] == "edge"
+    assert response.json()["backend"] == "edgetts"
     assert response.json()["audio_path"].endswith(".mp3")

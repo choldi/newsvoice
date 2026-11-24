@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 
 import structlog
+from tts_contract import canonical_engine_id
 
 from src.api.models.narration import TTSBackend
 from src.api.models.voices import VoiceOption
@@ -263,7 +264,7 @@ async def list_all_voices(
     """List every selectable voice of every engine.
 
     Args:
-        engine: Optional canonical engine id ('edge', 'omni_voice', ...);
+        engine: Optional canonical engine id ('edgetts', 'omnivoice', ...);
             keeps the voices whose id that engine accepts.
         category: Optional 'stock', 'cloned' or 'generated'.
         gateway_engine: Optional gateway engine id whose stock catalogue must be
@@ -272,7 +273,8 @@ async def list_all_voices(
     Returns:
         The merged voices, ordered by category, language and label.
     """
-    gateway_task = gateway_options(engine=gateway_engine) if gateway_engine else gateway_options()
+    gateway_pin = canonical_engine_id(gateway_engine) if gateway_engine else ""
+    gateway_task = gateway_options(engine=gateway_pin) if gateway_pin else gateway_options()
     (_, edge), (_, gateway) = await asyncio.gather(edge_options(), gateway_task)
     _, modal = modal_options()
 
@@ -283,7 +285,7 @@ async def list_all_voices(
     # win the merge, while the clone still contributes its engine.
     voices = _dedupe([*edge, *modal, *gateway])
     if engine:
-        wanted = engine.strip().lower()
+        wanted = canonical_engine_id(engine)
         voices = [voice for voice in voices if wanted in voice.engines]
     if category:
         wanted = category.strip().lower()

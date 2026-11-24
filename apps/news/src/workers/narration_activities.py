@@ -130,7 +130,7 @@ async def _enforce_modal_budget(
         )
     if spec.tts_backend is TTSBackend.ZONOS2 and not settings.zonos2_enabled:
         raise ApplicationError(
-            "tts_backend zonos2 is behind the benchmark gate and not enabled",
+            "tts_backend zono2 is behind the benchmark gate and not enabled",
             non_retryable=True,
         )
     if spec.tts_backend is TTSBackend.VOXCPM2 and not settings.voxcpm2_enabled:
