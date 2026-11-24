@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from src.api.db.database import run_migrations
+from src.api.services.voices import reset_voice_catalog_cache
 from src.core.config import settings
 from src.workers.client import configure_temporal_logging
 from tests.fake_gateway import FakeGateway, install_fake_gateway
@@ -47,6 +48,12 @@ def offline_edge_voices(monkeypatch: pytest.MonkeyPatch) -> None:
     ``src.api.services.tts._EDGE_VOICES`` themselves, which overrides this.
     """
     monkeypatch.setattr(edge_tts, "list_voices", AsyncMock(return_value=[]))
+
+
+@pytest.fixture(autouse=True)
+def clean_voice_catalog_cache() -> None:
+    """Keep the process-wide voice cache isolated between tests."""
+    reset_voice_catalog_cache()
 
 
 @pytest.fixture(autouse=True)

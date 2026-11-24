@@ -8,6 +8,9 @@ GUI snappy without hammering the TTS backend.
 
 from __future__ import annotations
 
+import asyncio
+import copy
+import hashlib
 import time
 from typing import Any
 
@@ -21,6 +24,23 @@ from src.core.config import get_settings
 logger = structlog.get_logger(__name__)
 
 CACHE_TTL_SECONDS = 60
+_CATALOG_CACHE: dict[tuple[str, str, str, tuple[tuple[str, str], ...]], tuple[float, Any]] = {}
+_CATALOG_INFLIGHT: dict[tuple[str, str, str, tuple[tuple[str, str], ...]], asyncio.Task[Any]] = {}
+
+
+def _catalog_key(
+    api_base_url: str, api_key: str, path: str, params: dict[str, str] | None
+) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
+    """Build a process-wide cache key without exposing the API key."""
+    key_digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    ordered = tuple(sorted((params or {}).items()))
+    return api_base_url.rstrip("/"), key_digest, path, ordered
+
+
+def reset_voice_catalog_cache() -> None:
+    """Drop the shared catalog cache and its in-flight requests."""
+    _CATALOG_CACHE.clear()
+    _CATALOG_INFLIGHT.clear()
 
 
 def _headers(settings: Any) -> dict[str, str]:
@@ -55,6 +75,44 @@ class VoicesService:
         self._cache_ts: float = 0.0
         self._stock_cache: list[dict[str, Any]] = []
         self._cloned_cache: list[dict[str, Any]] = []
+
+    async def _get_shared(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        force: bool = False,
+        ttl: float = CACHE_TTL_SECONDS,
+    ) -> Any:
+        """GET JSON with process-wide TTL caching and in-flight deduplication.
+
+        Args:
+            path: Path appended to the base URL.
+            params: Optional query parameters.
+            force: Bypass the fresh cached value, but still deduplicate concurrent
+                callers asking for the same key.
+            ttl: Cache lifetime in seconds; zero keeps only in-flight deduplication.
+
+        Returns:
+            Parsed JSON payload.
+        """
+        key = _catalog_key(self._api_base_url, self._api_key, path, params)
+        now = time.monotonic()
+        cached = _CATALOG_CACHE.get(key)
+        if not force and cached is not None and (now - cached[0]) <= ttl:
+            return copy.deepcopy(cached[1])
+
+        task = _CATALOG_INFLIGHT.get(key)
+        if task is None:
+            task = asyncio.create_task(self._get(path, params=params))
+            _CATALOG_INFLIGHT[key] = task
+        try:
+            data = await asyncio.shield(task)
+            _CATALOG_CACHE[key] = (time.monotonic(), data)
+            return copy.deepcopy(data)
+        finally:
+            if _CATALOG_INFLIGHT.get(key) is task:
+                del _CATALOG_INFLIGHT[key]
 
     async def _get(self, path: str, params: dict[str, str] | None = None) -> Any:
         """GET a JSON endpoint of the OmniVoice API.
@@ -98,7 +156,7 @@ class VoicesService:
             if language:
                 params["language"] = language
             try:
-                data = await self._get("voices/stock", params=params)
+                data = await self._get_shared("voices/stock", params=params, force=force)
                 if isinstance(data, list):
                     return [
                         StockVoice.model_validate(item).model_dump()
@@ -108,19 +166,17 @@ class VoicesService:
             except httpx.HTTPError as exc:
                 logger.warning("voices_engine_stock_fetch_failed", engine=engine, error=str(exc))
             return []
-        now = time.monotonic()
-        if force or (now - self._cache_ts) > CACHE_TTL_SECONDS or not self._stock_cache:
-            try:
-                data = await self._get("voices/stock")
-                if isinstance(data, list):
-                    self._stock_cache = [
-                        StockVoice.model_validate(item).model_dump()
-                        for item in data
-                        if isinstance(item, dict)
-                    ]
-                    self._cache_ts = now
-            except httpx.HTTPError as exc:
-                logger.warning("voices_stock_fetch_failed", error=str(exc))
+        try:
+            data = await self._get_shared("voices/stock", force=force)
+            if isinstance(data, list):
+                self._stock_cache = [
+                    StockVoice.model_validate(item).model_dump()
+                    for item in data
+                    if isinstance(item, dict)
+                ]
+                self._cache_ts = time.monotonic()
+        except httpx.HTTPError as exc:
+            logger.warning("voices_stock_fetch_failed", error=str(exc))
         voices = self._stock_cache
         if language:
             voices = [v for v in voices if v.get("language") == language]
@@ -176,19 +232,17 @@ class VoicesService:
         Returns:
             List of cloned voice dicts.
         """
-        now = time.monotonic()
-        if force or (now - self._cache_ts) > CACHE_TTL_SECONDS or not self._cloned_cache:
-            try:
-                data = await self._get("voices/cloned")
-                if isinstance(data, list):
-                    self._cloned_cache = [
-                        ClonedVoice.model_validate(item).model_dump()
-                        for item in data
-                        if isinstance(item, dict)
-                    ]
-                    self._cache_ts = now
-            except httpx.HTTPError as exc:
-                logger.warning("voices_cloned_fetch_failed", error=str(exc))
+        try:
+            data = await self._get_shared("voices/cloned", force=force, ttl=0)
+            if isinstance(data, list):
+                self._cloned_cache = [
+                    ClonedVoice.model_validate(item).model_dump()
+                    for item in data
+                    if isinstance(item, dict)
+                ]
+                self._cache_ts = time.monotonic()
+        except httpx.HTTPError as exc:
+            logger.warning("voices_cloned_fetch_failed", error=str(exc))
         return self._cloned_cache
 
     async def clone_voice(

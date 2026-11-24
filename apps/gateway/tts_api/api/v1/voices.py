@@ -11,7 +11,11 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from loguru import logger
 from tts_contract import CloneVoiceResponse, DesignedVoiceResponse
 
-from tts_api.core.engine_client import OmniVoiceEngineClient, StockVoice
+from tts_api.core.engine_client import (
+    OmniVoiceEngineClient,
+    StockVoice,
+    get_shared_engine_client,
+)
 from tts_api.core.exceptions import (
     FeatureNotSupportedError,
     InvalidReferenceAudioError,
@@ -27,11 +31,14 @@ router = APIRouter(prefix="/voices", tags=["voices"])
 async def get_engine_client(
     engine: str | None = Query(None, description="Engine del gateway a consultar"),
 ) -> AsyncIterator[OmniVoiceEngineClient]:
-    """Dependency para obtener el cliente del engine."""
+    """Reuse the live engine for the default catalog; avoid loading static catalogs."""
+    if not engine:
+        yield get_shared_engine_client()
+        return
+
     from tts_api.core.engine_factory import create_engine
 
-    client = OmniVoiceEngineClient(create_engine(engine) if engine else None)
-    await client.start()
+    client = OmniVoiceEngineClient(create_engine(engine))
     try:
         yield client
     finally:

@@ -1,11 +1,12 @@
 """Unit tests for the OmniVoice voices service."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from src.api.services.voices import VoicesService
+from src.api.services.voices import VoicesService, reset_voice_catalog_cache
 
 STOCK = [
     {
@@ -36,6 +37,34 @@ async def test_list_stock_returns_and_caches() -> None:
         assert first == STOCK
         assert cached == STOCK
         assert mock_get.call_count == 2  # force bypasses cache each time
+
+
+@pytest.mark.asyncio
+async def test_list_stock_shares_cache_between_service_instances() -> None:
+    """Concurrent instances dedupe one gateway request through the shared cache."""
+    first = VoicesService(api_base_url="http://tts.test/api/v1")
+    second = VoicesService(api_base_url="http://tts.test/api/v1")
+
+    with (
+        patch.object(first, "_get", new_callable=AsyncMock, return_value=STOCK) as first_get,
+        patch.object(second, "_get", new_callable=AsyncMock, return_value=STOCK) as second_get,
+    ):
+        results = await asyncio.gather(first.list_stock(), second.list_stock())
+
+    assert results == [STOCK, STOCK]
+    assert first_get.await_count + second_get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_catalog_cache_reset_forces_a_new_request() -> None:
+    """Resetting the shared cache makes the next read hit the gateway again."""
+    service = VoicesService(api_base_url="http://tts.test/api/v1")
+    with patch.object(service, "_get", new_callable=AsyncMock, return_value=STOCK) as mock_get:
+        await service.list_stock()
+        reset_voice_catalog_cache()
+        await service.list_stock()
+
+    assert mock_get.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -74,6 +103,22 @@ async def test_list_stock_with_engine_uses_query_params() -> None:
 
     assert voices == STOCK
     mock_get.assert_awaited_once_with("voices/stock", params={"engine": "kokoro", "language": "es"})
+
+
+@pytest.mark.asyncio
+async def test_list_cloned_dedupes_concurrent_reads_without_persistent_cache() -> None:
+    """Clones are fetched once per burst but never survive past the request."""
+    first = VoicesService(api_base_url="http://tts.test/api/v1")
+    second = VoicesService(api_base_url="http://tts.test/api/v1")
+    clones = [{"voice_id": "clone-1", "name": "Clone", "language": "es"}]
+
+    with (
+        patch.object(first, "_get", new_callable=AsyncMock, return_value=clones) as first_get,
+        patch.object(second, "_get", new_callable=AsyncMock, return_value=clones) as second_get,
+    ):
+        await asyncio.gather(first.list_cloned(), second.list_cloned())
+
+    assert first_get.await_count + second_get.await_count == 1
 
 
 @pytest.mark.asyncio

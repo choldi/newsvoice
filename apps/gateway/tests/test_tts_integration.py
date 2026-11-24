@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from tts_api.api.v1 import voices as voices_api
 from tts_api.api.v1.tts import get_tts_service
 from tts_api.api.v1.voices import get_engine_client
+from tts_api.core.engine_client import StockVoice
 from tts_api.main import app
 
 
@@ -189,6 +190,34 @@ async def test_voices_endpoint_no_filter() -> None:
         assert "en-us-male" in voice_ids
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_voices_endpoint_default_catalog_uses_shared_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default catalogue reuses the engine already started by the lifespan."""
+    shared_client = AsyncMock()
+    shared_client.list_stock_voices.return_value = [
+        StockVoice(voice_id="es-mx-male", language="es", gender="male", name="Spanish MX Male"),
+    ]
+    monkeypatch.setattr(voices_api, "get_shared_engine_client", lambda: shared_client)
+    created: list[str | None] = []
+
+    def fake_create_engine(name: str | None = None) -> str:
+        created.append(name)
+        return "unused"
+
+    monkeypatch.setattr("tts_api.core.engine_factory.create_engine", fake_create_engine)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/voices/stock")
+
+    assert response.status_code == 200
+    assert response.json()[0]["voice_id"] == "es-mx-male"
+    assert created == []
+    shared_client.list_stock_voices.assert_awaited_once_with(None)
 
 
 @pytest.mark.asyncio

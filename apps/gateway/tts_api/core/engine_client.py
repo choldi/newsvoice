@@ -217,11 +217,19 @@ class OmniVoiceEngineClient:
         )
 
     async def list_stock_voices(self, language: str | None = None) -> list[StockVoice]:
-        """Lista voces stock disponibles."""
-        if not self._started:
-            await self.start()
-        assert self._engine is not None
-        voices_dicts = await self._engine.list_stock_voices(language=language)
+        """Lista voces stock disponibles sin inicializar motores de catálogo estático."""
+        if not self._started and self._engine is not None:
+            try:
+                voices_dicts = await self._engine.list_stock_voices(language=language)
+            except Exception:
+                await self.start()
+                assert self._engine is not None
+                voices_dicts = await self._engine.list_stock_voices(language=language)
+        else:
+            if not self._started:
+                await self.start()
+            assert self._engine is not None
+            voices_dicts = await self._engine.list_stock_voices(language=language)
         return [
             StockVoice(
                 voice_id=str(v["voice_id"]),

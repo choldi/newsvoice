@@ -48,6 +48,38 @@ async def test_start_and_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_stock_voices_does_not_initialize_static_engine() -> None:
+    """A static catalogue is read without loading the TTS model."""
+    mock_engine = AsyncMock()
+    mock_engine.list_stock_voices.return_value = [
+        {"voice_id": "es-1", "language": "es", "gender": "female", "name": "Ana"}
+    ]
+    client = OmniVoiceEngineClient(engine=mock_engine)
+
+    voices = await client.list_stock_voices()
+
+    mock_engine.initialize.assert_not_awaited()
+    mock_engine.list_stock_voices.assert_awaited_once_with(language=None)
+    assert [(voice.voice_id, voice.name) for voice in voices] == [("es-1", "Ana")]
+
+
+@pytest.mark.asyncio
+async def test_list_stock_voices_initializes_engine_only_when_catalog_needs_it() -> None:
+    """Remote catalogues retry through initialize after a catalog-only read fails."""
+    mock_engine = AsyncMock()
+    mock_engine.list_stock_voices.side_effect = [
+        RuntimeError("client not ready"),
+        [{"voice_id": "es-1", "language": "es", "gender": "male", "name": "Luis"}],
+    ]
+    client = OmniVoiceEngineClient(engine=mock_engine)
+
+    voices = await client.list_stock_voices()
+
+    mock_engine.initialize.assert_awaited_once()
+    assert [voice.voice_id for voice in voices] == ["es-1"]
+
+
+@pytest.mark.asyncio
 async def test_synthesize_stock() -> None:
     """synthesize_stock delega en engine.synthesize() y envuelve el WAV."""
     wav = _make_wav_bytes()
