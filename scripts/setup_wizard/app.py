@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from engine_runtime import EngineRuntimeError, RuntimePlan
+
 from . import deps, transfer
 from . import validate as validation
 from .collections import ensure_example_collection
@@ -31,8 +33,11 @@ from .settings import (
     backend_voice_help,
     backend_voice_options,
     basic_defaults,
+    canonical_engine,
     config_requires_gpu,
     configured_engines,
+    engine_mode,
+    engine_modes,
     engine_option_label,
     engine_remote_urls,
     engine_services,
@@ -44,9 +49,14 @@ from .settings import (
     managed_compose_profiles,
     managed_remote_urls,
     parse_engine_map,
+    parse_runtime_modes,
     render_engine_map,
+    render_runtime_modes,
     required_engine_keys,
     required_model_downloads,
+    runtime_env_values,
+    runtime_plan,
+    runtime_plan_for,
     sections_for,
     selected_engine_infos,
     split_multi,
@@ -273,7 +283,7 @@ def _sync_gateway_docker_extras(ctx: Context) -> None:
     if deploy is None:
         return
     engine, engine_map, extra = _gateway_selection(ctx)
-    extras = gateway_docker_extras(engine, engine_map, extra)
+    extras = gateway_docker_extras(engine, engine_map, extra, _gateway_modes(ctx))
     if deploy.get("GATEWAY_UV_EXTRAS").strip() != extras:
         deploy.set("GATEWAY_UV_EXTRAS", extras)
 
@@ -284,19 +294,32 @@ def _sync_engine_requirements(ctx: Context) -> None:
     if deploy is None:
         return
     engine, engine_map, extra = _gateway_selection(ctx)
+    modes = _gateway_modes(ctx)
+    try:
+        plan = _current_runtime_plan(ctx)
+    except EngineRuntimeError:
+        plan = None
+    if plan is not None:
+        _apply_runtime_plan(ctx, plan)
 
-    profiles = managed_compose_profiles(deploy.get("COMPOSE_PROFILES"), engine, engine_map, extra)
+    profiles = managed_compose_profiles(
+        deploy.get("COMPOSE_PROFILES"),
+        engine,
+        engine_map,
+        extra,
+        plan.profiles if plan is not None else None,
+    )
     if deploy.get("COMPOSE_PROFILES").strip() != profiles:
         deploy.set("COMPOSE_PROFILES", profiles)
 
-    gpu = "1" if config_requires_gpu(engine, engine_map, extra) else "0"
+    gpu = "1" if config_requires_gpu(engine, engine_map, extra, modes) else "0"
     if deploy.get("GATEWAY_GPU").strip() != gpu:
         deploy.set("GATEWAY_GPU", gpu)
 
-    required = engine_remote_urls(engine, engine_map, extra)
+    required = engine_remote_urls(engine, engine_map, extra, modes) if plan is None else {}
     for (file_key, key), default in managed_remote_urls().items():
         env = ctx.envs.get(file_key)
-        if env is None:
+        if env is None or plan is not None:
             continue
         current = env.get(key).strip()
         target = required.get((file_key, key), "")
@@ -428,6 +451,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
             Row("button", label="Guía de valores externos (Fish, HF, Telegram…)", action="guide"),
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
             Row("button", label="Modificar engines TTS (añadir/quitar)", action="engines"),
+            Row("button", label="Modos de carga TTS (embedded/sidecar/modal)", action="modes"),
             Row("button", label="Requisitos del sistema", action="prereqs"),
             Row("button", label="Editar los .env ya configurados", action="edit"),
             Row("button", label="Importar valores desde un archivo .env", action="import"),
@@ -455,6 +479,8 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
                 app_.push(mode_screen(app_, ctx))
         elif row.action == "engines":
             app_.push(tts_screen(app_, ctx, standalone=True))
+        elif row.action == "modes":
+            app_.push(runtime_modes_screen(app_, ctx, standalone=True))
         elif row.action == "prereqs":
             app_.push(prereq_screen(app_, ctx, return_to="welcome"))
         elif row.action == "edit":
@@ -744,13 +770,14 @@ def basic_terms_screen(app: App, ctx: Context) -> Screen:
 
     def build() -> list[Row]:
         engine, engine_map, extra = _gateway_selection(ctx)
+        modes = _gateway_modes(ctx)
         accepted = _accepted_terms(ctx)
         rows: list[Row] = [
             Row("note", label="El perfil básico selecciona engines con licencia propia."),
             Row("note", label="Confirma que has leído sus términos antes de continuar."),
             Row("note", label=""),
         ]
-        terms = engine_terms(engine, engine_map, extra)
+        terms = engine_terms(engine, engine_map, extra, modes)
         if not terms:
             rows.append(Row("note", label="La selección no exige aceptación explícita."))
         for info in terms:
@@ -790,7 +817,7 @@ def basic_terms_screen(app: App, ctx: Context) -> Screen:
             engine, engine_map, extra = _gateway_selection(ctx)
             pending = [
                 info.label
-                for info in engine_terms(engine, engine_map, extra)
+                for info in engine_terms(engine, engine_map, extra, _gateway_modes(ctx))
                 if info.key not in _accepted_terms(ctx)
             ]
             if pending:
@@ -1128,6 +1155,48 @@ def _gateway_selection(ctx: Context) -> tuple[str, str, str]:
     )
 
 
+def _gateway_modes(ctx: Context) -> dict[str, str]:
+    """Return the runtime mode overrides stored in gateway/.env."""
+    gateway = ctx.envs.get("gateway")
+    return parse_runtime_modes(gateway.get("TTS_RUNTIME_MODES")) if gateway else {}
+
+
+def _current_runtime_plan(
+    ctx: Context,
+    overrides: dict[str, str] | None = None,
+) -> RuntimePlan:
+    """Resolve the staged gateway selection through the canonical planner."""
+    engine, engine_map, extra = _gateway_selection(ctx)
+    modes = {**_gateway_modes(ctx), **(overrides or {})}
+    return runtime_plan_for(engine, engine_map, extra, modes)
+
+
+def _apply_runtime_plan(ctx: Context, plan: RuntimePlan) -> None:
+    """Stage runtime modes, profiles and sidecar URLs in every env file."""
+    derived = runtime_env_values(plan)
+    modes = derived.get("TTS_RUNTIME_MODES", render_runtime_modes({}))
+    profiles = derived.get("TTS_RUNTIME_PROFILES", "")
+    for env in ctx.envs.values():
+        if env.has("TTS_RUNTIME_MODES") and env.get("TTS_RUNTIME_MODES").strip() != modes:
+            env.set("TTS_RUNTIME_MODES", modes)
+        if env.has("TTS_RUNTIME_PROFILES") and env.get("TTS_RUNTIME_PROFILES").strip() != profiles:
+            env.set("TTS_RUNTIME_PROFILES", profiles)
+
+    urls = {key: value for key, value in plan.urls.items()}
+    for (file_key, key), default in managed_remote_urls().items():
+        env = ctx.envs.get(file_key)
+        if env is None:
+            continue
+        current = env.get(key).strip()
+        target = urls.get(key, "")
+        if target:
+            if not current or current == default:
+                if current != target:
+                    env.set(key, target)
+        elif current == default:
+            env.set(key, "")
+
+
 def _sync_news_tts_options(
     ctx: Context,
     rows_by_key: dict[str, Row],
@@ -1200,7 +1269,7 @@ def _sync_required_models(ctx: Context, rows_by_key: dict[str, Row]) -> None:
     if gateway is None or models_row is None:
         return
     gateway_engine, engine_map, extra = _gateway_selection(ctx)
-    required = required_model_downloads(gateway_engine, engine_map, extra)
+    required = required_model_downloads(gateway_engine, engine_map, extra, _gateway_modes(ctx))
     models_row.required_options = required
     current = split_multi(models_row.value)
     missing = [model for model in required if model not in current]
@@ -1235,6 +1304,7 @@ def _apply_gpu_lock(
         gateway.get("TTS_ENGINE"),
         gateway.get("TTS_ENGINES"),
         gateway.get("TTS_EXTRA_ENGINES"),
+        _gateway_modes(ctx),
     )
     device = rows_by_key.get("TTS_DEVICE")
     if device is not None:
@@ -1317,7 +1387,10 @@ def _tts_catalog_lines() -> list[str]:
         cloning = "clonado sí" if info.cloning else "sin clonado"
         languages = "todos" if info.languages == ("*",) else ", ".join(info.languages)
         voices = f"{len(info.voices)} voces stock" if info.voices else "sin voces stock"
-        lines.append(f"{info.key}: {info.device} · {cloning} · idiomas: {languages} · {voices}")
+        modes = "/".join(info.modes)
+        lines.append(
+            f"{info.key}: {info.device} · {modes} · {cloning} · idiomas: {languages} · {voices}"
+        )
         lines.append(f"  {info.description}")
     return lines
 
@@ -1346,11 +1419,16 @@ def _tts_help_lines() -> list[str]:
 def _selected_engine_requirements(ctx: Context) -> tuple[list[str], list[str], bool]:
     """Return profiles, services and whether the selection needs a GPU."""
     engine, engine_map, extra = _gateway_selection(ctx)
+    modes = _gateway_modes(ctx)
     profiles: list[str] = []
-    for info in selected_engine_infos(engine, engine_map, extra):
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
         profiles.extend(info.profiles)
-    services = engine_services(engine, engine_map, extra)
-    return list(dict.fromkeys(profiles)), services, config_requires_gpu(engine, engine_map, extra)
+    services = engine_services(engine, engine_map, extra, modes)
+    return (
+        list(dict.fromkeys(profiles)),
+        services,
+        config_requires_gpu(engine, engine_map, extra, modes),
+    )
 
 
 def _requirement_summary(ctx: Context) -> str:
@@ -1388,8 +1466,9 @@ def _engine_credential_rows(ctx: Context) -> list[Row]:
     """Build rows for the credentials relevant to the selected engines."""
     gateway = ctx.envs["gateway"]
     engine, engine_map, extra = _gateway_selection(ctx)
+    modes = _gateway_modes(ctx)
     keys: list[str] = []
-    for info in selected_engine_infos(engine, engine_map, extra):
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
         keys.extend(info.required_keys)
         keys.extend(info.optional_keys)
     rows: list[Row] = []
@@ -1397,7 +1476,7 @@ def _engine_credential_rows(ctx: Context) -> list[Row]:
         field_ = _gateway_field(key)
         if field_ is None:
             continue
-        required = key in required_engine_keys(engine, engine_map, extra)
+        required = key in required_engine_keys(engine, engine_map, extra, modes)
         value = _value_for(ctx, field_)
         present = bool(gateway.get(key).strip())
         status = "obligatoria y pendiente" if required and not present else ""
@@ -1423,6 +1502,154 @@ def _engine_credential_rows(ctx: Context) -> list[Row]:
     return rows
 
 
+def _set_engine_mode(
+    ctx: Context,
+    engine: str,
+    mode: str,
+    *,
+    app: App | None = None,
+    row: Row | None = None,
+) -> bool:
+    """Stage one mode change, rolling back when the runtime plan rejects it."""
+    gateway = ctx.envs.get("gateway")
+    if gateway is None or engine not in ENGINE_INFO or mode not in engine_modes(engine):
+        return False
+    key = canonical_engine(engine)
+    modes = _gateway_modes(ctx)
+    snapshot = {
+        "TTS_ENGINE": gateway.get("TTS_ENGINE"),
+        "TTS_ENGINES": gateway.get("TTS_ENGINES"),
+        "TTS_EXTRA_ENGINES": gateway.get("TTS_EXTRA_ENGINES"),
+        "TTS_RUNTIME_MODES": gateway.get("TTS_RUNTIME_MODES"),
+    }
+    previous_mode = modes.get(key, engine_mode(key))
+    modes[key] = mode
+    engine_name, engine_map, extra = _gateway_selection(ctx)
+    selected = configured_engines(engine_name, engine_map, extra)
+    extras = split_multi(extra)
+    routing = parse_engine_map(engine_map) or {}
+    if mode == "disabled":
+        selected = [name for name in selected if canonical_engine(name) != key]
+        extras = [name for name in extras if canonical_engine(name) != key]
+        routing = {
+            language: target
+            for language, target in routing.items()
+            if canonical_engine(target) != key
+        }
+        if canonical_engine(engine_name) == key:
+            engine_name = "routed" if routing or extras else ""
+    elif key not in {canonical_engine(name) for name in selected}:
+        extras.append(key)
+        selected.append(key)
+
+    try:
+        plan = runtime_plan(selected, modes)
+    except EngineRuntimeError as exc:
+        for name, value in snapshot.items():
+            gateway.set(name, value)
+        if row is not None:
+            row.value = previous_mode
+        if app is not None:
+            app.say(str(exc), "bad")
+        return False
+    if plan.conflicts:
+        for name, value in snapshot.items():
+            gateway.set(name, value)
+        if row is not None:
+            row.value = previous_mode
+        if app is not None:
+            app.say("No se puede cambiar el modo: " + " · ".join(plan.conflicts), "bad")
+        return False
+
+    gateway.set("TTS_ENGINE", engine_name)
+    gateway.set("TTS_ENGINES", render_engine_map(routing))
+    gateway.set("TTS_EXTRA_ENGINES", join_multi(extras))
+    gateway.set("TTS_RUNTIME_MODES", render_runtime_modes(modes))
+    _apply_runtime_plan(ctx, plan)
+    _sync_gateway_docker_extras(ctx)
+    _sync_engine_requirements(ctx)
+    if row is not None:
+        row.value = mode
+    if app is not None:
+        label = "desactivado" if mode == "disabled" else mode
+        app.say(f"Modo de {key}: {label} (sin escribir en disco)", "ok")
+    return True
+
+
+def runtime_modes_screen(app: App, ctx: Context, *, standalone: bool = False) -> Screen:
+    """Edit the load mode of every engine without writing TOML or env files."""
+
+    def build() -> list[Row]:
+        modes = _gateway_modes(ctx)
+        engine_name, engine_map, extra = _gateway_selection(ctx)
+        active = {
+            canonical_engine(name) for name in configured_engines(engine_name, engine_map, extra)
+        }
+        candidates = [engine_name, *EXTRA_ENGINE_OPTIONS, *ENGINE_INFO]
+        rows: list[Row] = [
+            Row("note", label="Elige dónde carga cada engine; los cambios quedan en memoria."),
+            Row(
+                "note", label="disabled lo retira de la selección; embed/sidecar/modal se validan."
+            ),
+            Row("note", label=""),
+        ]
+        for candidate in dict.fromkeys(candidates):
+            key = canonical_engine(candidate)
+            info = ENGINE_INFO.get(key)
+            if info is None or not info.selectable:
+                continue
+            current = modes.get(key, engine_mode(key))
+            rows.append(
+                Row(
+                    "choice",
+                    label=f"{key} ({'activo' if key in active else 'inactivo'})",
+                    value=current,
+                    options=list(engine_modes(key)),
+                    help=f"Modo de carga de {key}. Combinaciones incompatibles se rechazan.",
+                    action=f"mode:{key}",
+                )
+            )
+            if info.modal_function:
+                rows.append(Row("note", label=f"  Modal: {info.modal_function}"))
+        rows.append(Row("note", label=""))
+        if standalone:
+            rows.append(Row("button", label="Guardar engines", action="save_engines"))
+        rows.append(Row("button", label="Volver", action="back"))
+        return rows
+
+    def on_change(app_: App, row: Row) -> None:
+        if not row.action.startswith("mode:"):
+            return
+        key = row.action.split(":", 1)[1]
+        _set_engine_mode(ctx, key, row.value.strip().lower(), app=app_, row=row)
+        app_.current.rows = build()
+        app_.refocus()
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "save_engines":
+            app_.modal = _confirm_engine_write(app_, ctx)
+
+    return Screen(
+        title="Modos de carga TTS",
+        subtitle="embedded · sidecar · modal · disabled",
+        rows=build(),
+        footer="F1 Ayuda   ←/→ Cambiar   Enter Confirmar   Esc Atrás   F10 Salir",
+        on_change=on_change,
+        on_activate=activate,
+        on_help=lambda app_: app_.info(
+            "Modos de carga",
+            "embedded: el engine se instancia dentro del gateway.",
+            "sidecar: contenedor propio con perfil Compose y URL dedicada.",
+            "modal: función remota; no añade extras pip ni perfiles sidecar.",
+            "disabled: retira el engine de la selección.",
+            "Los cambios se guardan solo en los .env cuando confirmes el guardado.",
+        ),
+    )
+
+
 def engine_requirements_screen(
     app: App,
     ctx: Context,
@@ -1436,7 +1663,8 @@ def engine_requirements_screen(
 
     def build() -> list[Row]:
         engine, engine_map, extra = _gateway_selection(ctx)
-        infos = selected_engine_infos(engine, engine_map, extra)
+        modes = _gateway_modes(ctx)
+        infos = selected_engine_infos(engine, engine_map, extra, modes)
         profiles, services, gpu = _selected_engine_requirements(ctx)
         accepted = _accepted_terms(ctx)
         rows: list[Row] = [
@@ -1452,7 +1680,9 @@ def engine_requirements_screen(
             rows.append(
                 Row(
                     "note",
-                    label=f"  {info.label}: {info.device} · {scope}"
+                    label=f"  {info.label}: {info.device} · modo: "
+                    + modes.get(canonical_engine(info.key), info.mode)
+                    + f" · {scope}"
                     + (f" · perfiles: {', '.join(info.profiles)}" if info.profiles else "")
                     + (f" · servicios: {', '.join(info.services)}" if info.services else ""),
                 )
@@ -1470,7 +1700,7 @@ def engine_requirements_screen(
         rows.extend(_engine_credential_rows(ctx))
         rows.append(Row("note", label=""))
         rows.append(Row("heading", label="Términos y licencias"))
-        terms = engine_terms(engine, engine_map, extra)
+        terms = engine_terms(engine, engine_map, extra, modes)
         if not terms:
             rows.append(Row("note", label="La selección no exige aceptación explícita."))
         for info in terms:
@@ -1495,6 +1725,9 @@ def engine_requirements_screen(
         rows.append(Row("note", label=""))
         profiles = deploy.get("COMPOSE_PROFILES") or "(vacío)"
         rows.append(Row("note", label=f"Perfiles que se escribirán: {profiles}"))
+        rows.append(
+            Row("button", label="Modos de carga (embedded/sidecar/modal/disabled)…", action="modes")
+        )
         if standalone:
             rows.append(Row("button", label="Guardar engines", action="save_engines"))
         rows.append(Row("button", label="Volver a engines", action="back"))
@@ -1526,6 +1759,9 @@ def engine_requirements_screen(
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "modes":
+            app_.push(runtime_modes_screen(app_, ctx, standalone=standalone))
             return
         if row.action == "save_engines":
             app_.modal = _confirm_engine_write(app_, ctx)
@@ -1625,6 +1861,7 @@ def tts_screen(
         Row("heading", label="Requisitos de infraestructura"),
         requirement_row,
         Row("button", label="Revisar contenedores, API y términos…", action="requirements"),
+        Row("button", label="Modos de carga (embedded/sidecar/modal/disabled)…", action="modes"),
         Row("note", label=""),
         Row("heading", label="Seguridad"),
         Row("button", label="Aplicar configuración segura (CPU)", action="safe"),
@@ -1677,6 +1914,9 @@ def tts_screen(
             app_.push(
                 engine_requirements_screen(app_, ctx, edit_mode=edit_mode, standalone=standalone)
             )
+            return
+        if row.action == "modes":
+            app_.push(runtime_modes_screen(app_, ctx, standalone=standalone))
             return
         if row.action == "safe":
             _apply_routed_preset(ctx, ROUTED_PRESETS[0])

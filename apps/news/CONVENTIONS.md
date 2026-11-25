@@ -206,6 +206,13 @@
   `fish`, `openai`, ...) are read-only aliases normalised at the model boundary.
   Stored values, API responses, cache keys and UI form values are canonical;
   keep alias coverage only in migration tests.
+- A new canonical engine must be registered in **both** `config/engines.toml`
+  (kind, class path, capabilities, required env/modules) and
+  `config/engine_runtimes.toml` (default/allowed modes, service, profile, URL,
+  GPU, extras, Modal function, incompatibilities), and must have a
+  `scripts/engines/<id>.sh` wrapper delegating to `load.sh`. The loader test
+  compares registry keys with `CANONICAL_ENGINE_IDS`, so a half-added engine
+  fails the build.
 - The Phase 10 local/Modal switch on the digest backends is
   `tts_backends.voice_for`/`synthesize(run_in_modal: bool | None)`: `False`
   resolves + pins the gateway's **local** `qwen3_tts` engine, `True` forces

@@ -1,0 +1,127 @@
+version = 1
+
+[defaults]
+health_path = "/api/v1/health"
+timeout_seconds = 300
+
+[engines.gateway]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gateway_engine = false
+selectable = false
+
+[engines.edgetts]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = false
+pip_extra = "edgetts"
+
+[engines.pocket_tts]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = false
+pip_extra = "pocket_tts"
+incompatible_with = ["chatterbox", "omnivoice"]
+
+[engines.piper]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = false
+pip_extra = "piper"
+
+[engines.kokoro]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = true
+pip_extra = "kokoro"
+incompatible_with = ["qwen3_tts", "omnivoice", "chatterbox"]
+
+[engines.fish_tts]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = true
+
+[engines.openai_tts]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+gpu = false
+
+[engines.omnivoice]
+mode = "sidecar"
+modes = ["sidecar", "disabled"]
+service = "gateway-omnivoice"
+profile = "omnivoice"
+dockerfile = "apps/gateway/Dockerfile.omnivoice"
+url = "http://gateway-omnivoice:8000"
+url_env = "OMNIVOICE_REMOTE_URL"
+health_path = "/api/v1/health"
+gpu = true
+incompatible_with = ["pocket_tts", "kokoro", "chatterbox"]
+
+[engines.omnivoice_remote]
+mode = "embedded"
+modes = ["embedded", "disabled"]
+service = "gateway"
+profile = ""
+url_env = "OMNIVOICE_REMOTE_URL"
+requires_service = "gateway-omnivoice"
+gpu = true
+incompatible_with = ["pocket_tts", "kokoro", "chatterbox"]
+
+[engines.qwen3_tts]
+mode = "sidecar"
+modes = ["embedded", "sidecar", "modal", "disabled"]
+service = "gateway-qwen3"
+profile = "qwen3"
+dockerfile = "apps/gateway/Dockerfile.qwen3"
+url = "http://gateway-qwen3:8000/api/v1"
+url_env = "QWEN3_TTS_REMOTE_URL"
+health_path = "/api/v1/health"
+gpu = true
+pip_extra = "qwen3-tts"
+modal_function = "qwen3_tts"
+incompatible_with = ["kokoro"]
+
+[engines.chatterbox]
+mode = "sidecar"
+modes = ["sidecar", "disabled"]
+service = "gateway-chatterbox"
+profile = "chatterbox"
+dockerfile = "apps/gateway/Dockerfile.chatterbox"
+url = "http://gateway-chatterbox:8000/api/v1"
+url_env = "CHATTERBOX_REMOTE_URL"
+health_path = "/api/v1/health"
+gpu = true
+incompatible_with = ["pocket_tts", "kokoro", "omnivoice"]
+
+[engines.zono2]
+mode = "modal"
+modes = ["modal", "disabled"]
+service = ""
+profile = "modal"
+gpu = true
+pip_extra = "zono2"
+modal_function = "zonos2"
+
+[engines.voxcpm2]
+mode = "modal"
+modes = ["modal", "disabled"]
+service = ""
+profile = "modal"
+gpu = true
+modal_function = "voxcpm2"
+gateway_engine = false

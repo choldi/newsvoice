@@ -13,7 +13,16 @@ from pathlib import Path
 from .detect import Prerequisite
 from .util import REPO_ROOT, CommandResult, which
 
-__all__ = ["METHODS", "Step", "execute", "plan", "prereq_steps", "verify", "method_available"]
+__all__ = [
+    "METHODS",
+    "Step",
+    "embedded_extras",
+    "execute",
+    "plan",
+    "prereq_steps",
+    "verify",
+    "method_available",
+]
 
 #: (id, label, description) for each supported installation method.
 METHODS: tuple[tuple[str, str, str], ...] = (
@@ -56,6 +65,18 @@ class Step:
     env: dict[str, str] = field(default_factory=dict)
 
 
+def embedded_extras(gateway_extras: tuple[str, ...] | list[str]) -> list[str]:
+    """Keep only extras whose engine loads inside the gateway process."""
+    from .settings import ENGINE_INFO
+
+    allowed = {
+        info.pip_extra
+        for info in ENGINE_INFO.values()
+        if info.pip_extra and info.mode == "embedded"
+    }
+    return [extra for extra in dict.fromkeys(gateway_extras) if extra == "dev" or extra in allowed]
+
+
 def plan(
     method: str,
     *,
@@ -65,7 +86,7 @@ def plan(
 
     Args:
         method: One of the ids in :data:`METHODS`.
-        gateway_extras: Optional pip extras required by the selected engines.
+        gateway_extras: Optional pip extras required by selected embedded engines.
 
     Returns:
         Steps to run in order; empty when the method installs nothing.
@@ -73,7 +94,7 @@ def plan(
     if method == "skip":
         return []
     if method == "venv":
-        extras = list(dict.fromkeys(["dev", *(extra for extra in gateway_extras if extra)]))
+        extras = list(dict.fromkeys(["dev", *embedded_extras(gateway_extras)]))
         gateway_spec = f".[{','.join(extras)}]"
         return [
             Step(

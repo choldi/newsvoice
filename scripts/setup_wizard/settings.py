@@ -9,8 +9,12 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+import engine_runtime
+from engine_runtime import EngineRuntimeError, RuntimePlan, RuntimeSpec
 
 __all__ = [
     "BASIC_LANGUAGES",
@@ -36,7 +40,10 @@ __all__ = [
     "basic_defaults",
     "configured_engines",
     "config_requires_gpu",
+    "canonical_engine",
     "engine_info",
+    "engine_mode",
+    "engine_modes",
     "engine_option_label",
     "engine_remote_urls",
     "engine_requires_gpu",
@@ -55,9 +62,15 @@ __all__ = [
     "news_backend_engines",
     "load_engine_registry",
     "parse_engine_map",
+    "parse_runtime_modes",
     "profiles",
     "render_engine_map",
+    "render_runtime_modes",
     "registry_engine_infos",
+    "runtime_env_values",
+    "runtime_plan",
+    "runtime_plan_for",
+    "runtime_specs",
     "required_model_downloads",
     "sections_for",
     "split_multi",
@@ -82,6 +95,108 @@ def hash_password(password: str) -> str | None:
     except ImportError:  # pragma: no cover - exercised on bare interpreters
         return None
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+
+
+# -- runtime modes -----------------------------------------------------------
+
+_RUNTIME_SPECS_CACHE: tuple[str, dict[str, RuntimeSpec]] | None = None
+
+
+def runtime_specs(*, reload: bool = False) -> dict[str, RuntimeSpec]:
+    """Load the canonical runtime registry without ever writing it."""
+    global _RUNTIME_SPECS_CACHE
+    source = str(engine_runtime.RUNTIME_PATH)
+    if reload or _RUNTIME_SPECS_CACHE is None or _RUNTIME_SPECS_CACHE[0] != source:
+        try:
+            specs = engine_runtime.load_runtimes(Path(source))
+        except (EngineRuntimeError, OSError, tomllib.TOMLDecodeError):
+            specs = {}
+        _RUNTIME_SPECS_CACHE = (source, specs)
+    return dict(_RUNTIME_SPECS_CACHE[1])
+
+
+def canonical_engine(key: str) -> str:
+    """Normalize a legacy alias to its canonical engine id."""
+    raw = key.strip().lower()
+    canonical, aliases = engine_runtime.load_contract()
+    return aliases.get(raw, raw) if raw in aliases or raw in canonical else raw
+
+
+def parse_runtime_modes(value: str) -> dict[str, str]:
+    """Parse ``TTS_RUNTIME_MODES`` into an engine→mode map."""
+    try:
+        raw = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        canonical_engine(str(engine)): str(mode).strip().lower()
+        for engine, mode in raw.items()
+        if str(mode).strip().lower() in engine_runtime.MODES
+    }
+
+
+def render_runtime_modes(modes: Mapping[str, str]) -> str:
+    """Render an engine→mode map as compact, stable JSON."""
+    return json.dumps(
+        {canonical_engine(engine): mode for engine, mode in modes.items()},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def runtime_plan(
+    engines: Iterable[str],
+    mode_overrides: Mapping[str, str] | None = None,
+) -> RuntimePlan:
+    """Resolve one selection through the canonical runtime planner."""
+    names = list(dict.fromkeys(canonical_engine(name) for name in engines))
+    overrides = {
+        canonical_engine(engine): mode.strip().lower()
+        for engine, mode in (mode_overrides or {}).items()
+        if canonical_engine(engine) in names
+    }
+    return engine_runtime.resolve_plan(names, overrides, runtime_specs())
+
+
+def runtime_plan_for(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> RuntimePlan:
+    """Resolve the wizard's current gateway selection."""
+    names = configured_engines(engine, engine_map, extra)
+    return runtime_plan(names, modes)
+
+
+def runtime_env_values(plan: RuntimePlan) -> dict[str, str]:
+    """Return the env values derived from ``engine_runtime.env_updates``."""
+    updates = engine_runtime.env_updates(plan)
+    wizard_keys = ("TTS_ENGINE", "TTS_EXTRA_ENGINES", "TTS_RUNTIME_MODES", "TTS_RUNTIME_PROFILES")
+    return {key: value for key, value in updates.items() if key not in wizard_keys} | {
+        "TTS_RUNTIME_MODES": updates["TTS_RUNTIME_MODES"],
+        "TTS_RUNTIME_PROFILES": updates["TTS_RUNTIME_PROFILES"],
+    }
+
+
+def engine_mode(key: str) -> str:
+    """Return the default load mode of one engine."""
+    info = ENGINE_INFO.get(key)
+    if info is not None and info.mode:
+        return info.mode
+    spec = runtime_specs().get(canonical_engine(key))
+    return spec.mode if spec is not None else "embedded"
+
+
+def engine_modes(key: str) -> tuple[str, ...]:
+    """Return every load mode offered for one engine."""
+    info = ENGINE_INFO.get(key)
+    if info is not None and info.modes:
+        return info.modes
+    spec = runtime_specs().get(canonical_engine(key))
+    return spec.modes if spec is not None else ("embedded", "disabled")
 
 
 # -- data model -------------------------------------------------------------
@@ -187,6 +302,10 @@ class EngineInfo:
         manual_install: Extra installation note when Docker cannot provide it.
         docker_supported: Whether the gateway image can run the engine as-is.
         pip_extra: Optional gateway ``uv`` extra that installs the engine.
+        mode: Default load mode from the runtime registry.
+        modes: Load modes accepted by the runtime registry.
+        modal_function: Modal entrypoint used when ``mode="modal"``.
+        selectable: Whether the engine can be picked as an active TTS engine.
     """
 
     key: str
@@ -211,6 +330,10 @@ class EngineInfo:
     manual_install: str = ""
     docker_supported: bool = True
     pip_extra: str = ""
+    mode: str = "embedded"
+    modes: tuple[str, ...] = ("embedded", "disabled")
+    modal_function: str = ""
+    selectable: bool = True
 
 
 @dataclass(frozen=True)
@@ -369,7 +492,7 @@ _MOCK_VOICES = (
     "fr-fr-female",
 )
 
-ENGINE_INFO: dict[str, EngineInfo] = {
+_CURATED_ENGINE_INFO: dict[str, EngineInfo] = {
     "pocket_tts": EngineInfo(
         "pocket_tts",
         "Pocket TTS",
@@ -422,11 +545,33 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "GPU",
         True,
         ("en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh"),
-        "Clonado, emociones y voces stock ZONOS2 en GPU.",
+        "Clonado, emociones y voces stock ZONOS2 en Modal.",
         (),
         (),
-        gpu_scope="gateway",
+        profiles=("modal",),
+        gpu_scope="modal",
+        mode="modal",
         pip_extra="zono2",
+    ),
+    "voxcpm2": EngineInfo(
+        "voxcpm2",
+        "VoxCPM2",
+        "GPU",
+        True,
+        ("en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh"),
+        "Clonado y emociones VoxCPM2 en Modal.",
+        profiles=("modal",),
+        gpu_scope="modal",
+        mode="modal",
+    ),
+    "gateway": EngineInfo(
+        "gateway",
+        "Gateway TTS",
+        "CPU",
+        False,
+        ("*",),
+        "Proxy interno del gateway sin motor de síntesis propio.",
+        selectable=False,
     ),
     "edgetts": EngineInfo(
         "edgetts",
@@ -469,14 +614,17 @@ ENGINE_INFO: dict[str, EngineInfo] = {
             "tr",
             "zh",
         ),
-        "Clonado zero-shot y 23 idiomas; no cubre catalán.",
+        "Clonado zero-shot y 23 idiomas en sidecar local; no cubre catalán.",
         ("chatterbox:ResembleAI/chatterbox",),
         _CHATTERBOX_VOICES,
-        gpu_scope="gateway",
+        profiles=("chatterbox",),
+        services=("gateway-chatterbox",),
+        gpu_scope="sidecar",
+        deploy_url_key="CHATTERBOX_REMOTE_URL",
+        gateway_url_key="CHATTERBOX_REMOTE_URL",
+        remote_url="http://gateway-chatterbox:8000/api/v1",
         terms_url="https://huggingface.co/ResembleAI/chatterbox",
         terms_required=True,
-        manual_install="pip install chatterbox-tts en un host local",
-        docker_supported=False,
     ),
     "qwen3_tts": EngineInfo(
         "qwen3_tts",
@@ -505,14 +653,17 @@ ENGINE_INFO: dict[str, EngineInfo] = {
         "GPU",
         True,
         ("es", "en", "fr", "de", "it", "pt", "zh", "ja", "ko"),
-        "Engine GPU completo: stock, clonado, instruct y emociones.",
+        "Engine GPU completo en sidecar: stock, clonado, instruct y emociones.",
         ("omnivoice:ModelsLab/omnivoice-singing",),
         _OMNIVOICE_VOICES,
-        services=("gateway",),
-        gpu_scope="gateway",
+        profiles=("omnivoice",),
+        services=("gateway-omnivoice",),
+        gpu_scope="sidecar",
+        deploy_url_key="OMNIVOICE_REMOTE_URL",
+        gateway_url_key="OMNIVOICE_REMOTE_URL",
+        remote_url="http://gateway-omnivoice:8000",
         terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
         terms_required=True,
-        pip_extra="omnivoice",
     ),
     "omnivoice_remote": EngineInfo(
         "omnivoice_remote",
@@ -608,11 +759,41 @@ def staged_active_engine() -> str | None:
     return str(active).strip().lower() if active else None
 
 
+def _enrich_engine_info(info: EngineInfo, spec: RuntimeSpec | None) -> EngineInfo:
+    """Overlay canonical runtime modes and resources on one catalog entry."""
+    if spec is None:
+        return info
+    changes: dict[str, object] = {
+        "mode": spec.mode,
+        "modes": spec.modes,
+        "selectable": spec.selectable,
+        "modal_function": spec.modal_function,
+    }
+    if not info.profiles and spec.profile:
+        changes["profiles"] = (spec.profile,)
+    if not info.services and spec.service and spec.service != "gateway":
+        changes["services"] = (spec.service,)
+    if spec.mode == "modal":
+        changes["gpu_scope"] = info.gpu_scope or "modal"
+        if not info.profiles:
+            changes["profiles"] = ("modal",)
+    if spec.mode == "sidecar" or spec.requires_service:
+        changes["gpu_scope"] = info.gpu_scope or "sidecar"
+        if spec.url_env and spec.url:
+            changes.setdefault("deploy_url_key", spec.url_env)
+            changes.setdefault("gateway_url_key", spec.url_env)
+            changes.setdefault("remote_url", spec.url)
+    if spec.pip_extra:
+        changes["pip_extra"] = spec.pip_extra
+    return replace(info, **changes)
+
+
 def registry_engine_infos() -> dict[str, EngineInfo]:
     """Build wizard entries for engines declared only in the registry."""
     infos: dict[str, EngineInfo] = {}
+    specs = runtime_specs()
     for name, spec in load_engine_registry().items():
-        if name in ENGINE_INFO:
+        if name in _CURATED_ENGINE_INFO:
             continue
         capabilities = spec.get("capabilities") or {}
         options = spec.get("options") or {}
@@ -620,30 +801,47 @@ def registry_engine_infos() -> dict[str, EngineInfo]:
         display_name = str(spec.get("display_name") or name)
         languages = tuple(str(code) for code in capabilities.get("supported_languages", ()))
         voices = tuple(str(voice) for voice in (options.get("voices") or {}))
-        infos[name] = EngineInfo(
-            name,
-            display_name,
-            "Cloud" if "cloud" in locations else "CPU",
-            bool(capabilities.get("voice_cloning", False)),
-            languages,
-            "Engine declarado en config/engines.toml.",
-            (),
-            voices,
-            required_keys=tuple(str(key) for key in spec.get("required_env", ())),
+        infos[name] = _enrich_engine_info(
+            EngineInfo(
+                name,
+                display_name,
+                "Cloud" if "cloud" in locations else "CPU",
+                bool(capabilities.get("voice_cloning", False)),
+                languages,
+                "Engine declarado en config/engines.toml.",
+                (),
+                voices,
+                required_keys=tuple(str(key) for key in spec.get("required_env", ())),
+            ),
+            specs.get(name),
         )
     return infos
 
 
-_ALL_ENGINE_INFO = {**registry_engine_infos(), **ENGINE_INFO}
+def _build_engine_catalog() -> dict[str, EngineInfo]:
+    """Merge curated capabilities with runtime defaults, without duplicates."""
+    specs = runtime_specs()
+    catalog = {
+        name: _enrich_engine_info(info, specs.get(name))
+        for name, info in registry_engine_infos().items()
+    }
+    for name, info in _CURATED_ENGINE_INFO.items():
+        catalog[name] = _enrich_engine_info(info, specs.get(name))
+    return catalog
+
+
+_ALL_ENGINE_INFO = _build_engine_catalog()
+ENGINE_INFO = _ALL_ENGINE_INFO
 GPU_ENGINES = frozenset(
     key for key, info in _ALL_ENGINE_INFO.items() if info.device in ("GPU", "Proxy")
 )
 CLOUD_ENGINES = frozenset(key for key, info in _ALL_ENGINE_INFO.items() if info.device == "Cloud")
 BASIC_LANGUAGES = ("ca", "es", "fr", "en")
-ENGINE_OPTIONS = ("routed", *_ALL_ENGINE_INFO)
-EXTRA_ENGINE_OPTIONS = tuple(_ALL_ENGINE_INFO)
+ENGINE_OPTIONS = ("routed", *(key for key, info in _ALL_ENGINE_INFO.items() if info.selectable))
+EXTRA_ENGINE_OPTIONS = tuple(
+    key for key, info in _ALL_ENGINE_INFO.items() if info.selectable and key != "mock"
+)
 MODEL_OPTIONS = tuple(download for info in _ALL_ENGINE_INFO.values() for download in info.downloads)
-ENGINE_INFO = _ALL_ENGINE_INFO
 
 _SAFE_TTS_ENGINES = (
     '{"es":"pocket_tts","en":"pocket_tts","fr":"pocket_tts","ca":"piper","_default":"pocket_tts"}'
@@ -769,59 +967,144 @@ def configured_engines(engine: str, engine_map: str, extra: str) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def config_requires_gpu(engine: str, engine_map: str, extra: str) -> bool:
+def config_requires_gpu(
+    engine: str,
+    engine_map: str,
+    extra: str,
+    modes: Mapping[str, str] | None = None,
+) -> bool:
     """Report whether the selection instantiates an engine that needs GPU."""
-    return any(name in GPU_ENGINES for name in configured_engines(engine, engine_map, extra))
+    try:
+        plan = runtime_plan_for(engine, engine_map, extra, modes)
+    except EngineRuntimeError:
+        plan = None
+    names = (
+        list(plan.engines)
+        if plan is not None and plan.engines
+        else configured_engines(engine, engine_map, extra)
+    )
+    if any(name in GPU_ENGINES for name in names):
+        return True
+    if plan is not None and plan.engines:
+        resolved = {canonical_engine(name): mode for name, mode in plan.modes.items()}
+        return any(
+            resolved.get(canonical_engine(name), "embedded") in ("sidecar", "modal")
+            for name in names
+        )
+    return False
 
 
 # Profiles owned by the engine catalog. Shape tokens (news/gateway/modal) are
 # preserved when the wizard recomputes COMPOSE_PROFILES.
-MANAGED_SIDECAR_PROFILES = ("qwen3", "omnivoice")
+MANAGED_SIDECAR_PROFILES = tuple(
+    dict.fromkeys(
+        (
+            "qwen3",
+            "omnivoice",
+            *(
+                profile
+                for info in ENGINE_INFO.values()
+                for profile in info.profiles
+                if profile != "modal"
+            ),
+        )
+    )
+)
 
 
-def selected_engine_infos(engine: str, engine_map: str = "", extra: str = "") -> list[EngineInfo]:
-    """Return catalog entries for every engine in the current selection."""
-    return [
-        ENGINE_INFO[name]
-        for name in configured_engines(engine, engine_map, extra)
-        if name in ENGINE_INFO
-    ]
+def selected_engine_infos(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[EngineInfo]:
+    """Return catalog entries for every active engine in the current selection."""
+    names = configured_engines(engine, engine_map, extra)
+    if modes:
+        try:
+            plan = runtime_plan_for(engine, engine_map, extra, modes)
+        except EngineRuntimeError:
+            plan = None
+        if plan is not None and plan.engines:
+            active = set(plan.engines)
+            names = [name for name in names if canonical_engine(name) in active]
+    return [ENGINE_INFO[name] for name in names if name in ENGINE_INFO]
 
 
-def engine_requires_gpu(engine: str, engine_map: str = "", extra: str = "") -> bool:
+def engine_requires_gpu(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> bool:
     """Alias with an engine-centric name used by the requirements screen."""
-    return config_requires_gpu(engine, engine_map, extra)
+    return config_requires_gpu(engine, engine_map, extra, modes)
 
 
-def engine_services(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
+def engine_services(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[str]:
     """Return the containers that implement the selected engines."""
     services: list[str] = []
-    for info in selected_engine_infos(engine, engine_map, extra):
+    try:
+        plan = runtime_plan_for(engine, engine_map, extra, modes)
+    except EngineRuntimeError:
+        plan = None
+    if plan is not None and plan.engines:
+        return sorted(plan.services)
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
         services.extend(info.services)
     return list(dict.fromkeys(services))
 
 
-def required_engine_keys(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
-    """Return mandatory credentials for the selected engines."""
+def required_engine_keys(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return mandatory credentials for the selected active engines."""
     keys: list[str] = []
-    for info in selected_engine_infos(engine, engine_map, extra):
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
         keys.extend(info.required_keys)
     return list(dict.fromkeys(keys))
 
 
-def engine_terms(engine: str, engine_map: str = "", extra: str = "") -> list[EngineInfo]:
-    """Return selected engines whose terms must be accepted in setup."""
+def engine_terms(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[EngineInfo]:
+    """Return selected active engines whose terms must be accepted in setup."""
     return [
-        info for info in selected_engine_infos(engine, engine_map, extra) if info.terms_required
+        info
+        for info in selected_engine_infos(engine, engine_map, extra, modes)
+        if info.terms_required
     ]
 
 
 def engine_remote_urls(
-    engine: str, engine_map: str = "", extra: str = ""
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
 ) -> dict[tuple[str, str], str]:
     """Return the managed sidecar URLs required by the selection."""
     urls: dict[tuple[str, str], str] = {}
-    for info in selected_engine_infos(engine, engine_map, extra):
+    try:
+        plan = runtime_plan_for(engine, engine_map, extra, modes)
+    except EngineRuntimeError:
+        plan = None
+    if plan is not None and plan.engines:
+        for key, value in plan.urls.items():
+            urls[(DEPLOY, key)] = value
+            urls[(GATEWAY, key)] = value
+        return urls
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
         if not info.remote_url:
             continue
         if info.deploy_url_key:
@@ -837,21 +1120,35 @@ def managed_remote_urls() -> dict[tuple[str, str], str]:
     for info in ENGINE_INFO.values():
         if not info.remote_url:
             continue
-        if info.deploy_url_key:
-            urls[(DEPLOY, info.deploy_url_key)] = info.remote_url
-        if info.gateway_url_key:
-            urls[(GATEWAY, info.gateway_url_key)] = info.remote_url
+        for file_key in (DEPLOY, GATEWAY, NEWS):
+            for key in (info.deploy_url_key, info.gateway_url_key):
+                if key:
+                    urls[(file_key, key)] = info.remote_url
+    for spec in runtime_specs().values():
+        if spec.url_env and spec.url:
+            for file_key in (DEPLOY, GATEWAY, NEWS):
+                urls[(file_key, spec.url_env)] = spec.url
     return urls
 
 
 def managed_compose_profiles(
-    current: str, engine: str, engine_map: str = "", extra: str = ""
+    current: str,
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    profiles: Iterable[str] | None = None,
 ) -> str:
     """Recompute sidecar profiles without disturbing shape tokens."""
     kept = [token for token in split_multi(current) if token not in MANAGED_SIDECAR_PROFILES]
-    required: list[str] = []
-    for info in selected_engine_infos(engine, engine_map, extra):
-        required.extend(info.profiles)
+    if profiles is not None:
+        required = [name for name in profiles if name in MANAGED_SIDECAR_PROFILES]
+    else:
+        required = [
+            profile
+            for info in selected_engine_infos(engine, engine_map, extra)
+            for profile in info.profiles
+            if profile in MANAGED_SIDECAR_PROFILES
+        ]
     return join_multi([*kept, *required])
 
 
@@ -1003,13 +1300,16 @@ def backend_voice_help(
     )
 
 
-def required_model_downloads(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
-    """Return the model checkpoints mandatory for the selected gateway engines."""
+def required_model_downloads(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return the model checkpoints mandatory for active gateway engines."""
     downloads: list[str] = []
-    for name in configured_engines(engine, engine_map, extra):
-        info = ENGINE_INFO.get(name)
-        if info is not None:
-            downloads.extend(info.downloads)
+    for info in selected_engine_infos(engine, engine_map, extra, modes):
+        downloads.extend(info.downloads)
     return list(dict.fromkeys(downloads))
 
 
@@ -1021,12 +1321,20 @@ BASIC_TTS_MODEL_DOWNLOADS = ",".join(
 )
 
 
-def gateway_pip_extras(engine: str, engine_map: str = "", extra: str = "") -> list[str]:
-    """Return the gateway pip extras required by the selected engines."""
+def gateway_pip_extras(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return pip extras for engines that actually load inside the gateway."""
     extras: list[str] = []
     for name in configured_engines(engine, engine_map, extra):
         info = ENGINE_INFO.get(name)
-        if info is not None and info.pip_extra:
+        if info is None or not info.pip_extra:
+            continue
+        mode = (modes or {}).get(canonical_engine(name), info.mode)
+        if mode == "embedded":
             extras.append(info.pip_extra)
     return list(dict.fromkeys(extras))
 
@@ -1035,15 +1343,22 @@ GATEWAY_BASE_PIP_EXTRAS = ("pocket_tts", "edgetts", "omnivoice", "kokoro", "pipe
 GATEWAY_DEFAULT_UV_EXTRAS = " ".join(f"--extra {name}" for name in GATEWAY_BASE_PIP_EXTRAS)
 
 
-def gateway_docker_extras(engine: str, engine_map: str = "", extra: str = "") -> str:
+def gateway_docker_extras(
+    engine: str,
+    engine_map: str = "",
+    extra: str = "",
+    modes: Mapping[str, str] | None = None,
+) -> str:
     """Return the ``uv sync`` flags baked into the gateway Docker image.
 
-    The base engines stay available for existing deployments, while every
-    local engine selected in the wizard is added on top. Sidecars and cloud
-    engines do not map to gateway pip extras and are therefore ignored here.
+    The base engines stay available for existing deployments, while only
+    engines configured as ``embedded`` are added on top. Sidecars, Modal and
+    disabled engines do not map to gateway pip extras.
     """
     names = list(
-        dict.fromkeys((*GATEWAY_BASE_PIP_EXTRAS, *gateway_pip_extras(engine, engine_map, extra)))
+        dict.fromkeys(
+            (*GATEWAY_BASE_PIP_EXTRAS, *gateway_pip_extras(engine, engine_map, extra, modes))
+        )
     )
     return " ".join(f"--extra {name}" for name in names)
 

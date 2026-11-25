@@ -158,6 +158,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3a. Chatterbox sidecar (optional profile)
+# ---------------------------------------------------------------------------
+section "3a. Chatterbox sidecar (optional)"
+if ! command -v docker >/dev/null 2>&1; then
+    info "docker binary not found; skipping the chatterbox sidecar check"
+else
+    CHATTERBOX_STATE="$("${DC[@]}" ps --format '{{.State}}' gateway-chatterbox 2>/dev/null | tr -d '[:space:]')"
+    if [[ -z "$CHATTERBOX_STATE" ]]; then
+        info "chatterbox sidecar not running (optional profile 'chatterbox'; enable with CHATTERBOX=1)"
+    elif [[ "$CHATTERBOX_STATE" != "running" ]]; then
+        warn "chatterbox sidecar is in state '${CHATTERBOX_STATE}'"
+    elif CB_HEALTH="$("${DC[@]}" exec -T gateway-chatterbox python -c \
+        'import httpx, sys; r = httpx.get("http://localhost:8000/api/v1/health"); print(r.text); sys.exit(0 if r.status_code == 200 else 1)' \
+        2>/dev/null)"; then
+        ok "chatterbox sidecar health -> ${CB_HEALTH}"
+    else
+        warn "chatterbox sidecar is running but /api/v1/health is unreachable"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 3b. GPU engine lease (design window)
 # ---------------------------------------------------------------------------
 section "3b. GPU engine lease"

@@ -20,14 +20,20 @@ set -euo pipefail
 #           gateway at it. Requires GPU=1.
 #   OMNIVOICE=1 start the OmniVoice sidecar (profile omnivoice) and point the
 #           gateway at it. Requires GPU=1.
-#   SIDECARS=1 start both sidecars and add the GPU overlay automatically
-#           (equivalent to GPU=1 QWEN3=1 OMNIVOICE=1).
+#   CHATTERBOX=1 start the isolated Chatterbox sidecar (profile chatterbox) and
+#           point the gateway at it. Requires GPU=1.
+#   SIDECARS=1 start all three sidecars and add the GPU overlay automatically
+#           (equivalent to GPU=1 QWEN3=1 OMNIVOICE=1 CHATTERBOX=1).
 #
 # Temporal namespaces are created before the workers start, so a fresh database
 # or a restore does not leave every worker idle forever.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+if [[ ! -e config/voice_profiles.json && -f apps/gateway/voice_profiles.json ]]; then
+    cp apps/gateway/voice_profiles.json config/voice_profiles.json
+fi
 
 _read_env() {
     local file="$1" key="$2" default="$3" val=""
@@ -46,7 +52,8 @@ if [[ "${SIDECARS:-0}" == "1" ]]; then
     GPU=1
     QWEN3=1
     OMNIVOICE=1
-    echo "==> SIDECARS=1: enabling qwen3 + omnivoice sidecars and the GPU overlay"
+    CHATTERBOX=1
+    echo "==> SIDECARS=1: enabling qwen3 + omnivoice + chatterbox sidecars and the GPU overlay"
 fi
 
 GPU="${GPU:-$(_read_env deploy/.env GATEWAY_GPU 0)}"
@@ -80,6 +87,15 @@ if [[ "${OMNIVOICE:-0}" == "1" ]]; then
     echo "==> OmniVoice sidecar enabled (gateway -> ${OMNIVOICE_REMOTE_URL})"
 fi
 
+if [[ "${CHATTERBOX:-0}" == "1" ]]; then
+    DC+=(--profile chatterbox)
+    if [[ -z "${CHATTERBOX_REMOTE_URL:-}" ]]; then
+        CHATTERBOX_REMOTE_URL="$(_read_env deploy/.env CHATTERBOX_REMOTE_URL http://gateway-chatterbox:8000/api/v1)"
+        export CHATTERBOX_REMOTE_URL
+    fi
+    echo "==> Chatterbox sidecar enabled (gateway -> ${CHATTERBOX_REMOTE_URL})"
+fi
+
 API_PORT="${API_PORT:-$(_read_env deploy/.env API_PORT 8000)}"
 GATEWAY_PORT="${GATEWAY_PORT:-$(_read_env deploy/.env GATEWAY_PORT 8001)}"
 
@@ -97,6 +113,23 @@ wait_for() {
     return 1
 }
 
+wait_container_health() {
+    local name="$1" service="$2"
+    echo "==> Waiting for ${name} container health..."
+    for _ in $(seq 1 20); do
+        if "${DC[@]}" exec -T "$service" python -c \
+            "import httpx, sys; r = httpx.get('http://localhost:8000/api/v1/health'); sys.exit(0 if r.status_code == 200 else 1)" \
+            >/dev/null 2>&1; then
+            echo "==> ${name} healthy."
+            return 0
+        fi
+        sleep 3
+    done
+    echo "${name} health check failed after 60s!" >&2
+    "${DC[@]}" logs "$service" >&2
+    return 1
+}
+
 echo "==> Starting Temporal and creating namespaces..."
 "${DC[@]}" up -d --wait temporal
 ./scripts/create_namespaces.sh
@@ -111,6 +144,10 @@ fi
 
 if ! wait_for "TTS gateway" "http://localhost:${GATEWAY_PORT}/api/v1/health"; then
     "${DC[@]}" logs gateway >&2
+    exit 1
+fi
+
+if [[ "${CHATTERBOX:-0}" == "1" ]] && ! wait_container_health "Chatterbox sidecar" gateway-chatterbox; then
     exit 1
 fi
 

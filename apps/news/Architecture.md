@@ -145,6 +145,30 @@ opt-in: with no voice it keeps the historical text-only digest, otherwise it
 runs `generate_tts_activity`, optionally compresses and delivers the file, and
 records `audio_path` without making an audio failure cancel the summary.
 
+### Engine runtime registry and loader (Phase 14)
+
+`config/engines.toml` is the capability catalogue; `config/engine_runtimes.toml`
+is the deployment registry: every canonical id from `libs/tts_contract` except
+`mock` maps to a default mode, allowed modes and the resources it needs. The
+four modes are `embedded` (inside the gateway image, with its `uv` extra),
+`sidecar` (dedicated Docker service, compose profile and remote URL), `modal`
+(Modal function plus the `modal` profile) and `disabled`. `incompatible_with`
+prevents two heavy engines from sharing the gateway process.
+
+`scripts/engine_runtime.py::resolve_plan` canonicalizes legacy aliases, applies
+`--mode ENGINE=MODE` overrides, computes services/profiles/dockerfiles/urls/
+extras/modal functions and reports conflicts. `scripts/engines/<id>.sh` wraps
+`scripts/engines/load.sh`, which turns that plan into exported `GPU`, `MODAL`,
+`QWEN3`, `OMNIVOICE` and `CHATTERBOX` variables, invokes `scripts/deploy.sh` and
+checks `/api/v1/engines` afterwards. `--dry-run` stops before deployment and
+prints the JSON plan plus the env updates.
+
+The plan is persisted by `env_updates`/`write_env` into the same three `.env`
+files the setup wizard owns: `TTS_ENGINE=routed`, `TTS_EXTRA_ENGINES`,
+`TTS_RUNTIME_MODES`, `TTS_RUNTIME_PROFILES` and sidecar URLs such as
+`CHATTERBOX_REMOTE_URL`. The wizard persists engine choices in `.env` only; the
+TOML registries are versioned inputs, never generated output.
+
 ### The engine lease (Phase 8.1)
 
 The digest, doc-tts and audiobook workers are separate containers sharing one

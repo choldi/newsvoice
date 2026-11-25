@@ -25,6 +25,7 @@ from setup_wizard.app import (
     _confirm_write,
     _confirm_write_one,
     _run_steps_with_progress,
+    _set_engine_mode,
     _shared_key_conflicts,
     _sync_engine_requirements,
     _unify_shared_key,
@@ -75,6 +76,7 @@ from setup_wizard.settings import (
     load_engine_registry,
     news_backend_engines,
     parse_engine_map,
+    parse_runtime_modes,
     registry_engine_infos,
     render_engine_map,
     required_engine_keys,
@@ -143,6 +145,25 @@ def _write_env_files(root: Path) -> dict[str, EnvFile]:
 def _context(envs: dict[str, EnvFile]) -> Context:
     """Build a context with an empty (but valid) detection report."""
     return Context(report=Report(python="3.12.0"), envs=envs)
+
+
+def _write_full_env_files(root: Path) -> dict[str, EnvFile]:
+    """Copy the real templates into a temporary repository."""
+    repo = Path(__file__).resolve().parents[4]
+    envs: dict[str, EnvFile] = {}
+    for key, rel in (
+        ("deploy", "deploy/.env.example"),
+        ("news", "apps/news/.env.example"),
+        ("gateway", "apps/gateway/.env.example"),
+    ):
+        source = repo / rel
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        example = target.with_name(".env.example")
+        shutil.copy2(source, target)
+        shutil.copy2(source, example)
+        envs[key] = EnvFile.load(target, example)
+    return envs
 
 
 # -- env file ---------------------------------------------------------------
@@ -436,8 +457,10 @@ def test_engine_catalog_exposes_credentials_terms_and_containers() -> None:
     assert qwen.services == ("gateway-qwen3",)
     assert qwen.profiles == ("qwen3",)
     assert fish.signup_url == "https://fish.audio/"
-    assert chatterbox.docker_supported is False
-    assert "pip install" in chatterbox.manual_install
+    assert chatterbox.docker_supported is True
+    assert chatterbox.manual_install == ""
+    assert chatterbox.mode == "sidecar"
+    assert chatterbox.profiles == ("chatterbox",)
     assert [info.key for info in selected_engine_infos("routed", '{"es":"piper"}')] == ["piper"]
 
 
@@ -887,10 +910,9 @@ def test_gateway_docker_extras_keep_the_base_and_add_selected_engines() -> None:
         "kokoro",
         "--extra",
         "piper",
-        "--extra",
-        "zono2",
     ]
     assert extras.count("--extra piper") == 1
+    assert "zono2" not in extras
 
 
 def test_gateway_defaults_are_opt_in() -> None:
@@ -2333,3 +2355,100 @@ def test_docker_prerequisite_is_manual_on_wsl(monkeypatch: pytest.MonkeyPatch) -
     assert items["docker"].missing is True
     assert items["docker"].remedy == ()
     assert items["docker"].automated is False
+
+
+def test_chatterbox_sidecar_persists_url_profile_and_modes_in_all_env_files(
+    tmp_path: Path,
+) -> None:
+    """Chatterbox writes the same mode, profile and sidecar URL everywhere."""
+    envs = _write_full_env_files(tmp_path)
+    ctx = _context(envs)
+    ctx.envs["gateway"].set("TTS_ENGINE", "chatterbox")
+
+    _sync_engine_requirements(ctx)
+
+    for env in envs.values():
+        assert parse_runtime_modes(env.get("TTS_RUNTIME_MODES")) == {"chatterbox": "sidecar"}
+        assert "chatterbox" in split_multi(env.get("TTS_RUNTIME_PROFILES"))
+        assert env.get("CHATTERBOX_REMOTE_URL") == "http://gateway-chatterbox:8000/api/v1"
+        env.write()
+    for env in envs.values():
+        saved = EnvFile.load(env.path, env.example)
+        assert parse_runtime_modes(saved.get("TTS_RUNTIME_MODES")) == {"chatterbox": "sidecar"}
+        assert "chatterbox" in split_multi(saved.get("TTS_RUNTIME_PROFILES"))
+
+
+def test_qwen3_modal_and_sidecar_modes_persist_and_switch_urls(tmp_path: Path) -> None:
+    """Switching qwen3 to Modal drops the sidecar URL and keeps the mode in sync."""
+    envs = _write_full_env_files(tmp_path)
+    ctx = _context(envs)
+    ctx.envs["gateway"].set("TTS_ENGINE", "qwen3_tts")
+    ctx.envs["deploy"].set("COMPOSE_PROFILES", "news,gateway,modal")
+
+    _sync_engine_requirements(ctx)
+    assert set(split_multi(ctx.envs["deploy"].get("COMPOSE_PROFILES"))) == {
+        "news",
+        "gateway",
+        "modal",
+        "qwen3",
+    }
+    for env in envs.values():
+        assert parse_runtime_modes(env.get("TTS_RUNTIME_MODES")) == {"qwen3_tts": "sidecar"}
+        assert env.get("QWEN3_TTS_REMOTE_URL") == "http://gateway-qwen3:8000/api/v1"
+
+    assert _set_engine_mode(ctx, "qwen3_tts", "modal") is True
+    assert set(split_multi(ctx.envs["deploy"].get("COMPOSE_PROFILES"))) == {
+        "news",
+        "gateway",
+        "modal",
+    }
+    for env in envs.values():
+        assert parse_runtime_modes(env.get("TTS_RUNTIME_MODES")) == {"qwen3_tts": "modal"}
+        assert "modal" in split_multi(env.get("TTS_RUNTIME_PROFILES"))
+        assert env.get("QWEN3_TTS_REMOTE_URL") == ""
+        env.write()
+    for env in envs.values():
+        saved = EnvFile.load(env.path, env.example)
+        assert parse_runtime_modes(saved.get("TTS_RUNTIME_MODES")) == {"qwen3_tts": "modal"}
+
+
+def test_runtime_mode_change_rejects_incompatible_embedded_combination(
+    tmp_path: Path,
+) -> None:
+    """A change that puts two incompatible engines inside the gateway is rolled back."""
+    envs = _write_full_env_files(tmp_path)
+    ctx = _context(envs)
+    gateway = ctx.envs["gateway"]
+    gateway.set("TTS_ENGINE", "routed")
+    gateway.set("TTS_ENGINES", '{"en":"kokoro"}')
+    _sync_engine_requirements(ctx)
+
+    assert _set_engine_mode(ctx, "qwen3_tts", "embedded") is False
+    assert parse_runtime_modes(gateway.get("TTS_RUNTIME_MODES")) == {"kokoro": "embedded"}
+    assert gateway.get("TTS_EXTRA_ENGINES") == ""
+
+    app = build_engines_app(ctx)
+    actions = {row.action for row in app.current.rows if row.kind == "button"}
+    assert "modes" in actions
+
+
+def test_runtime_selection_never_writes_toml(tmp_path: Path) -> None:
+    """Mode selection is an env-only operation even when the registry is available."""
+    repo = Path(__file__).resolve().parents[4]
+    toml_files = (repo / "config" / "engines.toml", repo / "config" / "engine_runtimes.toml")
+    before = {path: path.read_bytes() for path in toml_files}
+    envs = _write_full_env_files(tmp_path)
+    ctx = _context(envs)
+    ctx.envs["gateway"].set("TTS_ENGINE", "chatterbox")
+
+    assert _set_engine_mode(ctx, "chatterbox", "sidecar") is True
+    _sync_engine_requirements(ctx)
+
+    assert {path: path.read_bytes() for path in toml_files} == before
+
+
+def test_dependency_plan_filters_non_embedded_extras() -> None:
+    """Sidecar and Modal engines never add pip extras to the gateway image."""
+    steps = deps.plan("venv", gateway_extras=["chatterbox", "zono2", "piper"])
+
+    assert steps[3].command[-1] == ".[dev,piper]"

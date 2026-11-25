@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+
+from engine_runtime import MODES as RUNTIME_MODES
+from engine_runtime import EngineRuntimeError
 
 from .detect import Report
 from .envfile import EnvFile
@@ -257,12 +261,17 @@ def validate(
             ENGINE_INFO,
             MANAGED_SIDECAR_PROFILES,
             MODEL_OPTIONS,
+            canonical_engine,
             config_requires_gpu,
             configured_engines,
+            engine_modes,
             engine_terms,
             gateway_docker_extras,
             parse_engine_map,
+            parse_runtime_modes,
+            render_runtime_modes,
             required_engine_keys,
+            runtime_plan,
             selected_engine_infos,
             split_multi,
             valid_language_code,
@@ -294,6 +303,64 @@ def validate(
             )
         elif extra:
             checks.append(Check("engines extra", "ok", ", ".join(extra)))
+
+        raw_modes_text = gateway.get("TTS_RUNTIME_MODES").strip()
+        try:
+            raw_modes = json.loads(raw_modes_text or "{}")
+        except (TypeError, ValueError):
+            raw_modes = None
+        modes = parse_runtime_modes(raw_modes_text)
+        if raw_modes is None or not isinstance(raw_modes, dict):
+            checks.append(
+                Check("modos de carga", "bad", "TTS_RUNTIME_MODES no es un objeto JSON válido")
+            )
+            raw_modes = {}
+        else:
+            unknown_modes = sorted(
+                {
+                    canonical_engine(str(name))
+                    for name in raw_modes
+                    if canonical_engine(str(name)) not in ENGINE_INFO
+                }
+            )
+            unsupported_modes = sorted(
+                {
+                    f"{canonical_engine(str(name))}:{str(mode).strip().lower()}"
+                    for name, mode in raw_modes.items()
+                    if str(mode).strip().lower() in RUNTIME_MODES
+                    and str(mode).strip().lower() not in engine_modes(canonical_engine(str(name)))
+                }
+            )
+            invalid_values = sorted(
+                {
+                    str(mode).strip().lower()
+                    for mode in raw_modes.values()
+                    if str(mode).strip().lower() not in RUNTIME_MODES
+                }
+            )
+            if unknown_modes or unsupported_modes or invalid_values:
+                problems = [
+                    *(
+                        [f"engines desconocidos: {', '.join(unknown_modes)}"]
+                        if unknown_modes
+                        else []
+                    ),
+                    *(
+                        [f"modos no soportados: {', '.join(unsupported_modes)}"]
+                        if unsupported_modes
+                        else []
+                    ),
+                    *([f"modos inválidos: {', '.join(invalid_values)}"] if invalid_values else []),
+                ]
+                checks.append(Check("modos de carga", "bad", " · ".join(problems)))
+            else:
+                checks.append(
+                    Check(
+                        "modos de carga",
+                        "ok",
+                        render_runtime_modes(modes) or "sin perfiles de modo explícitos",
+                    )
+                )
 
         routing: dict[str, str] | None = None
         if engine == "routed":
@@ -362,11 +429,34 @@ def validate(
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
         )
+        try:
+            runtime_resolution = runtime_plan(selected, modes)
+        except EngineRuntimeError as exc:
+            checks.append(Check("conflictos de runtime", "bad", str(exc)))
+            runtime_resolution = None
+        if runtime_resolution is not None:
+            if runtime_resolution.conflicts:
+                checks.append(
+                    Check(
+                        "conflictos de runtime",
+                        "bad",
+                        " · ".join(runtime_resolution.conflicts),
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "conflictos de runtime",
+                        "ok",
+                        render_runtime_modes(runtime_resolution.modes),
+                    )
+                )
         docker_extras = deploy.get("GATEWAY_UV_EXTRAS").strip() if deploy else ""
         expected_extras = gateway_docker_extras(
             engine,
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
+            modes,
         )
         if not docker_extras:
             checks.append(
@@ -393,6 +483,7 @@ def validate(
             engine,
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
+            modes,
         ):
             device = gateway.get("TTS_DEVICE").strip() or "cuda:0"
             gpu_engines = [name for name in selected if name not in CLOUD_ENGINES]
@@ -431,11 +522,16 @@ def validate(
             engine,
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
+            modes,
         )
-        expected_profiles: list[str] = []
-        for info in selected_infos:
-            expected_profiles.extend(info.profiles)
-        expected_profiles = list(dict.fromkeys(expected_profiles))
+        expected_profiles = sorted(
+            runtime_resolution.profiles if runtime_resolution is not None else ()
+        )
+        required_urls = dict(runtime_resolution.urls) if runtime_resolution is not None else {}
+        if not expected_profiles:
+            expected_profiles = list(
+                dict.fromkeys(profile for info in selected_infos for profile in info.profiles)
+            )
         profiles = split_multi(deploy.get("COMPOSE_PROFILES")) if deploy else []
         missing_profiles = [name for name in expected_profiles if name not in profiles]
         stale_profiles = [
@@ -466,12 +562,43 @@ def validate(
         elif expected_profiles:
             checks.append(Check("perfiles engines", "ok", ", ".join(expected_profiles)))
 
+        if expected_profiles:
+            missing_runtime_profiles = [name for name in expected_profiles if name not in profiles]
+            checks.append(
+                Check(
+                    "perfiles de runtime",
+                    "warn" if missing_runtime_profiles else "ok",
+                    "faltan perfiles: " + ", ".join(missing_runtime_profiles)
+                    if missing_runtime_profiles
+                    else ", ".join(expected_profiles),
+                )
+            )
+        else:
+            checks.append(Check("perfiles de runtime", "ok", "sin sidecars requeridos"))
+
+        missing_urls = [
+            f"{file_key}.{key}"
+            for key in sorted(required_urls)
+            for file_key in ("deploy", "news", "gateway")
+            if file_key in envs and not envs[file_key].get(key).strip()
+        ]
+        checks.append(
+            Check(
+                "urls de sidecar",
+                "warn" if missing_urls else "ok",
+                "faltan URLs: " + ", ".join(missing_urls)
+                if missing_urls
+                else (", ".join(sorted(required_urls)) or "sin sidecars requeridos"),
+            )
+        )
+
         if deploy is not None:
             gpu_flag = deploy.get("GATEWAY_GPU").strip() or "0"
             if config_requires_gpu(
                 engine,
                 gateway.get("TTS_ENGINES"),
                 gateway.get("TTS_EXTRA_ENGINES"),
+                modes,
             ):
                 if gpu_flag != "1":
                     checks.append(
@@ -543,6 +670,7 @@ def validate(
             engine,
             gateway.get("TTS_ENGINES"),
             gateway.get("TTS_EXTRA_ENGINES"),
+            modes,
         ):
             if key == "FISH_API_KEY" and not gateway.get(key).strip():
                 checks.append(Check("fish tts", "warn", "fish_tts seleccionado sin FISH_API_KEY"))
@@ -561,6 +689,7 @@ def validate(
                 engine,
                 gateway.get("TTS_ENGINES"),
                 gateway.get("TTS_EXTRA_ENGINES"),
+                modes,
             )
             missing_terms = [info.label for info in terms if info.key not in accepted]
             if missing_terms:

@@ -283,6 +283,9 @@ services:
       # Set to the sidecar URL (http://gateway-qwen3:8000/api/v1) to use the
       # isolated qwen3 image.
       - QWEN3_TTS_REMOTE_URL=${QWEN3_TTS_REMOTE_URL:-}
+      # CHATTERBOX_REMOTE_URL=http://gateway-chatterbox:8000/api/v1 when the
+      # "chatterbox" profile is enabled (scripts/deploy.sh exports the default).
+      - CHATTERBOX_REMOTE_URL=${CHATTERBOX_REMOTE_URL:-}
     volumes:
       - ../apps/gateway/storage:/app/storage
       - ../config:/app/config
@@ -330,6 +333,8 @@ services:
       - DATABASE_URL=sqlite:///storage/omnivoice.db
     volumes:
       - ../apps/gateway/storage:/app/storage
+      - ../config/engines.toml:/app/config/engines.toml:ro
+      - ../config/voice_profiles.json:/app/config/voice_profiles.json:ro
       - qwen3_hf_cache:/models/huggingface
     restart: unless-stopped
 
@@ -360,7 +365,50 @@ services:
       - DATABASE_URL=sqlite:///storage/omnivoice.db
     volumes:
       - ../apps/gateway/storage:/app/storage
+      - ../config/engines.toml:/app/config/engines.toml:ro
+      - ../config/voice_profiles.json:/app/config/voice_profiles.json:ro
       - gateway_hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # chatterbox sidecar (apps/gateway, TTS_ENGINE=chatterbox)
+  # ---------------------------------------------------------------------------
+  # Runs the real chatterbox-tts model with numpy<2 in its own image; the main
+  # gateway proxies to it through the `chatterbox` engine. Not published to the
+  # host and only created when the "chatterbox" profile is active.
+  gateway-chatterbox:
+    profiles: ["chatterbox"]
+    build:
+      context: ..
+      dockerfile: apps/gateway/Dockerfile.chatterbox
+    container_name: news_engine_gateway_chatterbox
+    env_file:
+      - ../apps/gateway/.env
+    environment:
+      - API_KEY=
+      - TTS_ENGINE=chatterbox
+      - TTS_ENGINES=
+      - TTS_EXTRA_ENGINES=
+      - CHATTERBOX_REMOTE_URL=
+      - CHATTERBOX_DEVICE=cuda:0
+      - HF_HOME=/root/.cache/huggingface
+      - TTS_FALLBACK_TO_MOCK=false
+      - DATABASE_URL=sqlite:///storage/omnivoice.db
+    volumes:
+      - ../apps/gateway/storage:/app/storage
+      - ../config/engines.toml:/app/config/engines.toml:ro
+      - ../config/voice_profiles.json:/app/config/voice_profiles.json:ro
+      - gateway_hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import httpx; r=httpx.get('http://localhost:8000/api/v1/health'); exit(0 if r.status_code==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     restart: unless-stopped
 
 volumes:

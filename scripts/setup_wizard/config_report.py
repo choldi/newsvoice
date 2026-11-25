@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from engine_runtime import EngineRuntimeError
+
 from .collections import COLLECTIONS_PATH, load_collections
 from .detect import Report
 from .envfile import EnvFile
@@ -19,13 +21,18 @@ from .settings import (
     backend_language_options,
     backend_voice_help,
     backend_voice_options,
+    canonical_engine,
     config_requires_gpu,
     configured_engines,
+    engine_mode,
     fields_for,
     gateway_docker_extras,
     gateway_pip_extras,
     parse_engine_map,
+    parse_runtime_modes,
+    render_runtime_modes,
     required_model_downloads,
+    runtime_plan,
 )
 from .util import REPO_ROOT
 from .validate import Check
@@ -163,18 +170,18 @@ def _env_table(key: str, env: EnvFile) -> list[str]:
     return lines
 
 
-def _engine_table(engines: list[str]) -> list[str]:
-    """Render the capabilities and infrastructure needs of configured engines."""
+def _engine_table(engines: list[str], modes: dict[str, str]) -> list[str]:
+    """Render the capabilities and runtime needs of configured engines."""
     lines = [
-        "| Engine | Device | GPU scope | Profiles | Containers | Credentials | Terms | "
-        "Cloning | Languages | Stock voices | Required models |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Engine | Device | Runtime mode | GPU scope | Profiles | Sidecar services | "
+        "Credentials | Terms | Cloning | Languages | Stock voices | Required models |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for name in engines:
         info = ENGINE_INFO.get(name)
         if info is None:
             lines.append(
-                f"| `{name}` | `unknown` | `unknown` | `unknown` | `unknown` | "
+                f"| `{name}` | `unknown` | `unknown` | `unknown` | `unknown` | `unknown` | "
                 "`unknown` | `unknown` | `unknown` | `unknown` | `0` | `0` |"
             )
             continue
@@ -183,10 +190,12 @@ def _engine_table(engines: list[str]) -> list[str]:
         services = ",".join(info.services) or "-"
         keys = ",".join(info.required_keys) or "-"
         terms = "yes" if info.terms_required else "-"
+        mode = modes.get(canonical_engine(name), engine_mode(name))
         lines.append(
-            f"| `{name}` | `{info.device}` | `{info.gpu_scope or '-'}` | `{profiles}` | "
-            f"`{services}` | `{keys}` | `{terms}` | `{str(info.cloning).lower()}` | "
-            f"`{languages}` | `{len(info.voices)}` | `{len(info.downloads)}` |"
+            f"| `{name}` | `{info.device}` | `{mode}` | `{info.gpu_scope or '-'}` | "
+            f"`{profiles}` | `{services}` | `{keys}` | `{terms}` | "
+            f"`{str(info.cloning).lower()}` | `{languages}` | "
+            f"`{len(info.voices)}` | `{len(info.downloads)}` |"
         )
     return lines
 
@@ -272,6 +281,11 @@ def _tts_lines(envs: dict[str, EnvFile]) -> list[str]:
     engine_map = gateway.get("TTS_ENGINES")
     extra = gateway.get("TTS_EXTRA_ENGINES")
     engines = configured_engines(engine, engine_map, extra)
+    modes = parse_runtime_modes(gateway.get("TTS_RUNTIME_MODES"))
+    try:
+        runtime_resolution = runtime_plan(engines, modes)
+    except EngineRuntimeError:
+        runtime_resolution = None
     routing = parse_engine_map(engine_map) or {}
     backend = news.get("TTS_DEFAULT_BACKEND")
     language = news.get("TTS_LANGUAGE")
@@ -281,6 +295,11 @@ def _tts_lines(envs: dict[str, EnvFile]) -> list[str]:
     gateway_url = _redact_url(news.get("TTS_API_BASE_URL"))
     omnivoice_url = _redact_url(gateway.get("OMNIVOICE_REMOTE_URL"))
     qwen3_url = _redact_url(gateway.get("QWEN3_TTS_REMOTE_URL"))
+    modal_functions = sorted(
+        ENGINE_INFO[name].modal_function
+        for name in engines
+        if name in ENGINE_INFO and ENGINE_INFO[name].modal_function
+    )
     lines = [
         "## TTS",
         "",
@@ -288,7 +307,12 @@ def _tts_lines(envs: dict[str, EnvFile]) -> list[str]:
         f"- Routing: `{engine_map or '<empty>'}`",
         f"- Extra engines: `{extra or '<empty>'}`",
         f"- Configured engines: `{', '.join(engines) or '<none>'}`",
-        f"- Requires GPU: `{str(config_requires_gpu(engine, engine_map, extra)).lower()}`",
+        f"- Runtime modes: `{render_runtime_modes(modes) or '<defaults>'}`",
+        f"- Required sidecars: `{', '.join(sorted(runtime_resolution.services)) or '<none>'}`"
+        if runtime_resolution is not None
+        else "- Required sidecars: `<unknown>`",
+        f"- Modal functions: `{', '.join(modal_functions) or '<none>'}`",
+        f"- Requires GPU: `{str(config_requires_gpu(engine, engine_map, extra, modes)).lower()}`",
         f"- Device: `{gateway.get('TTS_DEVICE') or '<empty>'}`",
         f"- Gateway URL (news): `{gateway_url or '<empty>'}`",
         f"- OmniVoice sidecar URL: `{omnivoice_url or '<empty>'}`",
@@ -300,18 +324,18 @@ def _tts_lines(envs: dict[str, EnvFile]) -> list[str]:
         f"- Backend stock voices: `{', '.join(voices) or '<none>'}`",
         f"- Voice help: {backend_voice_help(backend, engine, engine_map, extra)}",
         "- Required model downloads: "
-        f"`{', '.join(required_model_downloads(engine, engine_map, extra)) or '<none>'}`",
+        f"`{', '.join(required_model_downloads(engine, engine_map, extra, modes)) or '<none>'}`",
         "- Gateway pip extras: "
-        f"`{', '.join(gateway_pip_extras(engine, engine_map, extra)) or '<none>'}`",
+        f"`{', '.join(gateway_pip_extras(engine, engine_map, extra, modes)) or '<none>'}`",
         "- Gateway Docker extras: "
-        f"`{gateway_docker_extras(engine, engine_map, extra) or '<none>'}`",
+        f"`{gateway_docker_extras(engine, engine_map, extra, modes) or '<none>'}`",
     ]
     if routing:
         lines.append(
             "- Routing map: "
             + ", ".join(f"`{code}`→`{name}`" for code, name in sorted(routing.items()))
         )
-    lines.extend(["", "### Configured engine capabilities", "", *_engine_table(engines)])
+    lines.extend(["", "### Configured engine capabilities", "", *_engine_table(engines, modes)])
     return lines
 
 

@@ -1295,6 +1295,41 @@ voces compatibles; teclear `is` encuentra `isabel`/`luis`, pero no crea una voz
 **Effort:** 6-8 hours.
 
 
+## FASE 14: Registro de modos de carga por engine
+
+**Estado:** implementada (loader, wrappers, variables y tests unitarios).
+
+**Objetivo:** decidir de forma explícita y validable si cada engine canónico se
+carga embebido en el gateway, como sidecar Docker, en Modal o desactivado, sin
+que dos motores incompatibles compartan el mismo entorno. FASE 13 sigue vigente.
+
+### Checklist
+- [x] **14.1 Registro**: `config/engine_runtimes.toml` declara versión, modo por
+      defecto, modos permitidos, servicio/profile/Dockerfile, URL, GPU, extras,
+      función Modal e incompatibilidades para cada ID canónico (menos `mock`).
+- [x] **14.2 Loader**: `scripts/engine_runtime.py` expone `load_runtimes`,
+      `canonicalize_engine`, `resolve_plan`, `env_updates` y `write_env`, con CLI
+      `--engine`, `--mode ENGINE=MODE`, `--dry-run`, `--registry` y `--root`.
+- [x] **14.3 Wrappers**: `scripts/engines/<id>.sh` delegan en `load.sh`, que
+      exporta GPU/MODAL/QWEN3/OMNIVOICE/CHATTERBOX, llama a `scripts/deploy.sh`
+      y comprueba `/api/v1/engines`.
+- [x] **14.4 Persistencia**: se escriben solo los tres `.env` existentes con
+      `TTS_ENGINE=routed`, `TTS_EXTRA_ENGINES`, `TTS_RUNTIME_MODES`,
+      `TTS_RUNTIME_PROFILES` y las URLs (`CHATTERBOX_REMOTE_URL` incluida); el
+      wizard no reescribe los TOML.
+- [x] **14.5 Tests y docs**: `tests/unit/test_engine_runtime.py` cubre registro,
+      alias, conflictos, modos no soportados, variables y `dry_run`;
+      `Deploy.md`, `Architecture.md`, `CONVENTIONS.md` y `AGENTS.md` documentan
+      el flujo.
+
+**Success criteria:** `scripts/engines/pocket_tts.sh chatterbox` y
+`scripts/engines/qwen3_tts.sh kokoro` resuelven sin conflictos; forzar ambos
+motores a `embedded` falla; `make check`, `docker compose config` y
+`scripts/engines/zono2.sh --dry-run` pasan antes de desplegar.
+
+**Effort:** 4-6 hours.
+
+
 ## ANTI-PATTERNS TO AVOID
 
 - Do NOT add collections/multi-user before the single pipeline is stable

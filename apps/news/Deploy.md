@@ -2198,3 +2198,64 @@ comparten ahora los combos de idioma/voz por motor.
 - Alimenta tanto la narración (§15/7.15) como las clases (§14.7/7.16): la
   narración usa la fila si existe y si no sus constantes históricas; la clase
   **exige** la fila habilitada.
+
+---
+
+## 17. Engine runtime y chatterbox (FASE 14)
+
+`config/engines.toml` describes **what** each canonical engine is (class path,
+capabilities, required env/modules). `config/engine_runtimes.toml` describes
+**how** it is loaded here: version, default mode, allowed modes, Docker service,
+compose profile, sidecar Dockerfile/URL, GPU flag, gateway `uv` extra, Modal
+function and incompatibilities. `scripts/engine_runtime.py` checks that the
+registry covers every id in `libs/tts_contract.CANONICAL_ENGINE_IDS` except
+`mock`; a missing or extra id fails before anything is deployed.
+
+| Mode | Meaning |
+|------|---------|
+| `embedded` | Runs inside the gateway image, adding its `uv` extra and, when needed, an auxiliary service. |
+| `sidecar` | Runs as its own Docker service/profile (for example `gateway-chatterbox`) and exports a remote URL. |
+| `modal` | Runs on Modal, enabling the `modal` compose profile and a Modal function. |
+| `disabled` | Resolved but neither started nor exported. |
+
+Wrappers are the operator entry point. Each `scripts/engines/<id>.sh` delegates
+to `scripts/engines/load.sh`, which calls the loader, exports `GPU` plus the
+`MODAL`/`QWEN3`/`OMNIVOICE`/`CHATTERBOX` switches from the plan, runs
+`./scripts/deploy.sh "${ENVIRONMENT:-production}"` and finally checks
+`GET /api/v1/engines`:
+
+```bash
+scripts/engines/pocket_tts.sh chatterbox
+scripts/engines/qwen3_tts.sh kokoro
+scripts/engines/zono2.sh --dry-run
+```
+
+The first example keeps Pocket TTS embedded and starts the `chatterbox` sidecar
+(`CHATTERBOX_REMOTE_URL=http://gateway-chatterbox:8000/api/v1`); the second keeps
+Qwen3-TTS in its `qwen3` sidecar so `kokoro` can stay embedded. Two engines
+listed in each other's `incompatible_with` (for example `qwen3_tts` and `kokoro`
+forced to `embedded`) are reported as a conflict instead of sharing the gateway
+process. Besides the wrappers, `scripts/engine_runtime.py` accepts `--engine`,
+`--mode ENGINE=MODE`, `--dry-run`, `--registry` and `--root`; `--dry-run` prints
+the JSON plan and the env updates without writing files or deploying.
+
+The loader persists only the three existing `.env` files (`deploy/.env`,
+`apps/gateway/.env`, `apps/news/.env`) through the wizard's comment-preserving
+`EnvFile`. New keys are `TTS_RUNTIME_MODES` (JSON map of effective modes),
+`TTS_RUNTIME_PROFILES` and `CHATTERBOX_REMOTE_URL`, alongside
+`TTS_ENGINE=routed` and `TTS_EXTRA_ENGINES`. The setup wizard likewise persists
+engine choices in `.env` only: it reads the TOML catalogues as input and never
+generates or overwrites `config/engines.toml` or
+`config/engine_runtimes.toml` (its separate `apps/news/collections.toml` is
+created only when missing).
+
+Validate before deploying:
+
+```bash
+make check
+docker compose config
+scripts/engines/<id>.sh --dry-run
+```
+
+From `apps/news`, the loader regression tests are:
+`../../.venv/bin/python -m pytest tests/unit/test_engine_runtime.py -q`.

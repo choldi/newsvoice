@@ -281,6 +281,21 @@ docker compose exec worker python -m src.workers.schedule --collection tech
 docker compose exec worker python -m src.workers.trigger --collection tech
 ```
 
+## VALIDACIÓN DEL LOADER (FASE 14)
+
+Desde `apps/news`, valida el registro y el plan antes de desplegar:
+
+```bash
+../../.venv/bin/python -m pytest tests/unit/test_engine_runtime.py -q
+make check
+docker compose config
+../../scripts/engines/zono2.sh --dry-run
+```
+
+`--dry-run` imprime el plan sin escribir `.env` ni llamar a `deploy.sh`; los
+errores de alias, modo no soportado o conflicto entre engines embebidos salen
+con código 2.
+
 ## CONTACTO Y ESCALACIÓN
 
 Si encuentras:

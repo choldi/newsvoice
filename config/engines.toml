@@ -167,12 +167,14 @@ supported_languages = ["es", "en", "fr", "de", "it", "pt", "ca"]
 [engines.chatterbox]
 kind = "local_class"
 class_path = "tts_api.core.engines.chatterbox_engine.ChatterboxEngine"
+class_path_remote = "tts_api.core.engines.chatterbox_remote_engine.ChatterboxRemoteEngine"
+remote_url_env = "CHATTERBOX_REMOTE_URL"
 display_name = "Chatterbox"
 enabled = true
 locations = ["local"]
 required_env = []
 required_modules = ["chatterbox"]
-auto_include_when_configured = false
+auto_include_when_configured = true
 
 [engines.chatterbox.capabilities]
 stock_voices = true
