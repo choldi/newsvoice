@@ -42,6 +42,8 @@ result before anything is written:
 python3 scripts/setup.py            # TUI (needs a terminal)
 python3 scripts/setup.py --plain    # line mode / CI
 python3 scripts/setup.py --check    # inspect + validate, writes nothing
+python3 scripts/setup.py --fix-conflicts  # repair engine/mode conflicts, then write
+python3 scripts/setup.py --fix-all --yes  # repair everything automatable, then write
 make setup                          # same entry point from make
 ```
 
@@ -63,12 +65,19 @@ The wizard also:
   virtualenvs) with the command that provides each one and offers to run them;
 - keeps the **gateway key coherent across the three files**
   (`GATEWAY_API_KEY` / `TTS_API_KEY` / `API_KEY`) — divergent copies would
-  answer `401` at runtime, so an edit propagates and the validation screen
-  offers **«Unificar la clave del gateway»**;
+  answer `401` at runtime, so an edit propagates and repairs can unify it;
+- offers **«Resolver conflictos de engines…»** in the TTS and runtime screens,
+  plus **«Solucionar todo…»** in validation: both stage reversible repairs in
+  memory until the `.env` files are saved;
+- `--fix-conflicts` limits the staged repairs to engine ids, routes, modes and
+  derived infrastructure; `--fix-all` also mints internal secrets and aligns
+  device and model downloads. Licenses still require an explicit acceptance;
+  external credentials, hosts and host dependencies remain manual;
 - marks every failing line with the command that fixes it;
 - writes `reports/setup-report.md` after saving: host, method, validation,
-  every non-secret setting, TTS engines/voices/models and collections, with
-  secrets and recipient identifiers redacted. Upload it to a GitHub issue
+  applied repairs, remaining manual items, every non-secret setting, TTS
+  engines/voices/models and collections, with secrets and recipient
+  identifiers redacted. Upload it to a GitHub issue
   with `./scripts/upload_setup_report.sh` (or comment with `--issue N`).
 
 `make report` produces `deploy-report.md`: the findings index plus a

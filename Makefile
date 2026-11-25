@@ -49,7 +49,7 @@ help: ## Show all make targets
 	@echo ""
 	@echo "Setup / quality"
 	@echo "  make setup            Guided TUI for .env files and dependencies"
-	@echo "                        (python3 scripts/setup.py [--plain|--check])"
+	@echo "                        (python3 scripts/setup.py [--plain|--check|--fix-conflicts|--fix-all|--ai-fix])"
 	@echo "  make engines          Guided TTS engines: containers, GPU, API and terms"
 	@echo "                        (writes deploy/.env + gateway/.env only)"
 	@echo "  make venv             Create news + gateway .venv with dev extras"
@@ -101,7 +101,7 @@ venv: ## Create news + gateway .venv with dev extras
 
 install: venv ## Alias for venv
 
-setup: ## Guided TUI for .env + dependencies (ARGS="--plain", ARGS="--check")
+setup: ## Guided TUI for .env + dependencies (ARGS="--plain", ARGS="--check", ARGS="--fix-all")
 	python3 scripts/setup.py $(ARGS)
 
 engines: ## Guided TTS engine requirements (ARGS="--plain", ARGS="--yes")

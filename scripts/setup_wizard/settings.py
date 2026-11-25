@@ -1686,6 +1686,34 @@ _SECTIONS: list[Section] = [
     ),
     Section(
         file=NEWS,
+        title="Solventar problemas con IA",
+        fields=(
+            Field(
+                file=NEWS,
+                key="AI_FIX_API_BASE",
+                label="Base IA",
+                help="Endpoint OpenAI-compatible para el agente efímero (incluye /v1).",
+                default="",
+            ),
+            Field(
+                file=NEWS,
+                key="AI_FIX_MODEL",
+                label="Modelo IA",
+                help="Id exacto del modelo usado por el diagnóstico.",
+                default="",
+            ),
+            Field(
+                file=NEWS,
+                key="AI_FIX_API_KEY",
+                label="Clave API IA",
+                help="Opcional; se guarda en .env y nunca entra en el prompt.",
+                kind="secret",
+                default="",
+            ),
+        ),
+    ),
+    Section(
+        file=NEWS,
         title="Entrega de boletines",
         fields=(
             Field(

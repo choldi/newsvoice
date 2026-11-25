@@ -163,6 +163,18 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
         ),
     ),
     GuidePage(
+        "Solventar problemas con IA · opcional",
+        (
+            "Cuándo: cuando quieras que un agente efímero analice errores y proponga parches.",
+            "Qué necesitas: AI_FIX_API_BASE con /v1, AI_FIX_MODEL y AI_FIX_API_KEY si hace falta.",
+            "Se solicitan al reparar y se guardan en apps/news/.env para futuras peticiones.",
+            "El setup descarga ai_fix_agent.py por HTTPS con SHA256 fijado, lo ejecuta en /tmp",
+            "y lo desinstala al terminar. La clave nunca entra en el prompt ni se imprime.",
+            "Acción: «python3 scripts/setup.py --ai-fix --ai-fix-dry-run» para ver el diagnóstico",
+            "sin aplicar nada; quita --ai-fix-dry-run y confirma para aplicar los cambios.",
+        ),
+    ),
+    GuidePage(
         "OpenAI-compatible TTS · opcional",
         (
             "Cuándo: solo si usas openai_tts o lo añades a TTS_EXTRA_ENGINES.",

@@ -162,6 +162,18 @@ Antes de **CUALQUIER** tarea de codificación, DEBES leer y entender:
    ```
 2. Si algo falla, **NO** intentes forzar el push. Revisa el error y pregunta al usuario.
 
+### Reparación del setup
+
+- TUI: «Resolver conflictos de engines…» en las pantallas TTS/modos y «Solucionar todo…» en validación.
+- Modo línea: responde «sí» a las preguntas de reparación antes de guardar.
+- CLI: `python3 scripts/setup.py --fix-conflicts [--yes]` repara IDs, rutas, modos e infraestructura derivada.
+- CLI: `python3 scripts/setup.py --fix-all [--yes]` añade secretos internos, dispositivo y modelos; las licencias siguen requiriendo aceptación explícita.
+- CLI: `python3 scripts/setup.py --ai-fix [--ai-fix-dry-run] [--ai-fix-with-tests] [--yes]` pide URL/modelo/clave, guarda `AI_FIX_*` en `apps/news/.env`, descarga `scripts/ai_fix_agent.py` con SHA256 fijado, diagnostica y aplica correcciones previa confirmación; el agente se borra al terminar.
+- TUI: «Solventar problemas con IA…» en el menú inicial y en validación; el botón «Solo diagnosticar» no aplica cambios.
+- Las reparaciones se guardan en memoria; sin `--yes` o confirmación no se escribe ningún `.env`.
+- El prompt del diagnóstico se genera en el setup y se redactan secretos antes de enviarlo; las credenciales nunca viajan en el prompt ni se imprimen.
+- Las credenciales externas, los hosts y las dependencias del sistema siguen siendo manuales.
+
 ## REGLAS DE DEPLOY
 
 - No despliegues automáticamente sin confirmación explícita.

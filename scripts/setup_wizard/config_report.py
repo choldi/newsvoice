@@ -347,6 +347,8 @@ def build_config_report(
     method: str,
     checks: list[Check],
     written: list[str] | tuple[str, ...] = (),
+    repairs: list[str] | tuple[str, ...] = (),
+    manual: list[str] | tuple[str, ...] = (),
 ) -> str:
     """Return the complete Markdown report without any secret values."""
     generated = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -375,6 +377,18 @@ def build_config_report(
         "## Validation",
         "",
         *_checks_table(checks),
+        "",
+        "## Repairs",
+        "",
+        *(
+            [f"- {item}" for item in repairs]
+            if repairs
+            else ["- No repairs were applied in this session."]
+        ),
+        "",
+        "### Still manual",
+        "",
+        *([f"- {item}" for item in manual] if manual else ["- None."]),
         "",
         "## Configuration",
         "",
@@ -417,6 +431,8 @@ def write_config_report(
     method: str,
     checks: list[Check],
     written: list[str] | tuple[str, ...] = (),
+    repairs: list[str] | tuple[str, ...] = (),
+    manual: list[str] | tuple[str, ...] = (),
     path: Path = REPORT_PATH,
 ) -> Path:
     """Write the secret-free report and return its path."""
@@ -429,6 +445,8 @@ def write_config_report(
             method=method,
             checks=checks,
             written=written,
+            repairs=repairs,
+            manual=manual,
         ),
         encoding="utf-8",
     )

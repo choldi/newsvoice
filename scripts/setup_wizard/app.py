@@ -6,12 +6,13 @@ all the data rules live in :mod:`settings`, :mod:`deps` and :mod:`validate`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from engine_runtime import EngineRuntimeError, RuntimePlan
 
-from . import deps, transfer
+from . import deps, repair, transfer
 from . import validate as validation
 from .collections import ensure_example_collection
 from .config_report import write_config_report
@@ -19,6 +20,8 @@ from .curses_ui import App, Dialog, Picker, Row, Screen
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
 from .guide import external_guide_screen
+from .repair import shared_key_conflicts as _shared_key_conflicts
+from .repair import unify_shared_key as _unify_shared_key
 from .settings import (
     ENGINE_INFO,
     EXTRA_ENGINE_OPTIONS,
@@ -81,6 +84,8 @@ class Context:
         written: Env paths written during this session.
         install_result: Outcome of the last installation attempt.
         report_path: Secret-free setup report written to disk, when available.
+        repairs: Repair descriptions applied during this session.
+        manual: Problems that still need operator action.
     """
 
     report: Report
@@ -90,6 +95,8 @@ class Context:
     written: list[str] = field(default_factory=list)
     install_result: str = ""
     report_path: str = ""
+    repairs: list[str] = field(default_factory=list)
+    manual: list[str] = field(default_factory=list)
 
 
 def load_context(report: Report | None = None) -> Context:
@@ -130,6 +137,7 @@ _SECRET_KEYS = frozenset(
         "SMTP_PASSWORD",
         "HF_TOKEN",
         "LLM_API_KEY",
+        "AI_FIX_API_KEY",
     }
 )
 
@@ -144,52 +152,6 @@ _SHARED_KEYS: tuple[tuple[str, str], ...] = (
 _SHARED_KEY_LABELS = frozenset({"Clave del gateway", "Clave gateway", "API key"})
 
 
-def _shared_key_values(ctx: Context) -> dict[tuple[str, str], str]:
-    """Return the current value of the gateway key in each file."""
-    return {
-        (file_key, key): ctx.envs[file_key].get(key).strip()
-        for file_key, key in _SHARED_KEYS
-        if file_key in ctx.envs
-    }
-
-
-def _shared_key_source(ctx: Context) -> str:
-    """Return the value every file should hold (deploy wins when set)."""
-    values = _shared_key_values(ctx)
-    if values.get(("deploy", "GATEWAY_API_KEY")):
-        return values[("deploy", "GATEWAY_API_KEY")]
-    return next((value for value in values.values() if value), "")
-
-
-def _shared_key_conflicts(ctx: Context) -> list[str]:
-    """Return ``file:key`` labels whose value differs from the source one."""
-    source = _shared_key_source(ctx)
-    if not source:
-        return []
-    return [
-        f"{file_key}/{key}"
-        for (file_key, key), value in _shared_key_values(ctx).items()
-        if value and value != source
-    ]
-
-
-def _unify_shared_key(ctx: Context) -> int:
-    """Write the source gateway key into every file.
-
-    Returns:
-        Number of files that had to change.
-    """
-    source = _shared_key_source(ctx)
-    if not source:
-        return 0
-    changed = 0
-    for (file_key, key), value in _shared_key_values(ctx).items():
-        if value != source:
-            ctx.envs[file_key].set(key, source)
-            changed += 1
-    return changed
-
-
 def _propagate_shared_key(app: App, ctx: Context, value: str) -> None:
     """Keep the three copies of the gateway key equal while the user types."""
     for file_key, key in _SHARED_KEYS:
@@ -199,6 +161,107 @@ def _propagate_shared_key(app: App, ctx: Context, value: str) -> None:
         for row in screen.rows:
             if row.label in _SHARED_KEY_LABELS:
                 row.value = value
+
+
+def _record_repair(ctx: Context, result: repair.RepairResult) -> None:
+    """Keep a secret-free summary of staged repairs in the wizard context."""
+    for item in result.applied:
+        if item not in ctx.repairs:
+            ctx.repairs.append(item)
+    ctx.manual = result.manual
+    if result.error and result.error not in ctx.manual:
+        ctx.manual.append(result.error)
+
+
+def repair_screen(
+    app: App,
+    ctx: Context,
+    *,
+    all_problems: bool = False,
+    on_done: Callable[[App], None],
+) -> Screen:
+    """Show staged repairs that can fix engine or configuration problems."""
+
+    def fixes() -> list[repair.Fix]:
+        return repair.all_fixes(ctx) if all_problems else repair.conflict_fixes(ctx)
+
+    def build() -> list[Row]:
+        current = fixes()
+        title = "Todos los problemas" if all_problems else "Conflictos de engines"
+        rows = [
+            Row("note", label=f"{title}: {len(current)} reparación(es) disponible(s)."),
+            Row("note", label="Los cambios quedan en memoria hasta guardar los .env."),
+            Row("note", label=""),
+        ]
+        if not current:
+            rows.append(Row("note", label="No hay reparaciones pendientes.", result="ok"))
+        for fix in current:
+            rows.append(
+                Row(
+                    "button",
+                    label=f"Aplicar: {fix.label}",
+                    value=fix.detail,
+                    action=f"fix:{fix.id}",
+                )
+            )
+        if current:
+            rows.append(Row("button", label="Aplicar todas las visibles", action="fix_all"))
+        if ctx.repairs:
+            rows.append(Row("note", label=f"Ya aplicadas: {len(ctx.repairs)}", result="ok"))
+        if ctx.manual:
+            rows.append(
+                Row(
+                    "note",
+                    label=f"Pendiente manual: {len(ctx.manual)} problema(s)",
+                    result="warn",
+                )
+            )
+        rows.extend(
+            [
+                Row("note", label=""),
+                Row("button", label="Volver", action="back"),
+            ]
+        )
+        return rows
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            on_done(app_)
+            return
+        current = fixes()
+        if row.action == "fix_all":
+            result = repair.apply_fixes(ctx, current)
+            _record_repair(ctx, result)
+            level = "bad" if result.error else "ok"
+            message = result.error or f"{len(result.applied)} reparación(es) aplicada(s)"
+            app_.say(message, level)
+        elif row.action.startswith("fix:"):
+            fix_id = row.action.split(":", 1)[1]
+            selected = next((item for item in current if item.id == fix_id), None)
+            if selected is None:
+                return
+            result = repair.apply_fixes(ctx, [selected])
+            _record_repair(ctx, result)
+            level = "bad" if result.error else "ok"
+            message = result.error or (result.applied[0] if result.applied else "Sin cambios")
+            app_.say(message, level)
+        app_.current.rows = build()
+        app_.refocus()
+
+    return Screen(
+        title="Reparación de configuración",
+        subtitle="Cambios reversibles en memoria · se aplican al guardar",
+        rows=build(),
+        footer="F1 Ayuda   Enter Ejecutar   Esc Atrás   F10 Salir",
+        on_activate=activate,
+        on_help=lambda app_: app_.info(
+            "Reparación",
+            "Los conflictos se resuelven moviendo engines a sidecar/modal o retirándolos.",
+            "Solucionar todo también alinea secretos internos, dispositivo y modelos.",
+            "Las credenciales externas y los requisitos del host siguen siendo manuales.",
+        ),
+    )
 
 
 def _value_for(ctx: Context, field_: Field) -> str:
@@ -458,6 +521,7 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
             Row("button", label="Exportar la configuración a un archivo", action="export"),
             Row("button", label="Volver a detectar el entorno", action="redetect"),
             Row("button", label="Validar la configuración actual", action="audit"),
+            Row("button", label="Solventar problemas con IA…", action="ai_fix"),
             Row("button", label="Ayuda de teclado", action="help"),
             Row("button", label="Salir", action="quit"),
         ]
@@ -495,6 +559,8 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
             app_.replace(welcome_screen(app_, ctx))
         elif row.action == "audit":
             app_.push(validate_screen(app_, ctx, write_mode=False))
+        elif row.action == "ai_fix":
+            app_.push(ai_fix_screen(app_, ctx, write_mode=False))
         elif row.action == "help":
             app_.info(
                 "Ayuda",
@@ -1612,6 +1678,7 @@ def runtime_modes_screen(app: App, ctx: Context, *, standalone: bool = False) ->
             if info.modal_function:
                 rows.append(Row("note", label=f"  Modal: {info.modal_function}"))
         rows.append(Row("note", label=""))
+        rows.append(Row("button", label="Resolver conflictos de engines…", action="fix_conflicts"))
         if standalone:
             rows.append(Row("button", label="Guardar engines", action="save_engines"))
         rows.append(Row("button", label="Volver", action="back"))
@@ -1628,6 +1695,17 @@ def runtime_modes_screen(app: App, ctx: Context, *, standalone: bool = False) ->
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "fix_conflicts":
+            app_.push(
+                repair_screen(
+                    app_,
+                    ctx,
+                    on_done=lambda active: active.replace(
+                        runtime_modes_screen(active, ctx, standalone=standalone)
+                    ),
+                )
+            )
             return
         if row.action == "save_engines":
             app_.modal = _confirm_engine_write(app_, ctx)
@@ -1864,6 +1942,7 @@ def tts_screen(
         Row("button", label="Modos de carga (embedded/sidecar/modal/disabled)…", action="modes"),
         Row("note", label=""),
         Row("heading", label="Seguridad"),
+        Row("button", label="Resolver conflictos de engines…", action="fix_conflicts"),
         Row("button", label="Aplicar configuración segura (CPU)", action="safe"),
         Row("button", label="Explicación de la configuración TTS", action="explain"),
     ]
@@ -1917,6 +1996,17 @@ def tts_screen(
             return
         if row.action == "modes":
             app_.push(runtime_modes_screen(app_, ctx, standalone=standalone))
+            return
+        if row.action == "fix_conflicts":
+            app_.push(
+                repair_screen(
+                    app_,
+                    ctx,
+                    on_done=lambda active: active.replace(
+                        tts_screen(active, ctx, edit_mode=edit_mode, standalone=standalone)
+                    ),
+                )
+            )
             return
         if row.action == "safe":
             _apply_routed_preset(ctx, ROUTED_PRESETS[0])
@@ -2207,6 +2297,8 @@ def _write_setup_artifacts(app: App, ctx: Context, *, written: list[str]) -> Non
             method=ctx.method,
             checks=checks,
             written=written,
+            repairs=ctx.repairs,
+            manual=ctx.manual,
         )
     except OSError as exc:
         app.say(f"No se pudo escribir el informe de setup: {exc}", "bad")
@@ -2228,6 +2320,8 @@ def _write_engine_report(app: App, ctx: Context) -> None:
             method=ctx.method,
             checks=checks,
             written=ctx.written,
+            repairs=ctx.repairs,
+            manual=ctx.manual,
         )
     except OSError as exc:
         app.say(f"No se pudo escribir el informe de setup: {exc}", "bad")
@@ -2694,6 +2788,16 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
         for check in checks:
             rows.append(Row("note", label=f"{check.name}: {check.detail}", result=check.status))
         rows.append(Row("note", label=""))
+        if ctx.repairs:
+            rows.append(
+                Row("note", label=f"Reparaciones aplicadas: {len(ctx.repairs)}", result="ok")
+            )
+        if ctx.manual:
+            rows.append(
+                Row("note", label=f"Pendiente manual: {len(ctx.manual)} problema(s)", result="warn")
+            )
+        rows.append(Row("button", label="Solucionar todo…", action="fix_all"))
+        rows.append(Row("button", label="Solventar problemas con IA…", action="ai_fix"))
         conflicts = _shared_key_conflicts(ctx)
         if conflicts:
             rows.extend(
@@ -2722,6 +2826,21 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
     def activate(app_: App, row: Row) -> None:
         if row.action == "back":
             app_.pop()
+            return
+        if row.action == "fix_all":
+            app_.push(
+                repair_screen(
+                    app_,
+                    ctx,
+                    all_problems=True,
+                    on_done=lambda active: active.replace(
+                        validate_screen(active, ctx, write_mode=write_mode)
+                    ),
+                )
+            )
+            return
+        if row.action == "ai_fix":
+            app_.push(ai_fix_screen(app_, ctx, write_mode=write_mode))
             return
         if row.action == "unify":
             changed = _unify_shared_key(ctx)
@@ -2758,6 +2877,109 @@ def validate_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
     )
 
 
+def ai_fix_screen(app: App, ctx: Context, *, write_mode: bool) -> Screen:
+    """Configure and run the ephemeral AI repair agent."""
+    from .ai_fix import run_ai_fix
+
+    news = ctx.envs["news"]
+    fields = {field.key: field for field in _fields("news")}
+    url_row = Row(
+        "text",
+        label="URL base IA (incluye /v1)",
+        value=_value_for(ctx, fields["AI_FIX_API_BASE"]) if "AI_FIX_API_BASE" in fields else "",
+        help="Endpoint OpenAI-compatible usado solo por el diagnóstico.",
+        action="aifix_base",
+    )
+    model_row = Row(
+        "text",
+        label="Modelo IA",
+        value=_value_for(ctx, fields["AI_FIX_MODEL"]) if "AI_FIX_MODEL" in fields else "",
+        help="Id exacto del modelo servido por la URL anterior.",
+        action="aifix_model",
+    )
+    key_row = Row(
+        "secret",
+        label="Clave API IA (opcional)",
+        value=news.get("AI_FIX_API_KEY"),
+        help="Se guarda en apps/news/.env y nunca se envía en el prompt.",
+        action="aifix_key",
+    )
+    rows = [
+        Row("note", label="El agente se descarga con HTTPS + SHA256, se ejecuta en /tmp"),
+        Row("note", label="y se desinstala al terminar. Los cambios se muestran antes de aplicar."),
+        Row("note", label=""),
+        url_row,
+        model_row,
+        key_row,
+        Row("note", label=""),
+        Row("button", label="Diagnosticar y aplicar correcciones…", action="run"),
+        Row("button", label="Solo diagnosticar (no aplicar)…", action="dry"),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def on_change(app_: App, row: Row) -> None:
+        keys = {
+            "aifix_base": "AI_FIX_API_BASE",
+            "aifix_model": "AI_FIX_MODEL",
+            "aifix_key": "AI_FIX_API_KEY",
+        }
+        key = keys.get(row.action)
+        if key is not None:
+            news.set(key, row.value.strip())
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action not in ("run", "dry"):
+            return
+        for source, key in (
+            (url_row, "AI_FIX_API_BASE"),
+            (model_row, "AI_FIX_MODEL"),
+            (key_row, "AI_FIX_API_KEY"),
+        ):
+            news.set(key, source.value.strip())
+        dialog = Dialog(
+            "Solventar problemas con IA",
+            ["Preparando diagnosis…"],
+            [("Cerrar", lambda active: active.close_modal())],
+        )
+        app_.modal = dialog
+
+        def emit(message: str) -> None:
+            dialog.lines.append(message.rstrip())
+            dialog.lines = dialog.lines[-40:]
+            app_.say(message.strip()[:200])
+            app_.redraw()
+
+        result = run_ai_fix(
+            ctx,
+            dry_run=row.action == "dry",
+            emit=emit,
+            confirm=lambda question: row.action == "run",
+        )
+        dialog.lines.append("")
+        dialog.lines.append(f"Estado: {result.status}")
+        if result.applied:
+            dialog.lines.append("Aplicado: " + ", ".join(result.applied))
+        if result.error:
+            dialog.lines.append(f"Error: {result.error}")
+        dialog.lines.append(f"Agente desinstalado: {'sí' if result.agent_removed else 'no'}")
+        dialog.lines = dialog.lines[-40:]
+        app_.say("Diagnóstico con IA terminado", "ok" if result.status == "ok" else "bad")
+        app_.redraw()
+
+    return Screen(
+        title="Solventar problemas con IA",
+        subtitle="Agente efímero · descarga verificada · cambios revisables",
+        rows=rows,
+        footer="F1 Ayuda   Enter Editar   Esc Atrás   F10 Salir",
+        progress="6/6",
+        on_change=on_change,
+        on_activate=activate,
+    )
+
+
 def final_screen(app: App, ctx: Context) -> Screen:
     """Build the closing screen with the hand-off instructions."""
     written = ", ".join(ctx.written) or "los archivos ya existentes"
@@ -2771,6 +2993,12 @@ def final_screen(app: App, ctx: Context) -> Screen:
         except ValueError:
             report_label = Path(ctx.report_path)
         rows.append(Row("note", label=f"Informe sin secretos: {report_label}", result="ok"))
+    if ctx.repairs:
+        rows.append(Row("note", label=f"Reparaciones aplicadas: {len(ctx.repairs)}", result="ok"))
+    if ctx.manual:
+        rows.append(
+            Row("note", label=f"Pendiente manual: {len(ctx.manual)} problema(s)", result="warn")
+        )
     rows.extend(
         [
             Row("note", label=""),

@@ -1489,7 +1489,7 @@ def test_tui_starts_with_the_external_values_guide(wizard_context: Context) -> N
     app = build_app(wizard_context)
 
     assert app.current.title == "Guía de valores externos"
-    assert app.current.progress == "1/9"
+    assert app.current.progress == f"1/{len(GUIDE_PAGES)}"
     assert any("Fish Audio" in row.label for row in app.current.rows)
 
 
@@ -1513,20 +1513,21 @@ def test_external_guide_paginates_and_can_skip_to_the_menu(
     """PgUp/PgDn, arrows and Home/End move between guide pages."""
     app = build_app(wizard_context)
 
+    total = len(GUIDE_PAGES)
     app.handle(curses.KEY_NPAGE)
     assert "Motor TTS" in app.current.subtitle
-    assert app.current.progress == "2/9"
+    assert app.current.progress == f"2/{total}"
     app.handle(curses.KEY_NPAGE)
     assert "Fish Audio" in app.current.subtitle
-    assert app.current.progress == "3/9"
+    assert app.current.progress == f"3/{total}"
     app.handle(curses.KEY_PPAGE)
     assert "Motor TTS" in app.current.subtitle
     app.handle(curses.KEY_PPAGE)
     assert "Antes de empezar" in app.current.subtitle
     app.handle(curses.KEY_END)
-    assert app.current.progress == "9/9"
+    assert app.current.progress == f"{total}/{total}"
     app.handle(curses.KEY_HOME)
-    assert app.current.progress == "1/9"
+    assert app.current.progress == f"1/{total}"
 
     skip = next(row for row in app.current.rows if row.label == "Saltar al menú")
     app.focus = app.current.rows.index(skip)

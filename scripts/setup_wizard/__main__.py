@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__
-from .app import build_app, load_context
+from . import __version__, repair
+from .app import _record_repair, build_app, load_context
+from .config_report import write_config_report
+from .plain import _show_repair_result
 from .settings import PROFILES
 from .validate import validate
 
@@ -36,6 +38,32 @@ def _parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="Solo detecta el entorno y valida los .env, sin escribir nada",
+    )
+    fixes = parser.add_mutually_exclusive_group()
+    fixes.add_argument(
+        "--fix-conflicts",
+        action="store_true",
+        help="Repara conflictos de engines y modos, y escribe los .env",
+    )
+    fixes.add_argument(
+        "--fix-all",
+        action="store_true",
+        help="Repara todos los problemas automatizables y escribe los .env",
+    )
+    fixes.add_argument(
+        "--ai-fix",
+        action="store_true",
+        help="Descarga un agente efímero, diagnostica y aplica correcciones con confirmación",
+    )
+    parser.add_argument(
+        "--ai-fix-dry-run",
+        action="store_true",
+        help="Con --ai-fix: muestra el diagnóstico y las propuestas sin aplicarlas",
+    )
+    parser.add_argument(
+        "--ai-fix-with-tests",
+        action="store_true",
+        help="Con --ai-fix: incluye pytest y ruff en la evidencia",
     )
     parser.add_argument(
         "--engines",
@@ -113,6 +141,81 @@ def _check(include_detect: bool = True, profile: str = "") -> int:
     return 1 if errors else 0
 
 
+def _run_fix(ctx, *, conflicts_only: bool, assume_yes: bool) -> int:
+    """Stage repairs, write the env files and report the remaining problems."""
+    fixes = repair.conflict_fixes(ctx) if conflicts_only else repair.all_fixes(ctx)
+    before = validate(ctx.envs, ctx.report, will_write=False, profile=ctx.profile.key)
+    before_bad = sum(1 for check in before if check.status == "bad")
+    before_warn = sum(1 for check in before if check.status == "warn")
+    print("== reparación ==")
+    print(f"  antes: {before_bad} error(es) · {before_warn} aviso(s)")
+    if not fixes:
+        print("  No hay reparaciones pendientes.")
+        return 0
+    for fix in fixes:
+        print(f"  · {fix.label}: {fix.detail}")
+    answer = "s" if assume_yes else input("  ¿Aplicar las reparaciones? [s/N]: ").strip().lower()
+    if answer not in ("s", "sí", "si", "y", "yes"):
+        print("  Reparación cancelada; no se escribió ningún archivo.")
+        return 0
+    result = repair.apply_fixes(ctx, fixes)
+    _record_repair(ctx, result)
+    _show_repair_result(result)
+    if result.error:
+        return 1
+    written: list[str] = []
+    for key in ("deploy", "news", "gateway"):
+        env = ctx.envs[key]
+        if not env.changed_keys() and env.exists:
+            continue
+        backup = env.write()
+        written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
+    print(f"  Escrito: {', '.join(written) or 'nada'}")
+    checks = validate(ctx.envs, ctx.report, will_write=False, profile=ctx.profile.key)
+    errors = sum(1 for check in checks if check.status == "bad")
+    warns = sum(1 for check in checks if check.status == "warn")
+    print(f"  después: {errors} error(es) · {warns} aviso(s)")
+    try:
+        path = write_config_report(
+            ctx.envs,
+            ctx.report,
+            profile=ctx.profile,
+            method=ctx.method,
+            checks=checks,
+            written=written,
+            repairs=ctx.repairs,
+            manual=ctx.manual,
+        )
+    except OSError:
+        print("  ⚠ No se pudo escribir el informe de setup")
+    else:
+        print(f"  Informe sin secretos: {path}")
+    return 1 if errors else 0
+
+
+def _run_ai_fix(ctx, *, dry_run: bool, include_tests: bool, assume_yes: bool) -> int:
+    """Run the ephemeral agent flow from the command line."""
+    from .ai_fix import run_ai_fix
+
+    print("== solventar problemas con IA ==")
+    result = run_ai_fix(
+        ctx,
+        dry_run=dry_run,
+        include_tests=include_tests,
+        assume_yes=assume_yes,
+    )
+    if result.applied:
+        print(f"  Aplicado: {', '.join(result.applied)}")
+    for item in result.manual:
+        print(f"  ⚠ pendiente manual: {item}")
+    if result.error:
+        print(f"  ✗ {result.error}")
+    print(f"  Agente desinstalado: {'sí' if result.agent_removed else 'no'}")
+    if result.report_path:
+        print(f"  Informe sin secretos: {result.report_path}")
+    return 1 if result.status == "error" else 0
+
+
 def _interactive() -> bool:
     """Report whether a curses TUI can be started.
 
@@ -145,6 +248,15 @@ def main(argv: list[str] | None = None) -> int:
         ctx.profile = next((p for p in PROFILES if p.key == args.profile), ctx.profile)
     if args.install:
         ctx.method = args.install
+    if args.fix_conflicts or args.fix_all:
+        return _run_fix(ctx, conflicts_only=args.fix_conflicts, assume_yes=args.yes)
+    if args.ai_fix:
+        return _run_ai_fix(
+            ctx,
+            dry_run=args.ai_fix_dry_run,
+            include_tests=args.ai_fix_with_tests,
+            assume_yes=args.yes,
+        )
 
     if args.engines and (args.plain or not _interactive()):
         from .plain import run_engines

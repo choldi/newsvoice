@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import sys
 
-from . import deps
+from . import deps, repair
 from . import validate as validation
 from .app import (
     Context,
     _apply_profile,
     _dependency_plan,
     _mask,
+    _record_repair,
     _shared_key_conflicts,
     _shown,
     _sync_engine_requirements,
@@ -112,6 +113,16 @@ def _choose(title: str, options: list[str], current: int = 0) -> int:
         if 1 <= picked <= len(options):
             return picked - 1
         print(f"  Escribe un número entre 1 y {len(options)}.")
+
+
+def _show_repair_result(result: repair.RepairResult) -> None:
+    """Print one repair outcome without exposing secret values."""
+    for item in result.applied:
+        print(f"  ✓ {item}")
+    for item in result.manual:
+        print(f"  ⚠ pendiente manual: {item}")
+    if result.error:
+        print(f"  ✗ {result.error}")
 
 
 def _multi_prompt(field: Field, current: str) -> str:
@@ -386,6 +397,12 @@ def run_engines(ctx: Context | None = None, *, assume_yes: bool = False) -> int:
     _sync_gateway_docker_extras(ctx)
     _sync_engine_requirements(ctx)
 
+    conflicts = repair.conflict_fixes(ctx)
+    if conflicts and _confirm("¿Resolver conflictos de engines? [s/N]:", assume_yes=assume_yes):
+        result = repair.apply_fixes(ctx, conflicts)
+        _record_repair(ctx, result)
+        _show_repair_result(result)
+
     infos = selected_engine_infos(
         gateway.get("TTS_ENGINE"),
         gateway.get("TTS_ENGINES"),
@@ -495,6 +512,8 @@ def run_engines(ctx: Context | None = None, *, assume_yes: bool = False) -> int:
                 method=ctx.method,
                 checks=checks,
                 written=ctx.written,
+                repairs=ctx.repairs,
+                manual=ctx.manual,
             )
         except OSError as exc:
             print(f"  ⚠ No se pudo escribir el informe de setup: {exc}")
@@ -537,6 +556,33 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
     else:
         print("  Se omite la instalación de dependencias.")
 
+    pending = repair.all_fixes(ctx)
+    if pending and _confirm(
+        "¿Solucionar todos los problemas automatizables? [s/N]:", assume_yes=assume_yes
+    ):
+        result = repair.apply_fixes(ctx, pending)
+        _record_repair(ctx, result)
+        _show_repair_result(result)
+        if write:
+            for file_key in _ORDER:
+                env = ctx.envs[file_key]
+                if not env.changed_keys() and env.exists:
+                    continue
+                backup = env.write()
+                ctx.written.append(env.key_path + (f" (copia: {backup.name})" if backup else ""))
+            print(f"  Escrito tras reparar: {', '.join(ctx.written) or 'nada'}")
+
+    if _confirm("¿Solventar problemas con IA (agente temporal)? [s/N]:", assume_yes=False):
+        from .ai_fix import run_ai_fix
+
+        _title("Solventar problemas con IA")
+        ai_result = run_ai_fix(ctx, emit=print)
+        if ai_result.applied:
+            print(f"  Aplicado: {', '.join(ai_result.applied)}")
+        if ai_result.error:
+            print(f"  ✗ {ai_result.error}")
+        print(f"  Agente desinstalado: {'sí' if ai_result.agent_removed else 'no'}")
+
     _title("Paso 6 · validación")
     checks = validation.validate(ctx.envs, ctx.report, will_write=write, profile=ctx.profile.key)
     symbols = {"ok": "✓", "warn": "⚠", "bad": "✗"}
@@ -553,6 +599,8 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
                 method=ctx.method,
                 checks=checks,
                 written=ctx.written,
+                repairs=ctx.repairs,
+                manual=ctx.manual,
             )
         except OSError as exc:
             print(f"  ⚠ No se pudo escribir el informe de setup: {exc}")

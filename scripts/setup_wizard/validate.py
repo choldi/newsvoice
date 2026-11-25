@@ -29,6 +29,8 @@ class Check:
     name: str
     status: str
     detail: str
+    code: str = ""
+    fixable: bool = False
 
 
 def validate(
@@ -69,6 +71,24 @@ def validate(
             checks.append(
                 Check(f"{key}/.env", "bad", f"falta {env.key_path} (copia de su .env.example)")
             )
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for entry in env.entries():
+            if entry.key is None or entry.commented:
+                continue
+            if entry.key in seen and entry.key not in duplicates:
+                duplicates.append(entry.key)
+            seen.add(entry.key)
+        if duplicates:
+            checks.append(
+                Check(
+                    "claves duplicadas",
+                    "warn",
+                    f"{key}/.env repite: {', '.join(sorted(duplicates))}",
+                    code=f"duplicates:{key}",
+                    fixable=True,
+                )
+            )
 
     # 2. Required values ----------------------------------------------------
     # The severity follows what the software really does without the key:
@@ -100,6 +120,24 @@ def validate(
             name + (f" ({fallback[name]})" if name in fallback else "") for name, _sev in missing
         )
         checks.append(Check(f"{key} obligatorias", worst, detail))
+
+    # 2b. AI repair endpoint is optional but must be complete ---------------
+    news = envs.get("news")
+    if news is not None:
+        ai_base = news.get("AI_FIX_API_BASE").strip()
+        ai_model = news.get("AI_FIX_MODEL").strip()
+        if bool(ai_base) != bool(ai_model):
+            checks.append(
+                Check(
+                    "solventar con IA",
+                    "warn",
+                    "AI_FIX_API_BASE y AI_FIX_MODEL deben definirse juntos",
+                )
+            )
+        elif ai_base and not ai_base.rstrip("/").endswith("/v1"):
+            checks.append(Check("solventar con IA", "warn", "AI_FIX_API_BASE debería incluir /v1"))
+        elif ai_base and ai_model:
+            checks.append(Check("solventar con IA", "ok", "endpoint de diagnóstico configurado"))
 
     # 3. Placeholders ------------------------------------------------------
     from .settings import fields_for
@@ -136,9 +174,7 @@ def validate(
             consumers.append(("news.TTS_API_KEY", news.get("TTS_API_KEY").strip()))
         if gateway is not None:
             consumers.append(("gateway.API_KEY", gateway.get("API_KEY").strip()))
-        fix = (
-            " — unifica los tres valores (el asistente lo hace con «Unificar la clave del gateway»)"
-        )
+        fix = " — usa «Solucionar todo» o la reparación de secretos internos"
         conflict = [name for name, value in consumers if shared and value != shared and value]
         absent = [name for name, value in consumers if not value]
         if shared:
@@ -272,6 +308,7 @@ def validate(
             render_runtime_modes,
             required_engine_keys,
             runtime_plan,
+            runtime_specs,
             selected_engine_infos,
             split_multi,
             valid_language_code,
@@ -303,6 +340,36 @@ def validate(
             )
         elif extra:
             checks.append(Check("engines extra", "ok", ", ".join(extra)))
+
+        valid_engines = {
+            name
+            for name, spec in runtime_specs().items()
+            if spec.selectable and spec.gateway_engine
+        }
+        routing_values = (parse_engine_map(gateway.get("TTS_ENGINES")) or {}).values()
+        referenced = [
+            engine,
+            *routing_values,
+            *extra,
+            *parse_runtime_modes(gateway.get("TTS_RUNTIME_MODES")),
+        ]
+        invalid_engines = sorted(
+            {
+                canonical_engine(name)
+                for name in referenced
+                if name and name != "routed" and canonical_engine(name) not in valid_engines
+            }
+        )
+        if invalid_engines:
+            checks.append(
+                Check(
+                    "engines configurables",
+                    "bad",
+                    "IDs no configurables en el gateway: " + ", ".join(invalid_engines),
+                    code="invalid-ids",
+                    fixable=True,
+                )
+            )
 
         raw_modes_text = gateway.get("TTS_RUNTIME_MODES").strip()
         try:
@@ -432,7 +499,15 @@ def validate(
         try:
             runtime_resolution = runtime_plan(selected, modes)
         except EngineRuntimeError as exc:
-            checks.append(Check("conflictos de runtime", "bad", str(exc)))
+            checks.append(
+                Check(
+                    "conflictos de runtime",
+                    "bad",
+                    str(exc),
+                    code="runtime-conflict",
+                    fixable=True,
+                )
+            )
             runtime_resolution = None
         if runtime_resolution is not None:
             if runtime_resolution.conflicts:
@@ -441,6 +516,8 @@ def validate(
                         "conflictos de runtime",
                         "bad",
                         " · ".join(runtime_resolution.conflicts),
+                        code="runtime-conflict",
+                        fixable=True,
                     )
                 )
             else:
