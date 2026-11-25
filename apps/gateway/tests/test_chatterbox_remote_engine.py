@@ -91,6 +91,20 @@ async def test_initialize_probes_the_sidecar_liveness(
     await engine.close()
 
 
+async def test_warmup_delegates_to_the_sidecar_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = ChatterboxRemoteEngine(base_url=SIDECAR_URL)
+    calls: list[bool] = []
+
+    async def warmup() -> None:
+        calls.append(True)
+
+    monkeypatch.setattr(engine._proxy, "warmup", warmup)
+
+    await engine.warmup()
+
+    assert calls == [True]
+
+
 async def test_synthesize_forwards_to_tts() -> None:
     captured: dict[str, Any] = {}
 

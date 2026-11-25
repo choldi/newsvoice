@@ -92,6 +92,35 @@ def test_sidecar_base_url_strips_the_api_prefix(given: str, expected: str) -> No
     assert normalize_sidecar_base_url(given) == expected
 
 
+async def test_initialize_retries_when_sidecar_becomes_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probes = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal probes
+        if request.url.path == "/api/v1/health/live":
+            probes += 1
+            if probes == 1:
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/api/v1/health":
+            return httpx.Response(200, json={"status": "ok", "mode": "REAL"})
+        raise AssertionError(request.url.path)
+
+    _patch_client(monkeypatch, handler)
+    engine = OmniVoiceRemoteEngine(base_url=SIDECAR_URL)
+    await engine.initialize()
+    assert engine._available is False
+
+    health = await engine.health_check()
+
+    assert probes == 2
+    assert health["status"] == "ok"
+    assert health["model_loaded"] is True
+    await engine.close()
+
+
 async def test_initialize_with_api_prefix_probes_the_real_health_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

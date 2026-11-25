@@ -116,7 +116,7 @@ wait_for() {
 wait_container_health() {
     local name="$1" service="$2"
     echo "==> Waiting for ${name} container health..."
-    for _ in $(seq 1 20); do
+    for _ in $(seq 1 100); do
         if "${DC[@]}" exec -T "$service" python -c \
             "import httpx, sys; r = httpx.get('http://localhost:8000/api/v1/health'); sys.exit(0 if r.status_code == 200 else 1)" \
             >/dev/null 2>&1; then
@@ -125,7 +125,7 @@ wait_container_health() {
         fi
         sleep 3
     done
-    echo "${name} health check failed after 60s!" >&2
+    echo "${name} health check failed after 300s!" >&2
     "${DC[@]}" logs "$service" >&2
     return 1
 }

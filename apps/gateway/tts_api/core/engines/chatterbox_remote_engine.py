@@ -37,6 +37,9 @@ class ChatterboxRemoteEngine(ChatterboxEngine):
     async def initialize(self) -> None:
         await self._proxy.initialize()
 
+    async def warmup(self) -> None:
+        await self._proxy.warmup()
+
     async def synthesize(
         self,
         *,

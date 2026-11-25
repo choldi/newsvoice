@@ -69,8 +69,13 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
 
         An unreachable sidecar is non-fatal: the engine stays unavailable for
         synthesis but does not prevent the main gateway (or a routed engine
-        that includes it) from starting.
+        that includes it) from starting. Later calls retry the probe so a
+        sidecar that warms up slowly becomes usable without a gateway restart.
         """
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+        self._available = False
         if not self._base_url:
             logger.warning(
                 "URL del sidecar no configurada para %s; el engine quedará no disponible",
@@ -92,6 +97,14 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
             return
         self._available = True
 
+    async def _ensure_available(self) -> None:
+        """Retry the sidecar probe when the initial startup probe failed."""
+        if self._client is None or not self._available:
+            await self.initialize()
+
+    async def warmup(self) -> None:
+        await self._ensure_available()
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -109,6 +122,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         return self._client
 
     async def _post_audio(self, path: str, payload: dict[str, Any]) -> bytes:
+        await self._ensure_available()
         client = self._require_client()
         try:
             response = await client.post(path, json=payload)
@@ -189,6 +203,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
     # --- introspection -----------------------------------------------------
 
     async def list_stock_voices(self, language: str | None = None) -> list[dict[str, Any]]:
+        await self._ensure_available()
         client = self._require_client()
         params = {"language": language} if language else None
         try:
@@ -205,6 +220,7 @@ class OmniVoiceRemoteEngine(TtsEngineBase):
         clave: un sub-engine que no la expone marca el gateway entero como
         ``degraded``, aunque el resto de engines estén sanos.
         """
+        await self._ensure_available()
         if self._client is None or not self._available:
             return {
                 "status": "unavailable",
