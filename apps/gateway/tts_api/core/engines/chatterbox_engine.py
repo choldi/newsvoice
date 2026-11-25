@@ -124,6 +124,9 @@ class ChatterboxEngine(TtsEngineBase):
             self._t3_model,
         )
 
+    async def warmup(self) -> None:
+        await self._ensure_model()
+
     async def synthesize(
         self,
         *,

@@ -76,7 +76,21 @@ PY
 ./scripts/deploy.sh "${ENVIRONMENT:-production}"
 
 GATEWAY_PORT="${GATEWAY_PORT:-8001}"
-if ! curl -sf "http://localhost:${GATEWAY_PORT}/api/v1/engines" >/dev/null 2>&1; then
+_read_env() {
+    local file="$1" key="$2" val=""
+    [[ -f "$file" ]] || return 0
+    val="$(grep -E "^${key}=" "$file" | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")"
+    printf '%s' "$val"
+}
+
+API_KEY="${GATEWAY_API_KEY:-$(_read_env deploy/.env GATEWAY_API_KEY)}"
+API_KEY="${API_KEY:-$(_read_env apps/gateway/.env API_KEY)}"
+catalog_headers=()
+if [[ -n "$API_KEY" ]]; then
+    catalog_headers+=(-H "X-API-Key: ${API_KEY}")
+fi
+if ! curl -sf "${catalog_headers[@]}" \
+    "http://localhost:${GATEWAY_PORT}/api/v1/engines" >/dev/null 2>&1; then
     echo "gateway engine catalog check failed" >&2
     exit 1
 fi

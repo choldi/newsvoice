@@ -107,6 +107,27 @@ async def test_chatterbox_initialize_does_not_load_model(
     assert engine._model is None
 
 
+async def test_chatterbox_warmup_loads_model(monkeypatch: pytest.MonkeyPatch):
+    fake = types.ModuleType("chatterbox")
+    fake.mtl_tts = types.ModuleType("chatterbox.mtl_tts")
+    monkeypatch.setitem(sys.modules, "chatterbox", fake)
+    monkeypatch.setitem(sys.modules, "chatterbox.mtl_tts", fake.mtl_tts)
+
+    engine = ChatterboxEngine()
+    expected = _FakeModel()
+
+    def load_model() -> _FakeModel:
+        engine._model = expected
+        return expected
+
+    monkeypatch.setattr(engine, "_load_model", load_model)
+
+    await engine.warmup()
+
+    assert engine._model is expected
+    assert (await engine.health_check())["model_loaded"] is True
+
+
 async def test_chatterbox_initialize_without_package(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "chatterbox", None)
     engine = ChatterboxEngine()
