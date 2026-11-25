@@ -82,7 +82,6 @@ class ChatterboxEngine(TtsEngineBase):
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._t3_model: str = settings.CHATTERBOX_T3_MODEL
         self._device_setting: str = settings.CHATTERBOX_DEVICE
         self._exaggeration: float = settings.CHATTERBOX_EXAGGERATION
         self._cfg_weight: float = settings.CHATTERBOX_CFG_WEIGHT
@@ -118,11 +117,7 @@ class ChatterboxEngine(TtsEngineBase):
             ) from exc
 
         self._ready = True
-        logger.info(
-            "chatterbox engine ready (device=%s, t3_model=%s)",
-            self._device_setting,
-            self._t3_model,
-        )
+        logger.info("chatterbox engine ready (device=%s)", self._device_setting)
 
     async def warmup(self) -> None:
         await self._ensure_model()
@@ -267,18 +262,12 @@ class ChatterboxEngine(TtsEngineBase):
 
             self._device = self._resolve_device()
             try:
-                self._model = ChatterboxMultilingualTTS.from_pretrained(
-                    device=self._device, t3_model=self._t3_model
-                )
+                self._model = ChatterboxMultilingualTTS.from_pretrained(device=self._device)
             except Exception as exc:
                 self._device = "cpu"
-                self._model = ChatterboxMultilingualTTS.from_pretrained(
-                    device="cpu", t3_model=self._t3_model
-                )
+                self._model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
                 logger.warning("chatterbox GPU load failed; fell back to CPU: %s", exc)
-            logger.info(
-                "chatterbox model loaded (device=%s, t3_model=%s)", self._device, self._t3_model
-            )
+            logger.info("chatterbox model loaded (device=%s)", self._device)
             return self._model
 
     async def _ensure_model(self) -> Any:

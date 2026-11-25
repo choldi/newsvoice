@@ -128,6 +128,30 @@ async def test_chatterbox_warmup_loads_model(monkeypatch: pytest.MonkeyPatch):
     assert (await engine.health_check())["model_loaded"] is True
 
 
+def test_chatterbox_load_model_uses_supported_from_pretrained_args(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    calls: list[dict] = []
+
+    class _FakeChatterboxMultilingualTTS:
+        @classmethod
+        def from_pretrained(cls, **kwargs) -> _FakeModel:
+            calls.append(kwargs)
+            return _FakeModel()
+
+    fake = types.ModuleType("chatterbox")
+    fake.mtl_tts = types.ModuleType("chatterbox.mtl_tts")
+    fake.mtl_tts.ChatterboxMultilingualTTS = _FakeChatterboxMultilingualTTS
+    monkeypatch.setitem(sys.modules, "chatterbox", fake)
+    monkeypatch.setitem(sys.modules, "chatterbox.mtl_tts", fake.mtl_tts)
+
+    engine = ChatterboxEngine()
+    monkeypatch.setattr(engine, "_resolve_device", lambda: "cpu")
+    engine._load_model()
+
+    assert calls == [{"device": "cpu"}]
+
+
 async def test_chatterbox_initialize_without_package(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "chatterbox", None)
     engine = ChatterboxEngine()
