@@ -24,6 +24,8 @@ def _build_app(api_key: str = "") -> Starlette:
     app.add_route("/api/v1/health", dummy_handler)
     app.add_route("/api/v1/disk", dummy_handler)
     app.add_route("/docs", dummy_handler)
+    app.add_route("/static", dummy_handler)
+    app.add_route("/static/app.js", dummy_handler)
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(APIKeyMiddleware, api_key=api_key)
     return app
@@ -114,3 +116,10 @@ class TestAPIKeyMiddleware:
         client = TestClient(_build_app(api_key="secret123"))
         response = client.get("/docs")
         assert response.status_code == 200
+
+    def test_static_assets_bypass_auth(self) -> None:
+        """Los assets de la GUI cargan sin clave; el resto sigue protegido."""
+        client = TestClient(_build_app(api_key="secret123"))
+        assert client.get("/static").status_code == 200
+        assert client.get("/static/app.js").status_code == 200
+        assert client.get("/staticx").status_code == 401

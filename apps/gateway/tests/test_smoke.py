@@ -6,8 +6,22 @@ externas se redirigen a un tmp_path mediante ``_isolate_external_install``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from httpx import AsyncClient
+
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "tts_api" / "static"
+
+
+def test_gui_keeps_api_key_client_side() -> None:
+    """La GUI ofrece la clave y la envía como header sin incrustarla en el HTML."""
+    html = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    js = (_STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="api-key"' in html
+    assert "headers.set('X-API-Key'" in js
+    assert "sessionStorage.getItem(API_KEY_STORAGE)" in js
+    assert "localStorage" not in js
 
 
 @pytest.mark.asyncio

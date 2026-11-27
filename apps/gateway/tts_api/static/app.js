@@ -2,11 +2,24 @@
 
 // ── API Client ──────────────────────────────────────────────────────────────
 
+const API_KEY_STORAGE = 'newsvoice.apiKey';
+
 const API = {
     base: '/api/v1',
+    key: '',
+
+    setKey(value) {
+        this.key = String(value || '').trim();
+        try {
+            if (this.key) sessionStorage.setItem(API_KEY_STORAGE, this.key);
+            else sessionStorage.removeItem(API_KEY_STORAGE);
+        } catch (_) {}
+    },
 
     async _fetch(path, opts = {}) {
-        const res = await fetch(this.base + path, opts);
+        const headers = new Headers(opts.headers || {});
+        if (this.key) headers.set('X-API-Key', this.key);
+        const res = await fetch(this.base + path, { ...opts, headers });
         if (!res.ok) {
             const body = await res.json().catch(() => ({ detail: res.statusText }));
             throw new Error(body.detail || body.error_type || `HTTP ${res.status}`);
@@ -1230,7 +1243,40 @@ function resizeCanvases() {
 
 // ── Init ────────────────────────────────────────────────────────────────────
 
+function initApiKeyField() {
+    const field = $('#api-key');
+    if (!field) return;
+    let stored = '';
+    try {
+        stored = sessionStorage.getItem(API_KEY_STORAGE) || '';
+    } catch (_) {}
+    API.setKey(stored);
+    field.value = API.key;
+    const apply = () => {
+        API.setKey(field.value);
+        const state = $('#api-key-state');
+        if (state) state.textContent = API.key ? 'guardada en esta pestaña' : 'sin clave';
+    };
+    apply();
+    field.addEventListener('change', apply);
+    field.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            apply();
+            field.blur();
+        }
+    });
+    const clear = $('#api-key-clear');
+    if (clear) {
+        clear.addEventListener('click', () => {
+            field.value = '';
+            apply();
+            field.focus();
+        });
+    }
+}
+
 async function init() {
+    initApiKeyField();
     initTabs();
     initPlayer();
     initLibrary();

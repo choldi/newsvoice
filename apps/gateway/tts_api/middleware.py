@@ -46,7 +46,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     Si settings.API_KEY está vacío, todas las peticiones pasan sin autenticación.
     Si tiene un valor, se requiere el header `X-API-Key` o query param `api_key`.
     Los endpoints públicos (sin auth): /docs, /redoc, /openapi.json, /metrics,
-    /api/v1/health* y /api/v1/disk.
+    /api/v1/health*, /api/v1/disk y los assets estáticos bajo /static/.
     """
 
     PUBLIC_PATHS: ClassVar[set[str]] = {
@@ -76,6 +76,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         # Endpoints públicos
         if path in self.PUBLIC_PATHS:
+            return await call_next(request)
+        if path == "/static" or path.startswith("/static/"):
             return await call_next(request)
         if path.startswith("/api/v1/health"):
             return await call_next(request)

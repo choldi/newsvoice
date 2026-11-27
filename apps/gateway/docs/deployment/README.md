@@ -238,6 +238,14 @@ curl -X POST "http://localhost:8001/api/v1/admin/engines/activate" \
 Después configura `VENDOR_BASE_URL` y `VENDOR_API_KEY` en
 `apps/gateway/.env`/compose y reinicia el gateway.
 
+## GUI web
+
+La GUI se sirve en `/` y sus assets bajo `/static/*`; son recursos públicos y
+no contienen secretos. Cuando `API_KEY` está activo, introduce la clave en el
+campo **X-API-Key** de la cabecera: la GUI la guarda solo en `sessionStorage` y
+la envía como header en cada llamada a `/api/v1/*`. La clave no se incrusta en
+el HTML ni viaja en la URL.
+
 ## Monitoreo
 
 - **Métricas**: `GET /metrics` (Prometheus)
