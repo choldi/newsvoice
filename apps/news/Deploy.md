@@ -73,6 +73,11 @@ The wizard also:
   derived infrastructure; `--fix-all` also mints internal secrets and aligns
   device and model downloads. Licenses still require an explicit acceptance;
   external credentials, hosts and host dependencies remain manual;
+- exposes **«Crear voces diseñadas básicas»** / `--design-voices`: it reads
+  `config/basic_voices.toml`, checks `X-API-Key` and `X-Admin-Token` from the
+  local `.env`, and creates each name both as a gateway designed preset and as
+  a news generated voice pinned to local Qwen3. `--design-dry-run` previews the
+  calls without writing, and existing names are skipped;
 - marks every failing line with the command that fixes it;
 - writes `reports/setup-report.md` after saving: host, method, validation,
   applied repairs, remaining manual items, every non-secret setting, TTS

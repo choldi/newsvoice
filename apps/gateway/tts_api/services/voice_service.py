@@ -9,12 +9,15 @@ from pathlib import Path
 from typing import Any, cast
 
 from loguru import logger
+from tts_contract import canonical_engine_id
 
 from tts_api.core.audio import AudioValidator
 from tts_api.core.embedding_cache import EmbeddingCache, get_embedding_cache
+from tts_api.core.engine_registry import EngineRegistry, engine_supports_capability
 from tts_api.core.exceptions import (
     FeatureNotSupportedError,
     InvalidReferenceAudioError,
+    UnsupportedInstructError,
     UnsupportedLanguageError,
     VoiceNotFoundError,
 )
@@ -22,8 +25,7 @@ from tts_api.core.omnivoice_engine import _validate_instruct
 from tts_api.repositories.voice_repository import VoiceRepository
 from tts_api.settings import get_settings
 
-# Engines that support voice cloning from reference audio
-CLONE_CAPABLE_ENGINES = {"omnivoice", "omnivoice_remote", "pocket_tts", "qwen3_tts", "fish_tts"}
+MIN_DESIGN_INSTRUCT_LENGTH = 10
 
 
 class VoiceService:
@@ -48,6 +50,13 @@ class VoiceService:
         if engine == "routed":
             return "pocket_tts"
         return engine
+
+    def _supports(self, engine: str, capability: str) -> bool:
+        """Check a declared engine capability from the registry."""
+        registry = getattr(self._settings, "engine_registry", None)
+        if not isinstance(registry, EngineRegistry):
+            registry = EngineRegistry.load()
+        return engine_supports_capability(registry, engine, capability, self._settings)
 
     async def initialize(self) -> None:
         """Initialize the service and its dependencies."""
@@ -98,11 +107,11 @@ class VoiceService:
         else:
             engine_str = engine.strip()
 
-        engine_list = [e.strip() for e in engine_str.split(",") if e.strip()]
+        engine_list = [canonical_engine_id(e.strip()) for e in engine_str.split(",") if e.strip()]
 
         # Validate each engine supports cloning
         for e in engine_list:
-            if e not in CLONE_CAPABLE_ENGINES:
+            if not self._supports(e, "voice_cloning"):
                 raise FeatureNotSupportedError("voice cloning", e)
 
         # Validate language
@@ -224,7 +233,7 @@ class VoiceService:
 
         # For routed engines, accept voices tagged with any clone-capable engine
         is_routed = self._settings.effective_tts_engine == "routed"
-        if is_routed and voice_engines & CLONE_CAPABLE_ENGINES:
+        if is_routed and any(self._supports(e, "voice_cloning") for e in voice_engines):
             return
 
         # Direct match: active engine is in the voice's engine list
@@ -243,20 +252,33 @@ class VoiceService:
         name: str,
         instruct: str,
         language: str,
+        engine: str | None = None,
     ) -> str:
-        """Create a designed voice from an instruct string."""
+        """Create a designed voice preset pinned to a design-capable engine."""
         if language not in self._settings.omnilang_list:
             raise UnsupportedLanguageError(language, self._settings.omnilang_list)
 
-        _validate_instruct(instruct)
+        design_engine = canonical_engine_id((engine or self._settings.effective_tts_engine).strip())
+        if design_engine == "routed" or not self._supports(design_engine, "instruct_voice_design"):
+            raise FeatureNotSupportedError("voice design", design_engine)
+
+        if design_engine in ("omnivoice", "omnivoice_remote"):
+            _validate_instruct(instruct)
+        elif len(instruct.strip()) < MIN_DESIGN_INSTRUCT_LENGTH:
+            raise UnsupportedInstructError(
+                instruct,
+                {"instruct": "debe contener al menos 10 caracteres"},
+                [],
+            )
 
         repository = cast(VoiceRepository, self._repository)
         voice_id = await repository.create_designed_voice(
             name=name,
             instruct=instruct,
             language=language,
+            metadata={"engine": design_engine},
         )
-        logger.info(f"Designed voice created: {name} ({voice_id})")
+        logger.info(f"Designed voice created: {name} ({voice_id}) on {design_engine}")
         return voice_id
 
     async def get_designed_voice(self, voice_id: str) -> dict[str, Any]:

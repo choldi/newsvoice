@@ -10,6 +10,7 @@ import curses
 from dataclasses import dataclass
 
 from .curses_ui import App, Row, Screen
+from .settings import ENGINE_INFO
 
 __all__ = ["GUIDE_PAGES", "GuidePage", "external_guide_screen"]
 
@@ -26,6 +27,9 @@ class GuidePage:
     title: str
     lines: tuple[str, ...]
 
+
+_CLONE_ENGINES = ", ".join(sorted(name for name, info in ENGINE_INFO.items() if info.cloning))
+_DESIGN_ENGINES = ", ".join(sorted(name for name, info in ENGINE_INFO.items() if info.voice_design))
 
 GUIDE_PAGES: tuple[GuidePage, ...] = (
     GuidePage(
@@ -59,8 +63,8 @@ GUIDE_PAGES: tuple[GuidePage, ...] = (
             "y el overlay GPU. El wizard bloquea el dispositivo si detecta alguno.",
             "Cloud: edgetts no necesita cuenta; fish_tts y openai_tts sí requieren clave. "
             "Ninguno descarga pesos locales.",
-            "Clonado: pocket_tts, chatterbox, qwen3_tts, fish_tts y omnivoice pueden clonar; "
-            "edgetts, piper, kokoro y openai_tts usan voces del catálogo.",
+            f"Clonado: {_CLONE_ENGINES} pueden clonar según el manifiesto de engines.",
+            f"Voice design: {_DESIGN_ENGINES} aceptan instruct libre o presets diseñados.",
             "Idiomas: revisa el catálogo del wizard. Si un engine no soporta un idioma, "
             "asigna otro en TTS_ENGINES o usa edgetts para catalán.",
             "Términos: el perfil básico exige aceptar las licencias de pocket_tts, piper y "

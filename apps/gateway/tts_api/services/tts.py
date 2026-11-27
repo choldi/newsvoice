@@ -125,8 +125,11 @@ class TtsService:
                 "emotion": emotion,
                 "language": language,
             }
-            if engine_name is not None:
-                instruct_kwargs["engine_name"] = engine_name
+            metadata = designed.get("metadata") or {}
+            pinned_engine = metadata.get("engine") if isinstance(metadata, dict) else None
+            selected_engine = engine_name or pinned_engine
+            if selected_engine is not None:
+                instruct_kwargs["engine_name"] = selected_engine
             return await engine.synthesize_instruct(**instruct_kwargs)
         except VoiceNotFoundError:
             pass

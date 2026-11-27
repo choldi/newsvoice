@@ -242,6 +242,12 @@
   with a warning when unavailability is confirmed, while a catalog outage is
   treated as unknown and never blocks. Normalise a blank `gateway_engine` pin
   before both the guard and the route selection.
+- Designed voices are declarative: `config/basic_voices.toml` is the manifest,
+  `config/engines.toml` owns `instruct_voice_design`, and the setup wizard is the
+  only creator (`--design-voices` / TUI). A preset is stored in the gateway with
+  `metadata.engine`; the news catalog keeps the generated WAV under the same
+  slug. The registry exposes both as categories `designed` and `generated`;
+  never hardcode a list of clone/design-capable engines in a form or service.
 - URL summary audio is opt-in: `tts_enabled` gates narration and `deliver_audio`
    is ignored unless narration was requested; an empty `voice` means text-only,
    so existing REST/GUI callers keep their behaviour.

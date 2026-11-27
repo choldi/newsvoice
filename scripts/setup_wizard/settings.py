@@ -283,6 +283,7 @@ class EngineInfo:
         label: Human readable name.
         device: ``GPU``, ``CPU``, ``Cloud`` or ``Proxy``.
         cloning: Whether the engine can clone voices.
+        voice_design: Whether the engine can synthesize from free-form instruct.
         languages: ISO 639-1 languages known to the engine.
         description: Short explanation of the engine and its limits.
         downloads: Local checkpoints the wizard can record for prefetch.
@@ -334,6 +335,7 @@ class EngineInfo:
     modes: tuple[str, ...] = ("embedded", "disabled")
     modal_function: str = ""
     selectable: bool = True
+    voice_design: bool = False
 
 
 @dataclass(frozen=True)
@@ -625,6 +627,7 @@ _CURATED_ENGINE_INFO: dict[str, EngineInfo] = {
         remote_url="http://gateway-chatterbox:8000/api/v1",
         terms_url="https://huggingface.co/ResembleAI/chatterbox",
         terms_required=True,
+        voice_design=True,
     ),
     "qwen3_tts": EngineInfo(
         "qwen3_tts",
@@ -646,6 +649,7 @@ _CURATED_ENGINE_INFO: dict[str, EngineInfo] = {
         remote_url="http://gateway-qwen3:8000/api/v1",
         terms_url="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
         terms_required=True,
+        voice_design=True,
     ),
     "omnivoice": EngineInfo(
         "omnivoice",
@@ -664,6 +668,7 @@ _CURATED_ENGINE_INFO: dict[str, EngineInfo] = {
         remote_url="http://gateway-omnivoice:8000",
         terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
         terms_required=True,
+        voice_design=True,
     ),
     "omnivoice_remote": EngineInfo(
         "omnivoice_remote",
@@ -682,6 +687,7 @@ _CURATED_ENGINE_INFO: dict[str, EngineInfo] = {
         remote_url="http://gateway-omnivoice:8000",
         terms_url="https://huggingface.co/ModelsLab/omnivoice-singing",
         terms_required=True,
+        voice_design=True,
     ),
     "fish_tts": EngineInfo(
         "fish_tts",
@@ -812,21 +818,36 @@ def registry_engine_infos() -> dict[str, EngineInfo]:
                 (),
                 voices,
                 required_keys=tuple(str(key) for key in spec.get("required_env", ())),
+                voice_design=bool(capabilities.get("instruct_voice_design", False)),
             ),
             specs.get(name),
         )
     return infos
 
 
+def _with_registry_capabilities(info: EngineInfo, registry: dict[str, dict]) -> EngineInfo:
+    """Let the engine manifest override curated voice capabilities."""
+    capabilities = (registry.get(info.key) or {}).get("capabilities") or {}
+    changes: dict[str, bool] = {}
+    if "voice_cloning" in capabilities:
+        changes["cloning"] = bool(capabilities["voice_cloning"])
+    if "instruct_voice_design" in capabilities:
+        changes["voice_design"] = bool(capabilities["instruct_voice_design"])
+    return replace(info, **changes) if changes else info
+
+
 def _build_engine_catalog() -> dict[str, EngineInfo]:
     """Merge curated capabilities with runtime defaults, without duplicates."""
     specs = runtime_specs()
+    registry = load_engine_registry()
     catalog = {
-        name: _enrich_engine_info(info, specs.get(name))
+        name: _with_registry_capabilities(_enrich_engine_info(info, specs.get(name)), registry)
         for name, info in registry_engine_infos().items()
     }
     for name, info in _CURATED_ENGINE_INFO.items():
-        catalog[name] = _enrich_engine_info(info, specs.get(name))
+        catalog[name] = _with_registry_capabilities(
+            _enrich_engine_info(info, specs.get(name)), registry
+        )
     return catalog
 
 
@@ -930,12 +951,17 @@ def engine_option_label(key: str) -> str:
         device = "GPU"
     else:
         device = info.device
-    cloning = "clonado" if info.cloning else "sin clonado"
+    capabilities = []
+    if info.cloning:
+        capabilities.append("clonado")
+    if info.voice_design:
+        capabilities.append("diseño")
+    capability_text = "/".join(capabilities) if capabilities else "sin clonado ni diseño"
     languages = " ".join(
         f"{language}{'✓' if info.languages == ('*',) or language in info.languages else '✗'}"
         for language in BASIC_LANGUAGES
     )
-    return f"{key} · {device} · {cloning} · {languages}"
+    return f"{key} · {device} · {capability_text} · {languages}"
 
 
 def parse_engine_map(value: str) -> dict[str, str] | None:

@@ -75,6 +75,7 @@ class VoicesService:
         self._cache_ts: float = 0.0
         self._stock_cache: list[dict[str, Any]] = []
         self._cloned_cache: list[dict[str, Any]] = []
+        self._designed_cache: list[dict[str, Any]] = []
 
     async def _get_shared(
         self,
@@ -244,6 +245,28 @@ class VoicesService:
         except httpx.HTTPError as exc:
             logger.warning("voices_cloned_fetch_failed", error=str(exc))
         return self._cloned_cache
+
+    async def list_designed(self, force: bool = False) -> list[dict[str, Any]]:
+        """List instruct-based designed presets stored in the gateway.
+
+        Args:
+            force: Bypass the short-TTL cache.
+
+        Returns:
+            List of designed voice dicts, empty when the gateway is unreachable.
+        """
+        try:
+            data = await self._get_shared("voices/designed", force=force, ttl=0)
+            if isinstance(data, list):
+                self._designed_cache = [
+                    dict(item)
+                    for item in data
+                    if isinstance(item, dict) and (item.get("id") or item.get("name"))
+                ]
+                self._cache_ts = time.monotonic()
+        except httpx.HTTPError as exc:
+            logger.warning("voices_designed_fetch_failed", error=str(exc))
+        return self._designed_cache
 
     async def clone_voice(
         self,

@@ -105,6 +105,15 @@ registrada en `ENGINE_TERMS_ACCEPTED`, pero los repos gated de HuggingFace
 siguen necesitando el botón **Agree and access repository** en la web antes de
 que `HF_TOKEN` funcione.
 
+La entrada **Crear voces diseñadas básicas** (o `python3 scripts/setup.py
+--design-voices`) lee `config/basic_voices.toml` y crea cada voz en dos sitios:
+como preset de `POST /api/v1/voices/design` del gateway y como voz generada de
+news vía `POST /api/admin/voices/custom`, con `run_in_modal=false`. Es
+idempotente: si el nombre ya existe en el gateway o en news lo respeta. El
+engine debe declarar `instruct_voice_design` en `config/engines.toml`; el
+manifiesto trae cuatro ejemplos es/en. Usa `--design-dry-run` para solo
+previsualizar y `--basic-voices PATH` para otro manifiesto.
+
 Además del flujo guiado, desde la pantalla inicial también puedes:
 
 - **Editar los `.env` ya configurados** — abre cualquiera de los tres archivos

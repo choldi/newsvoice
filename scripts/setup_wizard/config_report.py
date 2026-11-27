@@ -174,15 +174,15 @@ def _engine_table(engines: list[str], modes: dict[str, str]) -> list[str]:
     """Render the capabilities and runtime needs of configured engines."""
     lines = [
         "| Engine | Device | Runtime mode | GPU scope | Profiles | Sidecar services | "
-        "Credentials | Terms | Cloning | Languages | Stock voices | Required models |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "Credentials | Terms | Cloning | Design | Languages | Stock voices | Required models |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for name in engines:
         info = ENGINE_INFO.get(name)
         if info is None:
             lines.append(
                 f"| `{name}` | `unknown` | `unknown` | `unknown` | `unknown` | `unknown` | "
-                "`unknown` | `unknown` | `unknown` | `unknown` | `0` | `0` |"
+                "`unknown` | `unknown` | `unknown` | `unknown` | `unknown` | `0` | `0` |"
             )
             continue
         languages = "all" if info.languages == ("*",) else ",".join(info.languages)
@@ -194,8 +194,8 @@ def _engine_table(engines: list[str], modes: dict[str, str]) -> list[str]:
         lines.append(
             f"| `{name}` | `{info.device}` | `{mode}` | `{info.gpu_scope or '-'}` | "
             f"`{profiles}` | `{services}` | `{keys}` | `{terms}` | "
-            f"`{str(info.cloning).lower()}` | `{languages}` | "
-            f"`{len(info.voices)}` | `{len(info.downloads)}` |"
+            f"`{str(info.cloning).lower()}` | `{str(info.voice_design).lower()}` | "
+            f"`{languages}` | `{len(info.voices)}` | `{len(info.downloads)}` |"
         )
     return lines
 

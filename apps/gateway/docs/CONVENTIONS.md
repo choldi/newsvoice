@@ -11,6 +11,10 @@
   - EdgeTTS (`edgetts`) — Cloud, 400+ voces incl. catalán
   - OmniVoice (`omnivoice`) — GPU, emociones, voice design
   - Mock (`mock`) — Tonos de prueba
+- Las capacidades (`voice_cloning`, `instruct_voice_design`, ...) se leen de
+  `config/engines.toml` vía `EngineRegistry`; los servicios no mantienen listas
+  hardcoded de engines compatibles y `routed` agrega las capacidades de sus
+  sub-engines configurados.
 - Validación: Pydantic v2
 - Persistencia: SQLite (metadatos) + filesystem (audio)
 - Testing: pytest + pytest-asyncio + httpx (AsyncClient) + pytest-cov

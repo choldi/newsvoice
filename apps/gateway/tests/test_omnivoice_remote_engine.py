@@ -337,9 +337,9 @@ async def test_health_check_forwards_the_sidecar_mode() -> None:
 
 def test_remote_engine_is_clone_capable() -> None:
     """The routed gateway accepts voices pinned to the sidecar engine."""
-    from tts_api.services.voice_service import CLONE_CAPABLE_ENGINES
+    from tts_api.core.engine_registry import EngineRegistry, engine_supports_capability
 
-    assert "omnivoice_remote" in CLONE_CAPABLE_ENGINES
+    assert engine_supports_capability(EngineRegistry.load(), "omnivoice_remote", "voice_cloning")
 
 
 async def test_close_releases_client() -> None:

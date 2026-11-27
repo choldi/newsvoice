@@ -9,6 +9,7 @@ from httpx import AsyncClient
 
 from tts_api.api.v1.tts import get_tts_service
 from tts_api.core.engine_client import AudioResult
+from tts_api.core.engine_registry import EngineRegistry
 from tts_api.core.exceptions import (
     UnsupportedInstructError,
     UnsupportedLanguageError,
@@ -130,6 +131,18 @@ async def test_tts_voice_design_tokens(async_client: AsyncClient) -> None:
     assert "male" in data["gender"]
     assert "english_accent" in data
     assert "chinese_dialect" in data
+
+
+@pytest.mark.asyncio
+async def test_tts_voice_design_tokens_for_freeform_engine(async_client: AsyncClient) -> None:
+    with patch("tts_api.api.v1.tts.get_settings") as mock_settings:
+        mock_settings.return_value.effective_tts_engine = "qwen3_tts"
+        mock_settings.return_value.engine_registry = EngineRegistry.load()
+        resp = await async_client.get("/api/v1/tts/voice-design/tokens")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "libre" in data["note"]
+    assert data["gender"] == []
 
 
 # --- Emotion tests ---

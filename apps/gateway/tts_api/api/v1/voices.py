@@ -261,6 +261,10 @@ async def create_designed_voice(
         ..., description="Instruct de voice design (ej: 'female, young adult, british accent')"
     ),
     language: str = Body(..., description="Idioma principal (ISO 639-1)"),
+    engine: str | None = Body(
+        default=None,
+        description="Engine con capacidad instruct_voice_design; por defecto el activo",
+    ),
     voice_service: VoiceService = Depends(get_voice_service),
 ) -> DesignedVoiceResponse:
     try:
@@ -268,6 +272,7 @@ async def create_designed_voice(
             name=name,
             instruct=instruct,
             language=language,
+            engine=engine,
         )
         return DesignedVoiceResponse(
             voice_id=voice_id,
@@ -276,6 +281,11 @@ async def create_designed_voice(
             language=language,
             message=f"Voz diseñada '{name}' creada exitosamente",
         )
+    except FeatureNotSupportedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

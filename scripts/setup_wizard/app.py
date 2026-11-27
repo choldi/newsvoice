@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from engine_runtime import EngineRuntimeError, RuntimePlan
 
@@ -17,6 +18,12 @@ from . import validate as validation
 from .collections import ensure_example_collection
 from .config_report import write_config_report
 from .curses_ui import App, Dialog, Picker, Row, Screen
+from .design_voices import (
+    VoiceCreationOptions,
+    create_basic_voices,
+    load_basic_voices,
+    preview_basic_voices,
+)
 from .detect import Report, detect, prerequisites
 from .envfile import EnvFile
 from .guide import external_guide_screen
@@ -67,7 +74,13 @@ from .settings import (
 )
 from .util import REPO_ROOT, env_paths, generate_secret
 
-__all__ = ["Context", "build_app", "build_engines_app", "load_context"]
+__all__ = [
+    "Context",
+    "build_app",
+    "build_design_voices_app",
+    "build_engines_app",
+    "load_context",
+]
 
 _ORDER = ("deploy", "news", "gateway")
 
@@ -514,6 +527,11 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
             Row("button", label="Guía de valores externos (Fish, HF, Telegram…)", action="guide"),
             Row("button", label="Asistente guiado (.env + dependencias)", action="wizard"),
             Row("button", label="Modificar engines TTS (añadir/quitar)", action="engines"),
+            Row(
+                "button",
+                label="Crear voces diseñadas básicas (gateway + news)",
+                action="design_voices",
+            ),
             Row("button", label="Modos de carga TTS (embedded/sidecar/modal)", action="modes"),
             Row("button", label="Requisitos del sistema", action="prereqs"),
             Row("button", label="Editar los .env ya configurados", action="edit"),
@@ -543,6 +561,8 @@ def welcome_screen(app: App, ctx: Context) -> Screen:
                 app_.push(mode_screen(app_, ctx))
         elif row.action == "engines":
             app_.push(tts_screen(app_, ctx, standalone=True))
+        elif row.action == "design_voices":
+            app_.push(design_voices_screen(app_, ctx))
         elif row.action == "modes":
             app_.push(runtime_modes_screen(app_, ctx, standalone=True))
         elif row.action == "prereqs":
@@ -1450,12 +1470,18 @@ def _back_to_tts(app: App, ctx: Context, *, edit_mode: bool, standalone: bool = 
 def _tts_catalog_lines() -> list[str]:
     lines: list[str] = []
     for info in ENGINE_INFO.values():
-        cloning = "clonado sí" if info.cloning else "sin clonado"
+        capabilities = []
+        if info.cloning:
+            capabilities.append("clonado")
+        if info.voice_design:
+            capabilities.append("diseño")
+        capability_text = "/".join(capabilities) if capabilities else "sin clonado ni diseño"
         languages = "todos" if info.languages == ("*",) else ", ".join(info.languages)
         voices = f"{len(info.voices)} voces stock" if info.voices else "sin voces stock"
         modes = "/".join(info.modes)
         lines.append(
-            f"{info.key}: {info.device} · {modes} · {cloning} · idiomas: {languages} · {voices}"
+            f"{info.key}: {info.device} · {modes} · {capability_text} · "
+            f"idiomas: {languages} · {voices}"
         )
         lines.append(f"  {info.description}")
     return lines
@@ -1919,7 +1945,7 @@ def tts_screen(
         action="TTS_MODEL_DOWNLOADS",
     )
     rows: list[Row] = [
-        Row("note", label="Catálogo de engines (dispositivo · clonado · idiomas):"),
+        Row("note", label="Catálogo de engines (dispositivo · capacidades · idiomas):"),
         *[Row("note", label=line) for line in _tts_catalog_lines()],
         Row("note", label=""),
         Row("heading", label="Selección"),
@@ -3037,6 +3063,165 @@ def final_screen(app: App, ctx: Context) -> Screen:
     )
 
 
+def _default_design_options(ctx: Context) -> VoiceCreationOptions:
+    """Seed the voice-creation form from the current env files."""
+    deploy = ctx.envs.get("deploy")
+    gateway_env = ctx.envs.get("gateway")
+    news = ctx.envs.get("news")
+    gateway_key = ""
+    admin_token = ""
+    if deploy is not None:
+        gateway_key = deploy.get("GATEWAY_API_KEY").strip()
+    if not gateway_key and gateway_env is not None:
+        gateway_key = gateway_env.get("API_KEY").strip()
+    if not gateway_key and news is not None:
+        gateway_key = news.get("TTS_API_KEY").strip()
+    if news is not None:
+        admin_token = news.get("ADMIN_API_TOKEN").strip()
+    design_engines = [name for name, info in ENGINE_INFO.items() if info.voice_design]
+    return VoiceCreationOptions(
+        design_engine=design_engines[0] if design_engines else "qwen3_tts",
+        gateway_key=gateway_key,
+        admin_token=admin_token,
+    )
+
+
+def design_voices_screen(
+    app: App, ctx: Context, *, options: VoiceCreationOptions | None = None
+) -> Screen:
+    """Build the standalone screen that creates the declarative voice presets."""
+    initial = options or _default_design_options(ctx)
+    state: dict[str, Any] = {
+        "gateway_url": initial.gateway_url,
+        "news_url": initial.news_url,
+        "design_engine": initial.design_engine,
+        "gateway_key": initial.gateway_key,
+        "admin_token": initial.admin_token,
+        "dry_run": initial.dry_run,
+    }
+    try:
+        voices = load_basic_voices(initial.voices_path)
+        load_note = Row(
+            "note",
+            label=f"{initial.voices_path}: {len(voices)} voz(es) declarada(s)",
+            result="ok",
+        )
+    except ValueError as exc:
+        voices = []
+        load_note = Row("note", label=str(exc), result="bad")
+    design_engines = sorted(name for name, info in ENGINE_INFO.items() if info.voice_design)
+    if state["design_engine"] not in design_engines:
+        design_engines.insert(0, str(state["design_engine"]))
+
+    def current_options() -> VoiceCreationOptions:
+        return VoiceCreationOptions(
+            gateway_url=str(state["gateway_url"]).strip() or initial.gateway_url,
+            news_url=str(state["news_url"]).strip() or initial.news_url,
+            design_engine=str(state["design_engine"]) or initial.design_engine,
+            gateway_key=str(state["gateway_key"]).strip(),
+            admin_token=str(state["admin_token"]).strip(),
+            dry_run=bool(state["dry_run"]),
+            timeout=initial.timeout,
+            voices_path=initial.voices_path,
+        )
+
+    rows: list[Row] = [
+        Row(
+            "note",
+            label="Crea cada voz como preset del gateway y como voz generada de news.",
+        ),
+        load_note,
+        Row("note", label=""),
+        Row(
+            "text",
+            label="Gateway API",
+            value=state["gateway_url"],
+            help="URL base desde el host, por defecto http://localhost:8001/api/v1",
+            action="gateway_url",
+        ),
+        Row(
+            "text",
+            label="News API",
+            value=state["news_url"],
+            help="URL base desde el host, por defecto http://localhost:8000",
+            action="news_url",
+        ),
+        Row(
+            "choice",
+            label="Engine de diseño",
+            value=state["design_engine"],
+            options=design_engines,
+            help="Debe declarar instruct_voice_design en config/engines.toml",
+            action="design_engine",
+        ),
+        Row(
+            "secret",
+            label="Clave del gateway",
+            value=state["gateway_key"],
+            help="X-API-Key; se toma de deploy/.env cuando está disponible",
+            action="gateway_key",
+        ),
+        Row(
+            "secret",
+            label="Token admin de news",
+            value=state["admin_token"],
+            help="X-Admin-Token; se toma de news/.env cuando está disponible",
+            action="admin_token",
+        ),
+        Row(
+            "bool",
+            label="Solo simular",
+            value="true" if state["dry_run"] else "false",
+            help="Muestra las llamadas sin crear nada",
+            action="dry_run",
+        ),
+        Row("note", label=""),
+        Row("button", label="Ver voces declaradas", action="preview"),
+        Row("button", label="Crear voces en ambos servicios", action="create"),
+        Row("button", label="Atrás", action="back"),
+    ]
+
+    def on_change(app_: App, row: Row) -> None:
+        if not row.action:
+            return
+        if row.action == "dry_run":
+            state[row.action] = row.value.strip().lower() in ("true", "1", "yes", "sí", "si")
+        else:
+            state[row.action] = row.value
+
+    def activate(app_: App, row: Row) -> None:
+        if row.action == "back":
+            app_.pop()
+            return
+        if row.action == "preview":
+            app_.info(
+                "Voces básicas declaradas",
+                *preview_basic_voices(voices, current_options()),
+            )
+            return
+        if row.action == "create":
+            if not voices:
+                app_.say("No hay voces válidas en el manifiesto", "warn")
+                return
+            app_.say("Creando voces diseñadas…")
+            results = create_basic_voices(current_options(), voices)
+            lines = [
+                f"{result.voice.name}: gateway {result.gateway} · news {result.news}"
+                for result in results
+            ]
+            app_.info("Resultado", *lines)
+
+    return Screen(
+        title="Voces diseñadas básicas",
+        subtitle="Manifiesto: config/basic_voices.toml",
+        rows=rows,
+        footer="F1 Ayuda   Enter Editar/Ejecutar   Tab Siguiente   Esc Atrás   F10 Salir",
+        progress="Voces",
+        on_change=on_change,
+        on_activate=activate,
+    )
+
+
 def build_app(ctx: Context | None = None) -> App:
     """Create the application with the welcome screen already on the stack.
 
@@ -3058,4 +3243,14 @@ def build_engines_app(ctx: Context | None = None) -> App:
     ctx = ctx or load_context()
     app = App("newsvoice engines")
     app.push(tts_screen(app, ctx, standalone=True))
+    return app
+
+
+def build_design_voices_app(
+    ctx: Context | None = None, options: VoiceCreationOptions | None = None
+) -> App:
+    """Create an app that opens directly on the voice-creation assistant."""
+    ctx = ctx or load_context()
+    app = App("newsvoice designed voices")
+    app.push(design_voices_screen(app, ctx, options=options))
     return app

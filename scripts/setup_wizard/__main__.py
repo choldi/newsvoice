@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import __version__, repair
-from .app import _record_repair, build_app, load_context
+from .app import _default_design_options, _record_repair, build_app, load_context
 from .config_report import write_config_report
+from .design_voices import (
+    BASIC_VOICES_PATH,
+    DEFAULT_GATEWAY_URL,
+    DEFAULT_NEWS_URL,
+    VoiceCreationOptions,
+)
 from .plain import _show_repair_result
-from .settings import PROFILES
+from .settings import ENGINE_INFO, PROFILES
 from .validate import validate
 
 __all__ = ["main"]
@@ -69,6 +76,53 @@ def _parser() -> argparse.ArgumentParser:
         "--engines",
         action="store_true",
         help="Abre directamente el asistente de engines TTS (contenedores, GPU, API y términos)",
+    )
+    design_engines = sorted(name for name, info in ENGINE_INFO.items() if info.voice_design)
+    parser.add_argument(
+        "--design-voices",
+        action="store_true",
+        help="Crea las voces diseñadas declaradas en config/basic_voices.toml",
+    )
+    parser.add_argument(
+        "--basic-voices",
+        default="",
+        metavar="PATH",
+        help="Manifiesto TOML alternativo para --design-voices",
+    )
+    parser.add_argument(
+        "--design-engine",
+        choices=design_engines,
+        default="",
+        help="Engine con instruct_voice_design para los presets del gateway",
+    )
+    parser.add_argument(
+        "--gateway-url",
+        default="",
+        metavar="URL",
+        help=f"URL del gateway para --design-voices ({DEFAULT_GATEWAY_URL})",
+    )
+    parser.add_argument(
+        "--news-url",
+        default="",
+        metavar="URL",
+        help=f"URL de news para --design-voices ({DEFAULT_NEWS_URL})",
+    )
+    parser.add_argument(
+        "--gateway-key",
+        default="",
+        metavar="KEY",
+        help="X-API-Key para --design-voices (mejor usar los .env)",
+    )
+    parser.add_argument(
+        "--admin-token",
+        default="",
+        metavar="TOKEN",
+        help="X-Admin-Token para --design-voices (mejor usar los .env)",
+    )
+    parser.add_argument(
+        "--design-dry-run",
+        action="store_true",
+        help="Con --design-voices: simula las llamadas sin crear voces",
     )
     parser.add_argument(
         "--profile",
@@ -257,6 +311,42 @@ def main(argv: list[str] | None = None) -> int:
             include_tests=args.ai_fix_with_tests,
             assume_yes=args.yes,
         )
+
+    if args.design_voices:
+        from .app import build_design_voices_app
+        from .curses_ui import run_tui
+        from .plain import run_design_voices
+
+        seeded = _default_design_options(ctx)
+        options = VoiceCreationOptions(
+            gateway_url=args.gateway_url or seeded.gateway_url,
+            news_url=args.news_url or seeded.news_url,
+            design_engine=args.design_engine or seeded.design_engine,
+            gateway_key=args.gateway_key or seeded.gateway_key,
+            admin_token=args.admin_token or seeded.admin_token,
+            dry_run=args.design_dry_run,
+            voices_path=Path(args.basic_voices) if args.basic_voices else BASIC_VOICES_PATH,
+        )
+        if args.plain or not _interactive():
+            if not sys.stdin.isatty():
+                print("(modo línea: no hay terminal interactiva)", file=sys.stderr)
+            return run_design_voices(ctx, options=options, assume_yes=args.yes)
+        app = build_design_voices_app(ctx, options)
+        try:
+            return run_tui(app)
+        except Exception as exc:  # noqa: BLE001 - curses leaves the screen broken otherwise
+            if app.started:
+                print(
+                    f"\nEl TUI se cerró por un error ({exc}). No se cambia al modo línea "
+                    "para no volver a preguntar ni perder los cambios.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(
+                f"\nNo se pudo iniciar el TUI ({exc}); usando el modo línea.",
+                file=sys.stderr,
+            )
+            return run_design_voices(ctx, options=options, assume_yes=args.yes)
 
     if args.engines and (args.plain or not _interactive()):
         from .plain import run_engines

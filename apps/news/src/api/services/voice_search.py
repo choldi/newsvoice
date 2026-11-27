@@ -27,7 +27,12 @@ from math import ceil
 #: Display order of the categories inside the pickers: the operator's own
 #: voices (clones and designs) are what they look for first, so they lead the
 #: unfiltered list while the bulk of edge stock sinks to the bottom.
-PICKER_CATEGORY_RANK: dict[str, int] = {"generated": 0, "cloned": 1, "stock": 2}
+PICKER_CATEGORY_RANK: dict[str, int] = {
+    "generated": 0,
+    "designed": 1,
+    "cloned": 2,
+    "stock": 3,
+}
 
 #: Default and bounds of the table page size.
 DEFAULT_PAGE_SIZE = 25

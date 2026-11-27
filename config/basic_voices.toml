@@ -1,0 +1,31 @@
+[[voices]]
+name = "basic_es_female"
+label = "Español · femenina"
+language = "es"
+instruct = "Voz femenina española, cálida y clara, con ritmo de locución de noticias."
+ref_text = "Buenos días. Estas son las noticias más importantes del día."
+role_hint = "anchor"
+
+[[voices]]
+name = "basic_es_male"
+label = "Español · masculina"
+language = "es"
+instruct = "Voz masculina española, sobria y profesional, con dicción clara para informativos."
+ref_text = "Buenos días. Comenzamos con el resumen de la actualidad de hoy."
+role_hint = "anchor"
+
+[[voices]]
+name = "basic_en_female"
+label = "English · female"
+language = "en"
+instruct = "Warm, clear American female news anchor with a calm and confident delivery."
+ref_text = "Good morning. Here are the top stories of the day."
+role_hint = "anchor"
+
+[[voices]]
+name = "basic_en_male"
+label = "English · male"
+language = "en"
+instruct = "Clear, professional British male news anchor with a steady and neutral tone."
+ref_text = "Good morning. These are today's leading headlines."
+role_hint = "anchor"

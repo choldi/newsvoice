@@ -8,12 +8,14 @@ headless setup still gets the assisted configuration.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from . import deps, repair
 from . import validate as validation
 from .app import (
     Context,
     _apply_profile,
+    _default_design_options,
     _dependency_plan,
     _mask,
     _record_repair,
@@ -27,6 +29,12 @@ from .app import (
 )
 from .collections import ensure_example_collection
 from .config_report import write_config_report
+from .design_voices import (
+    VoiceCreationOptions,
+    create_basic_voices,
+    load_basic_voices,
+    preview_basic_voices,
+)
 from .detect import detect, prerequisites
 from .settings import (
     ENGINE_INFO,
@@ -43,7 +51,7 @@ from .settings import (
 )
 from .util import REPO_ROOT
 
-__all__ = ["run_engines", "run_plain"]
+__all__ = ["run_design_voices", "run_engines", "run_plain"]
 
 _ORDER = ("deploy", "news", "gateway")
 _LINE = "-" * 68
@@ -614,3 +622,79 @@ def _finish(ctx: Context, *, write: bool, assume_yes: bool = False) -> int:
     if ctx.written:
         print("  Siguientes pasos:  make up · make status · make urls")
     return 1 if errors else 0
+
+
+def run_design_voices(
+    ctx: Context | None = None,
+    *,
+    options: VoiceCreationOptions | None = None,
+    assume_yes: bool = False,
+) -> int:
+    """Create the declarative basic voices without the TUI."""
+    ctx = ctx or load_context()
+    initial = options or _default_design_options(ctx)
+    _title("newsvoice · voces diseñadas básicas (modo sin TUI)")
+    print("  Cada voz se crea en el gateway y en news-engine; la operación es idempotente.")
+
+    gateway_url = _read(f"  Gateway API [{initial.gateway_url}]: ", default=initial.gateway_url)
+    news_url = _read(f"  News API [{initial.news_url}]: ", default=initial.news_url)
+    gateway_key = _read("  X-API-Key del gateway [usar la configurada]: ") or initial.gateway_key
+    admin_token = _read("  X-Admin-Token de news [usar la configurada]: ") or initial.admin_token
+    voice_path = _read(
+        f"  Manifiesto de voces [{initial.voices_path}]: ", default=str(initial.voices_path)
+    )
+
+    design_engines = sorted(name for name, info in ENGINE_INFO.items() if info.voice_design)
+    if initial.design_engine not in design_engines:
+        design_engines.insert(0, initial.design_engine)
+    index = (
+        design_engines.index(initial.design_engine)
+        if initial.design_engine in design_engines
+        else 0
+    )
+    design_engine = design_engines[_choose("Engine con voice design", design_engines, index)]
+
+    configured = VoiceCreationOptions(
+        gateway_url=gateway_url,
+        news_url=news_url,
+        design_engine=design_engine,
+        gateway_key=gateway_key,
+        admin_token=admin_token,
+        dry_run=initial.dry_run,
+        timeout=initial.timeout,
+        voices_path=Path(voice_path),
+    )
+    try:
+        voices = load_basic_voices(configured.voices_path)
+    except ValueError as exc:
+        print(f"  ✗ {exc}")
+        return 1
+    for line in preview_basic_voices(voices, configured):
+        print(line)
+
+    dry_run = _confirm("¿Solo simular las llamadas? [s/N]:", assume_yes=False)
+    selected = VoiceCreationOptions(
+        gateway_url=configured.gateway_url,
+        news_url=configured.news_url,
+        design_engine=configured.design_engine,
+        gateway_key=configured.gateway_key,
+        admin_token=configured.admin_token,
+        dry_run=dry_run,
+        timeout=configured.timeout,
+        voices_path=configured.voices_path,
+    )
+    if not _confirm("¿Crear las voces declaradas? [s/N]:", assume_yes=assume_yes):
+        print("  Operación cancelada; no se ha creado ninguna voz.")
+        return 0
+    results = create_basic_voices(selected, voices)
+    print("")
+    for result in results:
+        print(f"  {result.voice.name}: gateway {result.gateway} · news {result.news}")
+    return (
+        1
+        if any(
+            result.gateway.startswith("error:") or result.news.startswith("error:")
+            for result in results
+        )
+        else 0
+    )

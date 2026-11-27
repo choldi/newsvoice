@@ -129,6 +129,29 @@ async def test_synthesize_stock_designed_voice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_synthesize_stock_designed_voice_uses_pinned_engine() -> None:
+    mock_engine = AsyncMock()
+    mock_engine.synthesize_instruct.return_value = AudioResult(
+        wav_bytes=b"designed-wav",
+        duration_sec=1.5,
+        sample_rate=22050,
+    )
+    mock_voice_service = AsyncMock()
+    mock_voice_service.get_voice.side_effect = VoiceNotFoundError("designed-id")
+    mock_voice_service.get_designed_voice.return_value = {
+        "id": "designed-id",
+        "name": "Basic EN",
+        "instruct": "clear english female anchor",
+        "language": "en",
+        "metadata": {"engine": "qwen3_tts"},
+    }
+
+    service = TtsService(engine_client=mock_engine, voice_service=mock_voice_service)
+    await service.synthesize_stock(text="Hello", voice_id="designed-id", language="en")
+    assert mock_engine.synthesize_instruct.call_args.kwargs["engine_name"] == "qwen3_tts"
+
+
+@pytest.mark.asyncio
 async def test_synthesize_stock_designed_voice_not_found_falls_to_stock() -> None:
     """Test de fallback a stock cuando la voz clonada y diseñada no existen."""
     mock_engine = AsyncMock()

@@ -47,6 +47,7 @@ async def test_gateway_options_tags_stock_and_cloned(monkeypatch: pytest.MonkeyP
         "list_cloned",
         AsyncMock(return_value=[{"voice_id": "uuid-1", "language": "es", "name": "mario"}]),
     )
+    monkeypatch.setattr(VoicesService, "list_designed", AsyncMock(return_value=[]))
 
     languages, voices = await voice_registry.gateway_options()
 
@@ -56,6 +57,37 @@ async def test_gateway_options_tags_stock_and_cloned(monkeypatch: pytest.MonkeyP
     assert by_id["es-mx-male"].engines == ["omnivoice"]
     assert by_id["uuid-1"].category == "cloned"
     assert by_id["uuid-1"].label == "mario"
+
+
+async def test_gateway_options_include_designed_presets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Designed presets keep their category and pinned engine."""
+    from src.api.services.voices import VoicesService
+
+    monkeypatch.setattr(VoicesService, "list_languages", AsyncMock(return_value=["es"]))
+    monkeypatch.setattr(VoicesService, "list_stock", AsyncMock(return_value=[]))
+    monkeypatch.setattr(VoicesService, "list_cloned", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        VoicesService,
+        "list_designed",
+        AsyncMock(
+            return_value=[
+                {
+                    "id": "designed-id",
+                    "name": "basic_es_female",
+                    "language": "es",
+                    "metadata": {"engine": "qwen3_tts"},
+                }
+            ]
+        ),
+    )
+
+    _, voices = await voice_registry.gateway_options()
+    assert len(voices) == 1
+    assert voices[0].id == "designed-id"
+    assert voices[0].category == "designed"
+    assert voices[0].engines == ["qwen3_tts"]
 
 
 async def test_gateway_options_use_the_reported_sub_engine(
@@ -76,6 +108,7 @@ async def test_gateway_options_use_the_reported_sub_engine(
         ),
     )
     monkeypatch.setattr(VoicesService, "list_cloned", AsyncMock(return_value=[]))
+    monkeypatch.setattr(VoicesService, "list_designed", AsyncMock(return_value=[]))
 
     _, voices = await voice_registry.gateway_options()
 

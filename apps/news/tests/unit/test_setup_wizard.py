@@ -330,9 +330,9 @@ def test_news_backend_gateway_uses_the_staged_active_when_unpinned(
 
 def test_engine_option_labels_show_gpu_cloning_and_base_languages() -> None:
     """Extra-engine labels answer GPU, cloning and ca/es/fr/en coverage."""
-    assert engine_option_label("qwen3_tts") == "qwen3_tts · GPU · clonado · ca✓ es✓ fr✓ en✓"
+    assert engine_option_label("qwen3_tts") == "qwen3_tts · GPU · clonado/diseño · ca✓ es✓ fr✓ en✓"
     assert engine_option_label("pocket_tts") == "pocket_tts · CPU · clonado · ca✗ es✓ fr✓ en✓"
-    assert engine_option_label("piper") == "piper · CPU · sin clonado · ca✓ es✓ fr✓ en✓"
+    assert engine_option_label("piper") == "piper · CPU · sin clonado ni diseño · ca✓ es✓ fr✓ en✓"
     assert "GPU (proxy)" in engine_option_label("omnivoice_remote")
     assert "Cloud" in engine_option_label("openai_tts")
     assert "ca✗" in engine_option_label("openai_tts")

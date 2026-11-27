@@ -196,3 +196,21 @@ async def test_clone_voice_includes_ref_text_when_provided() -> None:
             "ref_text": "Hola mundo",
         }
         assert "reference_audio" in kwargs["files"]
+
+
+@pytest.mark.asyncio
+async def test_list_designed_returns_gateway_presets() -> None:
+    """Designed presets come from /voices/designed and keep their metadata."""
+    service = VoicesService(api_base_url="http://tts.test/api/v1")
+    designed = [
+        {
+            "id": "designed-id",
+            "name": "basic_es_female",
+            "language": "es",
+            "instruct": "Voz femenina clara",
+            "metadata": {"engine": "qwen3_tts"},
+        }
+    ]
+    with patch.object(service, "_get_shared", new_callable=AsyncMock, return_value=designed):
+        result = await service.list_designed(force=True)
+    assert result == designed

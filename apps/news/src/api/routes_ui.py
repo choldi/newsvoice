@@ -1677,6 +1677,7 @@ CATEGORY_FILTERS: tuple[tuple[str, str], ...] = (
     ("stock", "stock"),
     ("cloned", "clonada"),
     ("generated", "diseñada"),
+    ("designed", "preset diseñado"),
 )
 ENGINE_FILTERS: tuple[tuple[str, str], ...] = (
     ("", "Todos"),

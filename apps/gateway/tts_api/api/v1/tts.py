@@ -11,6 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from tts_api.core.engine_client import get_shared_engine_client
 from tts_api.core.engine_pool import get_engine_pool
+from tts_api.core.engine_registry import engine_supports_capability
 from tts_api.core.exceptions import (
     EngineUnavailableError,
     FeatureNotSupportedError,
@@ -345,7 +346,10 @@ async def synthesize_instruct(
 @router.get(
     "/voice-design/tokens",
     summary="Listar tokens válidos para voice design",
-    description="Devuelve los tokens de instruct agrupados por categoría (solo OmniVoice engine).",
+    description=(
+        "Devuelve los tokens de instruct de OmniVoice cuando el engine activo los usa; "
+        "para engines con voice design libre devuelve las categorías vacías."
+    ),
 )
 async def get_voice_design_tokens() -> dict[str, Any]:
     """Devuelve los tokens válidos para instruct de voice design.
@@ -355,10 +359,26 @@ async def get_voice_design_tokens() -> dict[str, Any]:
     settings = get_settings()
 
     active_engine = settings.effective_tts_engine
-    if active_engine not in ("omnivoice", "omnivoice_remote"):
+    can_design = engine_supports_capability(
+        settings.engine_registry,
+        active_engine,
+        "instruct_voice_design",
+        settings,
+    )
+    if not can_design:
         return {
             "note": f"Voice design no soportado por el engine '{active_engine}'. "
-            "Cambia TTS_ENGINE=omnivoice para usar voice design.",
+            "Elige un engine con instruct_voice_design.",
+            "gender": [],
+            "age": [],
+            "pitch": [],
+            "style": [],
+            "english_accent": [],
+            "chinese_dialect": [],
+        }
+    if active_engine not in ("omnivoice", "omnivoice_remote"):
+        return {
+            "note": f"El engine '{active_engine}' usa voice design libre; no hay tokens cerrados.",
             "gender": [],
             "age": [],
             "pitch": [],

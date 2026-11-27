@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from tts_api.api.v1.voices import get_voice_service
 from tts_api.core.exceptions import (
+    FeatureNotSupportedError,
     InvalidReferenceAudioError,
     UnsupportedLanguageError,
     VoiceNotFoundError,
@@ -382,6 +383,7 @@ async def test_create_designed_voice_success() -> None:
                     "name": "British Female",
                     "instruct": "female, young adult, british accent",
                     "language": "en",
+                    "engine": "qwen3_tts",
                 },
             )
         assert response.status_code == 201
@@ -389,6 +391,40 @@ async def test_create_designed_voice_success() -> None:
         assert data["voice_id"] == "designed-uuid-1"
         assert data["name"] == "British Female"
         assert data["instruct"] == "female, young adult, british accent"
+        mock_service.create_designed_voice.assert_awaited_once_with(
+            name="British Female",
+            instruct="female, young adult, british accent",
+            language="en",
+            engine="qwen3_tts",
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_designed_voice_rejects_engine_without_capability() -> None:
+    mock_service = AsyncMock()
+    mock_service.create_designed_voice.side_effect = FeatureNotSupportedError(
+        "voice design", "piper"
+    )
+
+    async def override():
+        yield mock_service
+
+    app.dependency_overrides[get_voice_service] = override
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/voices/design",
+                json={
+                    "name": "Bad engine",
+                    "instruct": " female, young adult ",
+                    "language": "en",
+                    "engine": "piper",
+                },
+            )
+        assert response.status_code == 400
     finally:
         app.dependency_overrides.clear()
 

@@ -1321,6 +1321,14 @@ que dos motores incompatibles compartan el mismo entorno. FASE 13 sigue vigente.
       alias, conflictos, modos no soportados, variables y `dry_run`;
       `Deploy.md`, `Architecture.md`, `CONVENTIONS.md` y `AGENTS.md` documentan
       el flujo.
+- [x] **14.6 Voces diseñadas declarativas**: el gateway valida clonado y voice
+      design desde `config/engines.toml` (sin listas hardcodeadas), acepta
+      `engine` en `POST /voices/design`, guarda el pin en `metadata` y sirve
+      tokens según capacidades. `config/basic_voices.toml` declara cuatro voces
+      básicas es/en y el wizard (TUI, línea y CLI `--design-voices`) las crea de
+      forma idempotente como preset del gateway y como voz generada de news,
+      anclada a Qwen3 local. News publica los presets como categoría
+      `designed` junto a stock/clonadas/generadas.
 
 **Success criteria:** `scripts/engines/pocket_tts.sh chatterbox` y
 `scripts/engines/qwen3_tts.sh kokoro` resuelven sin conflictos; forzar ambos

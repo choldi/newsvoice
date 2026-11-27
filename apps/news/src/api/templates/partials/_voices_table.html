@@ -27,7 +27,7 @@
       <td>{{ v.label }}</td>
       <td><code>{{ v.id }}</code></td>
       <td>{{ v.language or '—' }}</td>
-      <td>{{ {'stock': 'stock', 'cloned': 'clonada', 'generated': 'diseñada'}.get(v.category, v.category) }}</td>
+      <td>{{ {'stock': 'stock', 'cloned': 'clonada', 'generated': 'diseñada', 'designed': 'preset diseñado'}.get(v.category, v.category) }}</td>
       <td>{{ v.engines | join(' · ') or '—' }}</td>
       <td>{% if v.status %}<span class="badge {{ v.badge }}">{{ v.status }}</span>{% else %}—{% endif %}</td>
       <td style="white-space:nowrap">

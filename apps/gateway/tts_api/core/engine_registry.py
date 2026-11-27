@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from tts_contract import canonical_engine_id
 
 _MODULE_PATH = Path(__file__).resolve()
 _REPO_CONFIG_PARENT_INDEX = 4
@@ -293,6 +294,49 @@ class EngineRegistry:
             json.dumps(self._override, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+
+def configured_engine_names(settings: Any) -> set[str]:
+    """Return the sub-engine ids enabled by ``TTS_ENGINES``/``TTS_EXTRA_ENGINES``."""
+    names: set[str] = set()
+    raw_routing = str(getattr(settings, "TTS_ENGINES", "") or "").strip()
+    if raw_routing:
+        try:
+            routing = json.loads(raw_routing)
+        except json.JSONDecodeError:
+            routing = {}
+        if isinstance(routing, dict):
+            names.update(
+                str(value).strip().lower() for value in routing.values() if str(value).strip()
+            )
+    names.update(
+        part.strip().lower()
+        for part in str(getattr(settings, "TTS_EXTRA_ENGINES", "") or "").split(",")
+        if part.strip()
+    )
+    return names
+
+
+def engine_supports_capability(
+    registry: EngineRegistry,
+    engine: str,
+    capability: str,
+    settings: Any | None = None,
+) -> bool:
+    """Report whether an engine (or ``routed``) declares a capability."""
+    name = canonical_engine_id(engine)
+    if name == "routed":
+        candidates = configured_engine_names(settings) if settings is not None else set()
+        if not candidates:
+            candidates = {key for key, spec in registry.specs.items() if spec.enabled}
+        return any(
+            engine_supports_capability(registry, candidate, capability) for candidate in candidates
+        )
+    try:
+        spec = registry.get(name)
+    except KeyError:
+        return False
+    return bool(getattr(spec.capabilities, capability, False))
 
 
 def known_engine_names() -> list[str]:

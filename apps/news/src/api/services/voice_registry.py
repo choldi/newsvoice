@@ -3,8 +3,9 @@
 Each TTS engine keeps its own voice vocabulary — Edge ShortNames, tts-api
 gateway stock ids and clone UUIDs, Modal catalog profile names — and the GUI
 used to show one engine at a time with no notion of where a voice came from.
-The registry merges the three categories of every engine (``stock``,
-``cloned``, ``generated``) into one :class:`VoiceOption` list so that:
+The registry merges the four voice origins (``stock``, ``cloned``,
+``generated`` and gateway ``designed`` presets) into one :class:`VoiceOption`
+list so that:
 
 * ``GET /api/admin/voices/all`` and the GUI dropdowns offer the full
   catalogue, each entry tagged with the engines that accept it and its origin;
@@ -28,7 +29,7 @@ from src.api.models.voices import VoiceOption
 logger = structlog.get_logger(__name__)
 
 #: Categories a voice can belong to, in the order they are listed.
-CATEGORY_ORDER: tuple[str, ...] = ("stock", "cloned", "generated")
+CATEGORY_ORDER: tuple[str, ...] = ("stock", "cloned", "generated", "designed")
 _CATEGORY_RANK = {name: index for index, name in enumerate(CATEGORY_ORDER)}
 
 #: Engines of the Modal catalog: one reference WAV serves every Modal backend.
@@ -72,12 +73,16 @@ def _gateway_engine_values(item: dict, *, category: str) -> list[str]:
 
     Args:
         item: Stock or cloned voice dict from the gateway.
-        category: ``stock`` or ``cloned``.
+        category: ``stock``, ``cloned`` or ``designed``.
 
     Returns:
         Canonical ``TTSBackend`` values, in the order the gateway reported them.
     """
     raw = str(item.get("engine") or "").strip()
+    if not raw and category == "designed":
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict):
+            raw = str(metadata.get("engine") or "").strip()
     if not raw:
         return [TTSBackend.OMNIVOICE.value]
     values: list[str] = []
@@ -115,7 +120,7 @@ def _dedupe(voices: list[VoiceOption]) -> list[VoiceOption]:
 
 
 async def gateway_options(engine: str | None = None) -> tuple[list[str], list[VoiceOption]]:
-    """Fetch the tts-api gateway voices (stock + clones).
+    """Fetch the tts-api gateway voices (stock, clones and designed presets).
 
     Args:
         engine: Optional gateway engine id. When set, its own stock catalogue is
@@ -137,14 +142,17 @@ async def gateway_options(engine: str | None = None) -> tuple[list[str], list[Vo
             languages = await service.list_languages()
             stock = await service.list_stock()
         cloned = await service.list_cloned()
+        designed = await service.list_designed()
     except Exception as exc:  # noqa: BLE001 - a dead gateway must not break the page
         logger.warning("voice_registry_gateway_failed", error=str(exc))
         return [], []
 
     voices: list[VoiceOption] = []
-    for category, entries in (("stock", stock), ("cloned", cloned)):
+    for category, entries in (("stock", stock), ("cloned", cloned), ("designed", designed)):
         for item in entries:
-            identifier = str(item.get("voice_id") or item.get("name") or "").strip()
+            identifier = str(
+                item.get("voice_id") or item.get("id") or item.get("name") or ""
+            ).strip()
             if not identifier:
                 continue
             voices.append(
